@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# First-boot fontconfig cache seed (first-paint perf).
+#
+# Fontconfig builds /var/cache/fontconfig lazily on first font use. Unseeded,
+# the very first GTK text render on a fresh boot stalls while fc-cache scans
+# every font directory, and GTK logs Fontconfig warnings. We build the cache
+# once so later renders (and later boots) are fast.
+#
+# The scan runs in the BACKGROUND so it never blocks the boot-to-desktop path:
+# the desktop (S99notebookos) comes up immediately while the cache builds
+# concurrently. A stamp file makes subsequent boots skip the work.
+#
+# Why at first boot rather than at build time: a host-side "fc-cache --sysroot"
+# seed proved unreliable with this fontconfig (2.14.2) — under --sysroot it
+# under-enumerates the font tree (it misses the TrueType UI fonts entirely) and
+# would bake an INCOMPLETE cache that the runtime trusts, hiding those fonts.
+# The target-native fc-cache below scans the full tree correctly.
+#
+STAMP=/var/cache/fontconfig/.notebookos-seeded
+
+start() {
+	# Already seeded on an earlier boot: nothing to do.
+	[ -f "$STAMP" ] && return 0
+	# fc-cache may be absent in a stripped image; never fail the boot for it.
+	command -v fc-cache >/dev/null 2>&1 || return 0
+	printf "Seeding fontconfig cache (background, low prio): "
+	# Off the boot path: the desktop starts without waiting for this. Run at the
+	# lowest CPU + IO priority so the scan never competes with desktop startup on
+	# a slow software-rendered machine (the desktop must feel instant regardless).
+	(
+		nice -n 19 fc-cache -f >/dev/null 2>&1
+		mkdir -p /var/cache/fontconfig
+		: > "$STAMP"
+	) &
+	echo "OK"
+}
+
+stop() {
+	:
+}
+
+case "$1" in
+	start) start ;;
+	stop)  stop ;;
+	restart) stop; start ;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

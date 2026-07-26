@@ -1,0 +1,1498 @@
+#!/usr/bin/env python3
+"""
+Screenplay — the Notebook OS script editor (native GTK).
+
+A Courier screenplay page on paper, with an Element format bar
+(Scene / Action / Character / Dialogue / Paren. / Transition) and a live
+page-count / word-count / autosave indicator. The File menu provides
+New / Open / Save / Save As over user files under $NB_HOME/Documents
+(.fountain, .txt, or Screenplay .json). Opens on a blank UNTITLED page — no seed
+content. The session-recovery snapshot (body text + per-line element formatting +
+current file path) persists to screenplay.json and is restored on launch. An
+optional script path may be passed as sys.argv[1] (the Finder opens scripts this
+way).
+"""
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("Pango", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
+
+import time
+import os
+import sys
+import json
+
+import nbapp
+import nbpicker
+import nbprint
+from nbi18n import _t  # noqa: E402
+
+ELEMENTS = ("Scene", "Action", "Character", "Dialogue", "Paren.", "Transition")
+
+# Pressing Enter at the end of an element advances to the element that
+# conventionally follows it (Final Draft / Fountain auto-advance): after a Scene
+# Heading you write Action; a Character cue is followed by Dialogue; a
+# Parenthetical returns to Dialogue; a Transition begins the next Scene.
+#   Scene(0) Action(1) Character(2) Dialogue(3) Paren.(4) Transition(5)
+FLOW = {0: 1, 1: 1, 2: 3, 3: 1, 4: 3, 5: 0}
+
+# ---- Zine / PDF page layout (half-letter 5.5x8.5" page, monospace script) ----
+# Standard screenplay is fixed-pitch Courier with fixed element indents; on the
+# half-letter zine page we keep the proportions and scale the type down to fit.
+PDF_FS = 9.0            # monospace body size (pt)
+PDF_LEAD = 12.0         # line advance (pt)
+PDF_ML = 48.0           # left text margin (pt)
+PDF_MR = 30.0           # right text margin (pt)
+PDF_MT = 54.0           # top text margin — first baseline (pt)
+PDF_MB = 48.0           # bottom text margin (pt)
+# Per element: (indent in monospace columns, wrap width in columns, UPPER-case,
+# right-align). Indents mirror a real script: dialogue block set in from the
+# left, the character cue further in, parentheticals inside the dialogue block.
+PDF_ELEMENT = {
+    0: (0, 54, True, False),    # Scene Heading
+    1: (0, 56, False, False),   # Action
+    2: (20, 34, True, False),   # Character cue
+    3: (10, 34, False, False),  # Dialogue
+    4: (14, 26, False, False),  # Parenthetical
+    5: (0, 56, True, True),     # Transition (flush right)
+}
+
+# -- persistence: the script survives close/reboot under $NB_HOME/.config/notebook,
+# matching writer.py's word-processor pattern (plain body + formatting spans) --
+HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
+CFG_DIR = os.path.join(HOME, ".config", "notebook")
+DOC_FILE = os.path.join(CFG_DIR, "screenplay.json")
+# User files (File ▸ Open/Save) live under Documents; the session-recovery
+# snapshot stays in CFG_DIR/screenplay.json and is independent of the user file.
+DOCS_DIR = os.path.join(HOME, "Documents")
+
+# First-run default: a blank UNTITLED page (no-seed rule). The title page shows
+# this until a user file is opened or saved.
+DEFAULT_TITLE = "UNTITLED SCREENPLAY"
+
+
+class Screenplay(nbapp.AppWindow):
+    app_name = "Screenplay"
+    menus = ("File", "Edit", "Format", "Insert", "View")
+
+    def __init__(self):
+        super().__init__()
+        self._install_css()
+        self._elbtns = []
+        self._active = 0
+        self._save_timer = None
+        self._count_timer = None          # debounced word / page totals
+        self._find_hits = []              # (start_off, end_off) of find hits
+        self._find_i = -1
+        # True when there are edits not yet written to the bound user file (the
+        # session-recovery autosave is separate). Drives the discard confirm on
+        # New / Open; cleared on load and on a real File ▸ Save.
+        self._file_dirty = False
+
+        # --- persistence: load BEFORE the body is seeded so the saved script
+        # (or the blank page on first run) fills the canvas, not a mock. The
+        # _loading guard keeps seeding from tripping the autosave path. ---
+        self._loading = True
+        doc = self._load_doc()
+        # the user file this script maps to (None = unsaved / no file). The File
+        # menu operates on this; session recovery restores it across boots.
+        self._path = doc.get("path")
+
+        # --- element / format bar ---
+        fbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        fbar.get_style_context().add_class("formatbar")
+
+        elabel = Gtk.Label(label=_t("ELEMENT"))
+        elabel.get_style_context().add_class("elementlabel")
+        elabel.set_margin_end(10)
+        fbar.pack_start(elabel, False, False, 0)
+
+        for i, name in enumerate(ELEMENTS):
+            b = Gtk.Button(label=name)
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            b.get_style_context().add_class("elbtn")
+            b.set_tooltip_text("%s element  (Ctrl+%d)" % (name, i + 1))
+            if i == 0:
+                b.get_style_context().add_class("active")
+            b.connect("clicked", self._on_element, i)
+            self._elbtns.append(b)
+            fbar.pack_start(b, False, False, 4)
+
+        # right: page count | word count | save state
+        self.saved = Gtk.Label()
+        self.saved.get_style_context().add_class("savestate")
+        self.saved.set_tooltip_text(
+            "Your script is kept automatically. Use File > Save to write "
+            "it to a file.")
+        fbar.pack_end(self.saved, False, False, 4)
+        fbar.pack_end(self._sep(), False, False, 14)
+        self.words = Gtk.Label(label=_t("0 words"))
+        self.words.get_style_context().add_class("meta")
+        self.words.set_tooltip_text(_t("Words in this script"))
+        fbar.pack_end(self.words, False, False, 0)
+        fbar.pack_end(self._sep(), False, False, 14)
+        self.pages = Gtk.Label(label=_t("1 page"))
+        self.pages.get_style_context().add_class("meta")
+        self.pages.set_tooltip_text(_t("Pages in the printed script"))
+        fbar.pack_end(self.pages, False, False, 0)
+        # Resting state is an honest "No changes" — the chip only claims a
+        # timestamped "Saved HH:MM" after a real write has actually happened.
+        self.saved.set_markup(
+            '<span foreground="#7FA98C">● </span>No changes')
+
+        self.content.pack_start(fbar, False, False, 0)
+        self.content.pack_start(self._build_findbar(), False, False, 0)
+
+        # --- canvas (scrolling paper desk) ---
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.get_style_context().add_class("desk")
+
+        centering = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        centering.set_halign(Gtk.Align.CENTER)
+        centering.set_margin_top(48)
+        centering.set_margin_bottom(120)
+
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        col.set_size_request(800, -1)
+
+        # page sheet
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page.get_style_context().add_class("page")
+        page.set_size_request(800, 1040)
+
+        overlay = Gtk.Overlay()
+        overlay.add(page)
+        pageno = Gtk.Label(label="1.")
+        pageno.get_style_context().add_class("pageno")
+        pageno.set_halign(Gtk.Align.END)
+        pageno.set_valign(Gtk.Align.START)
+        pageno.set_margin_top(34)
+        pageno.set_margin_end(60)
+        overlay.add_overlay(pageno)
+        overlay.set_overlay_pass_through(pageno, True)
+
+        # title block — the title reflects the current file (default UNTITLED),
+        # and the line beneath it is the file-status line: the open file's path,
+        # or the empty-state prompt when no user file is open. No marketing text.
+        titlebox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        titlebox.set_halign(Gtk.Align.CENTER)
+        titlebox.set_margin_top(74)
+        titlebox.set_margin_bottom(56)
+        # Title and subtitle are EDITABLE (they were fixed labels derived from
+        # the filename, so a script could never be titled from inside the app).
+        # Frameless, centred entries keep the title-page look while taking the
+        # caret; both are part of the document and persist with it.
+        self.scripttitle = Gtk.Entry()
+        self.scripttitle.set_has_frame(False)
+        self.scripttitle.set_alignment(0.5)
+        self.scripttitle.set_placeholder_text(DEFAULT_TITLE)
+        self.scripttitle.set_text(doc.get("title") or DEFAULT_TITLE)
+        self.scripttitle.get_style_context().add_class("scripttitle")
+        self.scripttitle.connect("changed", self._on_titlebar_change)
+        self.scriptsubtitle = Gtk.Entry()
+        self.scriptsubtitle.set_has_frame(False)
+        self.scriptsubtitle.set_alignment(0.5)
+        self.scriptsubtitle.set_placeholder_text(_t("written by"))
+        self.scriptsubtitle.set_text(doc.get("subtitle") or "")
+        self.scriptsubtitle.get_style_context().add_class("scriptsubtitle")
+        self.scriptsubtitle.set_margin_top(10)
+        self.scriptsubtitle.connect("changed", self._on_titlebar_change)
+        self.status = Gtk.Label(label="")
+        self.status.get_style_context().add_class("scriptsub")
+        self.status.set_margin_top(14)
+        # The file path is arbitrarily long (a script on a USB stick, a deep
+        # folder). Left un-trimmed it sets the page sheet's width, which STRETCHES
+        # the paper to the window edges, kills its centring and leaves the script
+        # hard against the left of the screen — the "text veers left" report.
+        # Trim in the middle so the file name (the useful end) always shows.
+        self.status.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self.status.set_max_width_chars(46)
+        titlebox.pack_start(self.scripttitle, False, False, 0)
+        titlebox.pack_start(self.scriptsubtitle, False, False, 0)
+        titlebox.pack_start(self.status, False, False, 0)
+        page.pack_start(titlebox, False, False, 0)
+        self._update_status()
+
+        # editable body
+        self.body = Gtk.TextView()
+        self.body.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.body.get_style_context().add_class("scriptbody")
+        self.body.set_pixels_below_lines(8)
+        self.body.set_pixels_inside_wrap(8)
+        self.body.set_left_margin(92)
+        self.body.set_right_margin(92)
+        self.body.set_size_request(800, 560)
+        buf = self.body.get_buffer()
+        self._setup_elements(buf)
+        buf.connect("changed", self._on_change)
+        # keep the element bar reflecting whatever line the caret sits in
+        buf.connect("mark-set", self._on_mark_set)
+        if doc.get("body"):
+            buf.set_text(doc["body"])   # seed from disk (fires guarded _on_change)
+            # restore the saved per-line element formatting on top of the text
+            self._apply_body_tags(buf, doc.get("body_tags"))
+        page.pack_start(self.body, True, True, 0)
+
+        col.pack_start(overlay, False, False, 0)
+        centering.pack_start(col, False, False, 0)
+        scroll.add(centering)
+        self.content.pack_start(scroll, True, True, 0)
+
+        # seeding complete — real edits now autosave, and a final flush on
+        # close keeps the last edit from being lost.
+        self._loading = False
+        # Undo/redo over the whole script: the body text, its element
+        # formatting and the title page, so File ▸ New and File ▸ Open — which
+        # replace all three AND overwrite the recovery snapshot that is an
+        # unsaved script's only copy — are reversible too. See nbapp.UndoHistory.
+        self.undo = nbapp.UndoHistory(self._undo_snapshot, self._undo_restore)
+        self.undo.reset()
+        self.connect("destroy", self._on_destroy)
+
+        # Finder launches Screenplay with a script path as argv[1]
+        # (.fountain/.txt/.json). Load it last so it overrides the restored
+        # session-recovery snapshot.
+        if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+            self._open_file(sys.argv[1])
+
+        # Land the caret in the script so she can start typing on open without
+        # having to click into the page first, and point the element bar at
+        # whatever line the caret lands on so it is honest from the first frame.
+        try:
+            self._sync_element_bar(self.body.get_buffer())
+            self.body.grab_focus()
+        except Exception:
+            pass
+
+    # -- find --------------------------------------------------------------
+    # A feature script is a hundred pages in ONE scrolling buffer with no
+    # navigation of any kind: finding the scene where a character first appears,
+    # or every "INT. KITCHEN", meant scrolling and reading. Every other writing
+    # app here can search its own text; this one could not.
+    def _build_findbar(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        bar.get_style_context().add_class("findbar")
+        self.find_entry = Gtk.SearchEntry()
+        self.find_entry.set_placeholder_text(_t("Find in script"))
+        self.find_entry.set_width_chars(24)
+        self.find_entry.get_style_context().add_class("findinput")
+        self.find_entry.connect("search-changed", lambda *_: self._do_find())
+        self.find_entry.connect("activate", lambda *_: self._find_step(1))
+        bar.pack_start(self.find_entry, False, False, 0)
+        prev = Gtk.Button(label="‹")
+        prev.get_style_context().add_class("findbtn")
+        prev.set_tooltip_text(_t("Previous match"))
+        prev.connect("clicked", lambda *_: self._find_step(-1))
+        bar.pack_start(prev, False, False, 0)
+        nxt = Gtk.Button(label="›")
+        nxt.get_style_context().add_class("findbtn")
+        nxt.set_tooltip_text(_t("Next match"))
+        nxt.connect("clicked", lambda *_: self._find_step(1))
+        bar.pack_start(nxt, False, False, 0)
+        self.find_count = Gtk.Label(label="", xalign=0)
+        self.find_count.get_style_context().add_class("findcount")
+        bar.pack_start(self.find_count, False, False, 6)
+        done = Gtk.Button(label=_t("Done"))
+        done.get_style_context().add_class("findbtn")
+        done.connect("clicked", lambda *_: self._toggle_find(False))
+        bar.pack_end(done, False, False, 0)
+        # Show the controls ONCE, then take the bar out of show_all()'s reach:
+        # gtk_widget_show_all() returns immediately on a no-show-all widget, so
+        # children shown after the flag is set would never appear (the bug that
+        # once opened Writer's find bar as an empty strip).
+        bar.show_all()
+        bar.set_no_show_all(True)
+        bar.hide()
+        self._findbar = bar
+        return bar
+
+    def _toggle_find(self, show=None):
+        vis = self._findbar.get_visible()
+        show = (not vis) if show is None else show
+        self._findbar.set_visible(show)
+        if show:
+            self.find_entry.grab_focus()
+            self._do_find()
+        else:
+            self._find_hits = []
+            self.find_count.set_text("")
+            self.body.grab_focus()
+
+    def _do_find(self):
+        needle = self.find_entry.get_text().strip().lower()
+        self._find_hits = []
+        self._find_i = -1
+        if not needle:
+            self.find_count.set_text("")
+            return
+        buf = self.body.get_buffer()
+        hay = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).lower()
+        i = hay.find(needle)
+        while i != -1:
+            self._find_hits.append((i, i + len(needle)))
+            i = hay.find(needle, i + len(needle))
+        n = len(self._find_hits)
+        if not n:
+            self.find_count.set_text(_t("No matches"))
+            return
+        self.find_count.set_text(_t("1 match") if n == 1
+                                 else _t("%d matches") % n)
+        self._find_step(1)
+
+    def _find_step(self, direction):
+        """Select the next/previous match and scroll the page to it."""
+        if not self._find_hits:
+            self._do_find()
+            if not self._find_hits:
+                return
+        self._find_i = (self._find_i + direction) % len(self._find_hits)
+        s_off, e_off = self._find_hits[self._find_i]
+        buf = self.body.get_buffer()
+        n = buf.get_char_count()
+        s = buf.get_iter_at_offset(max(0, min(s_off, n)))
+        e = buf.get_iter_at_offset(max(0, min(e_off, n)))
+        buf.select_range(s, e)
+        # scroll_to_mark, not scroll_to_iter: a mark survives the layout pass, so
+        # the jump lands even on a line GTK has not measured yet.
+        self.body.scroll_to_mark(buf.get_insert(), 0.25, False, 0, 0)
+        self.find_count.set_text(
+            _t("%d of %d") % (self._find_i + 1, len(self._find_hits)))
+
+    # -- helpers --
+    def _sep(self):
+        s = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        s.get_style_context().add_class("msep")
+        return s
+
+    # each screenplay element is a paragraph style: indentation + alignment,
+    # the way Final Draft / Fountain lay a script out on the page.
+    EL_TAGS = ("el_scene", "el_action", "el_character",
+               "el_dialogue", "el_paren", "el_transition")
+
+    def _setup_elements(self, buf):
+        tt = buf.get_tag_table()
+        # A GTK TextTag's left/right-margin REPLACES the TextView's own margin for
+        # tagged text (it is absolute from the text-content edge, NOT added on top
+        # of the view margin). These indents were written as if additive over the
+        # body's BASE page margin, so Scene/Action (indent 0) landed FLUSH on the
+        # page's left edge and the whole script "veered left". Bake the base margin
+        # into every element so each keeps its intended relative indent but starts
+        # from the proper page margin. BASE must match the body's set_left/right_
+        # margin (see _build). (Same GTK gotcha as the Writer word processor.)
+        BASE = 92
+        specs = [
+            ("el_scene", {"weight": Pango.Weight.BOLD, "left-margin": BASE}),
+            ("el_action", {"left-margin": BASE}),
+            ("el_character", {"left-margin": BASE + 216}),
+            ("el_dialogue", {"left-margin": BASE + 104, "right-margin": BASE + 128}),
+            ("el_paren", {"left-margin": BASE + 160, "right-margin": BASE + 160,
+                          "style": Pango.Style.ITALIC}),
+            ("el_transition", {"justification": Gtk.Justification.RIGHT}),
+        ]
+        for name, props in specs:
+            t = Gtk.TextTag(name=name)
+            for k, v in props.items():
+                t.set_property(k, v)
+            tt.add(t)
+
+    def _element_bounds(self, buf):
+        """Whole-line bounds covering the selection (every line it touches), or
+        just the caret's line when nothing is selected — so applying an element
+        to a multi-line selection lays it on all of them, not one line."""
+        sel = buf.get_selection_bounds()
+        if not sel:
+            it = buf.get_iter_at_mark(buf.get_insert())
+            ls = it.copy(); ls.set_line_offset(0)
+            le = it.copy()
+            if not le.ends_line():
+                le.forward_to_line_end()
+            return ls, le
+        ls = sel[0].copy(); ls.set_line_offset(0)
+        le = sel[1].copy()
+        if not le.ends_line():
+            le.forward_to_line_end()
+        return ls, le
+
+    def _apply_element(self, idx):
+        buf = self.body.get_buffer()
+        ls, le = self._element_bounds(buf)
+        for name in self.EL_TAGS:
+            buf.remove_tag_by_name(name, ls, le)
+        buf.apply_tag_by_name(self.EL_TAGS[idx], ls, le)
+
+    def _set_active_button(self, idx):
+        """Move the active-element highlight to button `idx` (no text change)."""
+        if not (0 <= idx < len(self._elbtns)) or idx == self._active:
+            return
+        self._elbtns[self._active].get_style_context().remove_class("active")
+        self._elbtns[idx].get_style_context().add_class("active")
+        self._active = idx
+
+    def _on_element(self, btn, idx):
+        self.undo.checkpoint("Element")
+        self._set_active_button(idx)
+        # apply the element's layout to the caret line (or the whole selection),
+        # even when the same element is re-clicked. Element formatting is
+        # tag-only and does NOT fire the buffer's 'changed' signal, so _touch()
+        # explicitly keeps it counted as an edit and autosaved.
+        self._apply_element(idx)
+        self._touch()
+        self.undo.commit()
+        self.body.grab_focus()
+
+    def _cycle_element(self, delta):
+        """Tab / Shift+Tab step the caret line through the element types in
+        order, applying the layout immediately — the keyboard-only way to pick an
+        element while writing, so a novice never has to reach for the mouse."""
+        if not self._elbtns:
+            return
+        idx = (self._active + delta) % len(self._elbtns)
+        self._on_element(self._elbtns[idx], idx)
+
+    def _newline(self, soft):
+        """Enter: break the line and auto-advance to the element that follows the
+        current one (Scene→Action, Character→Dialogue, …). Shift+Enter keeps the
+        same element for a soft line break within a block. Grouped as one undo
+        step; the new line is scrolled into view."""
+        try:
+            buf = self.body.get_buffer()
+            buf.begin_user_action()
+            if buf.get_has_selection():
+                buf.delete_selection(True, True)
+            buf.insert_at_cursor("\n")
+            buf.end_user_action()
+            if not soft:
+                self._set_active_button(FLOW.get(self._active, 1))
+            self.body.scroll_to_mark(buf.get_insert(), 0.08, False, 0, 0)
+        except Exception:
+            pass
+        return True
+
+    def _on_mark_set(self, buf, _it, mark):
+        """Caret moved / selection changed → point the element bar at the caret
+        line's element so the bar honestly reflects 'what element you're in'."""
+        if self._loading:
+            return
+        try:
+            if mark is buf.get_insert() or mark is buf.get_selection_bound():
+                self._sync_element_bar(buf)
+        except Exception:
+            pass
+
+    def _sync_element_bar(self, buf):
+        """Highlight the element the caret's line is tagged with. A line with no
+        element tag (plain text, laid out identically to Action) leaves the
+        current highlight unchanged, so it never flickers off mid-script."""
+        it = buf.get_iter_at_mark(buf.get_insert())
+        ls = it.copy(); ls.set_line_offset(0)
+        table = buf.get_tag_table()
+        for i, name in enumerate(self.EL_TAGS):
+            tag = table.lookup(name)
+            if tag is not None and ls.has_tag(tag):
+                self._set_active_button(i)
+                return
+
+    def _on_titlebar_change(self, _entry):
+        """Title / subtitle edited. These are Gtk.Entries, so they must NOT be
+        wired to _on_change (which is a TextBuffer handler and would call
+        buf.get_text(start, end, False) on an Entry). Word and page counts come
+        from the body only, so this just marks the document dirty for autosave."""
+        if self._loading:
+            return
+        self._touch()
+
+    def _on_change(self, buf):
+        if self._loading:
+            self._refresh_counts()
+            return   # seeding from disk: update the counts, don't autosave
+        # Counting words means copying the whole script out of the buffer, and
+        # the page total lays every line out; neither belongs on the keystroke
+        # path of a 120-page script. Coalesce them, as the other writing apps do.
+        if self._count_timer is None:
+            self._count_timer = GLib.timeout_add(200, self._count_tick)
+        # Keep the caret line tagged with its element as the writer types. GTK
+        # does NOT extend a tag onto text appended past its end, nor onto a fresh
+        # line after Enter, and a tag can't be applied to an empty line at all —
+        # so without this, setting an element then typing would silently lose the
+        # formatting. Re-tagging just the one caret line each keystroke is cheap.
+        self._retag_current_line()
+        self._touch()
+
+    def _count_tick(self):
+        self._count_timer = None
+        self._refresh_counts()
+        return False
+
+    def _refresh_counts(self):
+        """Word total and page total for the format bar."""
+        buf = self.body.get_buffer()
+        txt = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        n = len(txt.split())
+        self.words.set_text("%d word%s" % (n, "" if n == 1 else "s"))
+        try:
+            p = self._page_total()
+        except Exception:
+            p = max(1, -(-n // 190))          # last resort, never crash a count
+        self.pages.set_text("%d page%s" % (p, "" if p == 1 else "s"))
+
+    def _page_total(self):
+        """The script's REAL page count: the same laid-out lines the PDF and the
+        printer use, divided by the lines a page holds.
+
+        It used to be words / 190, which is not how a script paginates — the
+        format is fixed-pitch with fixed indents, so page count follows LINES,
+        and a dialogue-heavy scene has far fewer words per page than an action
+        one. The bar disagreed with the script that came out of the printer, and
+        page count is the one number a screenwriter actually works in."""
+        rows = self._pdf_lines()
+        usable = nbprint.HALF_H_PT - PDF_MT - PDF_MB
+        lpp = max(1, int(usable // PDF_LEAD))
+        return max(1, -(-len(rows) // lpp))
+
+    def _retag_current_line(self):
+        """Apply the active element's tag across the whole caret line so typed
+        and appended text stays formatted. No-op on an empty line (nothing to
+        tag — it re-tags itself the moment a character is typed)."""
+        try:
+            buf = self.body.get_buffer()
+            it = buf.get_iter_at_mark(buf.get_insert())
+            ls = it.copy(); ls.set_line_offset(0)
+            le = it.copy()
+            if not le.ends_line():
+                le.forward_to_line_end()
+            if le.get_offset() <= ls.get_offset():
+                return
+            for name in self.EL_TAGS:
+                buf.remove_tag_by_name(name, ls, le)
+            if 0 <= self._active < len(self.EL_TAGS):
+                buf.apply_tag_by_name(self.EL_TAGS[self._active], ls, le)
+        except Exception:
+            pass
+
+    def _touch(self):
+        """Record an edit and arm the debounced session-recovery autosave. The
+        single entry point for every content change — including a tag-only
+        element change, which does NOT emit the buffer's 'changed' signal and so
+        would otherwise never mark the script dirty, flip the chip, or autosave.
+        Marks the script dirty relative to its user file (drives the New / Open
+        discard confirm) and flashes the 'Saving…' chip. Crash-safe."""
+        if self._loading:
+            return
+        self._file_dirty = True
+        # One undo step per burst of typing; _touch is the single entry point
+        # for every content change, element retag included. Only re-arms a
+        # timer, so it adds nothing measurable per keystroke.
+        self.undo.touch()
+        try:
+            self.saved.set_markup(
+                '<span foreground="#C8341E">● </span>Saving…')
+        except Exception:
+            pass
+        if self._save_timer:
+            try:
+                GLib.source_remove(self._save_timer)
+            except Exception:
+                pass
+        self._save_timer = GLib.timeout_add(900, self._save_now)
+
+    def _save_now(self):
+        """Debounce fired: persist to disk, and only then flip the chip to a
+        REAL 'Saved HH:MM' — the indicator now reflects an actual write."""
+        self._save_timer = None
+        if self._save_doc():
+            self._set_saved()
+        return False
+
+    def _set_saved(self):
+        self.saved.set_markup(
+            '<span foreground="#7FA98C">● </span>Saved %s'
+            % time.strftime("%H:%M"))
+        return False
+
+    # ---- persistence (matches writer.py: plain body + formatting spans) ----
+    def _load_doc(self):
+        """Load the session-recovery snapshot (title + body text + element spans
+        + current file path), or fall back to the blank page. Malformed/foreign
+        data is ignored (→ blank) and never crashes the app."""
+        try:
+            with open(DOC_FILE) as fh:
+                data = json.load(fh)
+            if isinstance(data, dict):
+                doc = {"body": str(data.get("body", ""))}
+                tags = data.get("body_tags")
+                doc["body_tags"] = tags if isinstance(tags, list) else []
+                t = data.get("title")
+                doc["title"] = str(t) if isinstance(t, str) and t else DEFAULT_TITLE
+                sub = data.get("subtitle")
+                doc["subtitle"] = str(sub) if isinstance(sub, str) else ""
+                # the user file this snapshot maps to (may be absent/older)
+                p = data.get("path")
+                doc["path"] = p if isinstance(p, str) and p else None
+                return doc
+        except Exception:
+            pass
+        return {"body": "", "body_tags": [], "title": DEFAULT_TITLE,
+                "subtitle": "", "path": None}
+
+    def _collect_doc(self):
+        """Snapshot the script (title + body + per-line element formatting + the
+        current file path) from the widgets, ready to serialise."""
+        buf = self.body.get_buffer()
+        return {
+            "title": self.scripttitle.get_text(),
+            "subtitle": self.scriptsubtitle.get_text(),
+            "body": buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False),
+            # keep the screenplay layout alive across close/reopen: plain text
+            # alone would drop every Scene/Character/Dialogue element span
+            "body_tags": self._serialize_body_tags(buf),
+            # remember which user file this maps to so Save targets it after a boot
+            "path": self._path,
+        }
+
+    def _serialize_body_tags(self, buf):
+        """Capture the body buffer's element formatting as a list of
+        {tag,start,end} char spans (offsets into the plain text) so the
+        screenplay layout round-trips through screenplay.json. Only the app's
+        own element tags (from _setup_elements) are recorded."""
+        spans = []
+        table = buf.get_tag_table()
+        for name in self.EL_TAGS:
+            tag = table.lookup(name)
+            if tag is None:
+                continue
+            it = buf.get_start_iter()
+            # a toggle located exactly at the start iter is not reported by
+            # forward_to_tag_toggle, so seed the open offset here
+            open_off = 0 if it.has_tag(tag) else None
+            while it.forward_to_tag_toggle(tag):
+                off = it.get_offset()
+                if it.has_tag(tag):
+                    open_off = off
+                elif open_off is not None:
+                    spans.append({"tag": name, "start": open_off, "end": off})
+                    open_off = None
+            if open_off is not None:
+                spans.append({"tag": name, "start": open_off,
+                              "end": buf.get_end_iter().get_offset()})
+        return spans
+
+    def _apply_body_tags(self, buf, spans):
+        """Re-apply serialized {tag,start,end} element spans onto the body.
+        Defensive about missing/older data (spans may be None) and clamps
+        offsets to the text so a stale span can never raise."""
+        if not isinstance(spans, list):
+            return
+        table = buf.get_tag_table()
+        n = buf.get_char_count()
+        for sp in spans:
+            try:
+                name = sp.get("tag")
+                if name not in self.EL_TAGS or table.lookup(name) is None:
+                    continue
+                s = max(0, min(int(sp.get("start")), n))
+                e = max(0, min(int(sp.get("end")), n))
+                if e > s:
+                    buf.apply_tag_by_name(name, buf.get_iter_at_offset(s),
+                                          buf.get_iter_at_offset(e))
+            except Exception:
+                continue
+
+    # ---- undo / redo ----
+    # The snapshot IS the recovery document: one _collect_doc covers the body,
+    # every element span, the title page and the bound file path, so typing, an
+    # element change and File ▸ Open are all reversible by the same mechanism.
+    def _undo_snapshot(self):
+        doc = self._collect_doc()
+        buf = self.body.get_buffer()
+        doc["_caret"] = buf.get_iter_at_mark(buf.get_insert()).get_offset()
+        # Leading underscore: volatile, so it rides along and is restored, but
+        # two states differing only in it are not separate undo steps.
+        doc["_file_dirty"] = self._file_dirty
+        return doc
+
+    def _undo_restore(self, doc):
+        self._set_document(doc.get("title", ""), doc.get("body", ""),
+                           doc.get("body_tags"), doc.get("path"),
+                           doc.get("subtitle", ""))
+        # _set_document declares the script clean (it is used by New / Open);
+        # an undo puts back a state that may well differ from the file on disk.
+        self._file_dirty = doc.get("_file_dirty", False)
+        buf = self.body.get_buffer()
+        caret = min(max(0, doc.get("_caret", 0)), buf.get_char_count())
+        buf.place_cursor(buf.get_iter_at_offset(caret))
+        self._sync_element_bar(buf)
+        self.body.grab_focus()
+
+    def _save_doc(self):
+        """Write the script to disk. Returns True on success (crash-safe)."""
+        try:
+            nbapp.atomic_write_json(DOC_FILE, self._collect_doc())
+            return True
+        except Exception:
+            return False
+
+    def _on_destroy(self, *_):
+        """Flush a final synchronous save on close so the last edit survives."""
+        self.undo.cancel()
+        for attr in ("_save_timer", "_count_timer"):
+            tid = getattr(self, attr, None)
+            if tid is not None:
+                try:
+                    GLib.source_remove(tid)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        self._save_doc()
+
+    # ---- File menu: user files under $NB_HOME/Documents ----
+    def _fmt_of(self, path):
+        """Screenplay .json (structured, keeps element formatting) vs plain
+        screenplay text (.fountain/.txt)."""
+        return "json" if os.path.splitext(path)[1].lower() == ".json" else "text"
+
+    def _title_from_path(self, path):
+        """Derive a title-page title from a filename: the stem, separators
+        collapsed to spaces and upper-cased (screenplay titles are set caps)."""
+        stem = os.path.splitext(os.path.basename(path))[0]
+        disp = " ".join(stem.replace("_", " ").replace("-", " ").split()).upper()
+        return disp or DEFAULT_TITLE
+
+    def _update_status(self):
+        """Refresh the file-status line under the title: the open file's path,
+        or the empty-state prompt when no user file is open."""
+        try:
+            if self._path:
+                p = self._path
+                if p == HOME or p.startswith(HOME + os.sep):
+                    p = os.path.join("~", os.path.relpath(p, HOME))
+                self.status.set_text(p)
+            else:
+                # Plain sentence, not a menu path fragment: a first-time writer
+                # needs to know the script is safe but has no file of its own.
+                self.status.set_text("Not saved to a file yet — File > Save")
+        except Exception:
+            pass
+
+    def _set_document(self, title, body, tags, path, subtitle=""):
+        """Replace the whole script (used by New and Open). Seeds under the
+        _loading guard so it doesn't trip the autosave path, then marks a clean
+        state and refreshes the status line and counts."""
+        self._loading = True
+        try:
+            self.scripttitle.set_text(title or DEFAULT_TITLE)
+            self.scriptsubtitle.set_text(subtitle or "")
+            buf = self.body.get_buffer()
+            buf.remove_all_tags(buf.get_start_iter(), buf.get_end_iter())
+            buf.set_text(body)              # fires _on_change (loading → count only)
+            self._apply_body_tags(buf, tags)
+            self._path = path
+            # reset the element bar to Scene, matching the fresh document
+            if self._active != 0 and self._elbtns:
+                self._elbtns[self._active].get_style_context().remove_class("active")
+                self._elbtns[0].get_style_context().add_class("active")
+                self._active = 0
+        finally:
+            self._loading = False
+        self._file_dirty = False            # fresh script matches its file / blank
+        self._update_status()
+        self._save_doc()                    # snapshot recovery (incl. new path)
+        self._set_saved()
+
+    def _file_new(self):
+        """Blank UNTITLED page (no file). The old file is left on disk untouched.
+
+        New replaces the on-screen script AND overwrites screenplay.json (session
+        recovery), so anything not written to a user file is lost. Confirm first
+        when that would discard real work — an unsaved no-file script (recovery
+        is its only copy), or a file-bound script with edits since its last Save
+        — and if the user cancels, change nothing (no blank, no overwrite)."""
+        if not self._confirm_replace("New Script"):
+            return
+        # Undoable: the confirm only fires when the guard judges there is work
+        # to lose, and blanking overwrites the recovery snapshot as well.
+        self.undo.checkpoint("New Script")
+        self._set_document(DEFAULT_TITLE, "", [], None)
+        self.undo.commit()
+        self.body.grab_focus()
+
+    def _dirty_to_lose(self):
+        """True when replacing the script would discard work: an unsaved no-file
+        script (session recovery is its only copy, and it is about to be
+        overwritten), or a file-bound script with edits since its last Save."""
+        if self._path is None:
+            return not self._is_empty()
+        return self._file_dirty
+
+    def _confirm_replace(self, title):
+        """Ask before replacing the script if that would lose unsaved work.
+        Returns True when it is safe to proceed (nothing to lose, or confirmed)."""
+        if not self._dirty_to_lose():
+            return True
+        return self._confirm(
+            title,
+            "The current script has unsaved changes. Discard them?",
+            "Discard")
+
+    def _is_empty(self):
+        """True when the script has no body text and no custom title (still the
+        default), i.e. there is nothing to lose by blanking it."""
+        title = self.scripttitle.get_text().strip()
+        if title and title != DEFAULT_TITLE:
+            return False
+        buf = self.body.get_buffer()
+        body = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        return not body.strip()
+
+    def _confirm(self, title, body, ok_label):
+        """A small modal Cancel / <ok_label> confirmation for a destructive
+        action. Returns True on the positive response. Defaults to Cancel so a
+        stray Return never discards work (crash-safe).
+
+        Undecorated papertone card with its own heading and buttons — the
+        pattern the rest of the OS uses (journal, cookbook) — rather than a
+        stock GTK dialog with a window-manager title bar."""
+        try:
+            dlg = Gtk.Dialog(title=title, transient_for=self, modal=True)
+            dlg.set_decorated(False)
+            dlg.get_style_context().add_class("spdlg")
+            area = dlg.get_content_area()
+            area.set_spacing(0)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+            box.get_style_context().add_class("spdlgbox")
+            hd = Gtk.Label(label=title, xalign=0)
+            hd.get_style_context().add_class("spdlgtitle")
+            msg = Gtk.Label(label=body, xalign=0)
+            msg.set_line_wrap(True)
+            # width-chars sets the card's measure; max-width-chars alone only
+            # caps it and leaves GTK free to size the dialog uncomfortably narrow.
+            msg.set_width_chars(38)
+            msg.set_max_width_chars(40)
+            msg.get_style_context().add_class("spdlgmsg")
+            btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            btns.set_halign(Gtk.Align.END)
+            cancel = Gtk.Button(label=_t("Cancel"))
+            cancel.get_style_context().add_class("spdlgcancel")
+            cancel.connect("clicked",
+                           lambda *_: dlg.response(Gtk.ResponseType.CANCEL))
+            ok = Gtk.Button(label=ok_label)
+            ok.get_style_context().add_class("spdlgok")
+            ok.connect("clicked", lambda *_: dlg.response(Gtk.ResponseType.OK))
+            btns.pack_start(cancel, False, False, 0)
+            btns.pack_start(ok, False, False, 0)
+            box.pack_start(hd, False, False, 0)
+            box.pack_start(msg, False, False, 0)
+            box.pack_start(btns, False, False, 0)
+            area.add(box)
+            dlg.show_all()
+            # Focus the safe choice so Space/Return keeps the script.
+            cancel.grab_focus()
+            try:
+                resp = dlg.run()
+            finally:
+                dlg.destroy()
+            return resp == Gtk.ResponseType.OK
+        except Exception:
+            # If the dialog can't be shown, fail safe: do NOT discard.
+            return False
+
+    def _open_file(self, path):
+        """Load a user file into the script. Returns True on success."""
+        try:
+            if self._fmt_of(path) == "json":
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                # Every app saves into the shared Documents folder, so validate
+                # this is a Screenplay document BEFORE touching any state: a
+                # foreign JSON (a ledger, a calendar, contacts, …) that lacks a
+                # string 'body' and a 'body_tags' element list is rejected here.
+                # Without this, Open would replace the model with an empty
+                # script, overwrite screenplay.json (session recovery) with it,
+                # and a later Save would clobber the foreign file — a silent
+                # data loss. On mismatch, flash and change nothing (no model /
+                # path / autosave mutation).
+                if (not isinstance(data, dict)
+                        or not isinstance(data.get("body"), str)
+                        or not isinstance(data.get("body_tags"), list)):
+                    self._flash("Unrecognized file")
+                    return False
+                body = str(data.get("body", ""))
+                tags = data.get("body_tags")
+                tags = tags if isinstance(tags, list) else []
+                title = str(data.get("title", "")) or self._title_from_path(path)
+                sub = data.get("subtitle")
+                subtitle = str(sub) if isinstance(sub, str) else ""
+            else:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    body = fh.read()
+                # for plain text the filename is the script's identity
+                title = self._title_from_path(path)
+                subtitle = ""
+                # A .fountain/.txt script carries its layout in convention, not
+                # markup. Recover the elements from those conventions, or every
+                # line would land on the Action margin and a real script would
+                # open as a flat, unindented memo.
+                tags = self._elements_from_text(body)
+        except Exception:
+            self._flash("Open failed")
+            return False
+        # Same reason as New: opening replaces the script AND its recovery
+        # snapshot, so the script that was on screen must be recoverable.
+        self.undo.checkpoint("Open Script")
+        self._set_document(title, body, tags, path, subtitle)
+        self.undo.commit()
+        return True
+
+    # Screenplay text conventions used to recognise elements in a plain script.
+    SCENE_PREFIXES = ("INT.", "EXT.", "INT ", "EXT ", "EST.", "I/E.", "INT/EXT")
+
+    def _elements_from_text(self, body):
+        """Element spans for a plain screenplay (.fountain/.txt), read from the
+        page conventions Fountain itself uses: a line opening INT./EXT. is a
+        scene heading, a line in brackets is a parenthetical, an all-caps line
+        with text under it is a character cue and what follows it is dialogue,
+        and a caps line ending 'TO:' is a transition. Deliberately conservative
+        — anything unrecognised is left as Action, which is exactly how an
+        untagged line already renders."""
+        spans = []
+        lines = body.split("\n")
+        off = 0
+        prev = None
+        for i, raw in enumerate(lines):
+            t = raw.strip()
+            if not t:
+                prev = None
+                off += len(raw) + 1
+                continue
+            caps = (t == t.upper() and any(c.isalpha() for c in t))
+            if t.startswith(".") and not t.startswith(".."):
+                idx = 0                     # forced scene heading
+            elif t.upper().startswith(self.SCENE_PREFIXES):
+                idx = 0
+            elif t.startswith("(") and t.endswith(")"):
+                idx = 4
+            elif caps and (t.endswith("TO:") or t.startswith("FADE OUT")
+                           or t.startswith("FADE TO")):
+                # right-aligned transitions only: "FADE IN:" opens a script on
+                # the left, which is why Insert treats it as Action too
+                idx = 5
+            elif caps and len(t) <= 40 and (
+                    i + 1 < len(lines) and lines[i + 1].strip()):
+                idx = 2                     # cue: caps line with dialogue under it
+            elif prev in (2, 3, 4):
+                idx = 3                     # dialogue runs to the next blank line
+            else:
+                idx = 1
+            spans.append({"tag": self.EL_TAGS[idx], "start": off,
+                          "end": off + len(raw)})
+            prev = idx
+            off += len(raw) + 1
+        return spans
+
+    def _write_file(self, path):
+        """Serialise the script to `path`. .json keeps the title and element
+        spans; .fountain/.txt write the body text only. Returns True on success."""
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            buf = self.body.get_buffer()
+            body = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+            if self._fmt_of(path) == "json":
+                data = {
+                    "title": self.scripttitle.get_text(),
+                    "subtitle": self.scriptsubtitle.get_text(),
+                    "body": body,
+                    "body_tags": self._serialize_body_tags(buf),
+                }
+                nbapp.atomic_write_json(path, data, ensure_ascii=False, indent=2)
+            else:
+                # atomic_write_text, never open(path, "w"): a plain open
+                # TRUNCATES the destination before the first new byte arrives,
+                # so a .fountain save that could not finish (a full disk, a USB
+                # stick pulled mid-write) destroyed the previous draft and left
+                # a stump in its place. Temp + fsync + rename leaves either the
+                # old script or the new one, never a ruined one.
+                nbapp.atomic_write_text(path, body)
+            return True
+        except Exception:
+            return False
+
+    def _file_save(self):
+        """Write to the current file; prompt via Save As if there is none."""
+        if not self._path:
+            return self._file_save_as()
+        if self._write_file(self._path):
+            self._file_dirty = False        # in sync with the file on disk now
+            self._save_doc()
+            self._update_status()
+            self._set_saved()
+        else:
+            self._flash("Save failed")
+
+    def _file_save_as(self):
+        """Pick a path and write the script there, then adopt it. A bare name
+        defaults to Screenplay .json because it preserves the title and element
+        formatting; plain-text (.fountain/.txt) export still works if explicitly
+        typed (it drops the title and every element span, so it must not be
+        default). The title page takes the chosen filename so it always reflects
+        the open file."""
+        path = self._choose_file(save=True)
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".json"             # default extension preserves formatting
+        self._path = path
+        self.scripttitle.set_text(self._title_from_path(path))
+        self._file_save()
+
+    def _file_open(self):
+        path = self._choose_file(save=False)
+        if not (path and os.path.isfile(path)):
+            return
+        # Open replaces the script and overwrites session recovery — guard the
+        # same unsaved-work case New does before touching any state.
+        if not self._confirm_replace("Open Script"):
+            return
+        self._open_file(path)
+
+    def _choose_file(self, save):
+        """Finder-style in-app picker under Documents; return a path or None."""
+        try:
+            os.makedirs(DOCS_DIR, exist_ok=True)
+        except Exception:
+            pass
+        base = os.path.dirname(self._path) if self._path else DOCS_DIR
+        start = base if os.path.isdir(base) else DOCS_DIR
+        pats = ("*.fountain", "*.txt", "*.json")
+        if save:
+            suggested = (os.path.basename(self._path) if self._path
+                         else self._default_name())
+            return nbpicker.save_file(self, title="Save Script As",
+                                      start_dir=start, suggested_name=suggested,
+                                      patterns=pats, default_ext=".json")
+        return nbpicker.open_file(self, title="Open Script",
+                                  start_dir=start, patterns=pats)
+
+    def _default_name(self):
+        """A neutral filename derived from the title, else 'screenplay.json'.
+        Defaults to the lossless .json extension so the prefilled Save-As name
+        keeps the title and element formatting unless the user types
+        .fountain/.txt."""
+        words = "".join(c if c.isalnum() else " "
+                        for c in self.scripttitle.get_text()).split()
+        return ("-".join(words).lower() or "screenplay") + ".json"
+
+    def _flash(self, text):
+        """Surface a transient file-op error in the save chip (crash-safe)."""
+        try:
+            self.saved.set_markup(
+                '<span foreground="#C8341E">● </span>%s' % text)
+        except Exception:
+            pass
+
+    # ---- PDF / printing (monospace screenplay pages) ----
+    def _script_elements(self):
+        """The script as a list of (element_index, line_text), one per body line.
+        An untagged line reads as Action, the screenplay default."""
+        out = []
+        buf = self.body.get_buffer()
+        table = buf.get_tag_table()
+        tags = [table.lookup(n) for n in self.EL_TAGS]
+        for ln in range(buf.get_line_count()):
+            s = buf.get_iter_at_line(ln)
+            e = s.copy()
+            if not e.ends_line():
+                e.forward_to_line_end()
+            text = buf.get_text(s, e, False)
+            idx = 1
+            for i, tag in enumerate(tags):
+                if tag is not None and s.has_tag(tag):
+                    idx = i
+                    break
+            out.append((idx, text))
+        return out
+
+    @staticmethod
+    def _wrap_text(text, cols):
+        """Word-wrap `text` to at most `cols` monospace columns, breaking any
+        single over-long word. Always returns at least one line."""
+        cols = max(1, int(cols))
+        words = text.split()
+        if not words:
+            return [""]
+        lines = []
+        cur = ""
+        for w in words:
+            while len(w) > cols:
+                if cur:
+                    lines.append(cur); cur = ""
+                lines.append(w[:cols]); w = w[cols:]
+            if not cur:
+                cur = w
+            elif len(cur) + 1 + len(w) <= cols:
+                cur += " " + w
+            else:
+                lines.append(cur); cur = w
+        if cur:
+            lines.append(cur)
+        return lines or [""]
+
+    def _pdf_lines(self):
+        """Flatten the script into physical page lines: (column, text, right)
+        tuples, with None for a blank spacer. Scene/Character/Transition set in
+        caps; a blank line is inserted before the elements that want the air."""
+        rows = []
+        prev_blank = True
+        for idx, text in self._script_elements():
+            col, width, upper, right = PDF_ELEMENT.get(idx, PDF_ELEMENT[1])
+            t = text.strip()
+            if not t:
+                if not prev_blank:
+                    rows.append(None); prev_blank = True
+                continue
+            if upper and idx in (0, 2, 5) and not prev_blank:
+                rows.append(None)          # air before scene / cue / transition
+            disp = t.upper() if upper else t
+            for wl in self._wrap_text(disp, width):
+                rows.append((col, wl, right))
+            prev_blank = False
+        return rows
+
+    def _build_pages(self):
+        """Return (page_count, draw_page) for nbprint. Page 1 is the title page;
+        the script flows from page 2. draw_page(cr, page_no, w, h) fills an opaque
+        page and lays the monospace script out at half-letter scale."""
+        title = (self.scripttitle.get_text() or DEFAULT_TITLE).upper()
+        rows = self._pdf_lines()
+        usable = nbprint.HALF_H_PT - PDF_MT - PDF_MB
+        lpp = max(1, int(usable // PDF_LEAD))
+        body_pages = max(1, -(-len(rows) // lpp))
+        page_count = 1 + body_pages
+
+        def draw_page(cr, page_no, w, h):
+            # opaque paper — a PDF page must never be left transparent
+            cr.set_source_rgb(0.988, 0.984, 0.972)   # #FCFBF8
+            cr.rectangle(0, 0, w, h); cr.fill()
+            cr.set_source_rgb(0.102, 0.098, 0.086)    # #1A1916 ink
+            cr.select_font_face("monospace", 0, 0)
+            if page_no <= 1:
+                cr.set_font_size(13.0)
+                ext = cr.text_extents(title)
+                cr.move_to((w - ext.width) / 2.0 - ext.x_bearing, h * 0.44)
+                cr.show_text(title)
+                return
+            cr.set_font_size(PDF_FS)
+            cw = cr.text_extents("M").x_advance or (PDF_FS * 0.6)
+            # body page number, top-right (first body page reads as "1.")
+            pn = "%d." % (page_no - 1)
+            pext = cr.text_extents(pn)
+            cr.move_to(w - PDF_MR - pext.width, PDF_MT - PDF_LEAD - 6)
+            cr.show_text(pn)
+            y = PDF_MT
+            for row in rows[(page_no - 2) * lpp:(page_no - 1) * lpp]:
+                if row is not None:
+                    col, text, right = row
+                    if right:
+                        rext = cr.text_extents(text)
+                        x = w - PDF_MR - rext.width
+                    else:
+                        x = PDF_ML + col * cw
+                    cr.move_to(x, y)
+                    cr.show_text(text)
+                y += PDF_LEAD
+
+        return page_count, draw_page
+
+    def _print(self):
+        """Print the script one logical page per sheet via the shared dialog."""
+        try:
+            page_count, draw = self._build_pages()
+        except Exception:
+            self._flash("Print failed")
+            return
+        nbprint.print_document(
+            self, lambda p: nbprint.simple_pdf(p, page_count, draw),
+            job_name="Screenplay")
+
+    def _zine_print(self):
+        """Impose the script as a 5.5x8.5 saddle-stitch booklet and print it."""
+        try:
+            page_count, draw = self._build_pages()
+        except Exception:
+            self._flash("Print failed")
+            return
+        nbprint.print_booklet(
+            self, lambda p: nbprint.booklet_pdf(p, page_count, draw),
+            job_name="Screenplay")
+
+    def _export_pdf(self):
+        """Write the script to a PDF the user picks (default under Documents)."""
+        path = self._choose_pdf_path()
+        if not path:
+            return
+        try:
+            page_count, draw = self._build_pages()
+            nbprint.simple_pdf(path, page_count, draw)
+            self._flash("Exported PDF")
+        except Exception:
+            self._flash("Export failed")
+
+    def _choose_pdf_path(self):
+        """Finder-style Save picker for a .pdf under Documents; path or None."""
+        try:
+            os.makedirs(DOCS_DIR, exist_ok=True)
+        except Exception:
+            pass
+        base = os.path.splitext(self._default_name())[0]
+        path = nbpicker.save_file(self, title="Export to PDF",
+                                  start_dir=DOCS_DIR,
+                                  suggested_name=base + ".pdf",
+                                  patterns=("*.pdf",), default_ext=".pdf")
+        if path and not os.path.splitext(path)[1]:
+            path += ".pdf"
+        return path
+
+    # -- menu-driven actions --
+    def _insert_snippet(self, text, element_idx=None):
+        """Insert `text` on its own line at the cursor, optionally tagging that
+        line with a screenplay element. Crash-safe."""
+        try:
+            buf = self.body.get_buffer()
+            it = buf.get_iter_at_mark(buf.get_insert())
+            self.undo.checkpoint("Insert")
+            buf.insert(it, ("" if it.starts_line() else "\n") + text)
+            if element_idx is not None and 0 <= element_idx < len(self._elbtns):
+                self._on_element(self._elbtns[element_idx], element_idx)
+            self.undo.commit()
+            self.body.grab_focus()
+        except Exception:
+            pass
+
+    def _toggle_wrap(self):
+        """Flip the script body between word-wrap and no-wrap. Crash-safe."""
+        try:
+            cur = self.body.get_wrap_mode()
+            self.body.set_wrap_mode(
+                Gtk.WrapMode.NONE if cur != Gtk.WrapMode.NONE
+                else Gtk.WrapMode.WORD)
+        except Exception:
+            pass
+
+    def _goto(self, where):
+        """Move the cursor to the start/end of the script and scroll to it."""
+        try:
+            buf = self.body.get_buffer()
+            it = buf.get_start_iter() if where == "start" else buf.get_end_iter()
+            buf.place_cursor(it)
+            self.body.scroll_to_mark(buf.get_insert(), 0.0, True, 0, 0)
+            self.body.grab_focus()
+        except Exception:
+            pass
+
+    def menu_items(self, name):
+        if name == "Edit":
+            # Undo/redo lead the menu, as they do in every editor — and they
+            # have to be VISIBLE, not just bound to a key nobody can discover.
+            return nbapp.undo_menu_items(self.undo) + [nbapp.SEP] \
+                + super().menu_items("Edit")
+        if name == "File":
+            return [
+                ("New    Ctrl+N", self._file_new),
+                ("Open…    Ctrl+O", self._file_open),
+                nbapp.SEP,
+                ("Save    Ctrl+S", self._file_save),
+                ("Save As…    Ctrl+Shift+S", self._file_save_as),
+                nbapp.SEP,
+                ("Print…", self._print),
+                ("Export to PDF…", self._export_pdf),
+                ("Zine Print…", self._zine_print),
+                nbapp.SEP,
+                ("Close    Esc", self.close),
+            ]
+        if name == "Format":
+            # each screenplay element applies its layout to the caret line (or
+            # the whole selection); Ctrl+1…6 pick them from the keyboard
+            return [("%s    Ctrl+%d" % (el, i + 1),
+                     (lambda i=i: self._on_element(self._elbtns[i], i)))
+                    for i, el in enumerate(ELEMENTS)]
+        if name == "Insert":
+            return [
+                ("Scene Heading — INT.",
+                 lambda: self._insert_snippet("INT. ", 0)),
+                ("Scene Heading — EXT.",
+                 lambda: self._insert_snippet("EXT. ", 0)),
+                nbapp.SEP,
+                ("Fade In", lambda: self._insert_snippet("FADE IN:", 1)),
+                ("Cut To", lambda: self._insert_snippet("CUT TO:", 5)),
+                ("Fade Out", lambda: self._insert_snippet("FADE OUT.", 5)),
+                nbapp.SEP,
+                ("The End", lambda: self._insert_snippet("THE END", 5)),
+            ]
+        if name == "View":
+            # Show the toggle's state in words rather than a checkmark glyph
+            # (U+2713 is absent from the bundled fonts and would render as tofu).
+            state = "on" if self._wrap_is_on() else "off"
+            return [
+                ("Find in Script    Ctrl+F", lambda: self._toggle_find(True)),
+                nbapp.SEP,
+                ("Word Wrap    (%s)" % state, self._toggle_wrap),
+                nbapp.SEP,
+                ("Go to Start", lambda: self._goto("start")),
+                ("Go to End", lambda: self._goto("end")),
+            ]
+        return super().menu_items(name)
+
+    def _wrap_is_on(self):
+        try:
+            return self.body.get_wrap_mode() != Gtk.WrapMode.NONE
+        except Exception:
+            return True
+
+    def _on_key(self, w, ev):
+        """The shortcuts a screenwriter reaches for: Ctrl+S save, Ctrl+Shift+S
+        Save As, Ctrl+O open, Ctrl+N new, and — while the body is focused —
+        Ctrl+1…6 to set the current line's element. Anything else falls through
+        to the base (Esc / menu handling, and the TextView's own editing keys)."""
+        try:
+            # Esc closes the find bar before the base handler closes the app.
+            if ev.keyval == Gdk.KEY_Escape and self._findbar.get_visible():
+                self._toggle_find(False)
+                return True
+            # Tab / Enter screenwriting flow — only while editing the body, so
+            # neither key is stolen from menu/focus navigation elsewhere.
+            if (self.get_focus() is self.body
+                    and not (ev.state & Gdk.ModifierType.CONTROL_MASK)):
+                kv = ev.keyval
+                if kv == Gdk.KEY_Tab:
+                    self._cycle_element(1)
+                    return True
+                if kv == Gdk.KEY_ISO_Left_Tab:   # Shift+Tab
+                    self._cycle_element(-1)
+                    return True
+                if kv in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+                    return self._newline(
+                        bool(ev.state & Gdk.ModifierType.SHIFT_MASK))
+            if ev.state & Gdk.ModifierType.CONTROL_MASK:
+                shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
+                kv = ev.keyval
+                if kv in (Gdk.KEY_s, Gdk.KEY_S):
+                    self._file_save_as() if shift else self._file_save()
+                    return True
+                if kv in (Gdk.KEY_o, Gdk.KEY_O) and not shift:
+                    self._file_open()
+                    return True
+                if kv in (Gdk.KEY_n, Gdk.KEY_N) and not shift:
+                    self._file_new()
+                    return True
+                if kv in (Gdk.KEY_f, Gdk.KEY_F) and not shift:
+                    self._toggle_find(True)
+                    return True
+                # Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
+                if nbapp.undo_keys(self.undo, ev):
+                    return True
+                # element quick-keys, only while editing the body so Ctrl+2 never
+                # fires from elsewhere in the chrome
+                if self.get_focus() is self.body and not shift:
+                    keys = (Gdk.KEY_1, Gdk.KEY_2, Gdk.KEY_3,
+                            Gdk.KEY_4, Gdk.KEY_5, Gdk.KEY_6)
+                    kpkeys = (Gdk.KEY_KP_1, Gdk.KEY_KP_2, Gdk.KEY_KP_3,
+                              Gdk.KEY_KP_4, Gdk.KEY_KP_5, Gdk.KEY_KP_6)
+                    for i in range(len(self._elbtns)):
+                        if kv == keys[i] or kv == kpkeys[i]:
+                            self._on_element(self._elbtns[i], i)
+                            return True
+        except Exception:
+            pass
+        return super()._on_key(w, ev)
+
+    def _install_css(self):
+        # Signage-red (#C8341E) appears ONLY as the active-element accent, the
+        # editing caret and error chips (alerts) — never decorative. The
+        # selected element chip uses a darker-beige chrome, not black. Chrome is
+        # Nimbus Sans; the script body itself is fixed-pitch Courier, as
+        # screenplay pages require. Papertone surfaces throughout.
+        css = b"""
+        .formatbar { background: #F4F2EC; border-bottom: 1px solid #D7D2C5;
+                     padding: 0 36px; min-height: 54px; }
+        .formatbar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
+        .elementlabel { font-size: 11px; letter-spacing: 0.12em; color: #9A9484;
+                        font-weight: 700; }
+        .elbtn { min-height: 30px; padding: 0 13px; font-size: 13px;
+                 font-weight: 500; color: #1A1916; background: #FCFBF8;
+                 border: 1px solid #D7D2C5; border-radius: 2px;
+                 box-shadow: none; }
+        .elbtn:hover { background: #F1EEE6; }
+        .elbtn.active { color: #C8341E; background: #EAE3D2;
+                        border: 1px solid #C9C4B6; font-weight: 700; }
+        /* The button's own label node needs the accent too: the theme's
+           `* { color: ink }` matches it directly and so beats the colour it
+           would otherwise inherit from the button, which silently dropped the
+           red from the selected element chip. */
+        .elbtn.active label { color: #C8341E; }
+        .elbtn.active:hover { background: #EAE3D2; }
+        .meta, .savestate { font-size: 13px; color: #6E695E; }
+        .msep { color: #D7D2C5; min-width: 1px; margin: 15px 0; }
+        .findbar { background: #EFEBE0; border-bottom: 1px solid #D7D2C5;
+                   padding: 8px 36px; }
+        .findbar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
+        .findinput { background: #FCFBF8; border: 1px solid #C4BFB1;
+                     border-radius: 2px; box-shadow: none; color: #1A1916;
+                     font-size: 13px; min-height: 30px; }
+        .findinput:focus { border: 1px solid #8A857A; }
+        .findbtn { min-height: 30px; padding: 0 12px; font-size: 13px;
+                   color: #2A2620; background: #FCFBF8;
+                   border: 1px solid #D7D2C5; border-radius: 2px;
+                   box-shadow: none; }
+        .findbtn:hover { background: #ECE8DD; }
+        .findcount { font-size: 13px; color: #6E695E; }
+        .desk { background: #E4DFD2; }
+        .desk viewport { background: #E4DFD2; }
+        .page { background: #FCFBF8; border: 1px solid #D7D2C5;
+                box-shadow: 2px 3px 0 rgba(26,25,22,0.10); }
+        .pageno { font-family: "Courier New","Liberation Mono",monospace; font-size: 15px;
+                  color: #9A9484; }
+        .scripttitle { font-family: "Courier New","Liberation Mono",monospace; font-size: 18px;
+                       font-weight: 700; letter-spacing: 0.04em; color: #1A1916; }
+        .scripttitle { background: transparent; border: none; box-shadow: none;
+                       padding: 0; caret-color: #C8341E; }
+        .scriptsubtitle { font-family: "Courier New","Liberation Mono",monospace;
+                       font-size: 15px; color: #6E695E; background: transparent;
+                       border: none; box-shadow: none; padding: 0;
+                       caret-color: #C8341E; }
+        .scriptsub { font-family: "Courier New","Liberation Mono",monospace; font-size: 15px;
+                     color: #6E695E; }
+        .scriptbody { font-family: "Courier New","Liberation Mono",monospace; font-size: 16px;
+                      color: #1A1916; background: #FCFBF8; caret-color: #C8341E; }
+        .scriptbody text { background: #FCFBF8; }
+        .scriptbody text selection { background-color: #F1D9D2; color: #1A1916; }
+        /* discard confirmation: a papertone card, matching the OS pattern */
+        .spdlg { background: #FCFBF8; border: 1px solid #C4BFB1; }
+        .spdlgbox { padding: 24px 28px 20px; }
+        .spdlgbox * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
+        .spdlgtitle { font-family: "Newsreader","Liberation Serif",serif;
+                      font-size: 19px; font-weight: 600; color: #1A1916; }
+        .spdlgmsg { font-size: 13px; color: #57534B; }
+        .spdlgcancel { font-size: 13px; color: #2A2620; padding: 6px 16px;
+                       background: #FCFBF8; border: 1px solid #C9C4B6;
+                       border-radius: 2px; box-shadow: none; }
+        .spdlgcancel:hover { background: #ECE8DD; }
+        .spdlgok { font-size: 13px; padding: 6px 16px; background: #C8341E;
+                   color: #FCFBF8; border: 1px solid #C8341E;
+                   border-radius: 2px; box-shadow: none; font-weight: 600; }
+        .spdlgok label { color: #FCFBF8; }
+        .spdlgok:hover { background: #A82A18; border-color: #A82A18; }
+        """
+        # A CSS parse failure must never abort window construction — degrade to
+        # the app's default (nbapp) styling instead of crashing on launch.
+        try:
+            prov = Gtk.CssProvider()
+            prov.load_from_data(css)
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(), prov,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    nbapp.run(Screenplay)

@@ -1,0 +1,581 @@
+#!/usr/bin/env python3
+"""
+GBA Emulator — Notebook OS front-end for the bundled VisualBoyAdvance-M core.
+
+A cartridge library: it scans the Home folder for Game Boy / Game Boy Color /
+Game Boy Advance ROMs and shows them as a grid of cartridges; selecting one (or
+opening a ROM from the browser, or double-clicking a ROM in the Finder) launches
+the vbam emulator. Detected USB game controllers — Logitech pads and friends —
+are listed and work in-game through vbam's SDL joystick support. The library and
+settings persist; nothing here fabricates a game that is not really on disk.
+"""
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
+
+import os
+import sys
+import json
+import time
+import shutil
+import subprocess
+
+import nbapp
+import nbpicker
+import nbicons
+import nbgame
+from nbi18n import _t  # noqa: E402
+
+HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
+CFG_DIR = os.path.join(HOME, ".config", "notebook")
+CFG_FILE = os.path.join(CFG_DIR, "gbaemu.json")
+
+INK = "#1A1916"
+MUTED = "#6E695E"
+FAINT = "#9A9484"
+GHOST = "#9A9484"
+RED = "#C8341E"
+
+# ROM extension -> the system it runs on (for the card's kind line).
+ROM_EXT = {
+    ".gba": "Game Boy Advance", ".gb": "Game Boy",
+    ".gbc": "Game Boy Color", ".sgb": "Super Game Boy",
+}
+# ROMs are also accepted zipped (vbam reads .zip directly).
+ARCHIVE_EXT = {".zip"}
+MAX_ROMS = 600
+
+
+def _is_rom(path):
+    return os.path.splitext(path)[1].lower() in ROM_EXT
+
+
+class GbaEmu(nbapp.AppWindow):
+    app_name = "GBA Emulator"
+    menus = ("File",)
+
+    def __init__(self):
+        super().__init__()
+        self._install_css()
+
+        self._settings = {"fullscreen": True, "scale": 3}
+        self._load_settings()
+        self._roms = []                 # [{path, name, system, ext}]
+        self._launch_time = 0.0
+        self._session = None            # the running nbgame.GameSession, if any
+        # NB: the vbam process, its stdout log and the Ctrl+Esc watch all live in
+        # nbgame.GameSession now — gbaemu only owns the library + the session.
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.set_hexpand(True)
+        outer.set_vexpand(True)
+        self.content.pack_start(outer, True, True, 0)
+
+        outer.pack_start(self._header(), False, False, 0)
+
+        # library (scrolls)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        scroll.get_style_context().add_class("libscroll")
+        self._lib_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._lib_body.set_vexpand(True)
+        scroll.add(self._lib_body)
+        outer.pack_start(scroll, True, True, 0)
+
+        outer.pack_start(self._controller_bar(), False, False, 0)
+
+        self._scan_roms()
+        self._render_library()
+        self._render_controllers()
+
+        # A ROM passed on the command line (Finder double-click) plays at once.
+        rompath = next((a for a in sys.argv[1:]
+                        if not a.startswith("-") and os.path.isfile(a)
+                        and _is_rom(a)), None)
+        if rompath:
+            GLib.idle_add(lambda: (self._play(rompath), False)[1])
+
+        self.connect("destroy", self._on_destroy)
+
+    # ================= header =================
+    def _header(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bar.get_style_context().add_class("emuhead")
+
+        icon = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("gamepad", 26, INK))
+        icon.set_valign(Gtk.Align.CENTER)
+        bar.pack_start(icon, False, False, 0)
+        titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        t = Gtk.Label(label=_t("GBA Emulator"), xalign=0)
+        t.get_style_context().add_class("emutitle")
+        titles.pack_start(t, False, False, 0)
+        s = Gtk.Label(label=_t("Game Boy · Color · Advance"), xalign=0)
+        s.get_style_context().add_class("emusub")
+        titles.pack_start(s, False, False, 0)
+        bar.pack_start(titles, False, False, 0)
+
+        bar.pack_start(Gtk.Box(), True, True, 0)
+
+        # fullscreen toggle
+        self._fs_btn = Gtk.ToggleButton(label=_t("Fullscreen"))
+        self._fs_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self._fs_btn.get_style_context().add_class("emutoggle")
+        self._fs_btn.set_active(bool(self._settings.get("fullscreen", True)))
+        self._fs_btn.connect("toggled", self._on_fs_toggled)
+        bar.pack_start(self._fs_btn, False, False, 0)
+
+        openb = Gtk.Button()
+        openb.set_relief(Gtk.ReliefStyle.NONE)
+        openb.get_style_context().add_class("emubtn")
+        oh = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
+        oh.pack_start(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 13, INK)),
+                      False, False, 0)
+        oh.pack_start(Gtk.Label(label=_t("Open Game")), False, False, 0)
+        openb.add(oh)
+        openb.connect("clicked", lambda *_: self._open_rom())
+        bar.pack_end(openb, False, False, 0)
+        return bar
+
+    # ================= library =================
+    def _scan_roms(self):
+        """Scan Home (recursively; hidden dirs skipped) for real ROM files."""
+        found = []
+        seen = set()
+        try:
+            for root, dirs, files in os.walk(HOME):
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                for f in files:
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext not in ROM_EXT:
+                        continue
+                    p = os.path.join(root, f)
+                    if p in seen:
+                        continue
+                    seen.add(p)
+                    found.append({"path": p, "name": os.path.splitext(f)[0],
+                                  "system": ROM_EXT[ext], "ext": ext})
+                    if len(found) >= MAX_ROMS:
+                        raise StopIteration
+        except StopIteration:
+            pass
+        except Exception:
+            pass
+        found.sort(key=lambda m: m["name"].lower())
+        self._roms = found
+
+    def _render_library(self):
+        for c in self._lib_body.get_children():
+            self._lib_body.remove(c)
+        if not self._vbam_path():
+            # pack tight: as an expanding child this warning stretched into a
+            # tall pink slab with two lines of text floating at the top of it
+            self._lib_body.pack_start(self._notice(
+                "Games can’t be played on this system",
+                "The part of Notebook OS that runs games is missing, so "
+                "nothing here will start. Your games are still listed."),
+                False, False, 0)
+        if not self._roms:
+            self._lib_body.pack_start(self._empty_state(), True, True, 0)
+            self._lib_body.show_all()
+            return
+        flow = Gtk.FlowBox()
+        flow.set_valign(Gtk.Align.START)
+        flow.set_max_children_per_line(6)
+        flow.set_min_children_per_line(2)
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_homogeneous(True)
+        flow.set_row_spacing(16)
+        flow.set_column_spacing(16)
+        flow.get_style_context().add_class("libflow")
+        for m in self._roms:
+            flow.add(self._rom_card(m))
+        self._lib_body.pack_start(flow, False, False, 0)
+        self._lib_body.show_all()
+
+    def _rom_card(self, m):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.get_style_context().add_class("romcard")
+        art = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        art.get_style_context().add_class("romart")
+        art.set_size_request(120, 120)
+        img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("cartridge", 52, "#B5502F"))
+        img.set_halign(Gtk.Align.CENTER)
+        img.set_valign(Gtk.Align.CENTER)
+        img.set_vexpand(True)
+        art.pack_start(img, True, True, 0)
+        card.pack_start(art, False, False, 0)
+        nm = Gtk.Label(label=m["name"])
+        nm.get_style_context().add_class("romname")
+        nm.set_ellipsize(Pango.EllipsizeMode.END)
+        nm.set_max_width_chars(15)
+        nm.set_justify(Gtk.Justification.CENTER)
+        card.pack_start(nm, False, False, 0)
+        sysl = Gtk.Label(label=m["system"])
+        sysl.get_style_context().add_class("romsys")
+        card.pack_start(sysl, False, False, 0)
+        evt = Gtk.EventBox()
+        evt.set_visible_window(False)
+        evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        evt.add(card)
+        evt.set_tooltip_text(_t("Play %s") % m["name"])
+        evt.connect("button-press-event",
+                    lambda _w, _e, p=m["path"]: (self._play(p), True)[1])
+        return evt
+
+    def _empty_state(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_vexpand(True)
+        box.set_margin_start(40)
+        box.set_margin_end(40)
+        g = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("cartridge", 52, GHOST))
+        g.set_halign(Gtk.Align.CENTER)
+        box.pack_start(g, False, False, 0)
+        t = Gtk.Label(label=_t("No games in your library"))
+        t.get_style_context().add_class("emptytitle")
+        box.pack_start(t, False, False, 0)
+        s = Gtk.Label(
+            label="Make one in the GBA IDE — build a game, choose Compile & "
+                  "Export, and it appears here ready to play. Or use Open Game "
+                  "to pick a .gba, .gbc, .gb or .sgb file you already have.")
+        s.set_justify(Gtk.Justification.CENTER)
+        s.set_line_wrap(True)
+        s.set_max_width_chars(54)
+        # max_width_chars only caps the NATURAL width; a box child defaults to
+        # halign FILL and would be stretched to the whole window, wrapping this
+        # into one 1300px line. Centring it makes the cap actually bind.
+        s.set_halign(Gtk.Align.CENTER)
+        s.get_style_context().add_class("emptysub")
+        box.pack_start(s, False, False, 0)
+        return box
+
+    def _notice(self, title, body):
+        n = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        n.get_style_context().add_class("emunotice")
+        t = Gtk.Label(label=title, xalign=0)
+        t.get_style_context().add_class("noticetitle")
+        n.pack_start(t, False, False, 0)
+        b = Gtk.Label(label=body, xalign=0)
+        b.set_line_wrap(True)
+        b.set_max_width_chars(60)
+        b.get_style_context().add_class("noticebody")
+        n.pack_start(b, False, False, 0)
+        return n
+
+    # ================= controllers =================
+    def _controller_bar(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        bar.get_style_context().add_class("ctrlbar")
+        ico = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("gamepad", 16, MUTED))
+        ico.set_valign(Gtk.Align.CENTER)
+        bar.pack_start(ico, False, False, 0)
+        self._ctrl_label = Gtk.Label(label="", xalign=0)
+        self._ctrl_label.get_style_context().add_class("ctrllabel")
+        self._ctrl_label.set_ellipsize(Pango.EllipsizeMode.END)
+        bar.pack_start(self._ctrl_label, True, True, 0)
+        rb = Gtk.Button(label=_t("Rescan"))
+        rb.set_relief(Gtk.ReliefStyle.NONE)
+        rb.get_style_context().add_class("emutoggle")
+        rb.connect("clicked", lambda *_: (self._scan_roms(),
+                   self._render_library(), self._render_controllers()))
+        bar.pack_end(rb, False, False, 0)
+        return bar
+
+    # Devices that carry absolute axes but are NOT game controllers.
+    _NOT_PAD = ("keyboard", "mouse", "touchpad", "trackpad", "tablet",
+                "consumer control", "system control", "video bus",
+                "power button", "sleep button", "pc speaker", "webcam",
+                "wmi hotkeys")
+    # Names that positively identify a game controller.
+    # Only words that describe what the device IS. Brand names are deliberately
+    # NOT here: "logitech" used to be, and it matched the Logitech M705 *mouse*,
+    # which the app then announced as a ready game controller.
+    _PAD_HINT = ("gamepad", "game pad", "controller", "joystick", "joypad",
+                 "dualshock", "dualsense", "rumblepad", "gamecube")
+
+    # The button codes the kernel assigns to a device it has classified as a
+    # pad. A mouse reports BTN_MOUSE (0x110) and a keyboard reports ordinary
+    # keycodes, so testing for these is what actually separates a controller
+    # from every other USB thing plugged into the machine.
+    _BTN_JOYSTICK = 0x120
+    _BTN_GAMEPAD = 0x130
+
+    @staticmethod
+    def _bit_set(mask, bit):
+        """Is `bit` set in a /proc/bus/input/devices bitmask?
+
+        The kernel prints these as space-separated hex words, most significant
+        word first, the last word holding bits 0..63 (BITS_PER_LONG on the
+        64-bit kernel this OS ships)."""
+        words = mask.split()
+        idx = bit // 64
+        if not words or idx >= len(words):
+            return False
+        try:
+            word = int(words[len(words) - 1 - idx], 16)
+        except ValueError:
+            return False
+        return bool((word >> (bit % 64)) & 1)
+
+    def _detect_controllers(self):
+        """Names of connected game controllers, read from
+        /proc/bus/input/devices. This kernel exposes gamepads through evdev
+        (/dev/input/event*) via the generic-HID driver — which is exactly what
+        vbam's SDL layer binds.
+
+        A device counts as a pad when it has an evdev node and the kernel gave
+        it joystick/gamepad buttons — or, as a fallback for an oddly-described
+        pad, when its own name says it is one. Mice, keyboards and the rest are
+        excluded FIRST and unconditionally: a name hint must never be able to
+        promote a pointer, which is how a Logitech mouse and a USB microphone
+        both ended up announced as ready controllers."""
+        pads = []
+        try:
+            with open("/proc/bus/input/devices") as fh:
+                blob = fh.read()
+        except Exception:
+            return pads
+        for block in blob.split("\n\n"):
+            if not block.strip():
+                continue
+            name, handlers, keymask = "", "", ""
+            for line in block.splitlines():
+                if line.startswith("N: Name="):
+                    name = line.split("=", 1)[1].strip().strip('"')
+                elif line.startswith("H: Handlers="):
+                    handlers = line.split("Handlers=", 1)[1]
+                elif line.startswith("B: KEY="):
+                    keymask = line.split("KEY=", 1)[1].strip()
+            if not name or "event" not in handlers:
+                continue
+            low = name.lower()
+            # a pointer is never a game controller, whatever brand made it
+            if "mouse" in handlers or any(x in low for x in self._NOT_PAD):
+                continue
+            if not (self._bit_set(keymask, self._BTN_GAMEPAD)
+                    or self._bit_set(keymask, self._BTN_JOYSTICK)
+                    or any(h in low for h in self._PAD_HINT)):
+                continue
+            pads.append(name)
+        return pads
+
+    def _render_controllers(self):
+        pads = self._detect_controllers()
+        if pads:
+            txt = "Controller ready: " + ", ".join(pads[:2])
+            if len(pads) > 2:
+                txt += " +%d more" % (len(pads) - 2)
+        else:
+            txt = ("No game controller detected — keyboard works "
+                   "(arrows + Z/X); plug in a USB gamepad to use it.")
+        self._ctrl_label.set_text(txt)
+
+    # ================= launch =================
+    def _vbam_path(self):
+        try:
+            return shutil.which("vbam") or (
+                "/usr/bin/vbam" if os.path.exists("/usr/bin/vbam") else None)
+        except Exception:
+            return None
+
+    def _log_path(self):
+        try:
+            os.makedirs(CFG_DIR, exist_ok=True)
+        except OSError:
+            pass
+        return os.path.join(CFG_DIR, "vbam.log")
+
+    def _play(self, rompath):
+        vbam = self._vbam_path()
+        if not vbam:
+            self._flash("The emulator core isn’t installed.")
+            return
+        if not (rompath and os.path.isfile(rompath)):
+            self._flash("That ROM file is missing.")
+            return
+        if self._session is not None:       # a game is already running
+            return
+        self._launch_time = time.monotonic()
+        self._flash("Playing %s — press Ctrl+Esc to exit."
+                    % os.path.basename(rompath))
+        # Run the game inside a fullscreen "stage": a raw vbam window is unmapped
+        # by the single-app WM, so nbgame reparents vbam into a fullscreen app
+        # window (which also puts the desktop menu bar behind the game), and
+        # wires a global Ctrl+Esc to quit. See de/nbgame.py.
+        try:
+            self._session = nbgame.GameSession(self, vbam, rompath,
+                                               self._on_game_end)
+            self._session.run()
+        except Exception:
+            self._session = None
+            self._flash("Couldn’t start the emulator — see File ▸ Emulator Log.")
+            try:                       # make the failure diagnosable on-device
+                import traceback
+                with open(self._log_path(), "a") as fh:
+                    fh.write("\n[gbaemu] game session failed:\n")
+                    fh.write(traceback.format_exc())
+            except Exception:
+                pass
+
+    def _on_game_end(self):
+        self._session = None
+        # A game that dies within ~2s never really started — point at the log.
+        quick = (time.monotonic() - self._launch_time) < 2.0
+        self._flash("The game closed right away — see File ▸ Emulator Log."
+                    if quick else "")
+        try:
+            self.present()              # bring the launcher back to the front
+        except Exception:
+            pass
+
+    def _flash(self, text):
+        try:
+            self._ctrl_label.set_text(text)
+        except Exception:
+            pass
+
+    def _open_rom(self):
+        start = HOME
+        for d in ("Documents", "Desktop"):
+            p = os.path.join(HOME, d)
+            if os.path.isdir(p):
+                start = p
+                break
+        patterns = tuple("*" + e for e in sorted(ROM_EXT)) + ("*.zip",)
+        path = nbpicker.open_file(self, title="Open Game", start_dir=start,
+                                  patterns=patterns)
+        if path and os.path.isfile(path):
+            if _is_rom(path):
+                # bring a newly-opened ROM into the library, then play it
+                if not any(m["path"] == path for m in self._roms):
+                    self._scan_roms()
+                    self._render_library()
+                self._play(path)
+            else:
+                self._play(path)     # e.g. a .zip — let vbam try
+
+    # ================= settings =================
+    def _on_fs_toggled(self, btn):
+        self._settings["fullscreen"] = bool(btn.get_active())
+        self._save_settings()
+
+    def _load_settings(self):
+        try:
+            with open(CFG_FILE) as fh:
+                data = json.load(fh)
+            if isinstance(data, dict):
+                if isinstance(data.get("fullscreen"), bool):
+                    self._settings["fullscreen"] = data["fullscreen"]
+                if isinstance(data.get("scale"), int):
+                    self._settings["scale"] = max(1, min(6, data["scale"]))
+        except Exception:
+            pass
+
+    def _save_settings(self):
+        try:
+            nbapp.atomic_write_json(CFG_FILE, self._settings)
+        except Exception:
+            pass
+
+    def _on_destroy(self, *_):
+        # Tear down a running game so it can't orphan a stage/vbam over the desktop.
+        if self._session is not None:
+            try:
+                self._session.stop()
+                self._session._finish()
+            except Exception:
+                pass
+            self._session = None
+        self._save_settings()
+        return False
+
+    # ================= menu =================
+    def menu_items(self, name):
+        if name == "File":
+            return [
+                ("Open Game…", lambda: self._open_rom()),
+                ("Rescan Library", lambda: (self._scan_roms(),
+                 self._render_library(), self._render_controllers())),
+                ("Emulator Log…", self._show_log),
+                nbapp.SEP,
+                ("Close    Esc", self.close),
+            ]
+        return super().menu_items(name)
+
+    def _show_log(self):
+        try:
+            with open(self._log_path()) as fh:
+                text = fh.read().strip()
+        except OSError:
+            text = ""
+        if not text:
+            text = "No game has been launched yet."
+        dlg = Gtk.Dialog(title="Emulator Log", transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.set_default_size(560, 380)
+        box = dlg.get_content_area()
+        sw = Gtk.ScrolledWindow()
+        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sw.set_vexpand(True)
+        tv = Gtk.TextView()
+        tv.set_editable(False)
+        tv.set_cursor_visible(False)
+        tv.set_monospace(True)
+        tv.get_buffer().set_text(text)
+        sw.add(tv)
+        box.pack_start(sw, True, True, 0)
+        dlg.add_button("Close", Gtk.ResponseType.CLOSE)
+        dlg.show_all()
+        dlg.run()
+        dlg.destroy()
+
+    # ================= css =================
+    def _install_css(self):
+        css = b"""
+        * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
+        .emuhead { background: #F1EEE6; border-bottom: 1px solid #C9C4B6;
+                   padding: 16px 22px; }
+        .emutitle { font-size: 17px; font-weight: 600; color: #1A1916; }
+        .emusub { font-size: 12px; color: #9A9484; letter-spacing: 0.03em; }
+        .emubtn { min-height: 30px; padding: 0 14px; border: 1px solid #C9C4B6;
+                  background: #FCFBF8; border-radius: 2px; box-shadow: none;
+                  font-size: 12.5px; font-weight: 600; color: #1A1916; }
+        .emubtn:hover { background: #F4F2EC; }
+        .emutoggle { padding: 6px 12px; border: 1px solid #C9C4B6;
+                     background: #FCFBF8; border-radius: 2px; box-shadow: none;
+                     font-size: 12.5px; color: #1A1916; }
+        .emutoggle:hover { background: #F4F2EC; }
+        .emutoggle:checked { background: #EAE3D2; border-color: #B3AD9E; }
+        .libscroll, .libscroll viewport { background: #FCFBF8; }
+        .libflow { padding: 24px; }
+        .romcard { padding: 4px; }
+        .romart { background: #F1EEE6; border: 1px solid #C9C4B6;
+                  border-radius: 4px; }
+        .romcard:hover .romart { background: #FBEFEC; border-color: #C8341E; }
+        .romname { font-size: 13px; color: #1A1916; font-weight: 600; }
+        .romsys { font-size: 11px; color: #9A9484; }
+        .emptytitle { font-size: 15px; font-weight: 600; color: #6E695E; }
+        .emptysub { font-size: 13px; color: #9A9484; }
+        .emunotice { margin: 20px 24px 0; padding: 12px 16px;
+                     background: #FBEFEC; border: 1px solid #E4C7C0;
+                     border-radius: 3px; }
+        .noticetitle { font-size: 13px; font-weight: 600; color: #B12D19; }
+        .noticebody { font-size: 12.5px; color: #6E695E; }
+        .ctrlbar { background: #F1EEE6; border-top: 1px solid #C9C4B6;
+                   padding: 10px 22px; }
+        .ctrllabel { font-size: 12.5px; color: #6E695E; }
+        """
+        prov = Gtk.CssProvider()
+        try:
+            prov.load_from_data(css)
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(), prov,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    nbapp.run(GbaEmu)

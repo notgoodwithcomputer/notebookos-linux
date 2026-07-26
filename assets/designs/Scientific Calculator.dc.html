@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#DED4C2;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Calculator</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="3">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== CALCULATOR ===================== -->
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;min-height:0;padding:40px;">
+      <div style="width:640px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.12);">
+        <!-- display -->
+        <div style="padding:30px 28px 26px;border-bottom:1px solid #1A1916;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+            <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Scientific</div>
+            <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#8A857A;font-weight:600;font-variant-numeric:tabular-nums;">{{ degLabel }}</div>
+          </div>
+          <div style="text-align:right;font-size:15px;color:#9A958A;min-height:20px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ history }}</div>
+          <div style="text-align:right;font-size:52px;font-weight:500;color:#1A1916;letter-spacing:-0.01em;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.15;margin-top:4px;">{{ display }}</div>
+        </div>
+        <!-- keypad -->
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:#D7D2C5;">
+          <sc-for list="{{ keys }}" as="k" hint-placeholder-count="36">
+            <div onClick="{{ k.onClick }}" style="{{ k.style }}" style-hover="{{ k.hover }}">{{ k.label }}</div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(2026, 5, 20, 9, 41, 0), expr: "", history: "", deg: true, justEvaled: false };
+
+  keyDefs = [
+    { l: "2nd", a: "noop", t: "fn" }, { l: "DEG", a: "deg", t: "fn" }, { l: "sin", a: "app", v: "sin(", t: "fn" }, { l: "cos", a: "app", v: "cos(", t: "fn" }, { l: "tan", a: "app", v: "tan(", t: "fn" }, { l: "AC", a: "ac", t: "clear" },
+    { l: "x\u02b8", a: "app", v: "^", t: "fn" }, { l: "log", a: "app", v: "log(", t: "fn" }, { l: "ln", a: "app", v: "ln(", t: "fn" }, { l: "(", a: "app", v: "(", t: "fn" }, { l: ")", a: "app", v: ")", t: "fn" }, { l: "\u232b", a: "back", t: "clear" },
+    { l: "\u221a", a: "app", v: "\u221a(", t: "fn" }, { l: "\u03c0", a: "app", v: "\u03c0", t: "fn" }, { l: "7", a: "app", v: "7", t: "num" }, { l: "8", a: "app", v: "8", t: "num" }, { l: "9", a: "app", v: "9", t: "num" }, { l: "\u00f7", a: "app", v: "\u00f7", t: "op" },
+    { l: "x\u00b2", a: "app", v: "^2", t: "fn" }, { l: "e", a: "app", v: "e", t: "fn" }, { l: "4", a: "app", v: "4", t: "num" }, { l: "5", a: "app", v: "5", t: "num" }, { l: "6", a: "app", v: "6", t: "num" }, { l: "\u00d7", a: "app", v: "\u00d7", t: "op" },
+    { l: "1/x", a: "inv", t: "fn" }, { l: "x!", a: "app", v: "!", t: "fn" }, { l: "1", a: "app", v: "1", t: "num" }, { l: "2", a: "app", v: "2", t: "num" }, { l: "3", a: "app", v: "3", t: "num" }, { l: "\u2212", a: "app", v: "\u2212", t: "op" },
+    { l: "\u00b1", a: "neg", t: "fn" }, { l: "%", a: "app", v: "%", t: "fn" }, { l: "0", a: "app", v: "0", t: "num" }, { l: ".", a: "app", v: ".", t: "num" }, { l: "=", a: "eq", t: "eq" }, { l: "+", a: "app", v: "+", t: "op" },
+  ];
+
+  componentDidMount() { this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+
+  evaluate() {
+    let js = this.state.expr;
+    if (!js.trim()) return "0";
+    js = js.split("\u00d7").join("*").split("\u00f7").join("/").split("\u2212").join("-")
+           .split("\u03c0").join("(PI)").split("\u221a").join("sqrt").split("^").join("**");
+    js = js.replace(/(\d+(?:\.\d+)?)%/g, "($1/100)").replace(/(\d+)!/g, "fact($1)");
+    const d2r = this.state.deg ? Math.PI / 180 : 1;
+    try {
+      const f = new Function("sin", "cos", "tan", "ln", "log", "sqrt", "fact", "PI", "e",
+        "return (" + js + ")");
+      const fact = (n) => { n = Math.round(n); if (n < 0) return NaN; let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; };
+      const r = f((x) => Math.sin(x * d2r), (x) => Math.cos(x * d2r), (x) => Math.tan(x * d2r),
+        Math.log, (x) => Math.log10(x), Math.sqrt, fact, Math.PI, Math.E);
+      if (r === Infinity || r === -Infinity || Number.isNaN(r) || r === undefined) return "Error";
+      return String(Number(r.toPrecision(12)));
+    } catch (err) { return "Error"; }
+  }
+
+  press(k) {
+    const s = this.state;
+    if (k.a === "noop") return;
+    if (k.a === "deg") { this.setState({ deg: !s.deg }); return; }
+    if (k.a === "ac") { this.setState({ expr: "", history: "", justEvaled: false }); return; }
+    if (k.a === "back") { this.setState({ expr: s.expr.slice(0, -1), justEvaled: false }); return; }
+    if (k.a === "neg") { this.setState({ expr: s.expr ? "\u2212(" + s.expr + ")" : "\u2212", justEvaled: false }); return; }
+    if (k.a === "inv") { this.setState({ expr: s.expr ? "1\u00f7(" + s.expr + ")" : "1\u00f7(", justEvaled: false }); return; }
+    if (k.a === "eq") {
+      const r = this.evaluate();
+      this.setState({ history: s.expr + " =", expr: r === "Error" ? "" : r, justEvaled: true });
+      if (r === "Error") this.setState({ history: "Error" });
+      return;
+    }
+    if (k.a === "app") {
+      const isOp = k.t === "op" || k.v === "^" || k.v === "%" || k.v === "^2" || k.v === "!" || k.v === ")";
+      if (s.justEvaled) {
+        this.setState({ expr: isOp ? s.expr + k.v : k.v, justEvaled: false });
+      } else {
+        this.setState({ expr: s.expr + k.v, justEvaled: false });
+      }
+    }
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const P = (d) => E("path", { d });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    if (k === "signal") return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+    return S(R(5, 5, 14, 14, 1));
+  }
+
+  renderVals() {
+    const styleFor = (t) => {
+      const base = "height:66px;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;";
+      if (t === "num") return base + "background:#F8F7F2;color:#1A1916;font-size:23px;font-weight:500;";
+      if (t === "op") return base + "background:#E6DFCE;color:#1A1916;font-size:24px;";
+      if (t === "eq") return base + "background:#C8341E;color:#FCFBF8;font-size:25px;font-weight:600;";
+      if (t === "clear") return base + "background:#EBE6DA;color:#1A1916;font-size:17px;font-weight:600;";
+      return base + "background:#EFEBE0;color:#3A362E;font-size:16px;"; // fn
+    };
+    const hoverFor = (t) => {
+      if (t === "num") return "background:#EFEBE0;";
+      if (t === "op") return "background:#DCD3BF;";
+      if (t === "eq") return "background:#B12C18;";
+      return "background:#E3DCCB;";
+    };
+    const keys = this.keyDefs.map((k) => ({
+      label: k.l === "DEG" ? (this.state.deg ? "DEG" : "RAD") : k.l,
+      onClick: () => this.press(k),
+      style: styleFor(k.t),
+      hover: hoverFor(k.t),
+    }));
+
+    return {
+      menus: ["File", "Edit", "View"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"),
+      keys,
+      display: this.state.expr || "0",
+      history: this.state.history,
+      degLabel: this.state.deg ? "Degrees" : "Radians",
+    };
+  }
+}
+</script>
+</body>
+</html>

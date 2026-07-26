@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  input { font-family: inherit; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== MENU BAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:50;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Video Editor</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== IMPORT DIALOG ===================== -->
+    <sc-if value="{{ importDlg }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onImportClose }}" style="position:absolute;inset:0;z-index:72;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:460px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:28px 30px;">
+          <div style="font-size:17px;font-weight:700;color:#1A1916;margin-bottom:14px;">Import Media</div>
+          <div style="border:1px solid #DCD7C9;border-radius:2px;background:#FCFBF8;padding:34px 20px;text-align:center;">
+            <div style="font-size:14px;color:#6E695E;margin-bottom:5px;">No video, image, or audio files on this disk</div>
+            <div style="font-size:12.5px;color:#A39D8F;">Files placed anywhere in Home can be imported.</div>
+          </div>
+          <div onClick="{{ onImportClose }}" style="margin:20px 0 0 auto;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== UPPER ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+      <!-- media bin -->
+      <div style="width:340px;flex:none;border-right:1px solid #D7D2C5;background:#F1EEE6;display:flex;flex-direction:column;">
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #D7D2C5;">
+          <div style="font-size:13px;letter-spacing:0.1em;text-transform:uppercase;color:#1A1916;font-weight:700;">Media</div>
+          <div onClick="{{ onImport }}" style="height:30px;padding:0 12px;display:flex;align-items:center;gap:7px;border:1px solid #C4BFB1;background:#FBFAF6;border-radius:2px;font-size:12.5px;font-weight:600;color:#1A1916;cursor:pointer;" style-hover="background:#ECE8DD;">
+            <div style="width:13px;height:13px;display:flex;">{{ plusGlyph }}</div>Import
+          </div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:20px;">
+          <div style="width:40px;height:40px;color:#B5B0A3;display:flex;">{{ filmGlyph }}</div>
+          <div style="font-size:14px;font-weight:600;color:#6E695E;">No media imported</div>
+          <div style="font-size:12.5px;color:#A39D8F;text-align:center;line-height:1.5;">Import clips, stills, and audio, then drag them to the storyboard.</div>
+        </div>
+        <!-- transitions -->
+        <div style="flex:none;border-top:1px solid #D7D2C5;padding:16px 18px;">
+          <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:10px;">Transitions</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+            <sc-for list="{{ transitions }}" as="tr" hint-placeholder-count="6">
+              <div title="{{ tr.name }}" style="border:1px solid #DCD7C9;background:#FBFAF6;border-radius:2px;padding:9px 4px 7px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:default;opacity:0.55;">
+                <div style="width:20px;height:20px;color:#3A362E;display:flex;">{{ tr.glyph }}</div>
+                <span style="font-size:10.5px;color:#6E695E;">{{ tr.name }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <!-- preview -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;background:#FCFBF8;">
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:26px 40px 14px;min-height:0;">
+          <div style="aspect-ratio:16/9;max-width:100%;max-height:100%;flex:1;background:#15140F;border:1px solid #1A1916;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;">
+            <div style="width:44px;height:44px;color:#4A463E;display:flex;">{{ playBigGlyph }}</div>
+            <div style="font-size:13.5px;color:#8A857A;">Nothing to preview</div>
+          </div>
+        </div>
+        <div style="flex:none;display:flex;align-items:center;justify-content:center;gap:10px;padding:6px 0 18px;">
+          <div style="{{ offRound }}"><div style="width:15px;height:15px;display:flex;">{{ prevGlyph }}</div></div>
+          <div style="{{ offRoundBig }}"><div style="width:18px;height:18px;display:flex;margin-left:2px;">{{ playGlyph }}</div></div>
+          <div style="{{ offRound }}"><div style="width:15px;height:15px;display:flex;">{{ nextGlyph }}</div></div>
+          <div style="font-size:13px;color:#8A857A;font-variant-numeric:tabular-nums;margin-left:14px;">00:00:00 / 00:00:00</div>
+        </div>
+      </div>
+
+      <!-- properties -->
+      <div style="width:300px;flex:none;border-left:1px solid #E6E1D4;background:#FBFAF6;padding:22px 22px;">
+        <div style="font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:14px;">Properties</div>
+        <div style="font-size:13.5px;color:#A39D8F;line-height:1.6;">Select a clip on the storyboard to edit its duration, transition, and title overlay.</div>
+        <div style="border-top:1px solid #ECE7DA;margin-top:18px;padding-top:16px;">
+          <div style="display:flex;justify-content:space-between;padding:9px 0;font-size:13.5px;"><span style="color:#8A857A;">Project</span><span style="color:#1A1916;">Untitled</span></div>
+          <div style="display:flex;justify-content:space-between;padding:9px 0;font-size:13.5px;"><span style="color:#8A857A;">Format</span><span style="color:#1A1916;">720p · 24 fps</span></div>
+          <div style="display:flex;justify-content:space-between;padding:9px 0;font-size:13.5px;"><span style="color:#8A857A;">Duration</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">00:00:00</span></div>
+          <div style="display:flex;justify-content:space-between;padding:9px 0;font-size:13.5px;"><span style="color:#8A857A;">Clips</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">0</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== TIMELINE ===================== -->
+    <div style="height:290px;flex:none;border-top:1px solid #1A1916;background:#F1EEE6;display:flex;flex-direction:column;">
+      <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:10px 18px;border-bottom:1px solid #D7D2C5;">
+        <div style="display:flex;border:1px solid #C4BFB1;border-radius:2px;overflow:hidden;font-size:13px;">
+          <div onClick="{{ onStoryboard }}" style="{{ storyBtn }}">Storyboard</div>
+          <div onClick="{{ onTimeline }}" style="{{ timelineBtn }}">Timeline</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div style="{{ offSquare }}"><div style="width:14px;height:14px;display:flex;">{{ zoomOutGlyph }}</div></div>
+          <div style="{{ offSquare }}"><div style="width:14px;height:14px;display:flex;">{{ zoomInGlyph }}</div></div>
+        </div>
+      </div>
+
+      <!-- STORYBOARD -->
+      <sc-if value="{{ storyboardOn }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;align-items:center;gap:14px;padding:0 24px;overflow:hidden;">
+        <sc-for list="{{ storyCells }}" as="c" hint-placeholder-count="8">
+          <div style="display:flex;align-items:center;gap:14px;flex:none;">
+            <div style="width:150px;height:112px;border:1.5px dashed #B5B0A3;border-radius:2px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:#F8F6F0;">
+              <span style="font-size:12px;color:#B0AB9D;font-variant-numeric:tabular-nums;">{{ c.n }}</span>
+              <span style="font-size:11px;color:#B5B0A3;">Drag media here</span>
+            </div>
+            <sc-if value="{{ c.showTrans }}" hint-placeholder-val="{{ true }}">
+              <div style="width:34px;height:34px;border:1px dashed #C9C4B6;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;color:#C9C4B6;font-size:11px;">+</div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <!-- TIMELINE -->
+      <sc-if value="{{ timelineOn }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0;padding:0 0 8px;">
+        <div style="flex:none;display:flex;height:26px;border-bottom:1px solid #D7D2C5;">
+          <div style="width:110px;flex:none;border-right:1px solid #D7D2C5;"></div>
+          <div style="flex:1;position:relative;">
+            <sc-for list="{{ ruler }}" as="r" hint-placeholder-count="9">
+              <div style="{{ r.style }}">{{ r.label }}</div>
+            </sc-for>
+            <div style="position:absolute;left:0;top:0;bottom:-172px;width:2px;background:#C8341E;z-index:5;"></div>
+          </div>
+        </div>
+        <sc-for list="{{ tracks }}" as="tk" hint-placeholder-count="4">
+          <div style="flex:1;display:flex;border-bottom:1px solid #E0DBCE;min-height:0;">
+            <div style="width:110px;flex:none;border-right:1px solid #D7D2C5;display:flex;align-items:center;padding:0 12px;font-size:11.5px;letter-spacing:0.06em;text-transform:uppercase;color:#6E695E;font-weight:600;">{{ tk.label }}</div>
+            <div style="flex:1;display:flex;align-items:center;padding:0 14px;font-size:12px;color:#B5B0A3;">{{ tk.empty }}</div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false, view: "storyboard", importDlg: false };
+
+  componentDidMount() {
+    this._esc = (e) => { if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen || this.state.importDlg) { this.setState({ openMenu: null, aboutOpen: false, importDlg: false }); } else { this.goHome(); } } };
+    window.addEventListener("keydown", this._esc);
+    this.timer = setInterval(() => this.setState({ now: new Date() }), 10000);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this._esc); clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; }
+
+  appFile = "Video Editor.dc.html";
+  appName = "Video Editor";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File", "Edit", "View", "Clip"]; }
+  appMenuItems(name) {
+    const S = this.state;
+    if (name === "File") return [
+      this.mi("New Project", () => this.setState({ view: "storyboard", openMenu: null }), { hint: "⌘N" }),
+      this.mi("Import Media…", () => this.setState({ importDlg: true, openMenu: null }), { hint: "⌘I" }),
+      this.off("Save Project", "empty project"),
+      this.msep(),
+      this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" }),
+    ];
+    if (name === "Edit") return [this.off("Undo"), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste")];
+    if (name === "View") return [
+      this.mi("Storyboard", () => this.setState({ view: "storyboard", openMenu: null }), { check: S.view === "storyboard" ? "✓" : "" }),
+      this.mi("Timeline", () => this.setState({ view: "timeline", openMenu: null }), { check: S.view === "timeline" ? "✓" : "" }),
+    ];
+    if (name === "Clip") return [this.off("Split"), this.off("Trim"), this.off("Add Title Overlay"), this.off("Add Transition")];
+    return [this.off("No actions")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS…", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart…", () => this.power("restart")),
+      this.mi("Shut Down…", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "✓" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 · strong"), this.off("NODE-22", "ch 4 · good"), this.off("NODE-7F", "ch 4 · strong"), this.off("NODE-88", "ch 6 · fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "film": return S(R(3, 5, 18, 14, 1.5), L(8, 5, 8, 19), L(16, 5, 16, 19), L(3, 9.5, 8, 9.5), L(3, 14.5, 8, 14.5), L(16, 9.5, 21, 9.5), L(16, 14.5, 21, 14.5));
+      case "plus": return S(L(12, 5, 12, 19), L(5, 12, 19, 12));
+      case "play": return S(P("M8 5l11 7-11 7z"));
+      case "prev": return S(P("M18 5l-9 7 9 7z"), L(6, 5, 6, 19));
+      case "next": return S(P("M6 5l9 7-9 7z"), L(18, 5, 18, 19));
+      case "zoomin": return S(C(11, 11, 6), L(15.4, 15.4, 20, 20), L(11, 8.5, 11, 13.5), L(8.5, 11, 13.5, 11));
+      case "zoomout": return S(C(11, 11, 6), L(15.4, 15.4, 20, 20), L(8.5, 11, 13.5, 11));
+      case "fade": return S(R(4, 6, 7, 12, 1), R(13, 6, 7, 12, 1), L(11, 12, 13, 12));
+      case "wipe": return S(R(4, 6, 16, 12, 1), L(12, 6, 12, 18));
+      case "dissolve": return S(R(4, 6, 16, 12, 1), C(9, 10, 0.6), C(13, 13, 0.6), C(11, 15, 0.6), C(15, 9, 0.6));
+      case "slide": return S(R(4, 6, 16, 12, 1), P("M9 12h7"), P("M13 9l3 3-3 3"));
+      case "iris": return S(R(4, 6, 16, 12, 1), C(12, 12, 3.4));
+      case "black": return S(R(4, 6, 16, 12, 1), P("M4 6l16 12"));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    const S = this.state;
+    const btn = (on) => "padding:7px 15px;cursor:pointer;font-weight:600;" + (on ? "color:#FCFBF8;background:#1A1916;" : "color:#3A362E;background:#FBFAF6;");
+    const storyCells = [];
+    for (let i = 1; i <= 8; i++) storyCells.push({ n: i, showTrans: i < 8 });
+    const ruler = [];
+    for (let i = 0; i <= 8; i++) ruler.push({
+      label: "00:" + this.pad(i * 15),
+      style: "position:absolute;left:" + (i * 12) + "%;top:4px;font-size:10.5px;color:#A39D8F;font-variant-numeric:tabular-nums;border-left:1px solid #C9C4B6;padding-left:5px;height:18px;",
+    });
+    return {
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(),
+      signalGlyph: this.icon("signal"), plusGlyph: this.icon("plus"), filmGlyph: this.icon("film"),
+      playGlyph: this.icon("play"), playBigGlyph: this.icon("play"),
+      prevGlyph: this.icon("prev"), nextGlyph: this.icon("next"),
+      zoomInGlyph: this.icon("zoomin"), zoomOutGlyph: this.icon("zoomout"),
+      transitions: [
+        { name: "Fade", glyph: this.icon("fade") },
+        { name: "Dissolve", glyph: this.icon("dissolve") },
+        { name: "Wipe", glyph: this.icon("wipe") },
+        { name: "Slide", glyph: this.icon("slide") },
+        { name: "Iris", glyph: this.icon("iris") },
+        { name: "To Black", glyph: this.icon("black") },
+      ],
+      offRound: "width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid #E0DBCE;background:#F4F2EC;color:#C4BFB1;cursor:default;",
+      offRoundBig: "width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid #E0DBCE;background:#F4F2EC;color:#C4BFB1;cursor:default;",
+      offSquare: "width:28px;height:28px;display:flex;align-items:center;justify-content:center;border:1px solid #E0DBCE;background:#F4F2EC;color:#C4BFB1;border-radius:2px;cursor:default;",
+      storyboardOn: S.view === "storyboard", timelineOn: S.view === "timeline",
+      onStoryboard: () => this.setState({ view: "storyboard" }),
+      onTimeline: () => this.setState({ view: "timeline" }),
+      storyBtn: btn(S.view === "storyboard") + "border-right:1px solid #C4BFB1;",
+      timelineBtn: btn(S.view === "timeline"),
+      storyCells, ruler,
+      tracks: [
+        { label: "Video", empty: "No clips" },
+        { label: "Transition", empty: "" },
+        { label: "Audio", empty: "No audio" },
+        { label: "Title", empty: "No titles" },
+      ],
+      importDlg: S.importDlg,
+      onImport: () => this.setState({ importDlg: true }),
+      onImportClose: () => this.setState({ importDlg: false }),
+    };
+  }
+}
+</script>
+</body>
+</html>

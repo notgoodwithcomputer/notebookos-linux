@@ -1,0 +1,5 @@
+# Auto-mount removable USB storage to /media/<dev>. The system disk is virtio/
+# nvme, so sd[a-z][0-9] partitions are external drives. The mounted volume then
+# appears in the Finder's Devices sidebar.
+ACTION=="add",    SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]", RUN+="/opt/notebook/automount.sh add %k"
+ACTION=="remove", SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]", RUN+="/opt/notebook/automount.sh remove %k"

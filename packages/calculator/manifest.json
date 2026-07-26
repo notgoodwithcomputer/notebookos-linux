@@ -1,0 +1,10 @@
+{
+  "id": "calculator",
+  "name": "Calculator",
+  "kind": "Utility",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "calculator",
+  "order": 100
+}

@@ -1,0 +1,6 @@
+NAME="Notebook OS"
+ID=notebookos
+VERSION="1.0"
+VERSION_ID="1.0"
+PRETTY_NAME="Notebook OS"
+ANSI_COLOR="0;33"

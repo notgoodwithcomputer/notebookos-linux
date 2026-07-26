@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  @keyframes pop2048 { 0% { transform: scale(0.6); } 70% { transform: scale(1.06); } 100% { transform: scale(1); } }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#DED4C2;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">2048</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="3">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== GAME ===================== -->
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;min-height:0;padding:40px;">
+      <div style="width:600px;">
+        <!-- header -->
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:24px;">
+          <div>
+            <div style="font-size:60px;font-weight:700;color:#1A1916;letter-spacing:-0.03em;line-height:0.9;">2048</div>
+            <div style="font-size:14px;color:#6E695E;margin-top:12px;">Join the numbers to reach <b style="color:#C8341E;">2048</b>.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div style="background:#BCAE93;border-radius:3px;padding:9px 18px;text-align:center;min-width:88px;">
+              <div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#F1EADB;font-weight:700;">Score</div>
+              <div style="font-size:24px;font-weight:700;color:#FCFBF8;font-variant-numeric:tabular-nums;line-height:1.1;">{{ score }}</div>
+            </div>
+            <div style="background:#BCAE93;border-radius:3px;padding:9px 18px;text-align:center;min-width:88px;">
+              <div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#F1EADB;font-weight:700;">Best</div>
+              <div style="font-size:24px;font-weight:700;color:#FCFBF8;font-variant-numeric:tabular-nums;line-height:1.1;">{{ best }}</div>
+            </div>
+          </div>
+        </div>
+        <!-- board -->
+        <div style="position:relative;background:#BCAE93;border-radius:4px;padding:14px;">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);gap:14px;">
+            <sc-for list="{{ cells }}" as="c" hint-placeholder-count="16">
+              <div style="aspect-ratio:1;border-radius:3px;background:#CCBF9F;display:flex;align-items:center;justify-content:center;">
+                <div style="{{ c.tileStyle }}">{{ c.label }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ overlay }}" hint-placeholder-val="{{ false }}">
+            <div style="position:absolute;inset:0;background:rgba(222,212,194,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:4px;gap:18px;">
+              <div style="font-size:44px;font-weight:700;color:#1A1916;letter-spacing:-0.02em;">{{ overlayText }}</div>
+              <div onClick="{{ onNew }}" style="height:46px;padding:0 26px;display:flex;align-items:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:16px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">Play again</div>
+            </div>
+          </sc-if>
+        </div>
+        <!-- footer -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:22px;">
+          <div style="font-size:13.5px;color:#6E695E;">Use the <b>arrow keys</b> or <b>W A S D</b> to move tiles.</div>
+          <div onClick="{{ onNew }}" style="height:42px;padding:0 22px;display:flex;align-items:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14.5px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">New Game</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(2026, 5, 20, 9, 41, 0), board: [], score: 0, best: 0, status: "play" };
+
+  componentDidMount() {
+    let best = 0;
+    try { best = parseInt(localStorage.getItem("os2048best") || "0", 10) || 0; } catch (e) {}
+    this.setState({ best });
+    this.newGame();
+    this.keyHandler = (e) => this.onKey(e);
+    window.addEventListener("keydown", this.keyHandler);
+    this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this.keyHandler); clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+
+  empty() { return [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]]; }
+  addRandom(b) {
+    const cells = [];
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) if (!b[r][c]) cells.push([r, c]);
+    if (!cells.length) return;
+    const [r, c] = cells[Math.floor(Math.random() * cells.length)];
+    b[r][c] = Math.random() < 0.9 ? 2 : 4;
+  }
+  newGame() {
+    const b = this.empty();
+    this.addRandom(b); this.addRandom(b);
+    this.setState({ board: b, score: 0, status: "play" });
+  }
+  slide(line) {
+    const arr = line.filter((v) => v); const res = []; let g = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i] === arr[i + 1]) { res.push(arr[i] * 2); g += arr[i] * 2; i++; }
+      else res.push(arr[i]);
+    }
+    while (res.length < 4) res.push(0);
+    return { res, g };
+  }
+  rc(dir, i, j) {
+    if (dir === "left") return [i, j];
+    if (dir === "right") return [i, 3 - j];
+    if (dir === "up") return [j, i];
+    return [3 - j, i];
+  }
+  move(dir) {
+    if (this.state.status === "lose") return;
+    const b = this.state.board.map((r) => r.slice());
+    let moved = false, gained = 0;
+    for (let i = 0; i < 4; i++) {
+      const line = [];
+      for (let j = 0; j < 4; j++) { const [r, c] = this.rc(dir, i, j); line.push(b[r][c]); }
+      const { res, g } = this.slide(line); gained += g;
+      for (let j = 0; j < 4; j++) { const [r, c] = this.rc(dir, i, j); if (b[r][c] !== res[j]) moved = true; b[r][c] = res[j]; }
+    }
+    if (!moved) return;
+    this.addRandom(b);
+    const score = this.state.score + gained;
+    const best = Math.max(this.state.best, score);
+    try { localStorage.setItem("os2048best", String(best)); } catch (e) {}
+    let status = this.state.status;
+    if (status === "play" && b.some((row) => row.some((v) => v === 2048))) status = "win";
+    if (!this.canMove(b)) status = "lose";
+    this.setState({ board: b, score, best, status });
+  }
+  canMove(b) {
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+      if (!b[r][c]) return true;
+      if (c < 3 && b[r][c] === b[r][c + 1]) return true;
+      if (r < 3 && b[r][c] === b[r + 1][c]) return true;
+    }
+    return false;
+  }
+  onKey(e) {
+    const map = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", a: "left", d: "right", w: "up", s: "down", A: "left", D: "right", W: "up", S: "down" };
+    const dir = map[e.key];
+    if (dir) { e.preventDefault(); this.move(dir); }
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    if (k === "signal") return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+    return S(R(5, 5, 14, 14, 1));
+  }
+
+  tileColors(v) {
+    const map = {
+      2: ["#EFE7D5", "#1A1916"], 4: ["#E8DCC0", "#1A1916"], 8: ["#DCCBA2", "#1A1916"],
+      16: ["#CBB892", "#1A1916"], 32: ["#B89E6E", "#FCFBF8"], 64: ["#9E8252", "#FCFBF8"],
+      128: ["#8A6D43", "#FCFBF8"], 256: ["#6E5836", "#FCFBF8"], 512: ["#4A3F2E", "#FCFBF8"],
+      1024: ["#2A2620", "#FCFBF8"], 2048: ["#C8341E", "#FCFBF8"],
+    };
+    if (v === 16) return ["#CBB892", "#1A1916"];
+    return map[v] || ["#1A1916", "#FCFBF8"];
+  }
+
+  renderVals() {
+    const board = this.state.board.length ? this.state.board : this.empty();
+    const cells = [];
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+      const v = board[r][c];
+      if (!v) { cells.push({ label: "", tileStyle: "display:none;" }); continue; }
+      const [bg, col] = this.tileColors(v);
+      const fs = v < 100 ? 50 : v < 1000 ? 42 : 32;
+      cells.push({
+        label: String(v),
+        tileStyle: "width:100%;height:100%;border-radius:3px;display:flex;align-items:center;justify-content:center;background:" + bg + ";color:" + col + ";font-size:" + fs + "px;font-weight:700;font-variant-numeric:tabular-nums;animation:pop2048 0.13s ease-out;",
+      });
+    }
+
+    return {
+      menus: ["File", "Game", "View"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"),
+      cells,
+      score: this.state.score.toLocaleString(),
+      best: this.state.best.toLocaleString(),
+      overlay: this.state.status !== "play",
+      overlayText: this.state.status === "win" ? "You reached 2048!" : "No moves left",
+      onNew: () => this.newGame(),
+    };
+  }
+}
+</script>
+</body>
+</html>

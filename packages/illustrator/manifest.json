@@ -1,0 +1,10 @@
+{
+  "id": "illustrator",
+  "name": "Illustrator",
+  "kind": "Paint",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "illustrator",
+  "order": 140
+}

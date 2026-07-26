@@ -1,0 +1,10 @@
+{
+  "id": "messages",
+  "name": "Messages",
+  "kind": "LoRa Comms",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "messages",
+  "order": 130
+}

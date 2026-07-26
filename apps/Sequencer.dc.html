@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  input { font-family: inherit; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== MENU BAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:50;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Sequencer</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="3">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== IMPORT DIALOG ===================== -->
+    <sc-if value="{{ importDlg }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onImportClose }}" style="position:absolute;inset:0;z-index:72;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:460px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:28px 30px;">
+          <div style="font-size:17px;font-weight:700;color:#1A1916;margin-bottom:14px;">Import Audio</div>
+          <div style="border:1px solid #DCD7C9;border-radius:2px;background:#FCFBF8;padding:34px 20px;text-align:center;">
+            <div style="font-size:14px;color:#6E695E;margin-bottom:5px;">No audio files on this disk</div>
+            <div style="font-size:12.5px;color:#A39D8F;">Audio placed anywhere in Home can be imported to a track.</div>
+          </div>
+          <div onClick="{{ onImportClose }}" style="margin:20px 0 0 auto;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== TRANSPORT BAR ===================== -->
+    <div style="height:76px;flex:none;border-bottom:1px solid #1A1916;background:#F1EEE6;display:flex;align-items:center;gap:18px;padding:0 24px;">
+      <div style="display:flex;gap:6px;">
+        <div onClick="{{ onRew }}" title="Rewind" style="{{ btnRew }}"><div style="width:18px;height:18px;display:flex;">{{ rewGlyph }}</div></div>
+        <div onClick="{{ onFF }}" title="Fast forward" style="{{ btnFF }}"><div style="width:18px;height:18px;display:flex;">{{ ffGlyph }}</div></div>
+        <div onClick="{{ onStop }}" title="Stop" style="{{ btnStop }}"><div style="width:16px;height:16px;display:flex;">{{ stopGlyph }}</div></div>
+        <div onClick="{{ onPlay }}" title="Play (space)" style="{{ btnPlay }}"><div style="width:18px;height:18px;display:flex;margin-left:2px;">{{ playGlyph }}</div></div>
+        <div onClick="{{ onRec }}" title="Record" style="{{ btnRec }}"><div style="width:14px;height:14px;border-radius:50%;background:currentColor;"></div></div>
+      </div>
+      <div onClick="{{ onRTZ }}" title="Return to zero" style="height:34px;padding:0 13px;display:flex;align-items:center;border:1px solid #C4BFB1;background:#FBFAF6;border-radius:2px;font-size:12.5px;font-weight:700;letter-spacing:0.06em;color:#1A1916;cursor:pointer;" style-hover="background:#ECE8DD;">RTZ</div>
+      <div style="border:1px solid #1A1916;background:#15140F;color:#F4F2EC;padding:8px 18px;font-family:'Courier New',monospace;font-size:26px;letter-spacing:0.08em;font-variant-numeric:tabular-nums;">{{ counter }}</div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#8A857A;">
+        <div style="{{ statusDot }}"></div>{{ transportStatus }}
+      </div>
+      <div style="flex:1;"></div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Pitch</span>
+        <input value="{{ pitch }}" onInput="{{ onPitch }}" type="range" min="-12" max="12" style="width:130px;accent-color:#1A1916;" />
+        <span style="font-size:12.5px;color:#6E695E;font-variant-numeric:tabular-nums;width:42px;">{{ pitchLabel }}</span>
+      </div>
+      <div style="width:1px;height:34px;background:#DCD7C9;"></div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Master</span>
+        <input value="{{ master }}" onInput="{{ onMaster }}" type="range" min="0" max="100" style="width:150px;accent-color:#1A1916;" />
+        <div style="display:flex;gap:2px;align-items:center;">
+          <sc-for list="{{ masterVu }}" as="seg" hint-placeholder-count="10">
+            <div style="{{ seg }}"></div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== TRACK AREA ===================== -->
+    <div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative;">
+      <!-- ruler -->
+      <div style="height:30px;flex:none;display:flex;border-bottom:1px solid #1A1916;background:#F1EEE6;">
+        <div style="width:250px;flex:none;border-right:1px solid #1A1916;display:flex;align-items:center;padding:0 14px;font-size:10.5px;letter-spacing:0.12em;text-transform:uppercase;color:#A39D8F;font-weight:600;">4-track · 48 kHz</div>
+        <div onClick="{{ onSeek }}" style="flex:1;position:relative;cursor:pointer;">
+          <sc-for list="{{ ruler }}" as="r" hint-placeholder-count="9">
+            <div style="{{ r.style }}">{{ r.label }}</div>
+          </sc-for>
+        </div>
+      </div>
+      <!-- tracks -->
+      <sc-for list="{{ tracks }}" as="tk" hint-placeholder-count="4">
+        <div style="flex:1;display:flex;border-bottom:1px solid #D7D2C5;min-height:0;">
+          <!-- header -->
+          <div style="{{ tk.headStyle }}">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <div style="font-size:14px;font-weight:700;color:#1A1916;">{{ tk.name }}</div>
+              <div style="display:flex;gap:5px;">
+                <div onClick="{{ tk.onMute }}" title="Mute" style="{{ tk.muteStyle }}">M</div>
+                <div onClick="{{ tk.onArm }}" title="Record arm" style="{{ tk.armStyle }}">REC</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <div style="display:flex;border:1px solid #C4BFB1;border-radius:2px;overflow:hidden;">
+                <div onClick="{{ tk.onMic }}" style="{{ tk.micStyle }}">Mic</div>
+                <div onClick="{{ tk.onLine }}" style="{{ tk.lineStyle }}">Line</div>
+              </div>
+              <div style="display:flex;gap:2px;align-items:center;">
+                <sc-for list="{{ tk.vu }}" as="seg" hint-placeholder-count="8">
+                  <div style="{{ seg }}"></div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#A39D8F;font-weight:600;width:28px;">Gain</span>
+              <input value="{{ tk.gain }}" onInput="{{ tk.onGain }}" type="range" min="0" max="100" style="flex:1;accent-color:#1A1916;" />
+              <span style="font-size:11px;color:#6E695E;font-variant-numeric:tabular-nums;width:40px;text-align:right;">{{ tk.gainLabel }}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#A39D8F;font-weight:600;width:28px;">Pan</span>
+              <input value="{{ tk.pan }}" onInput="{{ tk.onPan }}" type="range" min="0" max="100" style="flex:1;accent-color:#1A1916;" />
+              <span style="font-size:11px;color:#6E695E;font-variant-numeric:tabular-nums;width:40px;text-align:right;">{{ tk.panLabel }}</span>
+            </div>
+          </div>
+          <!-- lane -->
+          <div onClick="{{ tk.onLaneSeek }}" style="{{ tk.laneStyle }}">
+            <div style="position:absolute;left:0;right:0;top:50%;height:1px;background:#E0DBCE;"></div>
+            <sc-for list="{{ tk.clips }}" as="c" hint-placeholder-count="0">
+              <div style="{{ c.style }}"><div style="position:absolute;left:6px;right:6px;top:50%;height:1px;background:#1A1916;opacity:0.4;"></div></div>
+            </sc-for>
+            <sc-if value="{{ tk.recActive }}" hint-placeholder-val="{{ false }}">
+              <div style="{{ tk.recRegion }}"></div>
+            </sc-if>
+            <sc-if value="{{ tk.laneEmpty }}" hint-placeholder-val="{{ true }}">
+              <div style="position:absolute;left:14px;top:8px;font-size:11.5px;color:#B5B0A3;">{{ tk.emptyLabel }}</div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-for>
+      <!-- playhead -->
+      <div style="{{ playheadStyle }}"></div>
+    </div>
+
+    <!-- ===================== STATUS BAR ===================== -->
+    <div style="height:32px;flex:none;border-top:1px solid #D7D2C5;background:#F1EEE6;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:12.5px;color:#8A857A;font-variant-numeric:tabular-nums;">
+      <div>{{ armedSummary }}</div>
+      <div>{{ takeSummary }}</div>
+      <div>48 kHz · 16-bit · 02:00 tape</div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = {
+    now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false, importDlg: false,
+    transport: "stop", pos: 0, tick: 0, pitch: 0, master: 80, recStart: null,
+    tracks: [1, 2, 3, 4].map((n) => ({ name: "Track " + n, input: n < 3 ? "mic" : "line", armed: false, muted: false, gain: 80, pan: 50, clips: [] })),
+  };
+  LEN = 120; // seconds of tape
+
+  componentDidMount() {
+    this._esc = (e) => {
+      if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen || this.state.importDlg) { this.setState({ openMenu: null, aboutOpen: false, importDlg: false }); } else { this.goHome(); } }
+      if (e.key === " " && !this.state.openMenu) { e.preventDefault(); this.togglePlay(); }
+    };
+    window.addEventListener("keydown", this._esc);
+    this.timer = setInterval(() => this.setState({ now: new Date() }), 10000);
+    this.runner = setInterval(() => {
+      const t = this.state.transport;
+      if (t === "play" || t === "rec") {
+        this.setState((s) => ({ pos: Math.min(this.LEN, s.pos + 0.1), tick: s.tick + 1 }), () => {
+          if (this.state.pos >= this.LEN) this.stopTransport(this.LEN);
+        });
+      } else if (t === "ff") this.setState((s) => ({ pos: Math.min(this.LEN, s.pos + 1.5), tick: s.tick + 1 }));
+      else if (t === "rew") this.setState((s) => ({ pos: Math.max(0, s.pos - 1.5), tick: s.tick + 1 }));
+    }, 100);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this._esc); clearInterval(this.timer); clearInterval(this.runner); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; }
+
+  appFile = "Sequencer.dc.html";
+  appName = "Sequencer";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File", "Transport", "Track"]; }
+  appMenuItems(name) {
+    const S = this.state;
+    if (name === "File") return [
+      this.mi("New Session", () => this.newSession(), { hint: "⌘N" }),
+      this.mi("Import Audio…", () => this.setState({ importDlg: true, openMenu: null }), { hint: "⌘I" }),
+      this.msep(),
+      this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" }),
+    ];
+    if (name === "Transport") return [
+      this.mi(S.transport === "play" || S.transport === "rec" ? "Stop" : "Play", () => { this.togglePlay(); this.setState({ openMenu: null }); }, { hint: "space" }),
+      this.mi("Record", () => { this.startRec(); this.setState({ openMenu: null }); }, { check: S.transport === "rec" ? "✓" : "" }),
+      this.msep(),
+      this.mi("Rewind", () => this.setState({ transport: "rew", openMenu: null })),
+      this.mi("Fast Forward", () => this.setState({ transport: "ff", openMenu: null })),
+      this.mi("Return to Zero", () => { this.stopTransport(0); this.setState({ openMenu: null }); }),
+    ];
+    if (name === "Track") {
+      const items = S.tracks.map((c, i) =>
+        this.mi((c.armed ? "Disarm " : "Arm ") + c.name, () => { this.toggleTrack(i, "armed"); this.setState({ openMenu: null }); }, { check: c.armed ? "✓" : "" }));
+      items.push(this.msep());
+      const anyClips = S.tracks.some((c) => c.clips.length);
+      items.push(anyClips ? this.mi("Clear All Takes", () => this.clearTakes()) : this.off("Clear All Takes"));
+      return items;
+    }
+    return [this.off("No actions")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS…", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart…", () => this.power("restart")),
+      this.mi("Shut Down…", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "✓" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 · strong"), this.off("NODE-22", "ch 4 · good"), this.off("NODE-7F", "ch 4 · strong"), this.off("NODE-88", "ch 6 · fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+
+  // ---------- transport / tape logic ----------
+  togglePlay() {
+    const t = this.state.transport;
+    if (t === "play" || t === "rec") this.stopTransport();
+    else this.setState({ transport: "play" });
+  }
+  startRec() {
+    if (this.state.transport === "rec") { this.stopTransport(); return; }
+    this.setState({ transport: "rec", recStart: this.state.pos });
+  }
+  stopTransport(seekTo) {
+    const S = this.state;
+    let tracks = S.tracks;
+    if (S.transport === "rec" && S.recStart !== null && S.pos - S.recStart > 0.2) {
+      tracks = S.tracks.map((c) => c.armed
+        ? { ...c, clips: c.clips.concat([{ start: S.recStart, end: S.pos }]) }
+        : c);
+    }
+    this.setState({ transport: "stop", recStart: null, tracks, pos: seekTo === undefined ? S.pos : seekTo });
+  }
+  newSession() {
+    this.setState({
+      transport: "stop", pos: 0, recStart: null, pitch: 0, master: 80, openMenu: null,
+      tracks: [1, 2, 3, 4].map((n) => ({ name: "Track " + n, input: n < 3 ? "mic" : "line", armed: false, muted: false, gain: 80, pan: 50, clips: [] })),
+    });
+  }
+  clearTakes() { this.setState({ tracks: this.state.tracks.map((c) => ({ ...c, clips: [] })), openMenu: null }); }
+  toggleTrack(i, key) { this.setState({ tracks: this.state.tracks.map((c, ci) => ci === i ? { ...c, [key]: !c[key] } : c) }); }
+  setTrack(i, key, val) { this.setState({ tracks: this.state.tracks.map((c, ci) => ci === i ? { ...c, [key]: val } : c) }); }
+  seekFromEvent(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    this.setState({ pos: f * this.LEN });
+  }
+  clipAt(track, t) { return track.clips.some((c) => t >= c.start && t <= c.end); }
+  vuLevel(track, i) {
+    const S = this.state;
+    if (track.muted) return 0;
+    const active = (S.transport === "rec" && track.armed) || ((S.transport === "play" || S.transport === "rec") && this.clipAt(track, S.pos));
+    if (!active) return 0;
+    const t = S.tick;
+    const wob = Math.abs(Math.sin(t * 0.29 + i * 1.7)) * 0.55 + Math.abs(Math.sin(t * 0.11 + i)) * 0.45;
+    return Math.min(1, (track.gain / 100) * (0.4 + wob * 0.7));
+  }
+  vuSegs(count, level) {
+    const segs = [];
+    for (let i = 0; i < count; i++) {
+      const on = level > i / count;
+      const hot = i >= count - 2;
+      segs.push("width:7px;height:14px;border-radius:1px;background:" + (on ? (hot ? "#C8341E" : "#6E7B57") : "#DCD5C4") + ";");
+    }
+    return segs;
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "play": return S(P("M8 5l11 7-11 7z"));
+      case "stop": return S(R(6, 6, 12, 12, 1));
+      case "rew": return S(P("M11 5l-8 7 8 7z"), P("M20 5l-8 7 8 7z"));
+      case "ff": return S(P("M4 5l8 7-8 7z"), P("M13 5l8 7-8 7z"));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    const S = this.state;
+    const playing = S.transport === "play" || S.transport === "rec";
+    const btn = (active, red) =>
+      "width:56px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;border:1px solid "
+      + (active ? (red ? "#C8341E;background:#C8341E;color:#FCFBF8;" : "#1A1916;background:#1A1916;color:#F4F2EC;") : "#C4BFB1;background:#FBFAF6;color:" + (red ? "#C8341E;" : "#3A362E;"));
+    const mins = Math.floor(S.pos / 60);
+    const secs = Math.floor(S.pos % 60);
+    const tenths = Math.floor((S.pos * 10) % 10);
+    const anyArmed = S.tracks.some((c) => c.armed);
+    const f = S.pos / this.LEN;
+
+    const ruler = [];
+    for (let i = 0; i <= 8; i++) ruler.push({
+      label: this.pad(Math.floor(i * 15 / 60)) + ":" + this.pad((i * 15) % 60),
+      style: "position:absolute;left:" + (i / 8 * 100) + "%;top:5px;font-size:10.5px;color:#A39D8F;font-variant-numeric:tabular-nums;border-left:1px solid #C9C4B6;padding-left:5px;height:20px;",
+    });
+
+    const tracks = S.tracks.map((c, i) => {
+      const recActive = S.transport === "rec" && c.armed && S.recStart !== null;
+      return {
+        name: c.name,
+        headStyle: "width:250px;flex:none;border-right:1px solid #1A1916;background:#F1EEE6;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between;gap:6px;" + (c.armed ? "box-shadow:inset 3px 0 0 #C8341E;" : ""),
+        onArm: () => this.toggleTrack(i, "armed"),
+        armStyle: "font-size:10.5px;font-weight:700;letter-spacing:0.08em;padding:4px 9px;border-radius:2px;cursor:pointer;border:1px solid "
+          + (c.armed ? "#C8341E;background:#C8341E;color:#FCFBF8;" : "#C4BFB1;background:#FBFAF6;color:#8A857A;"),
+        onMute: () => this.toggleTrack(i, "muted"),
+        muteStyle: "font-size:10.5px;font-weight:700;padding:4px 9px;border-radius:2px;cursor:pointer;border:1px solid "
+          + (c.muted ? "#1A1916;background:#1A1916;color:#FCFBF8;" : "#C4BFB1;background:#FBFAF6;color:#8A857A;"),
+        onMic: () => this.setTrack(i, "input", "mic"),
+        onLine: () => this.setTrack(i, "input", "line"),
+        micStyle: "padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;" + (c.input === "mic" ? "background:#1A1916;color:#FCFBF8;" : "background:#FBFAF6;color:#3A362E;"),
+        lineStyle: "padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;border-left:1px solid #C4BFB1;" + (c.input === "line" ? "background:#1A1916;color:#FCFBF8;" : "background:#FBFAF6;color:#3A362E;"),
+        gain: c.gain, pan: c.pan,
+        onGain: (e) => this.setTrack(i, "gain", parseInt(e.target.value, 10)),
+        onPan: (e) => this.setTrack(i, "pan", parseInt(e.target.value, 10)),
+        gainLabel: (c.gain - 90 >= 0 ? "+" : "") + Math.round((c.gain - 90) / 6) + " dB",
+        panLabel: c.pan === 50 ? "C" : c.pan < 50 ? "L" + (50 - c.pan) * 2 : "R" + (c.pan - 50) * 2,
+        vu: this.vuSegs(8, this.vuLevel(c, i)),
+        onLaneSeek: (e) => this.seekFromEvent(e),
+        laneStyle: "flex:1;position:relative;cursor:pointer;overflow:hidden;background:" + (c.muted ? "#F1EEE6;" : "#F8F7F2;"),
+        clips: c.clips.map((cl) => ({
+          style: "position:absolute;top:14%;bottom:14%;border:1px solid #1A1916;border-radius:2px;background:" + (c.muted ? "#DDD6C6" : "#CBBFA0") + ";left:" + (cl.start / this.LEN * 100) + "%;width:" + Math.max(0.4, (cl.end - cl.start) / this.LEN * 100) + "%;",
+        })),
+        recActive,
+        recRegion: recActive
+          ? "position:absolute;top:14%;bottom:14%;border:1px dashed #C8341E;border-radius:2px;background:rgba(200,52,30,0.12);left:" + (S.recStart / this.LEN * 100) + "%;width:" + Math.max(0.3, (S.pos - S.recStart) / this.LEN * 100) + "%;"
+          : "",
+        laneEmpty: c.clips.length === 0 && !recActive,
+        emptyLabel: c.armed ? "Armed — press record" : "Empty track",
+      };
+    });
+
+    return {
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(),
+      signalGlyph: this.icon("signal"),
+      rewGlyph: this.icon("rew"), ffGlyph: this.icon("ff"), stopGlyph: this.icon("stop"), playGlyph: this.icon("play"),
+      counter: this.pad(mins) + ":" + this.pad(secs) + "." + tenths,
+      onRew: () => this.setState({ transport: S.transport === "rew" ? "stop" : "rew" }),
+      onFF: () => this.setState({ transport: S.transport === "ff" ? "stop" : "ff" }),
+      onStop: () => this.stopTransport(),
+      onPlay: () => this.setState({ transport: "play" }),
+      onRec: () => this.startRec(),
+      onRTZ: () => this.stopTransport(0),
+      btnRew: btn(S.transport === "rew"), btnFF: btn(S.transport === "ff"),
+      btnStop: btn(S.transport === "stop"), btnPlay: btn(S.transport === "play"),
+      btnRec: btn(S.transport === "rec", true),
+      statusDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (S.transport === "rec" ? "#C8341E" : playing ? "#6E7B57" : "#B5B0A3") + ";",
+      transportStatus: S.transport === "rec" ? (anyArmed ? "Recording" : "Record — no track armed") : S.transport === "play" ? "Playing" : S.transport === "ff" ? "Fast forward" : S.transport === "rew" ? "Rewind" : "Stopped",
+      pitch: S.pitch,
+      onPitch: (e) => this.setState({ pitch: parseInt(e.target.value, 10) }),
+      pitchLabel: (S.pitch > 0 ? "+" : "") + S.pitch + "%",
+      master: S.master,
+      onMaster: (e) => this.setState({ master: parseInt(e.target.value, 10) }),
+      masterVu: this.vuSegs(10, playing ? this.vuLevel({ muted: false, gain: S.master, armed: anyArmed, clips: S.tracks.flatMap((c) => c.clips) }, 9) : 0),
+      ruler,
+      onSeek: (e) => this.seekFromEvent(e),
+      tracks,
+      playheadStyle: "position:absolute;top:0;bottom:0;width:2px;background:#C8341E;z-index:5;pointer-events:none;left:calc(250px + (100% - 250px)*" + f.toFixed(5) + ");",
+      armedSummary: anyArmed ? S.tracks.filter((c) => c.armed).map((c) => c.name).join(", ") + " armed" : "No tracks armed",
+      takeSummary: (function (n) { return n === 0 ? "No takes" : n + (n === 1 ? " take" : " takes"); })(S.tracks.reduce((a, c) => a + c.clips.length, 0)),
+    };
+  }
+}
+</script>
+</body>
+</html>

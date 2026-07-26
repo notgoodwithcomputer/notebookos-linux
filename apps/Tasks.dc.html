@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  input { font-family: inherit; }
+  .tk-scroll::-webkit-scrollbar { width: 12px; }
+  .tk-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== MENU BAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:50;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Tasks</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ LISTS SIDEBAR ============ -->
+      <div style="width:284px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div class="tk-scroll" style="flex:1;overflow-y:auto;padding:22px 14px;min-height:0;">
+          <sc-for list="{{ views }}" as="v" hint-placeholder-count="3">
+            <div onClick="{{ v.onClick }}" style="{{ v.rowStyle }}" style-hover="background:#E6DFCE;">
+              <div style="width:18px;height:18px;color:#3A362E;display:flex;flex:none;">{{ v.glyph }}</div>
+              <span style="flex:1;">{{ v.label }}</span>
+              <span style="font-size:12.5px;color:#9A958A;font-variant-numeric:tabular-nums;">{{ v.count }}</span>
+            </div>
+          </sc-for>
+          <div style="font-size:11px;letter-spacing:0.13em;text-transform:uppercase;color:#A39D8F;font-weight:600;padding:0 12px;margin:24px 0 10px;">Projects</div>
+          <sc-for list="{{ projects }}" as="p" hint-placeholder-count="4">
+            <div onClick="{{ p.onClick }}" style="{{ p.rowStyle }}" style-hover="background:#E6DFCE;">
+              <div style="{{ p.dot }}"></div>
+              <span style="flex:1;">{{ p.label }}</span>
+              <span style="font-size:12.5px;color:#9A958A;font-variant-numeric:tabular-nums;">{{ p.count }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- ============ TASK LIST ============ -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid #E6E1D4;">
+        <div style="flex:none;padding:34px 48px 22px;">
+          <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:8px;">{{ viewEyebrow }}</div>
+          <div style="display:flex;align-items:baseline;justify-content:space-between;">
+            <div style="font-size:34px;font-weight:700;color:#1A1916;letter-spacing:-0.02em;">{{ viewTitle }}</div>
+            <div style="font-size:14px;color:#8A857A;font-variant-numeric:tabular-nums;">{{ remaining }} remaining</div>
+          </div>
+        </div>
+        <!-- quick add -->
+        <div style="flex:none;margin:0 48px 8px;display:flex;align-items:center;gap:14px;height:48px;padding:0 16px;border:1px dashed #CFC9BA;border-radius:2px;color:#A39D8F;">
+          <div style="width:18px;height:18px;display:flex;flex:none;">{{ plusGlyph }}</div>
+          <input value="{{ draft }}" onInput="{{ onDraft }}" onKeyDown="{{ onDraftKey }}" ref="{{ draftRef }}" type="text" placeholder="Add a task — press Return to save" style="flex:1;border:none;background:transparent;outline:none;font-size:15px;color:#1A1916;" />
+        </div>
+        <div class="tk-scroll" style="flex:1;overflow-y:auto;padding:14px 48px 60px;min-height:0;">
+          <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;gap:10px;margin:18px 0 6px;">
+              <div style="{{ g.labelStyle }}">{{ g.label }}</div>
+              <div style="flex:1;height:1px;background:#ECE7DA;"></div>
+              <div style="font-size:12px;color:#B0AB9D;font-variant-numeric:tabular-nums;">{{ g.count }}</div>
+            </div>
+            <sc-for list="{{ g.items }}" as="t" hint-placeholder-count="3">
+              <div onClick="{{ t.onToggle }}" style="display:flex;align-items:center;gap:16px;padding:13px 6px;border-bottom:1px solid #F0ECE0;cursor:pointer;">
+                <div style="{{ t.boxStyle }}">{{ t.check }}</div>
+                <div style="flex:1;min-width:0;">
+                  <div style="{{ t.titleStyle }}">{{ t.title }}</div>
+                  <div style="display:flex;align-items:center;gap:12px;margin-top:5px;">
+                    <div style="display:flex;align-items:center;gap:6px;"><div style="{{ t.projDot }}"></div><span style="font-size:12.5px;color:#9A958A;">{{ t.project }}</span></div>
+                    <span style="{{ t.timeStyle }}">{{ t.time }}</span>
+                  </div>
+                </div>
+                <div style="{{ t.prioDot }}"></div>
+              </div>
+            </sc-for>
+          </sc-for>
+          <sc-if value="{{ listEmpty }}" hint-placeholder-val="{{ false }}"><div style="padding:60px 0;text-align:center;font-size:14px;color:#A39D8F;">No tasks. Type above to add one.</div></sc-if>
+          <sc-if value="{{ noTasks }}" hint-placeholder-val="{{ false }}"><div style="padding:48px 6px;text-align:center;font-size:14px;color:#A39D8F;">No tasks. Add one above.</div></sc-if>
+        </div>
+      </div>
+
+      <!-- ============ SCHEDULE RAIL ============ -->
+      <div style="width:392px;flex:none;background:#FBFAF6;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:34px 32px 18px;border-bottom:1px solid #E6E1D4;">
+          <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:6px;">Schedule</div>
+          <div style="font-size:22px;font-weight:700;color:#1A1916;">Today’s events</div>
+        </div>
+        <div class="tk-scroll" style="flex:1;overflow-y:auto;padding:20px 32px;min-height:0;">
+          <sc-for list="{{ events }}" as="ev" hint-placeholder-count="4">
+            <div style="display:flex;gap:16px;margin-bottom:6px;">
+              <div style="width:52px;flex:none;text-align:right;">
+                <div style="font-size:13.5px;font-weight:600;color:#1A1916;font-variant-numeric:tabular-nums;">{{ ev.time }}</div>
+                <div style="font-size:11.5px;color:#B0AB9D;">{{ ev.dur }}</div>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:center;flex:none;padding-top:4px;">
+                <div style="{{ ev.dot }}"></div>
+                <div style="width:1px;flex:1;background:#E6E1D4;margin-top:4px;"></div>
+              </div>
+              <div style="{{ ev.cardStyle }}">
+                <div style="font-size:15px;font-weight:600;color:#1A1916;">{{ ev.title }}</div>
+                <div style="font-size:12.5px;color:#8A857A;margin-top:3px;">{{ ev.place }}</div>
+              </div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ eventsEmpty }}" hint-placeholder-val="{{ false }}"><div style="padding:20px 0;font-size:13.5px;color:#A39D8F;">Nothing scheduled</div></sc-if>
+          <sc-if value="{{ noEvents }}" hint-placeholder-val="{{ false }}"><div style="padding:30px 0;text-align:center;font-size:13.5px;color:#A39D8F;">No events today</div></sc-if>
+        </div>
+        <div style="flex:none;border-top:1px solid #E6E1D4;padding:20px 32px 26px;">
+          <div style="font-size:14px;font-weight:700;color:#1A1916;margin-bottom:12px;">{{ miniTitle }}</div>
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);margin-bottom:4px;">
+            <sc-for list="{{ weekdays }}" as="w" hint-placeholder-count="7">
+              <div style="text-align:center;font-size:10.5px;color:#B0AB9D;font-weight:600;">{{ w }}</div>
+            </sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);">
+            <sc-for list="{{ calCells }}" as="c" hint-placeholder-count="30">
+              <div style="height:30px;display:flex;align-items:center;justify-content:center;"><div style="{{ c.pill }}">{{ c.day }}</div></div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = {
+    now: new Date(),
+    openMenu: null, menuLeft: 12, aboutOpen: false,
+    view: "view:today",
+    draft: "",
+    tasks: [],
+  };
+
+  projectColors = { Writing: "#4A5E73", Studio: "#6E7B57", Home: "#9A7B4F", Errands: "#8A857A" };
+  dueOrder = ["overdue", "today", "anytime", "tomorrow", "week", "later", "inbox"];
+  dueLabels = { overdue: "Overdue", today: "Due Today", anytime: "Anytime", tomorrow: "Tomorrow", week: "This Week", later: "Later", inbox: "Unsorted" };
+
+  events = [];
+
+  componentDidMount() {
+    this._esc = (e) => { if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen) { this.setState({ openMenu: null, aboutOpen: false }); } else { this.goHome(); } } };
+    window.addEventListener("keydown", this._esc);
+    this.timer = setInterval(() => this.setState({ now: new Date() }), 10000);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this._esc); clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; }
+
+  // ===== Notebook OS system chrome =====
+  appFile = "Tasks.dc.html";
+  appName = "Tasks";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File", "Edit", "View", "Lists"]; }
+  appMenuItems(name) {
+    const S = this.state;
+    if (name === "File") return [
+      this.mi("New Task", () => { this.setState({ openMenu: null }); if (this.draftEl) this.draftEl.focus(); }, { hint: "⌘N" }),
+      this.msep(),
+      this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" }),
+    ];
+    if (name === "Edit") {
+      const anyDone = this.scopedTasks().some((o) => o.t.done);
+      return [
+        anyDone ? this.mi("Clear Completed", () => this.clearCompleted()) : this.off("Clear Completed"),
+        this.msep(),
+        this.off("Undo"), this.off("Cut"), this.off("Copy"), this.off("Paste"),
+      ];
+    }
+    if (name === "View") return [
+      this.mi("Today", () => this.setState({ view: "view:today", openMenu: null }), { check: S.view === "view:today" ? "✓" : "" }),
+      this.mi("Upcoming", () => this.setState({ view: "view:upcoming", openMenu: null }), { check: S.view === "view:upcoming" ? "✓" : "" }),
+      this.mi("Inbox", () => this.setState({ view: "view:inbox", openMenu: null }), { check: S.view === "view:inbox" ? "✓" : "" }),
+    ];
+    if (name === "Lists") return Object.keys(this.projectColors).map((p) =>
+      this.mi(p, () => this.setState({ view: "proj:" + p, openMenu: null }), { check: S.view === "proj:" + p ? "✓" : "" }));
+    return [this.off("No actions")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS…", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart…", () => this.power("restart")),
+      this.mi("Shut Down…", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "✓" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 · strong"), this.off("NODE-22", "ch 4 · good"), this.off("NODE-7F", "ch 4 · strong"), this.off("NODE-88", "ch 6 · fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+
+  // ===== tasks logic =====
+  scopedTasks() {
+    const v = this.state.view;
+    const all = this.state.tasks.map((t, i) => ({ t, i }));
+    if (v === "view:today") return all.filter((o) => ["overdue", "today", "anytime"].indexOf(o.t.due) !== -1);
+    if (v === "view:upcoming") return all.filter((o) => ["tomorrow", "week", "later"].indexOf(o.t.due) !== -1);
+    if (v === "view:inbox") return all.filter((o) => o.t.due === "inbox");
+    const p = v.slice(5);
+    return all.filter((o) => o.t.project === p);
+  }
+  toggle(i) { this.setState((s) => { const t = s.tasks.slice(); t[i] = { ...t[i], done: !t[i].done }; return { tasks: t }; }); }
+  clearCompleted() {
+    const keepIdx = new Set(this.scopedTasks().filter((o) => o.t.done).map((o) => o.i));
+    this.setState((s) => ({ tasks: s.tasks.filter((t, i) => !keepIdx.has(i)), openMenu: null }));
+  }
+  addTask() {
+    const title = this.state.draft.trim();
+    if (!title) return;
+    const v = this.state.view;
+    const due = v === "view:upcoming" ? "tomorrow" : v === "view:inbox" ? "inbox" : "today";
+    const project = v.indexOf("proj:") === 0 ? v.slice(5) : (v === "view:inbox" ? null : "Home");
+    this.setState((s) => ({ tasks: s.tasks.concat([{ title, project, due: v.indexOf("proj:") === 0 ? "today" : due, time: "", prio: 0, done: false }]), draft: "" }));
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "star": return S(P("M12 4l2.3 5.1 5.6.5-4.2 3.7 1.3 5.5L12 21.4l-4.3 2.9 1.3-5.5-4.2-3.7 5.6-.5z"));
+      case "cal": return S(R(4, 5, 16, 15, 1.5), L(4, 9.2, 20, 9.2), L(8, 3.5, 8, 6.5), L(16, 3.5, 16, 6.5));
+      case "inbox": return S(P("M4 13h4l1.5 2.5h5L16 13h4"), P("M4 13l2.5-7h11L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"));
+      case "plus": return S(L(12, 5, 12, 19), L(5, 12, 19, 12));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+  check() { const E = React.createElement; return E("svg", { viewBox: "0 0 24 24", width: 13, height: 13, fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", strokeLinejoin: "round" }, E("path", { d: "M5 12.5 10 17.5 19 7" })); }
+
+  renderVals() {
+    const S = this.state;
+    const remainingIn = (dues) => this.state.tasks.filter((t) => dues.indexOf(t.due) !== -1 && !t.done).length;
+
+    const viewDefs = [
+      { id: "view:today", label: "Today", k: "star", count: remainingIn(["overdue", "today", "anytime"]) },
+      { id: "view:upcoming", label: "Upcoming", k: "cal", count: remainingIn(["tomorrow", "week", "later"]) },
+      { id: "view:inbox", label: "Inbox", k: "inbox", count: remainingIn(["inbox"]) },
+    ];
+    const views = viewDefs.map((v) => ({
+      label: v.label, count: String(v.count), glyph: this.icon(v.k),
+      onClick: () => this.setState({ view: v.id }),
+      rowStyle: "display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:2px;cursor:pointer;font-size:15px;color:#1A1916;font-weight:500;margin-bottom:2px;"
+        + (S.view === v.id ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+    const projects = Object.keys(this.projectColors).map((p) => ({
+      label: p,
+      count: String(this.state.tasks.filter((t) => t.project === p && !t.done).length),
+      dot: "width:11px;height:11px;flex:none;border-radius:50%;background:" + this.projectColors[p] + ";",
+      onClick: () => this.setState({ view: "proj:" + p }),
+      rowStyle: "display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:2px;cursor:pointer;font-size:15px;color:#2A2620;margin-bottom:2px;"
+        + (S.view === "proj:" + p ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+
+    const scoped = this.scopedTasks();
+    const mkTask = ({ t, i }) => ({
+      title: t.title, project: t.project || "Inbox", time: t.time,
+      onToggle: () => this.toggle(i),
+      boxStyle: t.done
+        ? "width:22px;height:22px;flex:none;border:1.5px solid #1A1916;background:#1A1916;color:#FCFBF8;display:flex;align-items:center;justify-content:center;border-radius:3px;"
+        : "width:22px;height:22px;flex:none;border:1.5px solid #B5B0A3;background:transparent;display:flex;align-items:center;justify-content:center;border-radius:3px;",
+      check: t.done ? this.check() : null,
+      titleStyle: t.done ? "font-size:16px;color:#A8A296;text-decoration:line-through;" : "font-size:16px;color:#1A1916;",
+      projDot: "width:9px;height:9px;flex:none;border-radius:50%;background:" + (this.projectColors[t.project] || "#C4BFB1") + ";",
+      timeStyle: "font-size:12.5px;font-variant-numeric:tabular-nums;color:" + (t.due === "overdue" ? "#C8341E" : "#9A958A") + ";",
+      prioDot: t.prio === 2 ? "width:9px;height:9px;flex:none;border-radius:50%;background:#C8341E;"
+        : (t.prio === 1 ? "width:9px;height:9px;flex:none;border-radius:50%;background:#1A1916;" : "width:9px;height:9px;flex:none;"),
+    });
+    const groups = this.dueOrder
+      .map((due) => {
+        const items = scoped.filter((o) => o.t.due === due);
+        return {
+          label: this.dueLabels[due], count: String(items.length),
+          labelStyle: "font-size:12px;letter-spacing:0.1em;text-transform:uppercase;font-weight:700;color:" + (due === "overdue" ? "#C8341E" : "#6E695E") + ";",
+          items: items.map(mkTask),
+        };
+      })
+      .filter((g) => g.items.length > 0);
+
+    const viewMeta = {
+      "view:today": { eyebrow: "Today", title: (function (n) { return ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][n.getDay()] + ", " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; })(S.now) },
+      "view:upcoming": { eyebrow: "Upcoming", title: "The next two weeks" },
+      "view:inbox": { eyebrow: "Inbox", title: "Unsorted tasks" },
+    };
+    const meta = viewMeta[S.view] || { eyebrow: "Project", title: S.view.slice(5) };
+
+    const events = this.events.map((e) => ({
+      time: e.time, dur: e.dur, title: e.title, place: e.place,
+      dot: "width:11px;height:11px;border-radius:50%;flex:none;border:2.5px solid " + e.c + ";background:#FBFAF6;",
+      cardStyle: "flex:1;background:#FCFBF8;border:1px solid #E6E1D4;border-left:3px solid " + e.c + ";border-radius:2px;padding:12px 16px;margin-bottom:14px;",
+    }));
+    const nowD = S.now;
+    const dimM = new Date(nowD.getFullYear(), nowD.getMonth() + 1, 0).getDate();
+    const leadM = (new Date(nowD.getFullYear(), nowD.getMonth(), 1).getDay() + 6) % 7;
+    const miniTitle = ["January","February","March","April","May","June","July","August","September","October","November","December"][nowD.getMonth()] + " " + nowD.getFullYear();
+    const eventDays = [];
+    const calCells = [];
+    for (let b = 0; b < leadM; b++) calCells.push({ day: "", pill: "" });
+    for (let d = 1; d <= dimM; d++) {
+      const today = d === nowD.getDate();
+      calCells.push({
+        day: d,
+        pill: today
+          ? "width:26px;height:26px;border-radius:50%;background:#C8341E;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;"
+          : "width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-variant-numeric:tabular-nums;color:" + (eventDays.indexOf(d) !== -1 ? "#1A1916;font-weight:700;" : "#6E695E;"),
+      });
+    }
+
+    return {
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(),
+      signalGlyph: this.icon("signal"), plusGlyph: this.icon("plus"),
+      views, projects, groups, noTasks: groups.length === 0, noEvents: this.events.length === 0,
+      viewEyebrow: meta.eyebrow, viewTitle: meta.title,
+      remaining: String(scoped.filter((o) => !o.t.done).length),
+      draft: S.draft,
+      onDraft: (e) => this.setState({ draft: e.target.value }),
+      onDraftKey: (e) => { if (e.key === "Enter") this.addTask(); },
+      draftRef: (el) => { this.draftEl = el; },
+      events, listEmpty: groups.length === 0, eventsEmpty: this.events.length === 0, weekdays: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"], calCells, miniTitle,
+    };
+  }
+}
+</script>
+</body>
+</html>

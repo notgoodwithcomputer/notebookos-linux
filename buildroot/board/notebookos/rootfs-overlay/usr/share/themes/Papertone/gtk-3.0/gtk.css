@@ -1,0 +1,174 @@
+/* Papertone — the Notebook OS GTK theme (base widget colors). Apps layer
+   their own precise styling on top; this sets the system defaults so stray
+   widgets already read as papertone rather than Adwaita blue. */
+
+@define-color paper   #FCFBF8;
+@define-color panel   #F4F2EC;
+@define-color ink     #1A1916;
+@define-color hair    #C9C4B6;
+@define-color accent  #C8341E;
+@define-color muted   #6E695E;
+@define-color select  #EAE3D2;
+
+* {
+  color: @ink;
+  font-family: "Helvetica Neue", "Helvetica", sans-serif;
+  /* Keyboard focus. `outline-color` alone drew NOTHING: GTK's default
+     outline-style is none, so every button, list row, check and tab in the OS
+     was keyboard-focusable and completely invisible while focused — Tab moved
+     an indicator nobody could see, which is the whole difference between "you
+     can use this without a mouse" and "you cannot". The style/width/offset
+     have to be set for gtk_render_focus to draw anything.
+
+     Safe to declare globally, and deliberately not scoped to :focus: GTK only
+     calls gtk_render_focus when gtk_widget_has_visible_focus() is true, and
+     that flag is set by keyboard navigation, not by a click. So a mouse user
+     never sees a ring (verified: all 28 apps render pixel-identically with
+     this rule added) and a keyboard user always does.
+
+     Inset by 3px so the ring sits inside the control's own border instead of
+     colliding with its neighbour, and in the accent the theme had already
+     nominated for it. */
+  outline-color: @accent;
+  outline-style: solid;
+  outline-width: 2px;
+  outline-offset: -3px;
+}
+
+window, .background { background-color: @paper; }
+
+/* Container surfaces MUST default to paper.
+   GTK silently inserts a viewport between a ScrolledWindow and a non-scrollable
+   child, and that viewport inherits no colour — on this stack an unstyled
+   surface paints BLACK, which is why Writer's document canvas came up black
+   even though .canvaswrap/.doccol were both styled: the black was the viewport
+   in between. Setting the defaults here fixes that everywhere at once instead
+   of app-by-app as each one is noticed.
+   Apps load their CSS at STYLE_PROVIDER_PRIORITY_APPLICATION (600), which beats
+   this theme (200), so anything wanting a different surface — the Terminal's
+   dark field, Illustrator's canvas — still overrides it.
+
+   Keep this list NARROW. An earlier version also matched box, grid, eventbox,
+   overlay and listbox — nearly every container in the system — which painted
+   paper over surfaces meant to inherit their parent's colour (a plain Box
+   inside the Music play bar, an app's tinted strip) and produced pale
+   rectangles in apps that had been fine. Only the containers GTK inserts
+   implicitly, and which genuinely render black when unstyled, belong here. */
+scrolledwindow, viewport { background-color: @paper; }
+
+button {
+  background: #F8F7F2;
+  border: 1px solid @hair;
+  border-radius: 2px;
+  color: @ink;
+  padding: 4px 10px;
+}
+button:hover { background: #F1EEE6; }
+/* A pressed or checked button is SELECTED, not inverted.
+   This used to paint @ink (#1A1916) with pale text, so every toggle, radio,
+   check and pressed control in the OS turned into a black slab — the one thing
+   the papertone language never does, and visible on every app at once. The
+   selected state is the warm @select tone with a firmer border, so the control
+   still reads as "on" while staying on the paper palette. */
+button:active, button:checked {
+  background: @select;
+  background-image: none;
+  color: @ink;
+  border-color: #B3AD9E;
+}
+button:checked:hover, button:active:hover { background: #E0D8C4; }
+/* Selection anywhere else (list rows, tree views, text) uses the same tone
+   rather than the theme default blue/black. */
+:selected, :selected:focus,
+list row:selected, listbox row:selected, treeview:selected,
+textview text selection, entry selection, label selection {
+  background-color: @select;
+  color: @ink;
+}
+
+entry {
+  background: #FBFAF6;
+  border: 1px solid @hair;
+  border-radius: 2px;
+  color: #2A2620;
+}
+entry:focus { border-color: @accent; }
+
+/* Native toggles/sliders default to papertone so a stray GtkSwitch, GtkScale,
+   check, radio or progress bar never shows Adwaita blue on this stack. An app
+   that styles its own (widgets.py's cairo check, the media sliders) wins at
+   APPLICATION priority and is unaffected. Flat - no blur, no gradient. */
+check, radio { background: #FBFAF6; border: 1px solid @hair;
+               min-width: 14px; min-height: 14px; }
+check { border-radius: 2px; }
+radio { border-radius: 100%; }
+check:checked, radio:checked { background: @select; border-color: #B3AD9E;
+                               color: @ink; }
+switch { background: #DED4C2; border: 1px solid @hair; border-radius: 12px; }
+switch:checked { background: @accent; border-color: #B12D19; }
+switch slider { background: @paper; border: 1px solid @hair;
+                border-radius: 100%; }
+scale trough, progressbar trough { background: #DED4C2; border: none;
+                                   border-radius: 6px; min-height: 5px; }
+scale highlight, progressbar progress { background: @ink; border-radius: 6px; }
+scale slider { background: @paper; border: 1px solid @hair; border-radius: 100%;
+               min-width: 16px; min-height: 16px; }
+
+/* SpinButton field — give the numeric box the same paper the entries use so a
+   stray spin (GBA IDE room size / sprite anim, sequencer tempo) doesn't sit on
+   bare white. An app that styles its own spins wins at APPLICATION priority. */
+spinbutton { background-color: #FBFAF6; border: 1px solid @hair;
+             border-radius: 2px; color: #2A2620; }
+/* The +/- step buttons: the paper `button` rule sets their fill, but the
+   increment/decrement GLYPHS are symbolic icons that must follow `color` to
+   stay ink instead of the host accent. Pin `color: @ink` (the offscreen uishot
+   harness can't recolour theme symbolics, so this only shows on the live guest)
+   and give the steppers a hairline divider + hover so they read as quiet paper
+   controls rather than a seam of bare buttons. */
+spinbutton button { color: @ink; background: #F4F2EC; border: none;
+                    border-left: 1px solid @hair; border-radius: 0;
+                    box-shadow: none; -gtk-icon-shadow: none;
+                    min-width: 22px; padding: 0 4px; }
+spinbutton button:hover { background: #ECE8DE; color: @ink; }
+spinbutton button:active { background: #E0D8C4; color: @ink; }
+
+selection { background-color: @select; color: @ink; }
+
+separator { background-color: @hair; min-width: 1px; min-height: 1px; }
+
+/* Scrollbars — the installer's papertone treatment, promoted to the system
+   default so every app gets it.
+   Styling ONLY the slider (as this did) leaves the scrollbar's own background
+   and trough at the GTK default, which on this software-rendered stack paints
+   as a dark/black band down the edge of any scrolling view. So all three parts
+   are set: the bar itself, the trough it runs in, and the slider. */
+scrollbar { background: @paper; border: none; }
+scrollbar trough { background: #F1EEE6; border: none;
+                   border-radius: 8px; margin: 2px; }
+scrollbar slider { background: #C9C4B6; border-radius: 8px;
+                   min-width: 9px; min-height: 30px;
+                   border: 2px solid #F1EEE6; }
+scrollbar slider:hover { background: #9A9484; }
+scrollbar slider:active { background: #8A857A; }
+/* No stepper arrow buttons at the ends of the bar. GTK always inserts these
+   button nodes; left at their defaults they render as little bordered arrow
+   boxes — the dated, clunky artifact this theme exists to avoid, and the one
+   thing that made every scrolling view in the OS look unfinished. Collapse the
+   nodes to nothing so a scrollbar is only ever a trough and a slider. Placed
+   after the slider rules so it also strips steppers from any app that restyles
+   the slider at its own priority but never thinks to hide the buttons. */
+scrollbar button,
+scrollbar.horizontal button,
+scrollbar.vertical button {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  -gtk-icon-source: none;
+}
+/* Overlay (thin, floating) scrollbars use the same palette rather than the
+   default translucent black, which reads as a smudge on paper. */
+scrollbar.overlay-indicator:not(.dragging):not(.hovering) slider {
+                   background: #C9C4B6; border: none; }

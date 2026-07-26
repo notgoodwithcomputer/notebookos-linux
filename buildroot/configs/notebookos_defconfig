@@ -1,0 +1,185 @@
+# Notebook OS — from-scratch userspace for the no-internet Linux kernel.
+# Userspace ONLY: the kernel is built separately (../linux -> ../kbuild) and
+# used to boot this rootfs in QEMU. Native GTK3 + PyGObject desktop stack.
+
+# --- architecture ---
+BR2_x86_64=y
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_1=y
+
+# --- init / system ---
+BR2_TARGET_GENERIC_HOSTNAME="notebook"
+BR2_TARGET_GENERIC_ISSUE="Notebook OS (offline by design)"
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+# real bash for the Terminal app (busybox stays as /bin/sh for system scripts,
+# keeping the validated boot path). bash needs SHOW_OTHERS to be selectable.
+BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
+BR2_PACKAGE_BASH=y
+BR2_TARGET_GENERIC_GETTY_PORT="tty1"
+BR2_ENABLE_LOCALE_PURGE=y
+BR2_GENERATE_LOCALE="en_US.UTF-8"
+BR2_SYSTEM_ENABLE_NLS=y
+
+# --- rootfs image (ext4, roomy for X + GTK + python) ---
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="1500M"
+
+# --- our overlay + post-build (the DE lives here) ---
+BR2_ROOTFS_OVERLAY="board/notebookos/rootfs-overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="board/notebookos/post-build.sh"
+
+# --- graphics: X.org (modesetting via KMS on virtio-gpu, fbdev fallback) ---
+BR2_PACKAGE_XORG7=y
+BR2_PACKAGE_XSERVER_XORG_SERVER=y
+BR2_PACKAGE_XSERVER_XORG_SERVER_MODULES_ALL=y
+BR2_PACKAGE_LIBDRM=y
+BR2_PACKAGE_XDRIVER_XF86_VIDEO_FBDEV=y
+BR2_PACKAGE_XDRIVER_XF86_INPUT_EVDEV=y
+BR2_PACKAGE_XDRIVER_XF86_INPUT_LIBINPUT=y
+BR2_PACKAGE_XAPP_XINIT=y
+BR2_PACKAGE_XAPP_XRANDR=y
+BR2_PACKAGE_XAPP_XRDB=y
+BR2_PACKAGE_XAPP_XSETROOT=y
+BR2_PACKAGE_XAPP_SETXKBMAP=y
+
+# --- debug/introspection: window-tree truth + input from inside the guest ---
+BR2_PACKAGE_XAPP_XWININFO=y
+BR2_PACKAGE_XAPP_XPROP=y
+BR2_PACKAGE_XDOTOOL=y
+
+# --- terminal emulator widget: native GTK Terminal app via gi Vte ---
+BR2_PACKAGE_VTE=y
+
+# --- audio mixer: Settings > Sound drives volume through amixer ---
+BR2_PACKAGE_ALSA_LIB=y
+BR2_PACKAGE_ALSA_UTILS=y
+BR2_PACKAGE_ALSA_UTILS_AMIXER=y
+
+# --- software compositor (opt-in via nb.compositor=1). NOTE: neither xcompmgr
+# nor picom fixes the blank-window bug under this swrast/simpledrm stack — it was
+# proven (draw-count probe) that GTK's frame clock stays stalled even with picom
+# compositing (is_composited=True). The picom package (package/picom, deps incl.
+# package/uthash) is kept in-tree for real-hardware use but left DISABLED here
+# because it also blacks out the desktop background under software rendering. ---
+BR2_PACKAGE_XAPP_XCOMPMGR=y
+
+# --- GL. virgl gives GPU-accelerated 3D via the host GPU (virtio-gpu-gl / KVM)
+# with NO LLVM in the guest — this provides real vblank/frame timing (which the
+# frame clock needs to paint) and offloads rendering off the CPU. swrast stays
+# as the fallback for GPU-less boots. ---
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_SWRAST=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_VIRGL=y
+BR2_PACKAGE_MESA3D_OPENGL_GLX=y
+BR2_PACKAGE_MESA3D_OPENGL_EGL=y
+
+# --- the toolkit: GTK3 (X11) + PyGObject + pycairo (icons) ---
+BR2_PACKAGE_LIBGTK3=y
+BR2_PACKAGE_LIBGTK3_X11=y
+BR2_PACKAGE_GOBJECT_INTROSPECTION=y
+BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_PYTHON3_PY_ONLY=y
+# pyexpat keeps the stdlib xml package (xml.etree) — needed for EPUB parsing
+BR2_PACKAGE_PYTHON3_PYEXPAT=y
+BR2_PACKAGE_PYTHON_GOBJECT=y
+BR2_PACKAGE_PYTHON_PYCAIRO=y
+BR2_PACKAGE_XAPP_XSET=y
+
+# --- session plumbing ---
+BR2_PACKAGE_DBUS=y
+BR2_PACKAGE_FONTCONFIG=y
+BR2_PACKAGE_LIBERATION=y
+# DejaVu: broad Unicode glyph coverage (superscripts, math/technical symbols,
+# arrows, box glyphs) used as the fontconfig fallback so special characters the
+# UI uses (⌫, xʸ, sin⁻¹, √, ▸, →, ×, ÷, −, …) never render as missing-glyph
+# "tofu" boxes on real hardware, which has no rich system font to fall back to.
+BR2_PACKAGE_DEJAVU=y
+BR2_PACKAGE_MATCHBOX=y
+# hicolor-icon-theme: the base freedesktop icon-theme index GTK looks up first;
+# without it GTK logs a warning per icon miss and does extra fallback work at
+# first paint. Providing it removes the warnings + speeds the first render.
+BR2_PACKAGE_HICOLOR_ICON_THEME=y
+
+# --- MEDIA STACK: real audio/video/document engines for the media apps ---
+# Audio playback: GStreamer1 -> ALSA (no PulseAudio). Callable from PyGObject via
+# the Gst typelib (gobject-introspection is on) + gst1-python overrides.
+BR2_PACKAGE_GSTREAMER1=y
+BR2_PACKAGE_GST1_PLUGINS_BASE=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_PLAYBACK=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_ALSA=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_AUDIOCONVERT=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_AUDIORESAMPLE=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_VOLUME=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_TYPEFIND=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_OGG=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_VORBIS=y
+BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_APP=y
+BR2_PACKAGE_GST1_PLUGINS_GOOD=y
+BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_MPG123=y
+BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_FLAC=y
+BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_WAVPARSE=y
+BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_ISOMP4=y
+BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_MATROSKA=y
+BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_AUTODETECT=y
+BR2_PACKAGE_GST1_PYTHON=y
+BR2_PACKAGE_ALSA_UTILS_APLAY=y
+BR2_PACKAGE_ALSA_UTILS_SPEAKER_TEST=y
+# Documents: PDF via gi.repository.Poppler (glib+introspection auto-on); EPUB is
+# pure-Python (zipfile + xml), no package needed.
+BR2_PACKAGE_POPPLER=y
+BR2_PACKAGE_POPPLER_UTILS=y
+# Video: decode/preview via gst1-libav (ffmpeg as a library); export via ffmpeg CLI.
+BR2_PACKAGE_GST1_LIBAV=y
+BR2_PACKAGE_FFMPEG=y
+BR2_PACKAGE_FFMPEG_FFMPEG=y
+BR2_PACKAGE_FFMPEG_GPL=y
+# SVG images: librsvg (with rsvg-convert). The Media viewer rasterises SVG via
+# rsvg-convert and every other image format GdkPixbuf lacks a loader for (WebP,
+# HEIC/HEIF, AVIF, ...) via the ffmpeg CLI above — so the OS renders all the
+# major image formats without the fragile cross-compiled gdk-pixbuf loaders.
+BR2_PACKAGE_LIBRSVG=y
+# Bluetooth A2DP audio: bluealsa exposes BT sinks as ALSA PCMs (bluealsa:DEV=...);
+# auto-selects bluez5_utils + audio plugins + sbc codec. bluetoothctl for pairing.
+BR2_PACKAGE_BLUEZ_ALSA=y
+BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
+
+# --- INSTALLER: real disk/partition/format tools for the guided installer app.
+# The live ISO boots to the desktop; the installer (de/installer.py) partitions
+# a target disk (GPT: ESP + root), formats it, copies the rootfs, and drops the
+# prebuilt GRUB EFI + kernel onto the ESP. Busybox's fdisk/mke2fs can't do GPT +
+# ext4 + VFAT reliably, so add the real tools. ---
+# mkfs.vfat for the EFI System Partition
+BR2_PACKAGE_DOSFSTOOLS=y
+BR2_PACKAGE_DOSFSTOOLS_MKFS_FAT=y
+# sgdisk for GPT partitioning (same tool + layout as tools/mkimage-uefi.sh)
+BR2_PACKAGE_GPTFDISK=y
+BR2_PACKAGE_GPTFDISK_SGDISK=y
+# real mkfs.ext4 (+ fsck/resize) for the root partition
+BR2_PACKAGE_E2FSPROGS=y
+BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y
+# util-linux: the basic binaries set gives lsblk (enumerate disks), blkid (read
+# PARTUUID), findfs/findmnt (identify the live/running device to exclude it),
+# sfdisk, mkswap, blockdev; plus wipefs (clear stale signatures) and partx
+# (re-read the partition table) as separate options.
+BR2_PACKAGE_UTIL_LINUX=y
+BR2_PACKAGE_UTIL_LINUX_BINARIES=y
+BR2_PACKAGE_UTIL_LINUX_WIPEFS=y
+BR2_PACKAGE_UTIL_LINUX_PARTX=y
+
+# --- PRINTING: CUPS + broad USB-printer driver coverage ---
+# CUPS is the print spooler; the usblp kernel driver (CONFIG_USB_PRINTER=y) +
+# libusb let it see a USB printer directly. Gutenprint provides drivers for
+# ~5000 printer models (Canon, Epson, HP, Brother, Lexmark, ...); cups-filters +
+# Ghostscript are the PDF/PostScript -> raster pipeline the apps print through
+# (each app Exports a PDF, then sends it to the printer via `lp`).
+BR2_PACKAGE_CUPS=y
+BR2_PACKAGE_CUPS_FILTERS=y
+BR2_PACKAGE_GHOSTSCRIPT=y
+BR2_PACKAGE_GUTENPRINT=y
+BR2_PACKAGE_LIBUSB=y
+
+# --- handy on the console ---
+BR2_PACKAGE_HTOP=y
+BR2_PACKAGE_STRACE=y

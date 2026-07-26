@@ -1,0 +1,10 @@
+{
+  "id": "media",
+  "name": "Media Viewer",
+  "kind": "Media",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "media",
+  "order": 170
+}

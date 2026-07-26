@@ -1,0 +1,15 @@
+config BR2_PACKAGE_BRLASER
+	bool "brlaser"
+	depends on BR2_INSTALL_LIBSTDCPP
+	depends on BR2_PACKAGE_CUPS
+	help
+	  A CUPS driver for the host-based (GDI) Brother laser printers —
+	  the DCP / HL / MFC mono models that speak their own raster
+	  language instead of PCL or PostScript, so a generic driver makes
+	  them receive a job and print nothing. Ships the "brlaser" raster
+	  filter and PPDs that Notebook OS's printer setup then offers.
+
+	  https://github.com/pdewacht/brlaser
+
+comment "brlaser needs CUPS and a C++ toolchain"
+	depends on !BR2_PACKAGE_CUPS || !BR2_INSTALL_LIBSTDCPP

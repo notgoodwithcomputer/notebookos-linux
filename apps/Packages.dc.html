@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  input { font-family: inherit; }
+  .pk-scroll::-webkit-scrollbar { width: 12px; }
+  .pk-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== MENU BAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:50;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Packages</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="3">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- sidebar -->
+      <div style="width:264px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;padding:22px 14px;">
+        <sc-for list="{{ views }}" as="v" hint-placeholder-count="3">
+          <div onClick="{{ v.onClick }}" style="{{ v.rowStyle }}" style-hover="background:#E6DFCE;">
+            <div style="width:18px;height:18px;color:#3A362E;display:flex;flex:none;">{{ v.glyph }}</div>
+            <span style="flex:1;">{{ v.label }}</span>
+            <span style="font-size:12.5px;color:#9A958A;font-variant-numeric:tabular-nums;">{{ v.count }}</span>
+          </div>
+        </sc-for>
+        <div style="margin-top:auto;font-size:12px;color:#A39D8F;padding:0 12px;line-height:1.55;">Offline system. Packages install from the LoRa mesh or removable media.</div>
+      </div>
+
+      <!-- INSTALLED -->
+      <sc-if value="{{ installedOn }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">
+        <div style="flex:none;display:flex;align-items:baseline;justify-content:space-between;padding:28px 36px 16px;">
+          <div style="font-size:26px;font-weight:700;color:#1A1916;letter-spacing:-0.01em;">Installed</div>
+          <div style="display:flex;align-items:center;gap:8px;background:#FBFAF6;border:1px solid #C4BFB1;border-radius:2px;height:34px;padding:0 11px;width:240px;">
+            <div style="width:15px;height:15px;color:#9A958A;display:flex;flex:none;">{{ searchGlyph }}</div>
+            <input value="{{ q }}" onInput="{{ onSearch }}" type="text" placeholder="Search packages" style="border:none;background:transparent;outline:none;font-size:13.5px;color:#2A2620;width:100%;" />
+          </div>
+        </div>
+        <div style="flex:none;display:grid;grid-template-columns:1fr 150px 90px 90px;align-items:center;height:34px;padding:0 36px;border-bottom:1px solid #D7D2C5;background:#F1EEE6;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#8A857A;font-weight:600;">
+          <div>Name</div><div>Kind</div><div>Version</div><div style="text-align:right;">Size</div>
+        </div>
+        <div class="pk-scroll" style="flex:1;overflow-y:auto;min-height:0;">
+          <sc-for list="{{ rows }}" as="p" hint-placeholder-count="12">
+            <div onClick="{{ p.onClick }}" style="{{ p.style }}" style-hover="background:#F0ECE0;">
+              <div style="display:flex;align-items:center;gap:12px;min-width:0;">
+                <div style="width:20px;height:20px;color:#1A1916;display:flex;flex:none;">{{ p.glyph }}</div>
+                <span style="font-size:14.5px;color:#1A1916;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ p.name }}</span>
+              </div>
+              <div style="font-size:13px;color:#6E695E;">{{ p.kind }}</div>
+              <div style="font-size:13px;color:#6E695E;font-variant-numeric:tabular-nums;">{{ p.version }}</div>
+              <div style="font-size:13px;color:#6E695E;text-align:right;font-variant-numeric:tabular-nums;">{{ p.size }}</div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noMatches }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:48px 0;text-align:center;font-size:13.5px;color:#A39D8F;">No packages match the search.</div>
+          </sc-if>
+        </div>
+      </div>
+      <div style="width:380px;flex:none;border-left:1px solid #E6E1D4;background:#FBFAF6;padding:30px 28px;display:flex;flex-direction:column;min-height:0;">
+        <sc-if value="{{ hasSel }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
+            <div style="width:36px;height:36px;color:#1A1916;display:flex;flex:none;">{{ selGlyph }}</div>
+            <div style="font-size:21px;font-weight:700;color:#1A1916;">{{ selName }}</div>
+          </div>
+          <div style="font-size:14px;color:#79736A;margin-bottom:22px;">{{ selDesc }}</div>
+          <div style="border-top:1px solid #E6E1D4;display:flex;flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #ECE7DA;font-size:13.5px;"><span style="color:#8A857A;">Version</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">{{ selVersion }}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #ECE7DA;font-size:13.5px;"><span style="color:#8A857A;">Kind</span><span style="color:#1A1916;">{{ selKind }}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #ECE7DA;font-size:13.5px;"><span style="color:#8A857A;">Size</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">{{ selSize }}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #ECE7DA;font-size:13.5px;"><span style="color:#8A857A;">Installed</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">{{ selInstalled }}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:12px 0;font-size:13.5px;"><span style="color:#8A857A;">Source</span><span style="color:#1A1916;">Local Disk</span></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:22px;">
+            <div onClick="{{ onReinstall }}" style="flex:1;height:40px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">Reinstall</div>
+            <div title="Read-only system image" style="flex:1;height:40px;display:flex;align-items:center;justify-content:center;border:1px solid #E0DBCE;color:#C4BFB1;border-radius:2px;font-size:14px;cursor:default;background:#FCFBF8;">Remove</div>
+          </div>
+          <div style="font-size:12px;color:#A39D8F;margin-top:12px;line-height:1.5;">Packages are part of the read-only system image and cannot be removed.</div>
+          <sc-if value="{{ flashShown }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:auto;display:flex;align-items:center;gap:8px;font-size:13px;color:#6E7B57;"><div style="width:8px;height:8px;border-radius:50%;background:#6E7B57;"></div>{{ flash }}</div>
+          </sc-if>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- UPDATES -->
+      <sc-if value="{{ updatesOn }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;">
+        <div style="width:44px;height:44px;color:#B5B0A3;display:flex;">{{ updateGlyph }}</div>
+        <div style="font-size:17px;font-weight:600;color:#1A1916;">Everything is up to date</div>
+        <div style="font-size:13.5px;color:#A39D8F;max-width:380px;text-align:center;line-height:1.55;">This system is offline. Package updates arrive over the LoRa mesh or from removable media.</div>
+        <div style="font-size:12.5px;color:#B0AB9D;margin-top:6px;font-variant-numeric:tabular-nums;">{{ lastChecked }}</div>
+      </div>
+      </sc-if>
+
+      <!-- SOURCES -->
+      <sc-if value="{{ sourcesOn }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;padding:28px 36px;">
+        <div style="font-size:26px;font-weight:700;color:#1A1916;letter-spacing:-0.01em;margin-bottom:20px;">Sources</div>
+        <sc-for list="{{ sources }}" as="s" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:16px;padding:18px 4px;border-bottom:1px solid #ECE7DA;">
+            <div style="width:24px;height:24px;color:#1A1916;display:flex;flex:none;">{{ s.glyph }}</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:15.5px;font-weight:600;color:#1A1916;">{{ s.label }}</div>
+              <div style="font-size:13px;color:#8A857A;margin-top:2px;">{{ s.detail }}</div>
+            </div>
+            <div style="{{ s.chip }}">{{ s.status }}</div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false, view: "installed", sel: 0, q: "", flash: "", lastChecked: "Last checked today at " + (() => { const n = new Date(), p = (x) => (x < 10 ? "0" + x : "" + x); return p(n.getHours()) + ":" + p(n.getMinutes()); })() };
+
+  packages = [
+    { name: "Writer", k: "writer", kind: "Application", version: "1.0", size: "1.2 MB", installed: "9 Jun 2026", desc: "Single-document word processor." },
+    { name: "Novel", k: "novel", kind: "Application", version: "1.0", size: "2.4 MB", installed: "9 Jun 2026", desc: "Long-form manuscript editor with chapters." },
+    { name: "Academic Notes", k: "academic", kind: "Application", version: "1.0", size: "880 KB", installed: "9 Jun 2026", desc: "Lecture notes organized by class." },
+    { name: "Journal", k: "journal", kind: "Application", version: "1.0", size: "640 KB", installed: "9 Jun 2026", desc: "Dated personal entries." },
+    { name: "Screenplay", k: "screenplay", kind: "Application", version: "1.0", size: "1.1 MB", installed: "9 Jun 2026", desc: "Screenplay formatting editor." },
+    { name: "Tasks", k: "tasks", kind: "Application", version: "1.0", size: "420 KB", installed: "9 Jun 2026", desc: "To-do lists and day planning." },
+    { name: "Calendar", k: "calendar", kind: "Application", version: "1.0", size: "510 KB", installed: "9 Jun 2026", desc: "Day, week, and month planner." },
+    { name: "Cookbook", k: "cookbook", kind: "Application", version: "1.0", size: "1.8 MB", installed: "9 Jun 2026", desc: "Recipe collection with scaling." },
+    { name: "E-book Reader", k: "ebook", kind: "Application", version: "1.0", size: "2.1 MB", installed: "9 Jun 2026", desc: "Offline book reader." },
+    { name: "Calculator", k: "calculator", kind: "Application", version: "1.0", size: "360 KB", installed: "9 Jun 2026", desc: "Scientific calculator." },
+    { name: "Accounting", k: "accounting", kind: "Application", version: "1.0", size: "720 KB", installed: "9 Jun 2026", desc: "Cash-only envelope ledger." },
+    { name: "Contacts", k: "contacts", kind: "Application", version: "1.0", size: "290 KB", installed: "9 Jun 2026", desc: "Address book of LoRa nodes." },
+    { name: "Messages", k: "messages", kind: "Application", version: "1.0", size: "1.4 MB", installed: "9 Jun 2026", desc: "Text messaging over the LoRa mesh." },
+    { name: "2048", k: "g2048", kind: "Application", version: "1.0", size: "180 KB", installed: "9 Jun 2026", desc: "Number-joining puzzle." },
+    { name: "Tetris", k: "tetris", kind: "Application", version: "1.0", size: "210 KB", installed: "9 Jun 2026", desc: "Falling-block game." },
+    { name: "Illustrator", k: "illustrator", kind: "Application", version: "1.0", size: "2.6 MB", installed: "9 Jun 2026", desc: "Raster paint editor with layers and transparency." },
+    { name: "Sequencer", k: "sequencer", kind: "Application", version: "1.0", size: "3.4 MB", installed: "9 Jun 2026", desc: "Four-track tape-style recorder." },
+    { name: "Video Editor", k: "videoeditor", kind: "Application", version: "1.0", size: "4.1 MB", installed: "9 Jun 2026", desc: "Storyboard and timeline video editor." },
+    { name: "Media Viewer", k: "mediaviewer", kind: "Application", version: "1.0", size: "980 KB", installed: "9 Jun 2026", desc: "Image and video viewer." },
+    { name: "Music", k: "music", kind: "Application", version: "1.0", size: "1.6 MB", installed: "9 Jun 2026", desc: "Music library sourced from the Music folder." },
+    { name: "Packages", k: "packages", kind: "Application", version: "1.0", size: "740 KB", installed: "9 Jun 2026", desc: "This package manager." },
+    { name: "notebook.kernel", k: "sys", kind: "System", version: "1.0", size: "8.2 MB", installed: "1 May 2026", desc: "System kernel." },
+    { name: "mesh-radio.driver", k: "sys", kind: "System", version: "1.0", size: "1.1 MB", installed: "1 May 2026", desc: "LoRa radio driver, 915 MHz." },
+    { name: "papertone.theme", k: "sys", kind: "System", version: "1.0", size: "340 KB", installed: "1 May 2026", desc: "System appearance." },
+    { name: "helvetica.typeface", k: "sys", kind: "System", version: "1.0", size: "2.8 MB", installed: "1 May 2026", desc: "Interface typeface." },
+    { name: "newsreader.typeface", k: "sys", kind: "System", version: "1.0", size: "3.1 MB", installed: "1 May 2026", desc: "Document typeface." },
+  ];
+
+  componentDidMount() {
+    this._esc = (e) => { if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen) { this.setState({ openMenu: null, aboutOpen: false }); } else { this.goHome(); } } };
+    window.addEventListener("keydown", this._esc);
+    this.timer = setInterval(() => this.setState({ now: new Date() }), 10000);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this._esc); clearInterval(this.timer); if (this.flashT) clearTimeout(this.flashT); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; }
+
+  appFile = "Packages.dc.html";
+  appName = "Packages";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File", "Packages", "View"]; }
+  appMenuItems(name) {
+    const S = this.state;
+    if (name === "File") return [
+      this.mi("Check for Updates", () => this.setState({ view: "updates", lastChecked: "Last checked today at " + this.clockStr(), openMenu: null })),
+      this.msep(),
+      this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" }),
+    ];
+    if (name === "Packages") {
+      const p = this.packages[S.sel];
+      return [
+        S.view === "installed" && p ? this.mi("Reinstall \u201c" + p.name + "\u201d", () => this.reinstall()) : this.off("Reinstall"),
+        this.off("Remove", "read-only system image"),
+      ];
+    }
+    if (name === "View") return [
+      this.mi("Installed", () => this.setState({ view: "installed", openMenu: null }), { check: S.view === "installed" ? "\u2713" : "" }),
+      this.mi("Updates", () => this.setState({ view: "updates", openMenu: null }), { check: S.view === "updates" ? "\u2713" : "" }),
+      this.mi("Sources", () => this.setState({ view: "sources", openMenu: null }), { check: S.view === "sources" ? "\u2713" : "" }),
+    ];
+    return [this.off("No actions")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS\u2026", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart\u2026", () => this.power("restart")),
+      this.mi("Shut Down\u2026", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "\u2713" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 \u00b7 strong"), this.off("NODE-22", "ch 4 \u00b7 good"), this.off("NODE-7F", "ch 4 \u00b7 strong"), this.off("NODE-88", "ch 6 \u00b7 fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+  reinstall() {
+    this.setState({ openMenu: null, flash: "Reinstalled at " + this.clockStr() });
+    if (this.flashT) clearTimeout(this.flashT);
+    this.flashT = setTimeout(() => this.setState({ flash: "" }), 2600);
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "search": return S(C(11, 11, 6), L(15.4, 15.4, 20, 20));
+      case "box": return S(P("M12 3l8 4.5v9L12 21l-8-4.5v-9z"), P("M4 7.5l8 4.5 8-4.5"), L(12, 12, 12, 21));
+      case "update": return S(P("M20 12a8 8 0 1 1-2.3-5.6"), P("M20 3v4h-4"));
+      case "sources": return S(R(3, 4, 18, 6, 1), R(3, 14, 18, 6, 1), C(6.5, 7, 0.7), C(6.5, 17, 0.7));
+      case "disk": return S(R(3, 6.5, 18, 11, 1.5), C(17, 12, 0.9), L(6, 10, 12, 10));
+      case "writer": return S(R(5, 3, 14, 18, 1), L(8, 8, 16, 8), L(8, 12, 16, 12), L(8, 16, 13, 16));
+      case "novel": return S(P("M12 6C9.5 4 6.5 4 4 5V18.5C6.5 17.5 9.5 17.5 12 19"), P("M12 6c2.5-2 5.5-2 8-1v13.5c-2.5-1-5.5-1-8 0"), L(12, 6, 12, 19));
+      case "academic": return S(P("M2.5 9 12 5l9.5 4L12 13z"), P("M6.5 11v4.3c0 1.7 11 1.7 11 0V11"), L(21.5, 9, 21.5, 13.5));
+      case "journal": return S(R(5, 3.5, 14, 17, 1), L(9, 3.5, 9, 20.5), P("M13 3.5v6l1.5-1.4L16 9.5v-6"));
+      case "screenplay": return S(R(3.5, 8.5, 17, 11.5, 1), P("M3.8 8.5 4.7 5l15.7 1.2L19.7 9"), L(8, 8.5, 9.2, 5.3), L(13, 8.5, 14.2, 5.8));
+      case "tasks": return S(R(4, 4, 16, 16, 2.5), P("M8 12.2 10.8 15 16 9"));
+      case "calendar": return S(R(4, 5, 16, 15, 1.5), L(4, 9.2, 20, 9.2), L(8, 3.5, 8, 6.5), L(16, 3.5, 16, 6.5));
+      case "cookbook": return S(P("M5 10.5h14v2.5c0 3.3-3.1 5.5-7 5.5s-7-2.2-7-5.5z"), L(3.2, 11.5, 5, 11.5), L(19, 11.5, 20.8, 11.5), L(7, 8, 17, 8), L(12, 8, 12, 6.6));
+      case "ebook": return S(R(5, 3, 14, 18, 2), L(8, 7, 16, 7), L(8, 10.5, 16, 10.5), L(8, 14, 13, 14), C(12, 18, 0.5));
+      case "calculator": return S(R(5, 3, 14, 18, 1.5), R(8, 6, 8, 3, 0.5), C(9, 13, 0.6), C(12, 13, 0.6), C(15, 13, 0.6), C(9, 16, 0.6), C(12, 16, 0.6), C(15, 16, 0.6));
+      case "accounting": return S(R(3, 7, 18, 10, 1.5), C(12, 12, 2.4), C(6, 12, 0.6), C(18, 12, 0.6));
+      case "contacts": return S(C(12, 8.5, 3.2), P("M5.5 19c0-4 13-4 13 0"));
+      case "messages": return S(R(4, 5, 16, 10, 2), P("M9 15v4l4-4"), C(9, 10, 0.6), C(12, 10, 0.6), C(15, 10, 0.6));
+      case "g2048": return S(R(4, 4, 7, 7, 1), R(13, 4, 7, 7, 1), R(4, 13, 7, 7, 1), R(13, 13, 7, 7, 1));
+      case "tetris": return S(R(4, 4, 5.3, 5.3, 0.5), R(9.3, 4, 5.3, 5.3, 0.5), R(14.6, 4, 5.3, 5.3, 0.5), R(9.3, 9.3, 5.3, 5.3, 0.5));
+      case "illustrator": return S(P("M15.5 3.5l5 5-8.5 8.5h-5v-5z"), P("M7 16c-2 0-3 1-3.5 4 3-.5 4-1.5 4-3.5"));
+      case "sequencer": return S(L(6, 4, 6, 20), L(12, 4, 12, 20), L(18, 4, 18, 20), C(6, 9, 1.7), C(12, 15, 1.7), C(18, 7, 1.7));
+      case "videoeditor": return S(R(3, 5, 18, 14, 1.5), L(8, 5, 8, 19), L(16, 5, 16, 19), L(3, 9.5, 8, 9.5), L(3, 14.5, 8, 14.5), L(16, 9.5, 21, 9.5), L(16, 14.5, 21, 14.5));
+      case "mediaviewer": return S(R(3, 5, 18, 14, 1.5), C(8.5, 10, 1.5), P("M4 17l5-5 3.5 3.5L16 12l4 5"));
+      case "music": return S(P("M9 18V6l10-2v12"), C(7, 18, 2), C(17, 16, 2));
+      case "packages": return S(P("M12 3l8 4.5v9L12 21l-8-4.5v-9z"), P("M4 7.5l8 4.5 8-4.5"), L(12, 12, 12, 21));
+      case "sys": return S(C(12, 12, 3), P("M12 4.5v2.2M12 17.3v2.2M4.5 12h2.2M17.3 12h2.2M6.7 6.7l1.6 1.6M15.7 15.7l1.6 1.6M17.3 6.7l-1.6 1.6M8.3 15.7l-1.6 1.6"));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    const S = this.state;
+    const viewDefs = [
+      { id: "installed", label: "Installed", k: "box", count: String(this.packages.length) },
+      { id: "updates", label: "Updates", k: "update", count: "0" },
+      { id: "sources", label: "Sources", k: "sources", count: "3" },
+    ];
+    const views = viewDefs.map((v) => ({
+      label: v.label, count: v.count, glyph: this.icon(v.k),
+      onClick: () => this.setState({ view: v.id }),
+      rowStyle: "display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:2px;cursor:pointer;font-size:15px;color:#1A1916;font-weight:500;margin-bottom:2px;"
+        + (S.view === v.id ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+    const q = S.q.trim().toLowerCase();
+    const filtered = this.packages.map((p, i) => ({ p, i })).filter((o) => !q || o.p.name.toLowerCase().indexOf(q) !== -1);
+    const rows = filtered.map(({ p, i }) => ({
+      name: p.name, kind: p.kind, version: p.version, size: p.size, glyph: this.icon(p.k),
+      onClick: () => this.setState({ sel: i }),
+      style: "display:grid;grid-template-columns:1fr 150px 90px 90px;align-items:center;height:42px;padding:0 36px;border-bottom:1px solid #ECE7DA;cursor:pointer;"
+        + (S.sel === i ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+    const sel = this.packages[S.sel];
+    const chipOn = "flex:none;font-size:11.5px;letter-spacing:0.04em;padding:4px 10px;border-radius:2px;background:#1A1916;color:#FCFBF8;";
+    const chipOff = "flex:none;font-size:11.5px;letter-spacing:0.04em;padding:4px 10px;border-radius:2px;background:#EFEBE0;color:#8A857A;";
+    return {
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(),
+      signalGlyph: this.icon("signal"), searchGlyph: this.icon("search"), updateGlyph: this.icon("update"),
+      views, rows, noMatches: rows.length === 0,
+      q: S.q, onSearch: (e) => this.setState({ q: e.target.value }),
+      installedOn: S.view === "installed", updatesOn: S.view === "updates", sourcesOn: S.view === "sources",
+      hasSel: !!sel,
+      selName: sel ? sel.name : "", selDesc: sel ? sel.desc : "", selVersion: sel ? sel.version : "",
+      selKind: sel ? sel.kind : "", selSize: sel ? sel.size : "", selInstalled: sel ? sel.installed : "",
+      selGlyph: sel ? this.icon(sel.k) : null,
+      onReinstall: () => this.reinstall(),
+      flash: S.flash, flashShown: !!S.flash,
+      lastChecked: S.lastChecked,
+      sources: [
+        { label: "Local Disk", detail: this.packages.length + " packages installed", glyph: this.icon("disk"), status: "Active", chip: chipOn },
+        { label: "LoRa Mesh", detail: "4 nodes reachable \u00b7 915 MHz", glyph: this.icon("signal"), status: "Listening", chip: chipOn },
+        { label: "Removable Media", detail: "No media detected", glyph: this.icon("sources"), status: "None", chip: chipOff },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

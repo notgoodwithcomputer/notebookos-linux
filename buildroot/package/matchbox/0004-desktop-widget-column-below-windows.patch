@@ -1,0 +1,60 @@
+From: Notebook OS <benwhiting810@gmail.com>
+Date: Mon, 20 Jul 2026 00:00:00 +0000
+Subject: [PATCH] wm: keep the desktop widget column below every window
+
+The Tasks/Calendar desktop widget column is a floating DIALOG (matchbox
+force-fullscreens DESKTOP-type windows, so it cannot use that layer). Being a
+dialog, matchbox stacked it at the dialog level -- i.e. ABOVE apps, and at the
+same level as the Finder -- so a click, a raise, or the race when an app maps
+could leave the widget cards rendered in FRONT of a window. The app-side
+keep-below / re-lower / hide-when-active hacks could not make this reliable.
+
+stack_get_window_list() is the single choke point that projects matchbox's
+internal stack onto the X server. Pin the widget column (a DIALOG whose WM_NAME
+is "nb-desktop-widgets") to the very bottom, just above the desktop wallpaper
+and below every app and other dialog, so it can never render in front of a
+window -- mirroring the panel-above-dialogs rule in 0003.
+
+Signed-off-by: Notebook OS <benwhiting810@gmail.com>
+---
+ src/stack.c | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/src/stack.c b/src/stack.c
+--- a/src/stack.c
++++ b/src/stack.c
+@@ -215,6 +215,16 @@
+     if (!fullscreen_app && c->type == MBCLIENT_TYPE_PANEL)
+       continue;
+ 
++    /* Notebook OS: hold the desktop wallpaper (DESKTOP) and the desktop widget
++     * column (a DIALOG titled "nb-desktop-widgets") out of the main pass; they
++     * are emitted last, at the very bottom, so the widget column can never be
++     * stacked in front of an app or the Finder. */
++    if (c->type == MBCLIENT_TYPE_DESKTOP)
++      continue;
++    if (c->type == MBCLIENT_TYPE_DIALOG && c->name
++        && !strcmp((char *)c->name, "nb-desktop-widgets"))
++      continue;
++
+     dbg("%i:%li, ", i, c->frame);
+ 
+     win_list[i++] = c->frame;
+@@ -227,6 +237,17 @@
+ 
+   }
+ 
++  /* Notebook OS: emit the desktop widget column just above the wallpaper (below
++   * every app and dialog), then the wallpaper itself at the very bottom. */
++  stack_enumerate_reverse(w, c)
++    if (c->type == MBCLIENT_TYPE_DIALOG && c->name
++        && !strcmp((char *)c->name, "nb-desktop-widgets"))
++      win_list[i++] = c->frame;
++
++  stack_enumerate_reverse(w, c)
++    if (c->type == MBCLIENT_TYPE_DESKTOP)
++      win_list[i++] = c->frame;
++
+   dbg("\n");
+ 
+   return win_list;

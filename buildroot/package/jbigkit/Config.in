@@ -1,0 +1,9 @@
+config BR2_PACKAGE_JBIGKIT
+	bool "jbigkit"
+	help
+	  JBIG-KIT: a small, portable library implementing the JBIG1 / T.85
+	  bi-level image compression used by several host-based laser
+	  printers (e.g. Samsung QPDL / SPL2 via splix). Provides the
+	  static libjbig / libjbig85 used at build time by such drivers.
+
+	  https://www.cl.cam.ac.uk/~mgk25/jbigkit/

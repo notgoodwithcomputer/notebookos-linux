@@ -1,0 +1,19 @@
+config BR2_PACKAGE_VBAM
+	bool "vbam (VisualBoyAdvance-M)"
+	depends on BR2_INSTALL_LIBSTDCPP
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on BR2_PACKAGE_HAS_LIBGL
+	select BR2_PACKAGE_SDL2
+	select BR2_PACKAGE_LIBPNG
+	select BR2_PACKAGE_ZLIB
+	select BR2_PACKAGE_LIBGLU
+	help
+	  VisualBoyAdvance-M, a Game Boy Advance / Game Boy emulator.
+	  This builds the lightweight SDL frontend (the "vbam" binary),
+	  driven by Notebook OS's GBA Emulator app.
+
+	  https://github.com/visualboyadvance-m/visualboyadvance-m
+
+comment "vbam needs a toolchain w/ C++, threads and an OpenGL provider"
+	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_TOOLCHAIN_HAS_THREADS || \
+		!BR2_PACKAGE_HAS_LIBGL

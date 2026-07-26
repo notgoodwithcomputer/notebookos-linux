@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+</style>
+</helmet>
+
+<div style="width:max-content;min-width:100%;min-height:100vh;box-sizing:border-box;padding:48px;background:#e7e5df;">
+
+  <div style="max-width:1180px;margin-bottom:40px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="width:18px;height:18px;border-radius:50%;background:#C8341E;"></div>
+      <div style="font-size:13px;letter-spacing:0.16em;text-transform:uppercase;color:#6E695E;font-weight:600;">Custom OS — Desktop Home</div>
+    </div>
+    <div style="font-family:Newsreader,serif;font-size:30px;color:#1A1916;margin:14px 0 10px;line-height:1.2;">Three treatments for the toolbar &amp; Finder.</div>
+    <div style="font-size:15px;line-height:1.55;color:#4A463E;max-width:760px;">
+      One system across all three: Helvetica for the interface, a warm serif (Newsreader) for editorial moments, a single signage red used only on the logo, active states, and alerts. MTA-weight pictographic icons. A persistent top toolbar (Cinnamon-structured, Mac&nbsp;OS&nbsp;7 menu cues) sits over a flat-Swiss Finder. Pick a direction and I'll build the live OS on it.
+    </div>
+  </div>
+
+  <div style="display:flex;gap:56px;align-items:flex-start;">
+
+    <!-- ============================= FRAME A — LIGHT SWISS ============================= -->
+    <div style="flex:none;width:1920px;">
+      <div style="font-size:13px;letter-spacing:0.14em;text-transform:uppercase;color:#6E695E;font-weight:600;margin-bottom:14px;">A · Light Swiss — floating Finder</div>
+      <div style="width:1920px;height:1080px;background:#DED4C2;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.12);overflow:hidden;display:flex;flex-direction:column;">
+
+        <!-- toolbar -->
+        <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;">
+          <div style="display:flex;align-items:center;gap:26px;">
+            <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;"></div>
+            <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Finder</div>
+            <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+              <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+            </sc-for>
+          </div>
+          <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+            <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+            <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+            <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+            <div style="color:#6E695E;">{{ dateLong }}</div>
+          </div>
+        </div>
+
+        <!-- desktop -->
+        <div style="flex:1;display:flex;padding:58px 64px;gap:52px;align-items:flex-start;">
+
+          <!-- Finder window -->
+          <div style="flex:1 1 auto;max-width:1160px;align-self:stretch;background:#F8F7F2;border:1px solid #1A1916;display:flex;flex-direction:column;">
+            <div style="height:44px;flex:none;border-bottom:1px solid #1A1916;display:flex;align-items:center;gap:14px;padding:0 16px;background:repeating-linear-gradient(#ECE8DD,#ECE8DD 1px,#D7D2C5 1px,#D7D2C5 3px);">
+              <div style="width:15px;height:15px;border:1px solid #1A1916;background:#F8F7F2;flex:none;"></div>
+              <div style="flex:1;display:flex;justify-content:center;"><div style="background:#ECE8DD;padding:2px 14px;font-size:14px;font-weight:700;letter-spacing:0.08em;">HOME</div></div>
+              <div style="background:#ECE8DD;padding:2px 6px;font-size:12px;color:#8A857A;font-variant-numeric:tabular-nums;flex:none;">15 items</div>
+            </div>
+            <div style="flex:1;padding:40px 36px;display:grid;grid-template-columns:repeat(5,1fr);gap:36px 8px;align-content:start;">
+              <sc-for list="{{ apps }}" as="app" hint-placeholder-count="15">
+                <div style="display:flex;flex-direction:column;align-items:center;gap:12px;cursor:pointer;padding:8px 4px;border-radius:2px;position:relative;" style-hover="background:#EEEADF;">
+                  <div style="width:52px;height:52px;color:#1A1916;display:flex;align-items:center;justify-content:center;">{{ app.glyph }}</div>
+                  <div style="font-size:14px;font-weight:500;text-align:center;color:#2A2620;line-height:1.25;">{{ app.name }}</div>
+                  {{ app.badge }}
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- widgets -->
+          <div style="width:540px;flex:none;display:flex;flex-direction:column;gap:36px;">
+            <!-- Tasks -->
+            <div style="background:#F8F7F2;border:1px solid #1A1916;">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #1A1916;">
+                <div style="font-size:17px;font-weight:700;letter-spacing:0.02em;">Tasks</div>
+                <div style="font-size:13px;color:#8A857A;font-variant-numeric:tabular-nums;">{{ tasksDone }} / {{ tasksTotal }} done</div>
+              </div>
+              <div style="padding:6px 22px 16px;">
+                <sc-for list="{{ tasks }}" as="task" hint-placeholder-count="6">
+                  <div onClick="{{ task.onToggle }}" style="display:flex;align-items:center;gap:15px;padding:12px 0;border-bottom:1px solid #E7E2D6;cursor:pointer;">
+                    <div style="{{ task.boxStyle }}">{{ task.check }}</div>
+                    <div style="{{ task.textStyle }}">{{ task.t }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <!-- Calendar -->
+            <div style="background:#F8F7F2;border:1px solid #1A1916;">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #1A1916;">
+                <div style="font-size:17px;font-weight:700;letter-spacing:0.02em;">June 2026</div>
+                <div style="font-size:13px;color:#8A857A;">{{ dateLong }}</div>
+              </div>
+              <div style="padding:16px 22px 6px;">
+                <div style="display:grid;grid-template-columns:repeat(7,1fr);margin-bottom:6px;">
+                  <sc-for list="{{ weekdays }}" as="w" hint-placeholder-count="7">
+                    <div style="text-align:center;font-size:11px;letter-spacing:0.06em;color:#9A958A;font-weight:600;">{{ w }}</div>
+                  </sc-for>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(7,1fr);">
+                  <sc-for list="{{ calCells }}" as="cell" hint-placeholder-count="30">
+                    <div style="height:44px;display:flex;align-items:center;justify-content:center;position:relative;">
+                      <div style="{{ cell.pill }}">{{ cell.day }}</div>
+                      {{ cell.dot }}
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="padding:14px 22px 18px;border-top:1px solid #E7E2D6;">
+                <div style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#9A958A;margin-bottom:11px;">Today</div>
+                <sc-for list="{{ events }}" as="ev" hint-placeholder-count="3">
+                  <div style="display:flex;gap:16px;padding:7px 0;align-items:baseline;">
+                    <div style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:#1A1916;width:48px;flex:none;">{{ ev.time }}</div>
+                    <div style="font-family:Newsreader,serif;font-size:18px;color:#2A2620;">{{ ev.title }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================= FRAME B — MTA SIGNAGE ============================= -->
+    <div style="flex:none;width:1920px;">
+      <div style="font-size:13px;letter-spacing:0.14em;text-transform:uppercase;color:#6E695E;font-weight:600;margin-bottom:14px;">B · MTA Signage — directory board</div>
+      <div style="width:1920px;height:1080px;background:#C7C1B4;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.12);overflow:hidden;display:flex;flex-direction:column;">
+
+        <!-- toolbar -->
+        <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#15140F;color:#F4F2EC;">
+          <div style="display:flex;align-items:center;gap:26px;">
+            <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;"></div>
+            <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Finder</div>
+            <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+              <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#F4F2EC;color:#15140F;">{{ m }}</div>
+            </sc-for>
+          </div>
+          <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+            <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#F4F2EC;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#8A857A;">· {{ loraNodes }}</span></div>
+            <div style="width:1px;height:16px;background:#3A372F;"></div>
+            <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+            <div style="color:#9A958A;">{{ dateLong }}</div>
+          </div>
+        </div>
+
+        <!-- desktop -->
+        <div style="flex:1;display:flex;padding:56px 64px;gap:48px;align-items:flex-start;">
+
+          <!-- directory list -->
+          <div style="flex:1 1 auto;align-self:stretch;background:#F4F2EC;border:1px solid #1A1916;display:flex;flex-direction:column;">
+            <div style="flex:none;background:#15140F;color:#F4F2EC;padding:14px 28px;display:flex;align-items:baseline;justify-content:space-between;">
+              <div style="font-size:20px;font-weight:700;letter-spacing:0.1em;">HOME</div>
+              <div style="font-size:13px;letter-spacing:0.06em;color:#9A958A;">15 ITEMS</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;">
+              <sc-for list="{{ apps }}" as="app" hint-placeholder-count="15">
+                <div style="flex:1;min-height:0;display:flex;align-items:center;gap:24px;padding:0 28px;border-bottom:1px solid #DBD5C7;cursor:pointer;position:relative;" style-hover="background:#E9E3D6;">
+                  <div style="width:30px;height:30px;color:#1A1916;display:flex;flex:none;">{{ app.glyph }}</div>
+                  <div style="font-size:20px;font-weight:600;letter-spacing:0.01em;color:#1A1916;flex:1;">{{ app.name }}</div>
+                  {{ app.badge }}
+                  <div style="width:15px;height:15px;color:#8A857A;display:flex;flex:none;">{{ arrowGlyph }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- widgets -->
+          <div style="width:520px;flex:none;display:flex;flex-direction:column;gap:36px;">
+            <!-- Tasks -->
+            <div style="background:#F4F2EC;border:1px solid #1A1916;">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 22px;background:#15140F;color:#F4F2EC;">
+                <div style="font-size:17px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Tasks</div>
+                <div style="font-size:13px;color:#9A958A;font-variant-numeric:tabular-nums;">{{ tasksDone }} / {{ tasksTotal }}</div>
+              </div>
+              <div style="padding:6px 22px 16px;">
+                <sc-for list="{{ tasks }}" as="task" hint-placeholder-count="6">
+                  <div onClick="{{ task.onToggle }}" style="display:flex;align-items:center;gap:15px;padding:12px 0;border-bottom:1px solid #E0DACC;cursor:pointer;">
+                    <div style="{{ task.boxStyle }}">{{ task.check }}</div>
+                    <div style="{{ task.textStyle }}">{{ task.t }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <!-- Calendar -->
+            <div style="background:#F4F2EC;border:1px solid #1A1916;">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;padding:15px 22px;background:#15140F;color:#F4F2EC;">
+                <div style="font-size:17px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">June 2026</div>
+                <div style="font-size:13px;color:#9A958A;">{{ dateLong }}</div>
+              </div>
+              <div style="padding:16px 22px 6px;">
+                <div style="display:grid;grid-template-columns:repeat(7,1fr);margin-bottom:6px;">
+                  <sc-for list="{{ weekdays }}" as="w" hint-placeholder-count="7">
+                    <div style="text-align:center;font-size:11px;letter-spacing:0.06em;color:#9A958A;font-weight:600;">{{ w }}</div>
+                  </sc-for>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(7,1fr);">
+                  <sc-for list="{{ calCells }}" as="cell" hint-placeholder-count="30">
+                    <div style="height:42px;display:flex;align-items:center;justify-content:center;position:relative;">
+                      <div style="{{ cell.pill }}">{{ cell.day }}</div>
+                      {{ cell.dot }}
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="padding:14px 22px 18px;border-top:1px solid #E0DACC;">
+                <div style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#9A958A;margin-bottom:11px;">Today</div>
+                <sc-for list="{{ events }}" as="ev" hint-placeholder-count="3">
+                  <div style="display:flex;gap:16px;padding:7px 0;align-items:baseline;">
+                    <div style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:#1A1916;width:48px;flex:none;">{{ ev.time }}</div>
+                    <div style="font-family:Newsreader,serif;font-size:18px;color:#2A2620;">{{ ev.title }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================= FRAME C — BAUHAUS MODULAR ============================= -->
+    <div style="flex:none;width:1920px;">
+      <div style="font-size:13px;letter-spacing:0.14em;text-transform:uppercase;color:#6E695E;font-weight:600;margin-bottom:14px;">C · Bauhaus Modular — tiled launcher</div>
+      <div style="width:1920px;height:1080px;background:#E6DFD0;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.12);overflow:hidden;display:flex;flex-direction:column;">
+
+        <!-- toolbar -->
+        <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;">
+          <div style="display:flex;align-items:center;gap:26px;">
+            <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;"></div>
+            <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Finder</div>
+            <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+              <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+            </sc-for>
+          </div>
+          <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+            <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+            <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+            <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+            <div style="color:#6E695E;">{{ dateLong }}</div>
+          </div>
+        </div>
+
+        <!-- desktop -->
+        <div style="flex:1;display:flex;padding:48px 56px;gap:24px;align-items:stretch;">
+
+          <!-- tile grid -->
+          <div style="flex:1 1 auto;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);gap:18px;">
+            <sc-for list="{{ apps }}" as="app" hint-placeholder-count="15">
+              <div style="background:#F5F3EC;border:1px solid #1A1916;padding:22px;display:flex;flex-direction:column;justify-content:space-between;cursor:pointer;position:relative;" style-hover="background:#EDE8DB;">
+                <div style="width:56px;height:56px;color:#1A1916;display:flex;">{{ app.glyph }}</div>
+                <div style="font-size:18px;font-weight:600;letter-spacing:0.01em;color:#1A1916;">{{ app.name }}</div>
+                {{ app.badge }}
+              </div>
+            </sc-for>
+            <div style="background:#E6DFD0;border:1px solid #1A1916;padding:22px;display:flex;flex-direction:column;justify-content:space-between;cursor:pointer;" style-hover="background:#DED6C5;">
+              <div style="width:56px;height:56px;color:#1A1916;display:flex;">{{ trashGlyph }}</div>
+              <div style="font-size:18px;font-weight:600;letter-spacing:0.01em;color:#1A1916;">Trash</div>
+            </div>
+          </div>
+
+          <!-- widgets -->
+          <div style="width:520px;flex:none;display:flex;flex-direction:column;gap:24px;">
+            <!-- Tasks -->
+            <div style="background:#F5F3EC;border:1px solid #1A1916;flex:none;">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 22px;border-bottom:1px solid #1A1916;">
+                <div style="font-size:17px;font-weight:700;letter-spacing:0.02em;">Tasks</div>
+                <div style="font-size:13px;color:#8A857A;font-variant-numeric:tabular-nums;">{{ tasksDone }} / {{ tasksTotal }}</div>
+              </div>
+              <div style="padding:4px 22px 12px;">
+                <sc-for list="{{ tasks }}" as="task" hint-placeholder-count="6">
+                  <div onClick="{{ task.onToggle }}" style="display:flex;align-items:center;gap:15px;padding:10px 0;border-bottom:1px solid #E7E2D6;cursor:pointer;">
+                    <div style="{{ task.boxStyle }}">{{ task.check }}</div>
+                    <div style="{{ task.textStyle }}">{{ task.t }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <!-- Calendar -->
+            <div style="background:#F5F3EC;border:1px solid #1A1916;flex:1;display:flex;flex-direction:column;">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;padding:16px 22px;border-bottom:1px solid #1A1916;">
+                <div style="font-size:17px;font-weight:700;letter-spacing:0.02em;">June 2026</div>
+                <div style="font-size:13px;color:#8A857A;">{{ dateLong }}</div>
+              </div>
+              <div style="padding:14px 22px 4px;">
+                <div style="display:grid;grid-template-columns:repeat(7,1fr);margin-bottom:4px;">
+                  <sc-for list="{{ weekdays }}" as="w" hint-placeholder-count="7">
+                    <div style="text-align:center;font-size:11px;letter-spacing:0.06em;color:#9A958A;font-weight:600;">{{ w }}</div>
+                  </sc-for>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(7,1fr);">
+                  <sc-for list="{{ calCells }}" as="cell" hint-placeholder-count="30">
+                    <div style="height:40px;display:flex;align-items:center;justify-content:center;position:relative;">
+                      <div style="{{ cell.pill }}">{{ cell.day }}</div>
+                      {{ cell.dot }}
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="padding:12px 22px 16px;border-top:1px solid #E7E2D6;margin-top:auto;">
+                <div style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#9A958A;margin-bottom:9px;">Today</div>
+                <sc-for list="{{ events }}" as="ev" hint-placeholder-count="3">
+                  <div style="display:flex;gap:16px;padding:6px 0;align-items:baseline;">
+                    <div style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:#1A1916;width:48px;flex:none;">{{ ev.time }}</div>
+                    <div style="font-family:Newsreader,serif;font-size:18px;color:#2A2620;">{{ ev.title }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    now: new Date(2026, 5, 20, 9, 41, 0),
+    tasks: [
+      { t: "Finish Chapter 7 draft", done: false },
+      { t: "Feed sourdough starter", done: true },
+      { t: "Buy oat milk + coffee filters", done: false },
+      { t: "Submit Lecture 12 notes", done: false },
+      { t: "Pay studio rent \u2014 cash", done: false },
+      { t: "Reply to Dey (LoRa)", done: true },
+    ],
+  };
+
+  appData = [
+    { k: "writer", name: "Writer" },
+    { k: "novel", name: "Novel" },
+    { k: "academic", name: "Academic Notes" },
+    { k: "journal", name: "Journal" },
+    { k: "screenplay", name: "Screenplay" },
+    { k: "tasks", name: "Tasks" },
+    { k: "calendar", name: "Calendar" },
+    { k: "cookbook", name: "Cookbook" },
+    { k: "ebook", name: "E-book Reader" },
+    { k: "calculator", name: "Calculator" },
+    { k: "accounting", name: "Accounting" },
+    { k: "contacts", name: "Contacts" },
+    { k: "messages", name: "Messages" },
+    { k: "g2048", name: "2048" },
+    { k: "tetris", name: "Tetris" },
+  ];
+
+  events = [
+    { time: "09:00", title: "Studio time" },
+    { time: "13:00", title: "Lunch \u2014 Dey" },
+    { time: "18:30", title: "Reading @ Greenlight" },
+  ];
+
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) }));
+    }, 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  toggle(i) {
+    this.setState((s) => {
+      const t = s.tasks.slice();
+      t[i] = { ...t[i], done: !t[i].done };
+      return { tasks: t };
+    });
+  }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() {
+    const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const n = this.state.now;
+    return d[n.getDay()] + " " + n.getDate() + " June";
+  }
+
+  // --- icon builder: MTA-weight pictographic line glyphs ---
+  icon(k) {
+    const E = React.createElement;
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const S = (...c) => E("svg", {
+      viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none",
+      stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round",
+    }, ...c);
+    switch (k) {
+      case "writer": return S(R(5, 3, 14, 18, 1), L(8, 8, 16, 8), L(8, 12, 16, 12), L(8, 16, 13, 16));
+      case "novel": return S(P("M12 6C9.5 4 6.5 4 4 5V18.5C6.5 17.5 9.5 17.5 12 19"), P("M12 6c2.5-2 5.5-2 8-1v13.5c-2.5-1-5.5-1-8 0"), L(12, 6, 12, 19));
+      case "academic": return S(P("M2.5 9 12 5l9.5 4L12 13z"), P("M6.5 11v4.3c0 1.7 11 1.7 11 0V11"), L(21.5, 9, 21.5, 13.5));
+      case "journal": return S(R(5, 3.5, 14, 17, 1), L(9, 3.5, 9, 20.5), P("M13 3.5v6l1.5-1.4L16 9.5v-6"));
+      case "screenplay": return S(R(3.5, 8.5, 17, 11.5, 1), P("M3.8 8.5 4.7 5l15.7 1.2L19.7 9"), L(8, 8.5, 9.2, 5.3), L(13, 8.5, 14.2, 5.8));
+      case "tasks": return S(R(4, 4, 16, 16, 2.5), P("M8 12.2 10.8 15 16 9"));
+      case "calendar": return S(R(4, 5, 16, 15, 1.5), L(4, 9.2, 20, 9.2), L(8, 3.5, 8, 6.5), L(16, 3.5, 16, 6.5));
+      case "cookbook": return S(P("M5 10.5h14v2.5c0 3.3-3.1 5.5-7 5.5s-7-2.2-7-5.5z"), L(3.2, 11.5, 5, 11.5), L(19, 11.5, 20.8, 11.5), L(7, 8, 17, 8), L(12, 8, 12, 6.6));
+      case "ebook": return S(R(5, 3, 14, 18, 2), L(8, 7, 16, 7), L(8, 10.5, 16, 10.5), L(8, 14, 13, 14), C(12, 18, 0.5));
+      case "calculator": return S(R(5, 3, 14, 18, 1.5), R(8, 6, 8, 3, 0.5), C(9, 13, 0.6), C(12, 13, 0.6), C(15, 13, 0.6), C(9, 16, 0.6), C(12, 16, 0.6), C(15, 16, 0.6));
+      case "accounting": return S(R(3, 7, 18, 10, 1.5), C(12, 12, 2.4), C(6, 12, 0.6), C(18, 12, 0.6));
+      case "contacts": return S(C(12, 8.5, 3.2), P("M5.5 19c0-4 13-4 13 0"));
+      case "messages": return S(R(4, 5, 16, 10, 2), P("M9 15v4l4-4"), C(9, 10, 0.6), C(12, 10, 0.6), C(15, 10, 0.6));
+      case "g2048": return S(R(4, 4, 7, 7, 1), R(13, 4, 7, 7, 1), R(4, 13, 7, 7, 1), R(13, 13, 7, 7, 1));
+      case "tetris": return S(R(4, 4, 5.3, 5.3, 0.5), R(9.3, 4, 5.3, 5.3, 0.5), R(14.6, 4, 5.3, 5.3, 0.5), R(9.3, 9.3, 5.3, 5.3, 0.5));
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "arrow": return S(P("M9 5l7 7-7 7"));
+      case "trash": return S(L(5, 7, 19, 7), P("M7 7l1 13h8l1-13"), P("M9.5 7V4.2h5V7"), L(10.5, 10.5, 10.5, 17), L(13.5, 10.5, 13.5, 17));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+  check() {
+    const E = React.createElement;
+    return E("svg", { viewBox: "0 0 24 24", width: 13, height: 13, fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", strokeLinejoin: "round" }, E("path", { d: "M5 12.5 10 17.5 19 7" }));
+  }
+  badge(n) {
+    const E = React.createElement;
+    return E("span", { style: { position: "absolute", top: "2px", right: "10px", minWidth: "20px", height: "20px", padding: "0 5px", borderRadius: "10px", background: "#C8341E", color: "#fff", fontSize: "12px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Helvetica Neue, Helvetica, Arial, sans-serif" } }, n);
+  }
+
+  renderVals() {
+    const apps = this.appData.map((a) => ({
+      name: a.name,
+      glyph: this.icon(a.k),
+      badge: a.k === "messages" ? this.badge(2) : null,
+    }));
+
+    const tasks = this.state.tasks.map((t, i) => ({
+      t: t.t,
+      onToggle: () => this.toggle(i),
+      boxStyle: t.done
+        ? "width:21px;height:21px;border:1.5px solid #1A1916;background:#1A1916;color:#F8F7F2;display:flex;align-items:center;justify-content:center;flex:none;"
+        : "width:21px;height:21px;border:1.5px solid #9A958A;background:transparent;display:flex;align-items:center;justify-content:center;flex:none;",
+      check: t.done ? this.check() : null,
+      textStyle: t.done
+        ? "font-size:15.5px;color:#A8A296;text-decoration:line-through;"
+        : "font-size:15.5px;color:#2A2620;",
+    }));
+    const tasksDone = this.state.tasks.filter((t) => t.done).length;
+
+    const eventDays = [12, 20, 23, 27];
+    const calCells = [];
+    for (let d = 1; d <= 30; d++) {
+      const today = d === 20;
+      const ev = eventDays.indexOf(d) !== -1;
+      calCells.push({
+        day: d,
+        pill: today
+          ? "width:34px;height:34px;border-radius:50%;background:#C8341E;color:#FFFFFF;display:flex;align-items:center;justify-content:center;font-size:14.5px;font-weight:700;font-variant-numeric:tabular-nums;"
+          : "width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:14.5px;color:#2A2620;font-variant-numeric:tabular-nums;",
+        dot: (ev && !today)
+          ? React.createElement("span", { style: { position: "absolute", bottom: "4px", left: "50%", transform: "translateX(-50%)", width: "5px", height: "5px", borderRadius: "50%", background: "#C8341E" } })
+          : null,
+      });
+    }
+
+    return {
+      apps, tasks, tasksDone, tasksTotal: this.state.tasks.length,
+      events: this.events, calCells,
+      weekdays: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+      menus: ["File", "Edit", "View", "Label", "Special"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"), arrowGlyph: this.icon("arrow"), trashGlyph: this.icon("trash"),
+    };
+  }
+}
+</script>
+</body>
+</html>

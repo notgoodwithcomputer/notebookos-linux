@@ -1,0 +1,10 @@
+{
+  "id": "tasks",
+  "name": "Tasks",
+  "kind": "Productivity",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "tasks",
+  "order": 60
+}

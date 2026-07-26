@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  .ac-scroll::-webkit-scrollbar { width: 12px; }
+  .ac-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Accounting</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ ENVELOPES SIDEBAR ============ -->
+      <div style="width:312px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:24px 24px 18px;border-bottom:1px solid #D7D2C5;">
+          <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:6px;">Cash on hand</div>
+          <div style="font-size:34px;font-weight:700;color:#1A1916;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;">{{ balance }}</div>
+          <div style="display:flex;align-items:center;gap:7px;margin-top:8px;font-size:12.5px;color:#8A857A;"><div style="width:14px;height:14px;display:flex;">{{ cashGlyph }}</div>Cash only · no cards, no banks</div>
+        </div>
+        <div class="ac-scroll" style="flex:1;overflow-y:auto;padding:16px 14px;min-height:0;">
+          <div style="font-size:11px;letter-spacing:0.13em;text-transform:uppercase;color:#A39D8F;font-weight:600;padding:0 10px;margin:4px 0 10px;">Envelopes</div>
+          <sc-for list="{{ envelopes }}" as="e" hint-placeholder-count="6">
+            <div onClick="{{ e.onClick }}" style="{{ e.rowStyle }}" style-hover="background:#E6DFCE;">
+              <div style="{{ e.dot }}"></div>
+              <span style="flex:1;font-size:15px;color:#1A1916;">{{ e.label }}</span>
+              <span style="font-size:14px;color:#3A362E;font-variant-numeric:tabular-nums;font-weight:500;">{{ e.amount }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- ============ LEDGER ============ -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">
+        <!-- summary -->
+        <div style="flex:none;display:flex;gap:0;padding:30px 48px 26px;">
+          <div style="flex:1;">
+            <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:8px;">{{ ledgerTitle }}</div>
+            <div style="font-size:28px;font-weight:700;color:#1A1916;letter-spacing:-0.01em;">June 2026</div>
+          </div>
+          <div style="display:flex;gap:36px;align-items:center;">
+            <div style="text-align:right;"><div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:5px;">In</div><div style="font-size:22px;font-weight:600;color:#1A1916;font-variant-numeric:tabular-nums;">{{ inTotal }}</div></div>
+            <div style="width:1px;height:40px;background:#E0DBCE;"></div>
+            <div style="text-align:right;"><div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:5px;">Out</div><div style="font-size:22px;font-weight:600;color:#1A1916;font-variant-numeric:tabular-nums;">{{ outTotal }}</div></div>
+          </div>
+        </div>
+        <!-- add row -->
+        <div style="flex:none;margin:0 48px 6px;display:flex;align-items:center;gap:14px;height:46px;padding:0 16px;border:1px dashed #CFC9BA;border-radius:2px;color:#A39D8F;cursor:text;">
+          <div style="width:17px;height:17px;display:flex;">{{ plusGlyph }}</div>
+          <span style="font-size:14.5px;">Record a cash entry…</span>
+        </div>
+        <!-- header -->
+        <div style="flex:none;display:grid;grid-template-columns:96px 1fr 150px 120px 130px;align-items:center;padding:12px 48px;margin:8px 0 0;border-bottom:1px solid #1A1916;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#8A857A;font-weight:600;">
+          <div>Date</div><div>Description</div><div>Envelope</div><div style="text-align:right;">Amount</div><div style="text-align:right;">Balance</div>
+        </div>
+        <!-- rows -->
+        <div class="ac-scroll" style="flex:1;overflow-y:auto;padding:0 48px 50px;min-height:0;">
+          <sc-for list="{{ ledger }}" as="t" hint-placeholder-count="9">
+            <div style="display:grid;grid-template-columns:96px 1fr 150px 120px 130px;align-items:center;height:56px;border-bottom:1px solid #F0ECE0;">
+              <div style="font-size:14px;color:#8A857A;font-variant-numeric:tabular-nums;">{{ t.date }}</div>
+              <div style="font-size:15.5px;color:#1A1916;">{{ t.desc }}</div>
+              <div><div style="{{ t.tag }}"><div style="{{ t.tagDot }}"></div>{{ t.env }}</div></div>
+              <div style="{{ t.amtStyle }}">{{ t.amount }}</div>
+              <div style="text-align:right;font-size:15px;color:#3A362E;font-variant-numeric:tabular-nums;">{{ t.bal }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(2026, 5, 20, 9, 41, 0), activeEnv: 0 };
+
+  envMeta = [
+    { label: "All cash", color: "#1A1916", amount: 2140 },
+    { label: "Wallet", color: "#9A7B4F", amount: 740 },
+    { label: "Rent", color: "#4A5E73", amount: 600 },
+    { label: "Studio", color: "#6E7B57", amount: 300 },
+    { label: "Groceries", color: "#8A6D5B", amount: 200 },
+    { label: "Buffer", color: "#8A857A", amount: 300 },
+  ];
+
+  // oldest first
+  tx = [
+    { date: "3 Jun", desc: "Locksmith \u2014 spare key", env: "Buffer", amt: -60 },
+    { date: "5 Jun", desc: "Birthday cash gift", env: "Wallet", amt: 100 },
+    { date: "9 Jun", desc: "Art supplies", env: "Studio", amt: -85 },
+    { date: "12 Jun", desc: "Sold the old desk", env: "Wallet", amt: 140 },
+    { date: "15 Jun", desc: "Coffee + filters", env: "Groceries", amt: -22 },
+    { date: "17 Jun", desc: "Freelance edit (cash)", env: "Wallet", amt: 600 },
+    { date: "18 Jun", desc: "Studio rent (cash)", env: "Rent", amt: -1200 },
+    { date: "19 Jun", desc: "Reading ticket refund", env: "Wallet", amt: 15 },
+    { date: "20 Jun", desc: "Farmers market", env: "Groceries", amt: -48 },
+  ];
+  opening = 2700;
+  envColors = { Wallet: "#9A7B4F", Rent: "#4A5E73", Studio: "#6E7B57", Groceries: "#8A6D5B", Buffer: "#8A857A" };
+
+  componentDidMount() { this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+  money(n) { const s = n < 0 ? "\u2212" : ""; return s + "$" + Math.abs(n).toLocaleString(); }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "cash": return S(R(3, 7, 18, 10, 1.5), C(12, 12, 2.4), C(6, 12, 0.6), C(18, 12, 0.6));
+      case "plus": return S(L(12, 5, 12, 19), L(5, 12, 19, 12));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    const ae = this.state.activeEnv;
+    const envelopes = this.envMeta.map((e, i) => ({
+      label: e.label, amount: this.money(e.amount),
+      onClick: () => this.setState({ activeEnv: i }),
+      dot: "width:11px;height:11px;flex:none;border-radius:50%;background:" + e.color + ";",
+      rowStyle: "display:flex;align-items:center;gap:12px;padding:11px 10px;border-radius:2px;cursor:pointer;margin-bottom:2px;"
+        + (i === ae ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+
+    // running balance
+    let bal = this.opening;
+    const withBal = this.tx.map((t) => { bal += t.amt; return { ...t, bal }; });
+    const filterName = ae === 0 ? null : this.envMeta[ae].label;
+    const display = withBal.slice().reverse().filter((t) => !filterName || t.env === filterName);
+
+    const ledger = display.map((t) => ({
+      date: t.date, desc: t.desc, env: t.env,
+      amount: (t.amt > 0 ? "+" : "") + this.money(t.amt),
+      amtStyle: "text-align:right;font-size:15.5px;font-weight:600;font-variant-numeric:tabular-nums;color:#1A1916;",
+      bal: this.money(t.bal),
+      tag: "display:inline-flex;align-items:center;gap:7px;padding:4px 11px;background:#F1EEE6;border-radius:2px;font-size:12.5px;color:#3A362E;",
+      tagDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (this.envColors[t.env] || "#8A857A") + ";",
+    }));
+
+    const inTotal = this.tx.filter((t) => t.amt > 0).reduce((a, t) => a + t.amt, 0);
+    const outTotal = this.tx.filter((t) => t.amt < 0).reduce((a, t) => a + t.amt, 0);
+
+    return {
+      menus: ["File", "Edit", "View", "Reports"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"), cashGlyph: this.icon("cash"), plusGlyph: this.icon("plus"),
+      balance: this.money(this.envMeta[0].amount), envelopes, ledger,
+      ledgerTitle: filterName ? filterName + " \u2014 ledger" : "All entries",
+      inTotal: "+" + this.money(inTotal), outTotal: this.money(outTotal),
+    };
+  }
+}
+</script>
+</body>
+</html>

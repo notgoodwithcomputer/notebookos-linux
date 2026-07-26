@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  .co-scroll::-webkit-scrollbar { width: 12px; }
+  .co-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Contacts</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ CONTACT LIST ============ -->
+      <div style="width:380px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:18px 18px 14px;">
+          <div style="display:flex;align-items:center;gap:10px;background:#FCFBF8;border:1px solid #C4BFB1;border-radius:2px;height:38px;padding:0 12px;">
+            <div style="width:16px;height:16px;color:#9A958A;display:flex;flex:none;">{{ searchGlyph }}</div>
+            <input type="text" placeholder="Search contacts" style="border:none;background:transparent;outline:none;font-size:14px;color:#2A2620;width:100%;font-family:inherit;" />
+          </div>
+        </div>
+        <div class="co-scroll" style="flex:1;overflow-y:auto;padding:0 12px 16px;min-height:0;">
+          <sc-for list="{{ groups }}" as="grp" hint-placeholder-count="5">
+            <div style="font-size:12px;letter-spacing:0.08em;color:#A39D8F;font-weight:700;padding:14px 12px 6px;">{{ grp.letter }}</div>
+            <sc-for list="{{ grp.people }}" as="p" hint-placeholder-count="3">
+              <div onClick="{{ p.onClick }}" style="{{ p.rowStyle }}" style-hover="background:#E6DFCE;">
+                <div style="{{ p.avatar }}">{{ p.initials }}</div>
+                <div style="min-width:0;flex:1;">
+                  <div style="font-size:15.5px;color:#1A1916;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ p.name }}</div>
+                  <div style="font-size:12.5px;color:#9A958A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">{{ p.role }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- ============ DETAIL ============ -->
+      <div class="co-scroll" style="flex:1;overflow-y:auto;min-height:0;background:#FCFBF8;">
+        <div style="max-width:860px;margin:0 auto;padding:56px 64px 80px;">
+          <!-- header -->
+          <div style="display:flex;align-items:flex-start;gap:32px;margin-bottom:44px;">
+            <div style="{{ bigAvatar }}">{{ activeInitials }}</div>
+            <div style="flex:1;padding-top:6px;">
+              <div style="font-family:Newsreader,serif;font-size:40px;line-height:1.1;color:#1A1916;letter-spacing:-0.01em;">{{ activeName }}</div>
+              <div style="font-size:17px;color:#79736A;margin-top:8px;">{{ activeRole }}</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:13.5px;color:#6E7B57;"><div style="width:8px;height:8px;border-radius:50%;background:#6E7B57;"></div>{{ activeStatus }}</div>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;">
+              <div style="height:40px;padding:0 20px;display:flex;align-items:center;gap:9px;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14.5px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;"><div style="width:17px;height:17px;display:flex;">{{ msgGlyph }}</div>Message</div>
+              <div style="height:40px;padding:0 16px;display:flex;align-items:center;border:1px solid #C4BFB1;color:#3A362E;border-radius:2px;font-size:14.5px;cursor:pointer;background:#FCFBF8;" style-hover="background:#ECE8DD;">Edit</div>
+            </div>
+          </div>
+          <!-- fields -->
+          <div style="border-top:1px solid #1A1916;">
+            <sc-for list="{{ fields }}" as="f" hint-placeholder-count="5">
+              <div style="display:grid;grid-template-columns:200px 1fr;align-items:baseline;padding:18px 0;border-bottom:1px solid #ECE7DA;">
+                <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">{{ f.label }}</div>
+                <div style="{{ f.valStyle }}">{{ f.value }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <!-- notes -->
+          <div style="margin-top:34px;">
+            <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:12px;">Notes</div>
+            <div style="font-family:Newsreader,serif;font-size:19px;line-height:1.6;color:#26241F;max-width:620px;">{{ activeNotes }}</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(2026, 5, 20, 9, 41, 0), active: 0 };
+
+  people = [
+    { name: "Dey Okonkwo", role: "Painter \u00b7 studio-mate", node: "NODE-7F", chan: "Ch. 4 \u00b7 915 MHz", area: "Java St, Greenpoint", bday: "14 March", heard: "Today, 08:55", color: "#4A5E73",
+      notes: "Studio-mate since the Java Street days. Owes me a frame. Reads everything twice and means it both times." },
+    { name: "Reuben Marsh", role: "Bookbinder", node: "NODE-12", chan: "Ch. 4 \u00b7 915 MHz", area: "Brighton Beach", bday: "2 November", heard: "Yesterday", color: "#9A7B4F",
+      notes: "Keeps an almanac in a butter tin. Will rebind anything for the price of a good story." },
+    { name: "Vera Holt", role: "Novelist", node: "NODE-3A", chan: "Ch. 6 \u00b7 915 MHz", area: "Fort Greene", bday: "30 June", heard: "2 days ago", color: "#6E7B57",
+      notes: "Wrote \u2018Brighton Lines.\u2019 Allergic to small talk; excellent at large talk." },
+    { name: "Sam Okafor", role: "Chef", node: "NODE-22", chan: "Ch. 4 \u00b7 915 MHz", area: "Bed-Stuy", bday: "9 August", heard: "Today, 07:10", color: "#8A6D5B",
+      notes: "Tests recipes on the building. Trade: a loaf for a paragraph." },
+    { name: "Mara Lindqvist", role: "Ceramicist", node: "NODE-55", chan: "Ch. 6 \u00b7 915 MHz", area: "Red Hook", bday: "21 January", heard: "4 days ago", color: "#4A5E73",
+      notes: "Throws bowls the color of weak tea. The studio lamp is hers, technically." },
+    { name: "The Super", role: "Building \u00b7 4C", node: "NODE-01", chan: "Ch. 1 \u00b7 915 MHz", area: "Downstairs", bday: "\u2014", heard: "Today, 06:40", color: "#8A857A",
+      notes: "Knows which pipes sing. Takes rent in cash and nods like it is the most ordinary thing in the world." },
+    { name: "Greenlight Books", role: "Bookshop", node: "NODE-88", chan: "Ch. 6 \u00b7 915 MHz", area: "Fort Greene", bday: "\u2014", heard: "Today, 09:30", color: "#9A7B4F",
+      notes: "Hosts the reading tonight, 18:30. Hold the corner seat." },
+  ];
+
+  componentDidMount() { this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+  initialsOf(name) { return name.split(" ").filter((w) => /[A-Za-z]/.test(w[0])).slice(0, 2).map((w) => w[0]).join("").toUpperCase(); }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "search": return S(C(11, 11, 6), L(15.4, 15.4, 20, 20));
+      case "msg": return S(R(4, 5, 16, 10, 2), P("M9 15v4l4-4"));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    const active = this.state.active;
+    const sorted = this.people.map((p, i) => ({ p, i })).sort((a, b) => a.p.name.localeCompare(b.p.name));
+    const groups = [];
+    sorted.forEach(({ p, i }) => {
+      const letter = p.name[0].toUpperCase();
+      let g = groups.find((x) => x.letter === letter);
+      if (!g) { g = { letter, people: [] }; groups.push(g); }
+      g.people.push({
+        name: p.name, role: p.role, initials: this.initialsOf(p.name),
+        onClick: () => this.setState({ active: i }),
+        avatar: "width:42px;height:42px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14.5px;font-weight:600;color:#fff;background:" + p.color + ";",
+        rowStyle: "display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:2px;cursor:pointer;margin-bottom:2px;"
+          + (i === active ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+      });
+    });
+
+    const a = this.people[active];
+    const fields = [
+      { label: "LoRa Node", value: a.node, mono: true },
+      { label: "Channel", value: a.chan, mono: true },
+      { label: "Last heard", value: a.heard },
+      { label: "Neighborhood", value: a.area },
+      { label: "Birthday", value: a.bday },
+    ].map((f) => ({
+      label: f.label, value: f.value,
+      valStyle: "font-size:17px;color:#1A1916;" + (f.mono ? "font-family:'Courier New',monospace;letter-spacing:0.02em;" : ""),
+    }));
+
+    return {
+      menus: ["File", "Edit", "Card", "View"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"), searchGlyph: this.icon("search"), msgGlyph: this.icon("msg"),
+      groups,
+      activeName: a.name, activeRole: a.role, activeInitials: this.initialsOf(a.name),
+      activeStatus: "Reachable \u00b7 last heard " + a.heard.toLowerCase(),
+      activeNotes: a.notes, fields,
+      bigAvatar: "width:96px;height:96px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:600;color:#fff;background:" + a.color + ";",
+    };
+  }
+}
+</script>
+</body>
+</html>

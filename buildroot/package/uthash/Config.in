@@ -1,0 +1,8 @@
+config BR2_PACKAGE_UTHASH
+	bool "uthash"
+	help
+	  uthash — C preprocessor macros implementing a hash table,
+	  linked list, dynamic array and string. Header-only; installed
+	  to the staging sysroot for build-time use (e.g. picom).
+
+	  https://github.com/troydhanson/uthash

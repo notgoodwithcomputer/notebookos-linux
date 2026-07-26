@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+"""
+nosd — the Notebook OS system daemon.
+
+A single Python-stdlib service (the machine has no node/pip and, by design, no
+network). It serves the desktop shell and the application packages, and exposes
+a local /api backed by real Linux system detail: /proc, the on-disk package
+registry, JSON stores (which start empty), a sandboxed Home filesystem, and the
+LoRa mesh stub. Nothing here reaches the internet — there is no internet.
+
+Layout (all relative to the repo root, discovered from this file's location):
+    web/        vendored runtime + fonts + logo (served static)
+    packages/   shell + application packages, each with a manifest.json
+    system/data user data + stores (created on first run, never seeded)
+
+Run:  system/nosd [--port 4680] [--root <repo>]
+"""
+
+import argparse
+import json
+import mimetypes
+import os
+import re
+import socket
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs, unquote
+
+# --- machine identity (spec §1: this node is NODE-3C on the LoRa mesh) ---
+NODE_ID = "NODE-3C"
+LORA_CHANNELS = [1, 4, 6]
+LORA_MAX_PAYLOAD = 235  # bytes per frame
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WEB = os.path.join(ROOT, "web")
+PKGS = os.path.join(ROOT, "packages")
+APPS = os.path.join(ROOT, "apps")           # verbatim .dc.html design surfaces
+SHELL = "OS Desktop Home.dc.html"           # the desktop, served at /
+DATA = os.path.join(ROOT, "system", "data")
+HOME = os.path.join(DATA, "Home")
+
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("image/png", ".png")
+mimetypes.add_type("font/ttf", ".ttf")
+
+# The design surfaces are authored against the claude.ai design tool: they pull
+# support.js + Google Fonts from the network. This machine has no network, so we
+# rewrite each surface at serve time to use the vendored offline runtime + the
+# locally-embedded typefaces. The design markup itself is served verbatim.
+OS_HEAD = (
+    '<script src="/vendor/react.js"></script>\n'
+    '<script src="/vendor/react-dom.js"></script>\n'
+    '<link rel="stylesheet" href="/fonts/fonts.css">\n'
+    '<script src="/runtime/support.js"></script>'
+)
+GFONTS_RE = re.compile(r'[ \t]*<link[^>]*fonts\.(?:googleapis|gstatic)\.com[^>]*>\n?')
+
+
+def rewrite_surface(html):
+    html = html.replace('<script src="./support.js"></script>', OS_HEAD)
+    html = html.replace('<script src="support.js"></script>', OS_HEAD)
+    html = GFONTS_RE.sub("", html)
+    return html
+
+
+# ----------------------------------------------------------------------------
+# package registry
+# ----------------------------------------------------------------------------
+def dir_size(path):
+    total = 0
+    for dp, _dn, fn in os.walk(path):
+        for f in fn:
+            try:
+                total += os.path.getsize(os.path.join(dp, f))
+            except OSError:
+                pass
+    return total
+
+
+def human_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            if unit == "B":
+                return "%d B" % n
+            return ("%.1f %s" % (n, unit)).replace(".0 ", " ")
+        n /= 1024.0
+
+
+def load_packages():
+    """Every packages/<id>/manifest.json, enriched with real size + mtime."""
+    out = []
+    if not os.path.isdir(PKGS):
+        return out
+    for pid in sorted(os.listdir(PKGS)):
+        mpath = os.path.join(PKGS, pid, "manifest.json")
+        if not os.path.isfile(mpath):
+            continue
+        try:
+            with open(mpath) as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        pdir = os.path.join(PKGS, pid)
+        m["id"] = m.get("id", pid)
+        size = dir_size(pdir)
+        m["bytes"] = size
+        m["size"] = human_size(size)
+        m["modified"] = int(os.path.getmtime(pdir))
+        out.append(m)
+    out.sort(key=lambda p: (p.get("order", 999), p.get("name", "")))
+    return out
+
+
+# System packages (spec §1): the parts of the image that are not applications.
+SYSTEM_PACKAGES = [
+    {"id": "notebook.kernel", "name": "Notebook Kernel", "kind": "System",
+     "category": "system", "version": "7.2.0-nointernet", "file": "notebook.kernel"},
+    {"id": "mesh-radio.driver", "name": "Mesh Radio Driver", "kind": "Driver",
+     "category": "system", "version": "1.0", "file": "mesh-radio.driver"},
+    {"id": "papertone.theme", "name": "Papertone Theme", "kind": "Theme",
+     "category": "system", "version": "1.0", "file": "papertone.theme"},
+    {"id": "helvetica.typeface", "name": "Helvetica", "kind": "Typeface",
+     "category": "system", "version": "1.0", "file": "helvetica.typeface"},
+    {"id": "newsreader.typeface", "name": "Newsreader", "kind": "Typeface",
+     "category": "system", "version": "1.0", "file": "newsreader.typeface"},
+]
+
+
+# ----------------------------------------------------------------------------
+# real system detail from /proc
+# ----------------------------------------------------------------------------
+def read_first_line(path, default=""):
+    try:
+        with open(path) as fh:
+            return fh.readline().strip()
+    except OSError:
+        return default
+
+
+def system_info():
+    info = {"node": NODE_ID}
+    # kernel
+    info["kernel"] = read_first_line("/proc/sys/kernel/osrelease")
+    info["hostname"] = read_first_line("/proc/sys/kernel/hostname", "notebook")
+    # uptime
+    up = read_first_line("/proc/uptime")
+    info["uptime"] = float(up.split()[0]) if up else 0.0
+    # memory (kB)
+    mem = {}
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                k, _, v = line.partition(":")
+                mem[k.strip()] = int(v.split()[0]) if v.split() else 0
+    except OSError:
+        pass
+    info["mem_total_kb"] = mem.get("MemTotal", 0)
+    info["mem_avail_kb"] = mem.get("MemAvailable", mem.get("MemFree", 0))
+    # cpu model + count
+    model, count = "", 0
+    try:
+        with open("/proc/cpuinfo") as fh:
+            for line in fh:
+                if line.startswith("model name") and not model:
+                    model = line.split(":", 1)[1].strip()
+                if line.startswith("processor"):
+                    count += 1
+    except OSError:
+        pass
+    info["cpu_model"] = model
+    info["cpu_count"] = count
+    # storage: local disk backing the user tree
+    try:
+        st = os.statvfs(DATA)
+        info["disk_total_bytes"] = st.f_blocks * st.f_frsize
+        info["disk_free_bytes"] = st.f_bavail * st.f_frsize
+    except OSError:
+        info["disk_total_bytes"] = info["disk_free_bytes"] = 0
+    info["disk_free"] = human_size(info["disk_free_bytes"])
+    info["time"] = time.time()
+    return info
+
+
+# ----------------------------------------------------------------------------
+# JSON stores — never seeded (CLAUDE.md: design empty states, no sample content)
+# ----------------------------------------------------------------------------
+STORE_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
+
+
+def store_path(name):
+    if not STORE_RE.match(name):
+        return None
+    return os.path.join(DATA, "stores", name + ".json")
+
+
+def read_store(name):
+    p = store_path(name)
+    if not p or not os.path.isfile(p):
+        return {"items": []}
+    try:
+        with open(p) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {"items": []}
+
+
+def write_store(name, body):
+    p = store_path(name)
+    if not p:
+        return False
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(body, fh)
+    os.replace(tmp, p)
+    return True
+
+
+# ----------------------------------------------------------------------------
+# sandboxed Home filesystem
+# ----------------------------------------------------------------------------
+USER_TREE = ["Desktop", "Documents", "Manuscripts", "Music", "Recipes", "Applications"]
+
+
+def ensure_tree():
+    os.makedirs(HOME, exist_ok=True)
+    for d in USER_TREE:
+        os.makedirs(os.path.join(HOME, d), exist_ok=True)
+    os.makedirs(os.path.join(DATA, "stores"), exist_ok=True)
+
+
+def safe_home(rel):
+    rel = unquote(rel or "").lstrip("/")
+    full = os.path.normpath(os.path.join(HOME, rel))
+    if full != HOME and not full.startswith(HOME + os.sep):
+        return None
+    return full
+
+
+def list_dir(rel):
+    full = safe_home(rel)
+    if full is None or not os.path.isdir(full):
+        return None
+    entries = []
+    for name in sorted(os.listdir(full)):
+        fp = os.path.join(full, name)
+        try:
+            isdir = os.path.isdir(fp)
+            entries.append({
+                "name": name,
+                "kind": "folder" if isdir else "file",
+                "bytes": 0 if isdir else os.path.getsize(fp),
+                "modified": int(os.path.getmtime(fp)),
+            })
+        except OSError:
+            pass
+    return entries
+
+
+# ----------------------------------------------------------------------------
+# HTTP
+# ----------------------------------------------------------------------------
+class Handler(BaseHTTPRequestHandler):
+    server_version = "nosd/1.0"
+
+    def log_message(self, *a):
+        pass  # quiet
+
+    # -- helpers --
+    def send_json(self, obj, code=200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_file(self, path, content_type=None):
+        if not os.path.isfile(path):
+            self.send_error(404)
+            return
+        ctype = content_type or mimetypes.guess_type(path)[0] or "application/octet-stream"
+        with open(path, "rb") as fh:
+            data = fh.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def read_body(self):
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        if not n:
+            return {}
+        try:
+            return json.loads(self.rfile.read(n))
+        except ValueError:
+            return {}
+
+    # -- routing --
+    def do_GET(self):
+        u = urlparse(self.path)
+        p = unquote(u.path)
+        if p == "/" or p == "/index.html":
+            return self.serve_surface(os.path.join(APPS, SHELL))
+        if p.startswith("/api/"):
+            return self.api_get(p, parse_qs(u.query))
+        if p.startswith("/vendor/") or p.startswith("/runtime/") or \
+           p.startswith("/fonts/") or p.startswith("/assets/"):
+            return self.serve_static(p)
+        # any /<Name>.dc.html is a design surface served from apps/
+        if p.endswith(".dc.html"):
+            name = os.path.basename(p)
+            return self.serve_surface(os.path.join(APPS, name))
+        self.send_error(404)
+
+    def do_PUT(self):
+        u = urlparse(self.path)
+        if u.path.startswith("/api/store/"):
+            name = u.path[len("/api/store/"):]
+            ok = write_store(name, self.read_body())
+            return self.send_json({"ok": ok}, 200 if ok else 400)
+        self.send_error(404)
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        if u.path == "/api/power":
+            state = self.read_body().get("state", "")
+            # The desktop owns the overlay; we just acknowledge (and, on a real
+            # image, would signal init). Offline machine: no-op but recorded.
+            return self.send_json({"ok": True, "state": state})
+        self.send_error(404)
+
+    # -- static + surfaces --
+    def serve_static(self, p):
+        rel = p.lstrip("/")
+        base = {"vendor": WEB, "runtime": WEB, "fonts": WEB, "assets": WEB}
+        # map /vendor/x -> web/vendor/x etc.
+        full = os.path.normpath(os.path.join(WEB, rel))
+        if not full.startswith(WEB + os.sep):
+            return self.send_error(403)
+        self.send_file(full)
+
+    def serve_surface(self, path):
+        """Serve a design .dc.html surface, rewritten for offline operation."""
+        # keep the surface inside apps/ (no path traversal via the basename)
+        path = os.path.normpath(path)
+        if not (path == os.path.join(APPS, os.path.basename(path)) and
+                os.path.isfile(path)):
+            return self.send_error(404)
+        with open(path, encoding="utf-8") as fh:
+            html = rewrite_surface(fh.read())
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    # -- api --
+    def api_get(self, p, q):
+        if p == "/api/system":
+            return self.send_json(system_info())
+        if p == "/api/packages":
+            apps = load_packages()
+            return self.send_json({
+                "node": NODE_ID,
+                "apps": [a for a in apps if a.get("category", "app") == "app"],
+                "system": SYSTEM_PACKAGES,
+            })
+        if p == "/api/lora":
+            return self.send_json({
+                "node": NODE_ID,
+                "channels": LORA_CHANNELS,
+                "max_payload": LORA_MAX_PAYLOAD,
+                "heard": [],          # no nodes heard yet — empty by design
+                "active_channel": LORA_CHANNELS[0],
+            })
+        if p.startswith("/api/store/"):
+            return self.send_json(read_store(p[len("/api/store/"):]))
+        if p == "/api/fs":
+            rel = (q.get("path", [""])[0])
+            entries = list_dir(rel)
+            if entries is None:
+                return self.send_json({"error": "not found"}, 404)
+            return self.send_json({"path": rel, "entries": entries})
+        self.send_error(404)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=4680)
+    ap.add_argument("--host", default="127.0.0.1")
+    args = ap.parse_args()
+    ensure_tree()
+    srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    print("nosd serving Notebook OS on http://%s:%d  (node %s)" %
+          (args.host, args.port, NODE_ID), flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

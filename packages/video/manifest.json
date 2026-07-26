@@ -1,0 +1,10 @@
+{
+  "id": "video",
+  "name": "Video Editor",
+  "kind": "Video",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "video",
+  "order": 160
+}

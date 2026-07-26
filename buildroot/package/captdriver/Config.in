@@ -1,0 +1,14 @@
+config BR2_PACKAGE_CAPTDRIVER
+	bool "captdriver"
+	depends on BR2_PACKAGE_CUPS
+	help
+	  A CUPS driver for Canon's host-based CAPT laser printers
+	  (LBP2900/3000, LBP3010/3018/3050) — GDI printers that receive a
+	  job and print nothing with a generic driver. Ships the
+	  rastertocapt filter and PPDs that Notebook OS's printer setup
+	  then offers.
+
+	  https://github.com/mounaiban/captdriver
+
+comment "captdriver needs CUPS"
+	depends on !BR2_PACKAGE_CUPS

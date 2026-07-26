@@ -1,0 +1,10 @@
+{
+  "id": "g2048",
+  "name": "2048",
+  "kind": "Game",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "g2048",
+  "order": 200
+}

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  [contenteditable] { outline: none; caret-color: #C8341E; }
+  ::selection { background: #F1D9D2; }
+  .wr-body p { margin: 0 0 22px; }
+  .nv-scroll::-webkit-scrollbar { width: 12px; }
+  .nv-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Novel</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== BODY: sidebar + editor ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ MANUSCRIPT SIDEBAR ============ -->
+      <div style="width:336px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <!-- header -->
+        <div style="flex:none;padding:26px 26px 22px;border-bottom:1px solid #D7D2C5;">
+          <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:10px;">Manuscript</div>
+          <div style="font-family:Newsreader,serif;font-size:25px;line-height:1.18;color:#1A1916;margin-bottom:14px;">The Tin Almanac</div>
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px;">
+            <div style="font-size:13px;color:#6E695E;font-variant-numeric:tabular-nums;">{{ totalWords }} words</div>
+            <div style="font-size:12px;color:#9A958A;font-variant-numeric:tabular-nums;">{{ goalPct }}% of 80,000</div>
+          </div>
+          <div style="height:5px;background:#E0DBCE;border-radius:3px;overflow:hidden;"><div style="{{ goalBar }}"></div></div>
+        </div>
+        <!-- chapter list -->
+        <div class="nv-scroll" style="flex:1;overflow-y:auto;padding:18px 14px;min-height:0;">
+          <sc-for list="{{ parts }}" as="part" hint-placeholder-count="2">
+            <div style="font-size:11px;letter-spacing:0.13em;text-transform:uppercase;color:#A39D8F;font-weight:600;padding:0 10px;margin:6px 0 10px;">{{ part.label }}</div>
+            <sc-for list="{{ part.chapters }}" as="ch" hint-placeholder-count="3">
+              <div onClick="{{ ch.onClick }}" style="{{ ch.rowStyle }}" style-hover="background:#E6DFCE;">
+                <div style="{{ ch.numStyle }}">{{ ch.num }}</div>
+                <div style="min-width:0;flex:1;">
+                  <div style="font-size:14.5px;color:#1A1916;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ ch.title }}</div>
+                  <div style="font-size:12px;color:#9A958A;font-variant-numeric:tabular-nums;margin-top:2px;">{{ ch.words }} words</div>
+                </div>
+              </div>
+            </sc-for>
+          </sc-for>
+        </div>
+        <!-- new chapter -->
+        <div style="flex:none;border-top:1px solid #D7D2C5;padding:14px 18px;">
+          <div style="display:flex;align-items:center;justify-content:center;gap:9px;height:40px;border:1px solid #C4BFB1;border-radius:2px;background:#FCFBF8;cursor:pointer;color:#2A2620;font-size:14.5px;font-weight:500;" style-hover="background:#ECE8DD;">
+            <div style="width:16px;height:16px;display:flex;">{{ plusGlyph }}</div>New Chapter
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ EDITOR ============ -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">
+        <!-- format bar -->
+        <div style="height:54px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 36px;background:#FBFAF6;border-bottom:1px solid #E6E1D4;">
+          <div style="display:flex;align-items:center;gap:4px;">
+            <div style="display:flex;align-items:center;gap:9px;height:34px;padding:0 13px;border:1px solid #DCD7C9;border-radius:2px;cursor:pointer;background:#FCFBF8;" style-hover="background:#F1EDE2;">
+              <span style="font-family:Newsreader,serif;font-size:16px;color:#1A1916;">Body</span>
+              <span style="font-size:11px;color:#8A857A;">▾</span>
+            </div>
+            <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+            <div onMouseDown="{{ onBold }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-weight:700;color:#2A2620;" style-hover="background:#EFEBE0;">B</div>
+            <div onMouseDown="{{ onItalic }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-style:italic;font-family:Newsreader,serif;color:#2A2620;" style-hover="background:#EFEBE0;">I</div>
+            <div onMouseDown="{{ onUnderline }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:16px;text-decoration:underline;color:#2A2620;" style-hover="background:#EFEBE0;">U</div>
+            <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+            <div onMouseDown="{{ onQuote }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ quoteGlyph }}</div></div>
+            <div onMouseDown="{{ onBullet }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ bulletGlyph }}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:18px;font-size:13.5px;color:#8A857A;">
+            <div style="font-variant-numeric:tabular-nums;">{{ wordCount }} words</div>
+            <div style="width:1px;height:16px;background:#E0DBCE;"></div>
+            <div style="display:flex;align-items:center;gap:8px;"><div style="{{ saveDot }}"></div><span>{{ saveText }}</span></div>
+          </div>
+        </div>
+        <!-- canvas -->
+        <div class="nv-scroll" style="flex:1;overflow-y:auto;min-height:0;background:#FCFBF8;">
+          <div style="max-width:744px;margin:0 auto;padding:80px 24px 160px;">
+            <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:24px;">{{ activeEyebrow }}</div>
+            {{ bodyNode }}
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(2026, 5, 20, 9, 41, 0), activeIndex: 1, words: 0, saved: true, savedAt: "09:41" };
+
+  H1 = 'font-family:Newsreader,serif;font-weight:500;font-size:47px;line-height:1.14;color:#1A1916;margin:0 0 28px;letter-spacing:-0.01em;';
+
+  chapters = [
+    { part: 0, num: "1", title: "The Tin Almanac", words: "3,180",
+      html: '<h1 style="' + 'X' + '">The Tin Almanac</h1><p>The almanac came in a tin that had once held butter cookies, and Reuben kept it under the floorboard the way other men kept money.</p><p>Every page predicted weather that had already happened. This, he felt, was the only honest kind of forecast.</p><p>On the morning the letter arrived he was reading about a snowstorm from 1961, and so he was not surprised, exactly, when the snow began.</p>' },
+    { part: 0, num: "2", title: "Coney Island Avenue", words: "4,420",
+      html: '<h1 style="X">Coney Island Avenue</h1><p>You could walk the length of the avenue and hear nine languages and smell all of them cooking at once.</p><p>Reuben walked it slowly, because slowness was the one luxury that cost nothing, and because the tin under his arm was heavier than tin had any right to be.</p><p>At the corner the radio shop still sold the little LoRa sets &mdash; the ones that threw a message across the borough without asking anyone&rsquo;s permission. He had sent three. None had been answered.</p><p>&ldquo;You wait too much,&rdquo; the shopkeeper told him, not unkindly. &ldquo;A message is a door. You have to walk through it, not stand in it.&rdquo;</p><p>He bought a fourth set anyway, and a battery, and a length of copper wire, and carried the whole arrangement home like a man carrying water in his hands.</p>' },
+    { part: 0, num: "3", title: "What the Super Knew", words: "2,640",
+      html: '<h1 style="X">What the Super Knew</h1><p>The superintendent knew which pipes sang and which ones only complained.</p><p>He knew, too, that the man in 4C had stopped paying in checks and started paying in folded cash, and that this meant either trouble or honesty &mdash; and that in this building they were frequently the same thing.</p>' },
+    { part: 1, num: "4", title: "Brighton, February", words: "3,910",
+      html: '<h1 style="X">Brighton, February</h1><p>The sea at Brighton in February is the color of a coin left out in the rain.</p><p>She had asked to meet at the water because the water, she said, kept its opinions to itself.</p>' },
+    { part: 1, num: "5", title: "A Loan in Cash", words: "2,070",
+      html: '<h1 style="X">A Loan in Cash</h1><p>The arrangement was simple and therefore suspicious: a sum, in cash, with no paper to remember it by.</p><p>Reuben counted it twice &mdash; not because he doubted the amount but because counting was a way of touching something true.</p>' },
+    { part: 1, num: "6", title: "The Last LoRa Message", words: "1,150",
+      html: '<h1 style="X">The Last LoRa Message</h1><p>The message came at 4:11 in the morning, when the band was empty and the city had finally stopped transmitting.</p><p>It was nine words long. He read it once, then unplugged the set, then read it again from memory for the rest of his life.</p>' },
+  ];
+  partLabels = ["Part One \u2014 Arrivals", "Part Two \u2014 The Long Winter"];
+
+  componentDidMount() {
+    this.chapters = this.chapters.map((c) => ({ ...c, html: c.html.split('"X"').join('"' + this.H1 + '"') }));
+    this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); if (this.saveT) clearTimeout(this.saveT); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+
+  bodyRefCb = (el) => this.setEditor(el);
+  onEditCb = () => this.onEdit();
+  setEditor(el) { this.editorEl = el; if (el) this.recount(); }
+  recount() {
+    if (!this.editorEl) return;
+    const txt = (this.editorEl.innerText || "").trim();
+    const n = txt ? (txt.match(/\S+/g) || []).length : 0;
+    if (n !== this.state.words) this.setState({ words: n });
+  }
+  onEdit() {
+    this.recount();
+    this.setState({ saved: false });
+    if (this.saveT) clearTimeout(this.saveT);
+    this.saveT = setTimeout(() => this.setState({ saved: true, savedAt: this.clockStr() }), 900);
+  }
+  selectChapter(i) {
+    if (i === this.state.activeIndex) return;
+    if (this.editorEl) this.chapters[this.state.activeIndex].html = this.editorEl.innerHTML;
+    this.setState({ activeIndex: i, saved: true });
+  }
+  cmd(e, command) { e.preventDefault(); document.execCommand(command, false, null); setTimeout(() => this.recount(), 0); }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "quote": return S(P("M7 7h3.5v3.5c0 2-1.3 3.3-3.3 3.8"), P("M14 7h3.5v3.5c0 2-1.3 3.3-3.3 3.8"));
+      case "bullet": return S(C(5, 7, 1), L(9, 7, 20, 7), C(5, 12, 1), L(9, 12, 20, 12), C(5, 17, 1), L(9, 17, 20, 17));
+      case "plus": return S(L(12, 5, 12, 19), L(5, 12, 19, 12));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    const active = this.state.activeIndex;
+    const parts = this.partLabels.map((label, pi) => ({
+      label,
+      chapters: this.chapters
+        .map((c, i) => ({ c, i }))
+        .filter((o) => o.c.part === pi)
+        .map(({ c, i }) => ({
+          num: c.num, title: c.title, words: c.words,
+          onClick: () => this.selectChapter(i),
+          rowStyle: "display:flex;align-items:center;gap:13px;padding:11px 10px;border-radius:2px;cursor:pointer;margin-bottom:2px;"
+            + (i === active ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+          numStyle: "width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;font-size:13px;font-variant-numeric:tabular-nums;border-radius:50%;"
+            + (i === active ? "background:#1A1916;color:#FCFBF8;font-weight:600;" : "color:#9A958A;border:1px solid #D7D2C5;"),
+        })),
+    }));
+
+    const ac = this.chapters[active];
+    const bodyNode = React.createElement("div", {
+      key: active, className: "wr-body", contentEditable: true,
+      ref: this.bodyRefCb, onInput: this.onEditCb,
+      style: { fontFamily: "Newsreader, serif", fontSize: "20.5px", lineHeight: 1.74, color: "#26241F", textWrap: "pretty" },
+      dangerouslySetInnerHTML: { __html: ac.html },
+    });
+
+    return {
+      menus: ["File", "Edit", "Format", "Insert", "View"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"), quoteGlyph: this.icon("quote"), bulletGlyph: this.icon("bullet"), plusGlyph: this.icon("plus"),
+      parts, bodyNode,
+      activeEyebrow: "Chapter " + ac.num + " \u00b7 " + this.partLabels[ac.part],
+      totalWords: "17,370", goalPct: 22, goalBar: "height:100%;width:22%;background:#1A1916;",
+      wordCount: this.state.words.toLocaleString(),
+      saveText: this.state.saved ? "Saved " + this.state.savedAt : "Saving\u2026",
+      saveDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (this.state.saved ? "#7FA98C" : "#C8341E") + ";",
+      onBold: (e) => this.cmd(e, "bold"), onItalic: (e) => this.cmd(e, "italic"),
+      onUnderline: (e) => this.cmd(e, "underline"), onBullet: (e) => this.cmd(e, "insertUnorderedList"),
+      onQuote: (e) => this.cmd(e, "formatBlock"),
+    };
+  }
+}
+</script>
+</body>
+</html>

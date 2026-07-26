@@ -1,0 +1,10 @@
+{
+  "id": "accounting",
+  "name": "Accounting",
+  "kind": "Finance",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "accounting",
+  "order": 110
+}

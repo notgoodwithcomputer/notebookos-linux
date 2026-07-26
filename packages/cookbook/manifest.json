@@ -1,0 +1,10 @@
+{
+  "id": "cookbook",
+  "name": "Cookbook",
+  "kind": "Reference",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "cookbook",
+  "order": 80
+}

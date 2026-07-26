@@ -1,0 +1,261 @@
+{
+  "code": "sr",
+  "name": "Serbo-Croatian",
+  "from": "English",
+  "units": [
+    {
+      "title": "BASICS",
+      "skills": [
+        {
+          "name": "Greetings",
+          "words": [
+            {"t": "zdravo", "e": "hello", "ipa": "zdrâːʋo"},
+            {"t": "ćao", "e": "hi", "ipa": "tɕaːo"},
+            {"t": "doviđenja", "e": "goodbye", "ipa": "doʋiˈdʑeːɲa"},
+            {"t": "hvala", "e": "thank you", "ipa": "xʋǎːla"},
+            {"t": "molim", "e": "please", "ipa": "mǒlim"},
+            {"t": "da", "e": "yes", "ipa": "dâ"},
+            {"t": "ne", "e": "no", "ipa": "nê"},
+            {"t": "izvini", "e": "sorry", "ipa": "izʋǐːni"},
+            {"t": "dobro jutro", "e": "good morning", "ipa": "dôbroː jǔtro"}
+          ],
+          "phrases": [
+            {"t": "Kako si?", "e": "How are you?", "ipa": "kǎko si"},
+            {"t": "Dobro sam", "e": "I am well", "ipa": "dôbro sam"}
+          ]
+        },
+        {
+          "name": "People",
+          "words": [
+            {"t": "ja", "e": "I", "ipa": "jâ"},
+            {"t": "ti", "e": "you", "ipa": "tî"},
+            {"t": "on", "e": "he", "ipa": "ôn"},
+            {"t": "ona", "e": "she", "ipa": "ǒna"},
+            {"t": "mi", "e": "we", "ipa": "mî"},
+            {"t": "oni", "e": "they", "ipa": "ǒni"},
+            {"t": "čovek", "e": "man", "ipa": "tʃǒʋeːk"},
+            {"t": "žena", "e": "woman", "ipa": "ʒěna"},
+            {"t": "dečak", "e": "boy", "ipa": "dětʃaːk"},
+            {"t": "devojka", "e": "girl", "ipa": "děʋoːjka"}
+          ],
+          "phrases": [
+            {"t": "On je čovek", "e": "He is a man", "ipa": "ôn je tʃǒʋeːk"}
+          ]
+        },
+        {
+          "name": "Numbers",
+          "words": [
+            {"t": "jedan", "e": "one", "ipa": "jědan"},
+            {"t": "dva", "e": "two", "ipa": "dʋâ"},
+            {"t": "tri", "e": "three", "ipa": "trî"},
+            {"t": "četiri", "e": "four", "ipa": "tʃětiri"},
+            {"t": "pet", "e": "five", "ipa": "pêːt"},
+            {"t": "šest", "e": "six", "ipa": "ʃêːst"},
+            {"t": "sedam", "e": "seven", "ipa": "sědam"},
+            {"t": "osam", "e": "eight", "ipa": "ǒsam"},
+            {"t": "devet", "e": "nine", "ipa": "děʋeːt"},
+            {"t": "deset", "e": "ten", "ipa": "dêset"}
+          ],
+          "phrases": [
+            {"t": "Imam dva brata", "e": "I have two brothers", "ipa": "îmaːm dʋâ brâta"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "PEOPLE",
+      "skills": [
+        {
+          "name": "Family",
+          "words": [
+            {"t": "otac", "e": "father", "ipa": "ǒtats"},
+            {"t": "majka", "e": "mother", "ipa": "mâːjka"},
+            {"t": "sin", "e": "son", "ipa": "sîːn"},
+            {"t": "ćerka", "e": "daughter", "ipa": "tɕêrka"},
+            {"t": "brat", "e": "brother", "ipa": "brâːt"},
+            {"t": "sestra", "e": "sister", "ipa": "sêstra"},
+            {"t": "porodica", "e": "family", "ipa": "porǒditsa"},
+            {"t": "prijatelj", "e": "friend", "ipa": "prǐjatelj"}
+          ],
+          "phrases": [
+            {"t": "Ona je moja sestra", "e": "She is my sister", "ipa": "ǒna je mǒja sêstra"}
+          ]
+        },
+        {
+          "name": "Colors",
+          "words": [
+            {"t": "crveno", "e": "red", "ipa": "tsř̩ʋeno"},
+            {"t": "plavo", "e": "blue", "ipa": "plâːʋo"},
+            {"t": "zeleno", "e": "green", "ipa": "zěleno"},
+            {"t": "žuto", "e": "yellow", "ipa": "ʒûto"},
+            {"t": "crno", "e": "black", "ipa": "tsr̩̂no"},
+            {"t": "belo", "e": "white", "ipa": "bêlo"}
+          ],
+          "phrases": [
+            {"t": "Jabuka je crvena", "e": "The apple is red", "ipa": "jǎbuka je tsř̩ʋena"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "EVERYDAY",
+      "skills": [
+        {
+          "name": "Food",
+          "words": [
+            {"t": "voda", "e": "water", "ipa": "ʋǒda"},
+            {"t": "hleb", "e": "bread", "ipa": "xlêːb"},
+            {"t": "mleko", "e": "milk", "ipa": "mlěko"},
+            {"t": "jabuka", "e": "apple", "ipa": "jǎbuka"},
+            {"t": "meso", "e": "meat", "ipa": "mêso"},
+            {"t": "kafa", "e": "coffee", "ipa": "kâfa"},
+            {"t": "sir", "e": "cheese", "ipa": "sîːr"}
+          ],
+          "phrases": [
+            {"t": "Ja jedem hleb", "e": "I eat bread", "ipa": "jâ jêdeːm xlêːb"},
+            {"t": "Pijem vodu", "e": "I drink water", "ipa": "pǐjeːm ʋǒdu"}
+          ]
+        },
+        {
+          "name": "Verbs",
+          "words": [
+            {"t": "biti", "e": "to be", "ipa": "bîti"},
+            {"t": "imati", "e": "to have", "ipa": "îmati"},
+            {"t": "ići", "e": "to go", "ipa": "îtɕi"},
+            {"t": "videti", "e": "to see", "ipa": "ʋǐdeti"},
+            {"t": "govoriti", "e": "to speak", "ipa": "ɡoʋǒriti"},
+            {"t": "učiti", "e": "to learn", "ipa": "ǔtʃiti"},
+            {"t": "jesti", "e": "to eat", "ipa": "jêsti"},
+            {"t": "piti", "e": "to drink", "ipa": "pîti"}
+          ],
+          "phrases": [
+            {"t": "Učim srpski", "e": "I learn Serbian", "ipa": "ǔtʃim sr̩̂pski"},
+            {"t": "Govorite li srpski?", "e": "Do you speak Serbian?", "ipa": "ɡoʋǒriteː li sr̩̂pski"}
+          ]
+        },
+        {
+          "name": "Describing",
+          "words": [
+            {"t": "veliko", "e": "big", "ipa": "ʋěliko"},
+            {"t": "malo", "e": "small", "ipa": "mâːlo"},
+            {"t": "dobro", "e": "good", "ipa": "dôbro"},
+            {"t": "lepo", "e": "beautiful", "ipa": "lêːpo"},
+            {"t": "novo", "e": "new", "ipa": "nôʋo"},
+            {"t": "toplo", "e": "warm", "ipa": "tôplo"},
+            {"t": "hladno", "e": "cold", "ipa": "xlâdno"}
+          ],
+          "phrases": [
+            {"t": "Velika kuća", "e": "A big house", "ipa": "ʋělika kûːtɕa"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "GETTING AROUND",
+      "skills": [
+        {
+          "name": "Places",
+          "words": [
+            {"t": "kuća", "e": "house", "ipa": "kûːtɕa"},
+            {"t": "škola", "e": "school", "ipa": "ʃkôːla"},
+            {"t": "grad", "e": "city", "ipa": "ɡrâːd"},
+            {"t": "ulica", "e": "street", "ipa": "ûlitsa"},
+            {"t": "selo", "e": "village", "ipa": "sêlo"},
+            {"t": "vrata", "e": "door", "ipa": "ʋrǎːta"},
+            {"t": "put", "e": "road", "ipa": "pûːt"}
+          ],
+          "phrases": [
+            {"t": "Škola je velika", "e": "The school is big", "ipa": "ʃkôːla je ʋělika"},
+            {"t": "Grad je velik", "e": "The city is big", "ipa": "ɡrâːd je ʋělik"}
+          ]
+        },
+        {
+          "name": "Time",
+          "words": [
+            {"t": "danas", "e": "today", "ipa": "dânas"},
+            {"t": "sutra", "e": "tomorrow", "ipa": "sûtra"},
+            {"t": "sada", "e": "now", "ipa": "sâda"},
+            {"t": "dan", "e": "day", "ipa": "dâːn"},
+            {"t": "noć", "e": "night", "ipa": "nôːtɕ"},
+            {"t": "nedelja", "e": "week", "ipa": "nêdeʎa"},
+            {"t": "sat", "e": "hour", "ipa": "sâːt"},
+            {"t": "godina", "e": "year", "ipa": "ɡǒdina"}
+          ],
+          "phrases": [
+            {"t": "Danas je lepo", "e": "Today is nice", "ipa": "dânas je lêːpo"},
+            {"t": "Danas je hladno", "e": "Today is cold", "ipa": "dânas je xlâdno"}
+          ]
+        },
+        {
+          "name": "Travel",
+          "words": [
+            {"t": "auto", "e": "car", "ipa": "âuto"},
+            {"t": "voz", "e": "train", "ipa": "ʋôːz"},
+            {"t": "avion", "e": "airplane", "ipa": "ǎʋion"},
+            {"t": "ovde", "e": "here", "ipa": "ôʋde"},
+            {"t": "tamo", "e": "there", "ipa": "tâmo"},
+            {"t": "daleko", "e": "far", "ipa": "dalěko"},
+            {"t": "blizu", "e": "near", "ipa": "blîzu"}
+          ],
+          "phrases": [
+            {"t": "Auto je nov", "e": "The car is new", "ipa": "âuto je nôʋ"},
+            {"t": "Voz je velik", "e": "The train is big", "ipa": "ʋôːz je ʋělik"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "THE WORLD",
+      "skills": [
+        {
+          "name": "Animals",
+          "words": [
+            {"t": "pas", "e": "dog", "ipa": "pâːs"},
+            {"t": "mačka", "e": "cat", "ipa": "mâtʃka"},
+            {"t": "ptica", "e": "bird", "ipa": "ptîtsa"},
+            {"t": "konj", "e": "horse", "ipa": "kôɲ"},
+            {"t": "riba", "e": "fish", "ipa": "rîba"},
+            {"t": "krava", "e": "cow", "ipa": "krâʋa"},
+            {"t": "pile", "e": "chicken", "ipa": "pîle"}
+          ],
+          "phrases": [
+            {"t": "Imam psa", "e": "I have a dog", "ipa": "îmaːm psâ"},
+            {"t": "Imam mačku", "e": "I have a cat", "ipa": "îmaːm ˈmâtʃku"}
+          ]
+        },
+        {
+          "name": "Nature",
+          "words": [
+            {"t": "sunce", "e": "sun", "ipa": "sûːntse"},
+            {"t": "mesec", "e": "moon", "ipa": "mêsets"},
+            {"t": "drvo", "e": "tree", "ipa": "dr̩̂ʋo"},
+            {"t": "cvet", "e": "flower", "ipa": "tsʋêːt"},
+            {"t": "kiša", "e": "rain", "ipa": "kîʃa"},
+            {"t": "more", "e": "sea", "ipa": "môre"},
+            {"t": "nebo", "e": "sky", "ipa": "nêbo"}
+          ],
+          "phrases": [
+            {"t": "Nebo je plavo", "e": "The sky is blue", "ipa": "nêbo je plâːʋo"},
+            {"t": "Sunce je toplo", "e": "The sun is warm", "ipa": "sûːntse je tôplo"}
+          ]
+        },
+        {
+          "name": "More Verbs",
+          "words": [
+            {"t": "raditi", "e": "to work", "ipa": "râditi"},
+            {"t": "hteti", "e": "to want", "ipa": "xtêti"},
+            {"t": "moći", "e": "to be able", "ipa": "môtɕi"},
+            {"t": "reći", "e": "to say", "ipa": "rêtɕi"},
+            {"t": "doći", "e": "to come", "ipa": "dôtɕi"},
+            {"t": "kupiti", "e": "to buy", "ipa": "kǔːpiti"},
+            {"t": "živeti", "e": "to live", "ipa": "ʒǐːʋeti"}
+          ],
+          "phrases": [
+            {"t": "Hoću da jedem", "e": "I want to eat", "ipa": "xǒtɕu da jêdeːm"},
+            {"t": "Hoću da pijem vodu", "e": "I want to drink water", "ipa": "xǒtɕu da pǐjeːm ʋǒdu"}
+          ]
+        }
+      ]
+    }
+  ]
+}

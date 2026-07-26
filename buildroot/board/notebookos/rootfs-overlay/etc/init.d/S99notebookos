@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# Start the Notebook OS desktop: bring up X on the virtio-gpu framebuffer and
+# launch the native GTK session. There is no display manager — the machine
+# boots straight into the desktop (single-seat appliance).
+#
+NOTEBOOK=/opt/notebook
+
+start() {
+	printf "Starting Notebook OS desktop: "
+	# The modesetting Xorg driver references libgbm symbols but doesn't link
+	# libgbm directly (it expects the server to have loaded gbm globally via
+	# glamor, which this minimal build didn't wire). Preload libgbm so those
+	# symbols are in the global namespace before Xorg dlopens modesetting.
+	export LD_PRELOAD=/usr/lib/libgbm.so.1
+	# X reads /opt/notebook/session.sh as the session; :0 on vt1.
+	#
+	# LOGGING. This used to run "-logfile /dev/console -verbose 3", which put
+	# every one of the server's ~600 startup lines through a console write while
+	# the user waited. Measured in the guest, warm, same method both ways:
+	#
+	#   -logfile /dev/console -verbose 3   8.80s / 8.82s
+	#   -logfile /var/log/Xorg.0.log       4.97s / 3.64s
+	#
+	# — the logging alone was half of X's entire startup. Nothing is lost: the
+	# same log is still written, just to a file that survives the boot and can be
+	# read afterwards, which is more useful for a support case than text that has
+	# already scrolled past. Bring-up debugging that genuinely needs it live picks
+	# the "verbose + serial console" GRUB entry, which is detected here.
+	#
+	# (Historical: a "-extension Present" arg was once passed here on the theory
+	# that disabling Present would unstall GTK3's frame clock and cure blank
+	# windows. That theory was wrong — the blank DrawingAreas were caused by a
+	# missing gi._gi_cairo bridge in the pygobject build, not by Present — so the
+	# arg was a no-op and has been removed.)
+	if grep -q "console=ttyS" /proc/cmdline 2>/dev/null; then
+		XLOG="-logfile /dev/console -verbose 3"
+	else
+		mkdir -p /var/log
+		XLOG="-logfile /var/log/Xorg.0.log"
+	fi
+	xinit "$NOTEBOOK/session.sh" -- :0 vt1 -nolisten tcp \
+		$XLOG \
+		> /dev/console 2>&1 &
+	echo "OK"
+}
+
+stop() {
+	killall xinit 2>/dev/null
+}
+
+case "$1" in
+	start) start ;;
+	stop)  stop ;;
+	restart) stop; sleep 1; start ;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

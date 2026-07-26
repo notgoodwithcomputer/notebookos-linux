@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  [contenteditable] { outline: none; caret-color: #C8341E; }
+  ::selection { background: #F1D9D2; }
+  .an-body p { margin: 0 0 16px; }
+  .an-body ul, .an-body ol { margin: 0 0 18px; padding-left: 26px; }
+  .an-body li { margin: 0 0 9px; }
+  .an-body h2 { font-weight: 700; font-size: 21px; line-height: 1.25; color: #1A1916; margin: 30px 0 14px; letter-spacing: -0.01em; }
+  .an-body b { font-weight: 700; color: #1A1916; }
+  .an-scroll::-webkit-scrollbar { width: 12px; }
+  .an-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Academic Notes</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ CLASSES SIDEBAR ============ -->
+      <div style="width:340px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:24px 26px 20px;border-bottom:1px solid #D7D2C5;">
+          <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:8px;">Semester</div>
+          <div style="font-size:21px;font-weight:700;color:#1A1916;letter-spacing:-0.01em;">{{ termLabel }}</div>
+        </div>
+        <div class="an-scroll" style="flex:1;overflow-y:auto;padding:16px 14px;min-height:0;">
+          <sc-for list="{{ classes }}" as="cl" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;gap:10px;padding:0 10px;margin:10px 0 9px;">
+              <div style="{{ cl.swatch }}"></div>
+              <div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#6E695E;font-weight:700;">{{ cl.label }}</div>
+            </div>
+            <sc-for list="{{ cl.lectures }}" as="lec" hint-placeholder-count="3">
+              <div onClick="{{ lec.onClick }}" style="{{ lec.rowStyle }}" style-hover="background:#E6DFCE;">
+                <div style="{{ lec.numStyle }}">{{ lec.num }}</div>
+                <div style="min-width:0;flex:1;">
+                  <div style="font-size:14.5px;color:#1A1916;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ lec.title }}</div>
+                  <div style="font-size:12px;color:#9A958A;margin-top:2px;">{{ lec.date }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </sc-for>
+          <sc-if value="{{ noLectures }}" hint-placeholder-val="{{ false }}"><div style="padding:30px 12px;text-align:center;font-size:13px;color:#A39D8F;">No classes</div></sc-if>
+        </div>
+        <div style="flex:none;border-top:1px solid #D7D2C5;padding:14px 18px;">
+          <div onClick="{{ onNewLecture }}" style="display:flex;align-items:center;justify-content:center;gap:9px;height:40px;border:1px solid #C4BFB1;border-radius:2px;background:#FCFBF8;cursor:pointer;color:#2A2620;font-size:14.5px;font-weight:500;" style-hover="background:#ECE8DD;">
+            <div style="width:16px;height:16px;display:flex;">{{ plusGlyph }}</div>New Lecture
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ EDITOR ============ -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">
+        <!-- format bar -->
+        <div style="height:54px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 36px;background:#FBFAF6;border-bottom:1px solid #E6E1D4;">
+          <div style="display:flex;align-items:center;gap:4px;">
+            <div onClick="{{ onStyleMenu }}" style="display:flex;align-items:center;gap:9px;height:34px;padding:0 13px;border:1px solid #DCD7C9;border-radius:2px;cursor:pointer;background:#FCFBF8;" style-hover="background:#F1EDE2;">
+              <span style="font-size:14.5px;color:#1A1916;font-weight:500;">Style</span>
+              <span style="font-size:11px;color:#8A857A;">▾</span>
+            </div>
+            <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+            <div onMouseDown="{{ onBold }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-weight:700;color:#2A2620;" style-hover="background:#EFEBE0;">B</div>
+            <div onMouseDown="{{ onItalic }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-style:italic;color:#2A2620;" style-hover="background:#EFEBE0;">I</div>
+            <div onMouseDown="{{ onHighlight }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ highlightGlyph }}</div></div>
+            <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+            <div onMouseDown="{{ onBullet }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ bulletGlyph }}</div></div>
+            <div onMouseDown="{{ onNumber }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ numberGlyph }}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:18px;font-size:13.5px;color:#8A857A;">
+            <div style="font-variant-numeric:tabular-nums;">{{ wordCount }} words</div>
+            <div style="width:1px;height:16px;background:#E0DBCE;"></div>
+            <div style="display:flex;align-items:center;gap:8px;"><div style="{{ saveDot }}"></div><span>{{ saveText }}</span></div>
+          </div>
+        </div>
+        <!-- canvas -->
+        <div class="an-scroll" style="flex:1;overflow-y:auto;min-height:0;background:#FCFBF8;">
+          <div style="max-width:760px;margin:0 auto;padding:56px 24px 160px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+              <div style="{{ activeSwatch }}"></div>
+              <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#6E695E;font-weight:700;">{{ activeEyebrow }}</div>
+            </div>
+            <sc-if value="{{ noLectures }}" hint-placeholder-val="{{ false }}"><div style="padding:60px 0 0;text-align:center;"><div style="font-size:15px;color:#6E695E;margin-bottom:6px;">No classes yet</div><div style="font-size:13.5px;color:#A39D8F;">Use File → New Class to create the first class and lecture.</div></div></sc-if>
+            {{ bodyNode }}
+            <sc-if value="{{ hasLecture }}" hint-placeholder-val="{{ true }}"><div style="display:flex;gap:24px;align-items:center;margin:6px 0 38px;padding-bottom:24px;border-bottom:1px solid #ECE7DA;font-size:13.5px;color:#9A958A;">
+              <span>{{ activeMeta }}</span>
+            </div></sc-if>
+            {{ notesNode }}
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false, activeIndex: 0, words: 0, saved: true, savedAt: (() => { const n = new Date(), p = (x) => (x < 10 ? "0" + x : "" + x); return p(n.getHours()) + ":" + p(n.getMinutes()); })() };
+
+  classMeta = [];
+
+  H1 = "font-weight:700;font-size:39px;line-height:1.14;color:#1A1916;margin:0 0 12px;letter-spacing:-0.012em;";
+
+  lectures = [];
+
+  componentDidMount() {
+    this._esc = (e) => { if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen) { this.setState({ openMenu: null, aboutOpen: false }); } else { this.goHome(); } } };
+    window.addEventListener("keydown", this._esc); this.timer = setInterval(() => this.setState({ now: new Date() }), 10000); }
+  componentWillUnmount() {
+    window.removeEventListener("keydown", this._esc); clearInterval(this.timer); if (this.saveT) clearTimeout(this.saveT); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  shortDate() { const n = new Date(); return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][n.getDay()] + " " + n.getDate() + " " + ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][n.getMonth()]; }
+  longDate() { const n = new Date(); return ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()] + " " + n.getFullYear(); }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; }
+
+  bodyRefCb = (el) => { this.editorEl = el; if (el) this.recount(); };
+  onEditCb = () => this.onEdit();
+  recount() {
+    if (!this.editorEl) return;
+    const txt = (this.editorEl.innerText || "").trim();
+    const n = txt ? (txt.match(/\S+/g) || []).length : 0;
+    if (n !== this.state.words) this.setState({ words: n });
+  }
+  onEdit() {
+    this.recount();
+    this.setState({ saved: false });
+    if (this.saveT) clearTimeout(this.saveT);
+    this.saveT = setTimeout(() => this.setState({ saved: true, savedAt: this.clockStr() }), 900);
+  }
+  selectLecture(i) {
+    if (i === this.state.activeIndex) return;
+    if (this.editorEl && this.lectures[this.state.activeIndex]) this.lectures[this.state.activeIndex].notes = this.editorEl.innerHTML;
+    this.setState({ activeIndex: i, saved: true });
+  }
+  cmd(e, command, val) { e.preventDefault(); document.execCommand(command, false, val || null); setTimeout(() => this.recount(), 0); }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "bullet": return S(C(5, 7, 1), L(9, 7, 20, 7), C(5, 12, 1), L(9, 12, 20, 12), C(5, 17, 1), L(9, 17, 20, 17));
+      case "number": return S(L(10, 7, 20, 7), L(10, 12, 20, 12), L(10, 17, 20, 17), P("M4 5.5h1.5V9"), P("M4 13.5h2l-2 3h2"));
+      case "highlight": return S(P("M5 19l2.5-.6 9-9-2-2-9 9z"), L(14.5, 6.5, 17.5, 9.5), L(4, 21, 9, 21));
+      case "plus": return S(L(12, 5, 12, 19), L(5, 12, 19, 12));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  goHomeCb = () => { try { if (window.parent !== window) window.parent.postMessage({ type: "nb-home" }, "*"); } catch (e) {} };
+
+  // ===== Notebook OS system chrome =====
+  appFile = "Academic Notes.dc.html";
+  appName = "Academic Notes";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File","Edit","Format","Classes"]; }
+  appMenuItems(name) {
+    if (name === "File") return [this.mi("New Lecture", () => this.newLecture()), this.mi("New Class", () => this.newClass()), this.mi("Save", () => this.markSaved(), { hint: "⌘S" }), this.msep(), this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" })];
+    if (name === "Edit") return this.editMenu();
+    if (name === "Format") return [this.mi("Bold", () => this.fmt("bold"), { hint: "⌘B" }), this.mi("Italic", () => this.fmt("italic"), { hint: "⌘I" }), this.mi("Highlight", () => { this.execCmd("hiliteColor", "#F0E2C0"); this.setState({ openMenu: null }); }), this.msep(), this.mi("Body", () => this.styleBlock("p")), this.mi("Heading", () => this.styleBlock("h2")), this.msep(), this.mi("Bulleted List", () => this.fmt("insertUnorderedList")), this.mi("Numbered List", () => this.fmt("insertOrderedList"))];
+    if (name === "Classes") {
+      const cur = this.lectures[this.state.activeIndex];
+      const items = this.classMeta.map((cm, ci) => this.mi(cm.label, () => { const first = this.lectures.findIndex((l) => l.cls === ci); if (first !== -1) this.selectLecture(first); this.setState({ openMenu: null }); }, { check: cur && cur.cls === ci ? "✓" : "" }));
+      if (items.length) items.push(this.msep());
+      items.push(this.mi("New Class", () => this.newClass()));
+      return items;
+    }
+    if (name === "__style") return [this.mi("Body", () => this.styleBlock("p")), this.mi("Heading", () => this.styleBlock("h2"))];
+    return this.defaultAppMenu(name);
+  }
+  newLecture() {
+    if (!this.classMeta.length) { this.newClass(); return; }
+    if (this.editorEl && this.lectures[this.state.activeIndex]) this.lectures[this.state.activeIndex].notes = this.editorEl.innerHTML;
+    const cur = this.lectures[this.state.activeIndex];
+    const cls = cur ? cur.cls : 0;
+    const nums = this.lectures.filter((l) => l.cls === cls).map((l) => parseInt(l.num, 10));
+    const num = this.pad(nums.length ? Math.max.apply(null, nums) + 1 : 1);
+    this.lectures.push({ cls: cls, num: num, title: "Lecture " + num, date: this.shortDate(), meta: this.longDate() + " · added " + this.clockStr(), title_html: "Lecture " + num, notes: "<p><br></p>" });
+    this.setState({ activeIndex: this.lectures.length - 1, openMenu: null, saved: true });
+  }
+  newClass() {
+    const colors = ["#9A7B4F", "#4A5E73", "#6E7B57", "#8A6D5B", "#566E86"];
+    this.classMeta.push({ label: "Untitled Class " + (this.classMeta.length + 1), color: colors[this.classMeta.length % colors.length] });
+    const ci = this.classMeta.length - 1;
+    this.lectures.push({ cls: ci, num: "01", title: "Lecture 01", date: this.shortDate(), meta: this.longDate() + " · added " + this.clockStr(), title_html: "Lecture 01", notes: "<p><br></p>" });
+    this.setState({ activeIndex: this.lectures.length - 1, openMenu: null, saved: true });
+  }
+  defaultAppMenu(name) {
+    if (name === "File") return [this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" })];
+    return [this.off("Undo"), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS…", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart…", () => this.power("restart")),
+      this.mi("Shut Down…", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "✓" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 · strong"), this.off("NODE-22", "ch 4 · good"), this.off("NODE-7F", "ch 4 · strong"), this.off("NODE-88", "ch 6 · fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+  execCmd(command, val) { document.execCommand(command, false, val || null); }
+  selectAllBody() { if (!this.editorEl) return; const r = document.createRange(); r.selectNodeContents(this.editorEl); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); if (this.editorEl.focus) this.editorEl.focus(); }
+  markSaved() { this.setState({ saved: true, savedAt: this.clockStr(), openMenu: null }); }
+  styleBlock(tag) { this.setState({ openMenu: null }); if (this.editorEl && this.editorEl.focus) this.editorEl.focus(); document.execCommand("formatBlock", false, tag); }
+  fmt(cmd) { this.execCmd(cmd); this.setState({ openMenu: null }); }
+  editMenu() { return [this.mi("Undo", () => this.fmt("undo"), { hint: "⌘Z" }), this.mi("Redo", () => this.fmt("redo")), this.msep(), this.mi("Select All", () => { this.selectAllBody(); this.setState({ openMenu: null }); }, { hint: "⌘A" }), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste")]; }
+  countOf(html) { const t = String(html).replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ").trim(); return t ? (t.match(/\S+/g) || []).length : 0; }
+  renderVals() {
+    const active = this.state.activeIndex;
+    const classes = this.classMeta.map((cm, ci) => ({
+      label: cm.label,
+      swatch: "width:11px;height:11px;flex:none;background:" + cm.color + ";",
+      lectures: this.lectures
+        .map((l, i) => ({ l, i }))
+        .filter((o) => o.l.cls === ci)
+        .map(({ l, i }) => ({
+          num: l.num, title: l.title, date: l.date,
+          onClick: () => this.selectLecture(i),
+          rowStyle: "display:flex;align-items:center;gap:13px;padding:10px 10px;border-radius:2px;cursor:pointer;margin-bottom:2px;"
+            + (i === active ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+          numStyle: "min-width:30px;height:24px;padding:0 6px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-variant-numeric:tabular-nums;border-radius:2px;"
+            + (i === active ? "background:#1A1916;color:#FCFBF8;font-weight:600;" : "color:#8A857A;border:1px solid #D7D2C5;"),
+        })),
+    }));
+
+    const al = this.lectures[active] || { cls: 0, num: "", title_html: "", notes: "", meta: "" };
+    const hasLecture = this.lectures.length > 0;
+    const titleNode = React.createElement("h1", {
+      key: "t" + active, contentEditable: true, suppressContentEditableWarning: true,
+      style: { fontWeight: 700, fontSize: "39px", lineHeight: 1.14, color: "#1A1916", margin: "0 0 14px", letterSpacing: "-0.012em", outline: "none", caretColor: "#C8341E" },
+      dangerouslySetInnerHTML: { __html: al.title_html },
+    });
+    const notesNode = React.createElement("div", {
+      key: "n" + active, className: "an-body", contentEditable: true,
+      ref: this.bodyRefCb, onInput: this.onEditCb,
+      style: { fontSize: "17px", lineHeight: 1.62, color: "#26241F", textWrap: "pretty" },
+      dangerouslySetInnerHTML: { __html: al.notes },
+    });
+
+    return {
+      goHome: this.goHomeCb,
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"), bulletGlyph: this.icon("bullet"), numberGlyph: this.icon("number"),
+      highlightGlyph: this.icon("highlight"), plusGlyph: this.icon("plus"),
+      termLabel: (function (n) { const m = n.getMonth(); return (m >= 8 ? "Fall " : m >= 5 ? "Summer " : "Spring ") + n.getFullYear(); })(this.state.now), classes, bodyNode: hasLecture ? titleNode : null, notesNode: hasLecture ? notesNode : null, hasLecture, noLectures: !hasLecture,
+      activeEyebrow: hasLecture ? this.classMeta[al.cls].label + " · Lecture " + al.num : "",
+      activeMeta: al.meta,
+      activeSwatch: "width:11px;height:11px;flex:none;background:" + (hasLecture ? this.classMeta[al.cls].color : "transparent") + ";",
+      wordCount: this.state.words.toLocaleString(),
+      saveText: this.state.saved ? "Saved " + this.state.savedAt : "Saving…",
+      saveDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (this.state.saved ? "#7FA98C" : "#C8341E") + ";",
+      onBold: (e) => this.cmd(e, "bold"), onItalic: (e) => this.cmd(e, "italic"),
+      onBullet: (e) => this.cmd(e, "insertUnorderedList"), onNumber: (e) => this.cmd(e, "insertOrderedList"),
+      onHighlight: (e) => this.cmd(e, "hiliteColor", "#F0E2C0"),
+      onNewLecture: () => this.newLecture(),
+      onStyleMenu: (e) => this.toggleMenu("__style", e),
+    };
+  }
+}
+</script>
+</body>
+</html>

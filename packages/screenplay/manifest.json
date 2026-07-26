@@ -1,0 +1,10 @@
+{
+  "id": "screenplay",
+  "name": "Screenplay",
+  "kind": "Scriptwriting",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "screenplay",
+  "order": 50
+}

@@ -1,0 +1,3410 @@
+#!/usr/bin/env python3
+"""
+Finder — the Notebook OS file manager. A native GTK window (Cinnamon/Nemo
+lineage) that browses the real filesystem under Home, styled to the papertone
+design language: custom Mac-OS-7 title bar, Devices/Places sidebar, list view
+with Name / Size / Date Modified, and a status bar with the live free-space
+figure read from statvfs. No web view — every pixel is drawn by GTK.
+"""
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gtk, Gdk, GLib, Gio, GObject, Pango  # noqa: E402
+
+import os
+import re
+import time
+import shutil
+import subprocess
+import threading
+
+import nbicons
+import nbapp  # for nudge_paint (swrast first-paint flush)
+from nbi18n import _t  # noqa: E402
+
+# Whether the GPU stack is accelerated (a compositor is running). session.sh
+# exports NB_ACCEL from the kernel's "[drm] features: +/-virgl" line and only
+# starts xcompmgr when accelerated. Window move/resize are offered ONLY then: the
+# compositor backs the window in a pixmap so dragging is smooth, whereas on the
+# software stack (real hardware on simpledrm) there is no compositor and a live
+# drag would repaint everything underneath on every motion event and jank the
+# whole machine — so the Finder stays fixed there (double-click still zooms).
+_ACCEL = os.environ.get("NB_ACCEL") == "1"
+
+DE_DIR = os.path.dirname(os.path.abspath(__file__))
+# display name (without .app) -> python module in the DE directory
+APP_MODULES = {
+    "Writer": "writer", "Novel": "novel", "Academic Notes": "academic",
+    "Journal": "journal", "Screenplay": "screenplay", "Tasks": "tasks",
+    "Calendar": "calendar", "Cookbook": "cookbook", "E-book Reader": "ebook",
+    "Calculator": "calculator", "Accounting": "accounting", "Contacts": "contacts",
+    "Illustrator": "illustrator", "Sequencer": "sequencer",
+    "Video Editor": "video", "Media Viewer": "media", "Music": "music",
+    "Packages": "packages", "2048": "g2048",
+    "GBA Emulator": "gbaemu", "GBA IDE": "gbaide", "Language": "language",
+    "Maps": "maps",
+    "Terminal": "terminal", "Settings": "settings",
+    "System Monitor": "sysmon", "Install Notebook OS": "installer",
+}
+
+# a few app modules have no same-named glyph in nbicons — alias to a fitting one
+# (an unaliased name with no glyph falls back to a featureless square, which is
+# what the GBA Emulator was showing in the Applications folder).
+ICON_ALIAS = {"settings": "sys", "sysmon": "sys", "terminal": "toc",
+              "installer": "disk", "gbaide": "cartridge", "language": "globe",
+              "maps": "mappin", "gbaemu": "gamepad"}
+
+# file extension -> DE module that opens it, so double-clicking a document
+# launches its owning app with the file as argv[1] (media/writer/ebook accept a
+# path as sys.argv[1]). Mirrors the .app launch, just with the document passed in.
+FILE_APPS = {
+    ".png": "media", ".jpg": "media", ".jpeg": "media", ".gif": "media",
+    ".bmp": "media", ".webp": "media", ".tiff": "media", ".tif": "media",
+    ".ico": "media", ".svg": "media", ".heic": "media", ".heif": "media",
+    ".avif": "media",
+    # video opens in the Media viewer by default (it plays via GStreamer)
+    ".mp4": "media", ".m4v": "media", ".mkv": "media", ".mov": "media",
+    ".webm": "media", ".avi": "media",
+    ".txt": "writer", ".md": "writer", ".writer": "writer",
+    ".epub": "ebook", ".pdf": "ebook",
+    # audio files carry a music icon and 'Audio' Kind, so double-click must
+    # honour that affordance: hand the path to the Music app (it accepts/scans
+    # the file) rather than flashing "No app for this file type".
+    ".mp3": "music", ".wav": "music", ".ogg": "music",
+    ".flac": "music", ".m4a": "music",
+    # Game Boy / GBA ROMs open in the GBA Emulator (it plays via the vbam core)
+    ".gba": "gbaemu", ".gbc": "gbaemu", ".gb": "gbaemu", ".sgb": "gbaemu",
+}
+
+# Modules that actually accept a document path as sys.argv[1] and act on it.
+# Only these may be honoured from the user's Settings ▸ Default Applications
+# choice (settings.json 'default_apps': {ext: module}), so a stale or
+# hand-edited entry can never route a file to an app that would silently
+# ignore it — novel/academic, for instance, open only their own JSON formats.
+FILE_OPENERS = {"writer", "ebook", "media", "music", "screenplay", "gbaemu"}
+
+# human "Kind" descriptor per app (matches the design's KIND column)
+APP_KIND = {
+    "Writer": "Word Processor", "Novel": "Word Processor",
+    "Academic Notes": "Notebook", "Journal": "Diary",
+    "Screenplay": "Scriptwriting", "Tasks": "Productivity",
+    "Calendar": "Productivity", "Cookbook": "Reference",
+    "E-book Reader": "Reader", "Calculator": "Utility",
+    "Accounting": "Finance", "Contacts": "Utility",
+    "Illustrator": "Graphics",
+    "Sequencer": "Audio", "Video Editor": "Video",
+    "Media Viewer": "Media", "Music": "Music", "Packages": "System",
+    "2048": "Game", "GBA Emulator": "Game", "GBA IDE": "Development",
+    "Language": "Education", "Maps": "Reference",
+    "Terminal": "Utility",
+    "Settings": "System", "System Monitor": "System",
+    "Install Notebook OS": "System",
+}
+
+HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
+# The Places sidebar is the standard set of Linux user folders (Nautilus
+# lineage). Applications is not a user folder — it lives under Devices so the
+# app launcher stays reachable (see _devices).
+PLACES = [("Home", "home", ""), ("Desktop", "desktop", "Desktop"),
+          ("Documents", "folder", "Documents"),
+          ("Music", "music", "Music"),
+          ("Pictures", "media", "Pictures"),
+          ("Videos", "video", "Videos"),
+          ("Trash", "trash", ".Trash")]
+# Places whose folders we create on launch so no sidebar row is ever dead
+# (Applications is provisioned by the OS image; .Trash is made on demand).
+PERSONA_DIRS = ("Desktop", "Documents", "Music", "Pictures", "Videos")
+
+# Icon pixel sizes. The list view keeps the design's compact 22px row glyph;
+# the grid/icon view uses a much larger glyph so the app/file icons read as
+# real icons, not dots. The mockup drew 48px cells; the reporter found those too
+# small (then 64px still small — "icons should be larger in icon view"), so the
+# icon view now draws big 96px glyphs. nbicons rasterizes each icon NATIVELY at
+# the requested pixel size (never an upscale of a small pixbuf), so both stay
+# crisp on the GPU-less framebuffer; the result is memoized per (name, size), so
+# carrying two sizes costs one extra render per distinct glyph, once, at
+# folder-load time — never per draw/expose.
+LIST_ICON_PX = 22
+GRID_ICON_PX = 96
+# Store columns the list may be sorted by: Name, Size (hidden byte count),
+# Date Modified (hidden mtime), Kind. Anything else is not a sortable column.
+SORT_COLUMNS = (1, 6, 7, 8)
+# Grid cell geometry. The label wraps to the cell's inner width, so the three
+# numbers have to stay in step — a wrap width wider than the cell would let one
+# long name stretch every cell and, with it, the whole window.
+GRID_CELL_PX = 156
+GRID_CELL_PAD = 12
+GRID_LABEL_PX = GRID_CELL_PX - 2 * GRID_CELL_PAD
+
+# Search. Typing filters the folder you are standing in instantly (from the
+# cached listing), and a beat later the SAME query is run over the whole of
+# Home on a worker thread, so "calc" finds Calculator and "tax" finds the
+# return wherever you happen to be. Before this, search only ever looked in one
+# folder, which is no help at all to the person who knows the name but not the
+# place. Bounded so a deep tree can never make the desktop think.
+SEARCH_DEBOUNCE_MS = 350      # wait for a typist to pause before walking disk
+SEARCH_MIN_CHARS = 2          # one letter matches nearly everything
+SEARCH_MAX_HITS = 200         # a wall of results is not an answer
+SEARCH_MAX_SCAN = 20000       # entries examined before we stop and report
+
+# Type-ahead: typing letters at the list jumps to the item that starts with
+# them; the buffer resets after this long, so a fresh word starts a fresh jump.
+TYPEAHEAD_RESET_MS = 1200
+
+# Copying. Anything bigger than this gets a progress dialog with a working
+# Cancel instead of freezing the desktop until it finishes — copying a folder of
+# photos to a USB stick is minutes of silence otherwise.
+COPY_ASYNC_BYTES = 8 * 1024 * 1024
+COPY_CHUNK = 256 * 1024
+
+
+class _CopyCancelled(Exception):
+    """Raised inside the copy worker when the user presses Cancel."""
+
+
+def human(n):
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024 or u == "GB":
+            return ("%d %s" % (n, u)) if u == "B" else ("%.1f %s" % (n, u))
+        n /= 1024.0
+
+
+def size_text(name, isdir, nbytes):
+    """The Size column reading for an item.
+
+    An application is a small launcher stub, so its file size ("44 B") is not
+    the size of the app and means nothing to anybody — it just put a confident
+    wrong number down the whole of the most-looked-at screen in the OS. Apps
+    take the same em dash folders do; the real byte count is still the hidden
+    sort key, and Get Info still reports it for anyone who asks."""
+    if isdir or name.endswith(".app"):
+        return "—"
+    return human(nbytes)
+
+
+# Folders whose on-disk name is not what the user should be shown. The Trash
+# lives in the dotted ".Trash" so it stays out of the Home listing, but the
+# sidebar has always called it "Trash" — the title bar and breadcrumb said
+# ".TRASH" / ".Trash", which reads as a stray file to anyone who has never met
+# a dotfile.
+DISPLAY_NAMES = {".Trash": "Trash"}
+
+
+def _unframe(scroller):
+    """Drop the frame GTK puts around a scroller's contents.
+
+    Adding a non-scrollable child (a Box) to a Gtk.ScrolledWindow makes GTK slip
+    a Gtk.Viewport in between, and that viewport defaults to SHADOW_IN — which
+    styles as `frame` and draws a hairline in a grey (#A29E9B) that appears
+    nowhere in this design. It boxed the toolbar and, worse, drew a rectangle
+    around the breadcrumb that ran on past the last pill, reading as an empty
+    extra crumb. The scrollers here are plumbing, not framed regions."""
+    scroller.set_shadow_type(Gtk.ShadowType.NONE)
+    child = scroller.get_child()
+    if isinstance(child, Gtk.Viewport):
+        child.set_shadow_type(Gtk.ShadowType.NONE)
+
+
+def display_name(name):
+    """What the user should READ for an item called `name`.
+
+    Applications live on disk as "Calculator.app" so the launcher can recognise
+    them, but ".app" is plumbing — it means nothing to the person reading the
+    Applications folder, which is the most-looked-at screen in the OS. Only the
+    display changes: the store still holds the real name, so search, sort,
+    rename and remove all keep working against the file that exists.
+
+    DISPLAY_NAMES handles the other case, a folder whose on-disk name is not
+    the one the product uses (".Trash" is the Trash everywhere else)."""
+    if name in DISPLAY_NAMES:
+        return DISPLAY_NAMES[name]
+    return name[:-4] if name.endswith(".app") else name
+
+
+def _unmount_esc(s):
+    """Undo the octal escaping /proc/mounts applies to space, tab and backslash.
+
+    A stick labelled "My Backup" is mounted at /media/My Backup and appears in
+    /proc/mounts as "My\\040Backup"; used raw, the path does not exist."""
+    if "\\" not in s:
+        return s
+    for esc, ch in (("\\040", " "), ("\\011", "\t"), ("\\012", "\n"),
+                    ("\\134", "\\")):
+        s = s.replace(esc, ch)
+    return s
+
+
+# Raw kernel names for a whole disk or a partition: sda1, nvme0n1p2, mmcblk0p1.
+_RAW_DEV_RE = re.compile(r"^(sd[a-z]+\d*|nvme\d+n\d+(p\d+)?|mmcblk\d+(p\d+)?"
+                         r"|vd[a-z]+\d*|hd[a-z]+\d*|sr\d+|loop\d+)$")
+
+
+def _volume_name(dev, mnt):
+    """What to call a mounted volume in the sidebar.
+
+    automount.sh names the mount point after the volume's own label, so the
+    basename is usually already the right, human answer ("PHOTOS", "My Backup").
+    This only has to catch what slips through: a volume with no label, or one
+    mounted by something other than automount, where the basename is a raw
+    kernel device name. "sda1" means nothing to the person holding the stick."""
+    name = os.path.basename(mnt) or os.path.basename(dev)
+    if _RAW_DEV_RE.match(name):
+        return "USB Drive" if name.startswith(("sd", "mmcblk")) else "Disk"
+    return name
+
+
+def icon_for(name):
+    """nbicons glyph name for a file/app `name`. Module-level so nbpicker reuses
+    the Finder's EXACT icon mapping (Finder._icon_for delegates here)."""
+    n = name.lower()
+    if n.endswith(".app"):
+        mod = APP_MODULES.get(name[:-4])
+        if mod:
+            return ICON_ALIAS.get(mod, mod)
+        return "packages"
+    # The glyph says what the file IS, not which app opens it: a film clip and a
+    # photo both open in the Media Viewer but must not share the photo icon, and
+    # every audio format must carry the music note (.flac / .ogg / .m4a were
+    # falling through to the generic document glyph beside an "Audio" Kind).
+    m = {".txt": "writer", ".md": "writer", ".writer": "writer",
+         ".png": "media", ".jpg": "media",
+         ".jpeg": "media", ".gif": "media", ".bmp": "media", ".webp": "media",
+         ".tiff": "media", ".tif": "media", ".ico": "media", ".svg": "media",
+         ".heic": "media", ".heif": "media", ".avif": "media",
+         ".mp4": "video", ".m4v": "video",
+         ".mkv": "video", ".mov": "video", ".webm": "video", ".avi": "video",
+         ".mp3": "music", ".wav": "music", ".ogg": "music", ".flac": "music",
+         ".m4a": "music",
+         ".gba": "cartridge", ".gbc": "cartridge", ".gb": "cartridge",
+         ".sgb": "cartridge",
+         ".pdf": "ebook", ".epub": "ebook"}
+    for ext, ic in m.items():
+        if n.endswith(ext):
+            return ic
+    return "toc"
+
+
+def kind_for(name, isdir):
+    """Human 'Kind' descriptor (module-level twin; Finder._kind_for delegates)."""
+    if isdir:
+        return "Folder"
+    if name.endswith(".app"):
+        return APP_KIND.get(name[:-4], "Application")
+    n = name.lower()
+    ek = {".txt": "Text", ".md": "Text", ".writer": "Document",
+          ".gba": "Game", ".gbc": "Game", ".gb": "Game", ".sgb": "Game",
+          ".png": "Image", ".jpg": "Image",
+          ".jpeg": "Image", ".gif": "Image", ".bmp": "Image", ".webp": "Image",
+          ".tiff": "Image", ".tif": "Image", ".ico": "Image", ".svg": "Image",
+          ".heic": "Image", ".heif": "Image", ".avif": "Image",
+          ".pdf": "Document", ".epub": "E-book",
+          ".mp3": "Audio", ".wav": "Audio", ".ogg": "Audio", ".flac": "Audio",
+          ".m4a": "Audio", ".mp4": "Video", ".m4v": "Video", ".mkv": "Video",
+          ".mov": "Video", ".webm": "Video", ".avi": "Video"}
+    for e, k in ek.items():
+        if n.endswith(e):
+            return k
+    base, dot, ext = name.rpartition(".")
+    return (ext.upper() + " File") if dot and ext and base else "Document"
+
+
+def list_dir(abspath, show_hidden=False):
+    """Shared disk walker used by BOTH the Finder and nbpicker. Returns records:
+        {name, is_dir, size_bytes, mtime, size, date, kind, icon}
+    Pure filesystem read (no GTK/pixbufs). Never raises. Mirrors Finder.load's
+    per-entry stat loop, including the musl %-d ValueError guard."""
+    out = []
+    try:
+        names = sorted(os.listdir(abspath))
+    except OSError:
+        return out
+    for nm in names:
+        if nm.startswith(".") and not show_hidden:
+            continue
+        p = os.path.join(abspath, nm)
+        isdir = os.path.isdir(p)
+        size_bytes, mtime = 0, 0.0
+        try:
+            st = os.stat(p)
+            mtime = st.st_mtime
+            size_bytes = 0 if isdir else st.st_size
+            size = size_text(nm, isdir, st.st_size)
+            date = time.strftime("%-d %b %Y", time.localtime(st.st_mtime))
+        except (OSError, ValueError):
+            size, date = "\u2014", "\u2014"
+        out.append({"name": nm, "is_dir": isdir, "size_bytes": size_bytes,
+                    "mtime": mtime, "size": size, "date": date,
+                    "kind": kind_for(nm, isdir),
+                    "icon": "folder" if isdir else icon_for(nm)})
+    return out
+
+
+class Crumbs(Gtk.Box):
+    """The path breadcrumb, rendered as a row of clickable pill buttons — one
+    per path component, the current folder shown active. Keeps a get_text()
+    that returns the classic "Home  ›  Documents" string so callers/tests can
+    still read the trail as plain text."""
+
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.get_style_context().add_class("crumbbar")
+        self._text = ""
+
+    def get_text(self):
+        return self._text
+
+    def _scroll_to_end(self):
+        """Keep the LAST pill — the folder you are in — in view when the trail
+        is wider than the space the toolbar can give it (see the scroller the
+        Finder wraps this in)."""
+        try:
+            sw = self.get_parent()
+            adj = sw.get_hadjustment() if sw is not None else None
+            if adj is not None:
+                adj.set_value(adj.get_upper() - adj.get_page_size())
+        except Exception:
+            pass
+        return False
+
+    def set_trail(self, root_label, trail, on_load):
+        # root_label: "Home"/"Computer"; trail: list of (label, target_rel) for
+        # each component after the root; on_load: callback(rel) to navigate.
+        for c in self.get_children():
+            self.remove(c)
+        self._text = root_label + "".join("  ›  " + lbl for lbl, _ in trail)
+        pills = [(root_label, "" if root_label == "Home" else "/")] + list(trail)
+        last = len(pills) - 1
+        for i, (label, target) in enumerate(pills):
+            btn = Gtk.Button(label=label)
+            btn.set_relief(Gtk.ReliefStyle.NONE)
+            ctx = btn.get_style_context()
+            ctx.add_class("crumb")
+            if i == last:
+                ctx.add_class("active")
+            btn.connect("clicked", lambda _w, t=target: on_load(t))
+            self.pack_start(btn, False, False, 0)
+        self.show_all()
+        # after the new pills have been sized, not before
+        GLib.idle_add(self._scroll_to_end)
+
+
+class Finder(Gtk.Window):
+    def __init__(self, start="Applications"):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.set_decorated(False)
+        # opaque visual before realise: an RGBA visual under a compositor
+        # shows black wherever the app has not painted (see nbapp).
+        nbapp.force_opaque_visual(self)              # we draw our own title bar
+        # Size the desktop home to fit the ACTUAL screen — real hardware panels
+        # are not 1920x1080; a fixed 1180x940 overflows a smaller display (and
+        # left no room for the widget column to its right). Fit within the screen,
+        # leaving space for the top panel and the widget column.
+        # nbapp.screen_size() returns the REAL primary-monitor pixel size (and
+        # falls back sanely on its own) — never assume a literal 1920x1080 here,
+        # which would overflow a smaller panel. Matches nbapp/widgets/installer.
+        _sw, _sh = nbapp.screen_size()
+        _wcol = min(620, max(320, _sw // 3)) + 80
+        self._home_size = (min(1180, max(560, _sw - _wcol)),
+                           min(940, _sh - 46 - 40))
+        self.set_default_size(*self._home_size)
+        # The window must never be dragged UNDER the panel: the panel is a
+        # strut-docked bar across the top, and a window pushed above y=PANEL_H
+        # hides its own title bar behind it — with no decorations, that leaves
+        # nothing to grab and the window is stranded. The WM does the dragging
+        # (begin_move_drag), so the clamp happens after the fact, on the
+        # configure event that reports the new position.
+        self.connect("configure-event", self._clamp_to_workarea)
+        # The Finder is a floating window in the design. matchbox maximizes
+        # normal toplevels (handheld lineage), so present it as a dialog in
+        # free-dialog mode: it floats at the size/position it asks for.
+        # matchbox pins dialogs above main clients and lets them keep
+        # focus, so the Finder HIDES itself while an app it launched is
+        # running (see launch_app) — the fullscreen app owns the screen,
+        # exactly like the design, and the Finder returns when it exits.
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        # Accept keyboard focus so the Search field can actually receive typed
+        # text (it was dead before). The old worry — the Finder starving the
+        # panel menus / app windows of focus — no longer applies: the panel
+        # menus are in-window pointer-driven (no Gtk.Menu grab), and a launched
+        # app maps on top and takes focus as the new top window (the Finder also
+        # hides while an app is active). Don't grab focus on map, though, so the
+        # desktop home doesn't yank focus the instant it (re)appears.
+        self.set_accept_focus(True)
+        self.set_focus_on_map(False)
+        panel_h = 46
+        # left band of the desktop home; the widget column sits to the right
+        self.move(40, panel_h + 16)
+        self.get_style_context().add_class("finder")
+        self.rel = start                       # current path relative to HOME
+        self._history = [start]                # visited rel paths (back/fwd)
+        self._hpos = 0                         # index of current spot in history
+        self._filter = ""                      # live search filter (substring)
+        self._wide = []                        # search hits from the rest of Home
+        self._wide_gen = 0                     # stamp: a stale scan can't land
+        self._wide_id = 0                      # pending debounce timeout
+        self._searching = False                # a whole-Home scan is running
+        self._wide_capped = False              # ...and it stopped at the cap
+        self._typeahead = ""                   # letters typed at the list
+        self._typeahead_id = 0                 # timeout that clears them
+        self._undo = None                      # {"label", "fn"} for Ctrl+Z
+        self._raw_entries = []                 # cached disk listing (unfiltered)
+        self._free = "—"                        # cached free-space status string
+        self._sb_rows = []                     # (rel, button) for sidebar places
+        self._clipboard = None                 # (abspath, is_cut) for copy/paste
+        self._show_hidden = False               # View: show dotfiles
+        self._view = "list"                     # "list" | "grid" view mode
+        self._sort_col = 1                      # store column the list sorts by
+        self._sort_desc = False                 # ...and in which direction
+        self._prefs_ready = False               # gate _save_prefs during build
+        self._load_prefs()                      # restore view mode + show hidden
+        self._load_removed_apps()               # apps hidden from Applications
+        self._ensure_places()                   # persona folders must exist
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.get_style_context().add_class("window-frame")
+        # A software compositor (xcompmgr) now backs this window in an off-screen
+        # pixmap, so the home is a movable/resizable floating window again (it was
+        # pinned to avoid the no-compositor expose storm). Wrap the frame in an
+        # overlay so a corner resize grip can float over its bottom-right corner;
+        # the title bar drives the move (see _begin_move).
+        root = Gtk.Overlay()
+        root.add(outer)
+        if _ACCEL:                       # resize only when the compositor backs us
+            root.add_overlay(self._resize_grip())
+        self.add(root)
+        # Name it the way nbapp names its overlay: the press-and-hold accent
+        # palette (and anything else that draws inside the window instead of in
+        # a second toplevel) looks for exactly this attribute. Naming files
+        # "Álbumes" or "Café" is the Finder's own reason to want it.
+        self._overlay = root
+        self._outer = outer   # so the collapse box can roll the body up
+
+        outer.pack_start(self._titlebar(), False, False, 0)
+        # The navbar is the widest thing in the window (nine tool buttons, the
+        # crumb bar, a search field and the view switcher), and as a plain Box
+        # its minimum width became the WINDOW's minimum width: 1280px, so the
+        # Finder could not be resized meaningfully smaller and would not fit a
+        # small panel at all. Putting it in a horizontal scroller lets the
+        # window shrink to whatever the content area needs, with the toolbar
+        # scrolling sideways instead of blocking the resize. EXTERNAL keeps the
+        # scrollbar itself out of the layout (no bar drawn across the toolbar);
+        # propagate_natural_width keeps the toolbar its normal size whenever
+        # there IS room, so nothing changes at a comfortable window size.
+        _navscroll = Gtk.ScrolledWindow()
+        _navscroll.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+        _navscroll.set_propagate_natural_width(True)
+        _navscroll.set_propagate_natural_height(True)
+        _navscroll.get_style_context().add_class("navbar")
+        _navscroll.add(self._navbar())
+        _unframe(_navscroll)
+        outer.pack_start(_navscroll, False, False, 0)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        body.pack_start(self._sidebar(), False, False, 0)
+
+        main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        # icon,name,size,date,relpath, is_dir, size_bytes, mtime, kind, gridicon
+        # (size_bytes/mtime are hidden sort keys so Size/Date sort numerically
+        # and folders group first; kind is the human "Kind" column, index 8;
+        # gridicon at index 9 is the same glyph rendered LARGE for the icon view,
+        # so list rows stay compact while the grid shows big, crisp icons — both
+        # views share one model, so search/sort/load keep them in step)
+        self.store = Gtk.ListStore(GObject.TYPE_OBJECT, str, str, str, str,
+                                   bool, GObject.TYPE_INT64, GObject.TYPE_DOUBLE,
+                                   str, GObject.TYPE_OBJECT)
+        self.tree = Gtk.TreeView(model=self.store)
+        self.tree.set_headers_visible(True)
+        self.tree.get_style_context().add_class("filelist")
+        self._add_columns()
+        self.tree.connect("row-activated", self._on_open)
+        # right-click a row -> context menu (Open / Rename / Duplicate / …)
+        self.tree.connect("button-press-event", self._on_tree_button)
+        sw = Gtk.ScrolledWindow()
+        sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sw.add(self.tree)
+        self._list_sw = sw
+        views = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        views.pack_start(sw, True, True, 0)
+        # Grid view: an icon grid over the SAME model, so search/sort/load all
+        # keep it in step. Hidden until the toolbar's grid toggle selects it.
+        self.iconview = Gtk.IconView(model=self.store)
+        # bind renderers via CellLayout (not set_pixbuf_column) because store
+        # col 0 is TYPE_OBJECT, which set_pixbuf_column rejects; the manual
+        # pixbuf renderer accepts it, exactly like the list view's Name column.
+        gpr = Gtk.CellRendererPixbuf()
+        self.iconview.pack_start(gpr, False)
+        # bind to store col 9 (the LARGE glyph), not col 0 (the 22px list glyph):
+        # the grid view must show big icons, and reusing col 0 is what made them
+        # render tiny on real hardware.
+        self.iconview.add_attribute(gpr, "pixbuf", 9)
+        gtr = Gtk.CellRendererText()
+        gtr.set_property("xalign", 0.5)
+        # CENTER is 1; 2 is RIGHT. The name under a grid icon was right-ragged
+        # (invisible while every name fitted one line, obvious once they wrap).
+        gtr.set_property("alignment", Pango.Alignment.CENTER)
+        # A file name has to WRAP under its icon. GtkIconView's item-width is a
+        # hint about the cell, NOT a wrap width: with no wrap-width the renderer
+        # lays the name out on one line at its natural width, and because every
+        # cell is as wide as the widest one, a single long name ("Holiday photos
+        # from the summer of...") collapsed the grid to one column AND pushed the
+        # window past the edge of a 1024px panel, where it could not be reached.
+        gtr.set_property("wrap-mode", Pango.WrapMode.WORD_CHAR)
+        gtr.set_property("wrap-width", GRID_LABEL_PX)
+        self.iconview.pack_start(gtr, True)
+        self.iconview.add_attribute(gtr, "text", 1)
+        self.iconview.set_cell_data_func(gtr, self._name_cell_data)
+        # keep the grid's text renderer so inline rename can drive it too; it is
+        # editable only for the duration of a rename (see _begin_rename).
+        gtr.connect("edited", self._on_name_edited)
+        gtr.connect("editing-canceled", lambda *_: self._end_rename_mode())
+        gtr.connect("editing-started", self._on_edit_started)
+        self._grid_text_renderer = gtr
+        # Cell geometry sized around the LARGE 96px glyph — wider than the icon
+        # so a name gets a comfortable two lines under it (the renderer wraps to
+        # GRID_LABEL_PX above); the spacing values give the icon-to-label gap and
+        # the inter-cell gutters (a roomy grid) that scale with the bigger icon
+        # without leaving cavernous whitespace around it.
+        self.iconview.set_item_width(GRID_CELL_PX)
+        self.iconview.set_item_padding(GRID_CELL_PAD)
+        self.iconview.set_spacing(12)         # gap between the icon and its label
+        self.iconview.set_row_spacing(22)
+        self.iconview.set_column_spacing(12)
+        self.iconview.set_margin(24)          # inset the whole grid from the edges
+        self.iconview.get_style_context().add_class("filegrid")
+        self.iconview.connect("item-activated", self._on_open_grid)
+        self.iconview.connect("button-press-event", self._on_grid_button)
+        grid_sw = Gtk.ScrolledWindow()
+        grid_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        grid_sw.add(self.iconview)
+        grid_sw.set_no_show_all(True)           # _apply_view controls visibility
+        self._grid_sw = grid_sw
+        views.pack_start(grid_sw, True, True, 0)
+        # An empty folder (or a search with no matches) shows a plain, centered
+        # message over the empty view instead of a disconcerting blank void.
+        overlay = Gtk.Overlay(); overlay.add(views)
+        self._empty_label = Gtk.Label()
+        self._empty_label.get_style_context().add_class("emptystate")
+        self._empty_label.set_halign(Gtk.Align.CENTER)
+        self._empty_label.set_valign(Gtk.Align.CENTER)
+        self._empty_label.set_justify(Gtk.Justification.CENTER)
+        self._empty_label.set_line_wrap(True)
+        self._empty_label.set_max_width_chars(30)
+        self._empty_label.set_no_show_all(True)  # shown only when the view is empty
+        overlay.add_overlay(self._empty_label)
+        try:
+            overlay.set_overlay_pass_through(self._empty_label, True)
+        except (AttributeError, TypeError):
+            pass
+        main.pack_start(overlay, True, True, 0)
+        self.status = Gtk.Label(xalign=0)
+        self.status.get_style_context().add_class("statusbar")
+        main.pack_start(self.status, False, False, 0)
+        body.pack_start(main, True, True, 0)
+        outer.pack_start(body, True, True, 0)
+
+        self._set_view(self._view)   # reflect the restored view mode on the chrome
+        self.load(self.rel)
+
+        # Press-and-hold accent palette, connected BEFORE the Finder's own key
+        # handler so Esc dismisses an open palette instead of the rename box
+        # underneath it. Guarded: a load failure must never break the Finder.
+        try:
+            import nbdiacritics
+            self._diacritics = nbdiacritics.DiacriticsPicker(self)
+        except Exception:
+            self._diacritics = None
+
+        # F2 renames the selected item (window-level, so it works whichever
+        # child — list, grid, or the search box — currently holds focus).
+        self.connect("key-press-event", self._on_key_press)
+
+        # matchbox occasionally leaves a freshly-mapped dialog's frame
+        # unmapped when it appears before any input/restack event (its
+        # delayed-mapping path never completes). If we're not viewable
+        # shortly after startup, remap: the new MapRequest makes matchbox
+        # re-activate us, which completes the mapping. (A blank-but-viewable
+        # window is the separate TCG repaint artifact — not reliably fixable
+        # in-process; on real hardware the first paint lands normally.)
+        GLib.timeout_add(400, self._nudge)
+        GLib.timeout_add(1200, self._nudge)
+        GLib.timeout_add(2000, self._ensure_mapped)
+        GLib.timeout_add(6000, self._ensure_mapped)
+        # Hide the Finder while a launched app owns the screen (the flag file is
+        # written by launch_app AND the panel/shell), reappearing when it exits.
+        # This transition is rare and event-driven, so watch the flag with an
+        # inotify-backed GLib file monitor rather than stat-polling it ~2.5x a
+        # second for the whole session (the old 400ms poll). monitor_file
+        # reports CREATED/DELETED even for a path that doesn't exist yet.
+        self._app_flag_monitor = None
+        try:
+            _flag = Gio.File.new_for_path("/tmp/nb-app-active")
+            self._app_flag_monitor = _flag.monitor_file(
+                Gio.FileMonitorFlags.NONE, None)
+            self._app_flag_monitor.connect("changed", self._on_app_flag_changed)
+        except Exception:
+            # No file-monitor backend available: fall back to an occasional
+            # poll. The flag flips only when an app opens/closes, so a slow
+            # interval is plenty (vs. the old 400ms wake).
+            GLib.timeout_add_seconds(3, self._poll_app_flag)
+        # Reconcile once shortly after start too: covers a flag already present
+        # when the Finder (re)launches, which has no future monitor event.
+        GLib.timeout_add(500, self._reconcile_app_flag_once)
+        self._prefs_ready = True   # user-driven changes may now persist to disk
+
+    def _sync_app_flag(self):
+        # Reconcile visibility with the app-active flag: hide while a launched
+        # app owns the screen, reappear when it exits.
+        try:
+            active = os.path.exists("/tmp/nb-app-active")
+            if active and self.get_visible():
+                self.hide()
+            elif not active and not self.get_visible():
+                self.show_all()
+        except Exception:
+            pass
+
+    def _on_app_flag_changed(self, *_):
+        # GLib file-monitor callback: the flag file was created or removed.
+        self._sync_app_flag()
+
+    def _reconcile_app_flag_once(self):
+        self._sync_app_flag()
+        return False
+
+    def _poll_app_flag(self):
+        # Fallback path used only when no file monitor is available; repeats.
+        self._sync_app_flag()
+        return True
+
+    def _ensure_mapped(self):
+        # Don't force-remap on top of a freshly-launched app: if the app-active
+        # flag exists an app owns the screen, so stay hidden (mirrors
+        # _poll_app_flag) rather than flashing the Finder over the app's window.
+        try:
+            if os.path.exists("/tmp/nb-app-active"):
+                return False
+        except Exception:
+            pass
+        win = self.get_window()
+        if win is not None and not win.is_viewable():
+            self.hide()
+            self.show_all()
+        return False
+
+    def _ensure_places(self):
+        # create the sidebar's persona folders so none of the Places rows is a
+        # dead link (navigating to a missing folder would show an empty list).
+        for sub in PERSONA_DIRS:
+            try:
+                os.makedirs(os.path.join(HOME, sub), exist_ok=True)
+            except OSError:
+                pass
+
+    # ---- preferences (view mode + show-hidden persist across launches) ----
+    def _prefs_path(self):
+        return os.path.join(HOME, ".config", "notebook", "finder.json")
+
+    def _load_prefs(self):
+        # Restore the view mode and Show-hidden toggle from the last session so
+        # a chosen Grid view (or shown dotfiles) survives a close/reopen.
+        # Guarded end-to-end: a missing or garbage file just leaves the defaults.
+        try:
+            import json
+            with open(self._prefs_path()) as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                return
+            if data.get("view") in ("list", "grid"):
+                self._view = data["view"]
+            if isinstance(data.get("show_hidden"), bool):
+                self._show_hidden = data["show_hidden"]
+            # Sort order too: someone who works newest-first should not have to
+            # say so again in every folder, at every launch. Only the four real
+            # sort keys are accepted, so a hand-edited file can't wedge the list.
+            if data.get("sort") in SORT_COLUMNS:
+                self._sort_col = data["sort"]
+            if isinstance(data.get("sort_desc"), bool):
+                self._sort_desc = data["sort_desc"]
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save_prefs(self):
+        # Persist view mode + show-hidden. Never runs during construction
+        # (gated by _prefs_ready) and never raises into the caller.
+        if not getattr(self, "_prefs_ready", False):
+            return
+        try:
+            import json
+            path = self._prefs_path()
+            nbapp.atomic_write_json(path, {"view": self._view,
+                                           "show_hidden": self._show_hidden,
+                                           "sort": self._sort_col,
+                                           "sort_desc": self._sort_desc})
+        except (OSError, TypeError, ValueError):
+            pass
+
+    # ---- removed applications (hidden from the Applications listing) ----
+    # The user can hide an app from the Applications view ("Remove from
+    # Applications"); the choice PERSISTS under $NB_HOME/.config/notebook so the
+    # app stays gone across reboots, and "Restore removed apps…" brings it back.
+    # This never touches the .app file on disk — only which apps the listing
+    # shows — so a restore is always possible and nothing is ever destroyed.
+    def _removed_apps_path(self):
+        return os.path.join(HOME, ".config", "notebook", "removed_apps.json")
+
+    def _load_removed_apps(self):
+        self._removed_apps = set()
+        try:
+            import json
+            with open(self._removed_apps_path()) as fh:
+                data = json.load(fh)
+            if isinstance(data, list):
+                self._removed_apps = {str(x) for x in data}
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save_removed_apps(self):
+        try:
+            import json
+            path = self._removed_apps_path()
+            nbapp.atomic_write_json(path, sorted(self._removed_apps))
+        except (OSError, TypeError, ValueError):
+            pass
+
+    # ---- chrome ----
+    def _titlebar(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        bar.get_style_context().add_class("titlebar")
+        # The three window controls were blank squares distinguished only by a
+        # tooltip, so nothing on screen said which was which. Each now carries
+        # its classic mark, DRAWN with cairo rather than typed: the shipped
+        # Nimbus Sans has no glyph for these and a missing one renders as a tofu
+        # box on real hardware.
+        def _winmark(icon):
+            img = Gtk.Image()
+            try:
+                img.set_from_pixbuf(nbicons.pixbuf(icon, 11, "#4A463E"))
+            except Exception:
+                pass
+            return img
+
+        close = Gtk.Button(); close.get_style_context().add_class("winbox")
+        close.set_valign(Gtk.Align.CENTER)     # keep it a 15px square
+        close.set_tooltip_text(_t("Close"))
+        close.add(_winmark("wclose"))
+        close.connect("clicked", lambda *_: self.close())
+        bar.pack_start(close, False, False, 0)
+        self.title = Gtk.Label(label=_t("APPLICATIONS"))
+        self.title.get_style_context().add_class("wintitle")
+        bar.set_center_widget(self.title)
+        rbox = Gtk.Box(spacing=8)
+        # classic Mac window controls — were created but wired to nothing.
+        zoom = Gtk.Button(); zoom.get_style_context().add_class("winbox")
+        zoom.set_valign(Gtk.Align.CENTER); zoom.set_tooltip_text(_t("Zoom"))
+        zoom.add(_winmark("wzoom"))
+        zoom.connect("clicked", self._toggle_zoom)
+        rbox.pack_start(zoom, False, False, 0)
+        coll = Gtk.Button(); coll.get_style_context().add_class("winbox")
+        coll.set_valign(Gtk.Align.CENTER); coll.set_tooltip_text(_t("Collapse"))
+        coll.add(_winmark("wshade"))
+        coll.connect("clicked", self._toggle_collapse)
+        rbox.pack_start(coll, False, False, 0)
+        bar.pack_end(rbox, False, False, 0)
+        # drag the window by the title bar
+        eb = Gtk.EventBox(); eb.add(bar)
+        eb.connect("button-press-event", self._begin_move)
+        return eb
+
+    # Top panel height; a window's top edge may not go above this.
+    PANEL_H = 46
+
+    def _clamp_to_workarea(self, _w, ev):
+        """Keep the window inside the work area below the panel.
+
+        Only ever moves the window DOWN/back into view, and only when it is
+        actually out of bounds, so a normal drag is untouched. Guarded against
+        recursion: move() re-fires configure-event."""
+        if getattr(self, "_clamping", False):
+            return False
+        try:
+            x, y = ev.x, ev.y
+            sw, sh = nbapp.screen_size()
+            nx, ny = x, y
+            if ny < self.PANEL_H:
+                ny = self.PANEL_H
+            # keep a grabbable strip on screen horizontally + at the bottom
+            if sw and nx > sw - 120:
+                nx = sw - 120
+            if sw and nx < -(max(0, ev.width - 120)):
+                nx = -(max(0, ev.width - 120))
+            if sh and ny > sh - 60:
+                ny = sh - 60
+            if (nx, ny) != (x, y):
+                self._clamping = True
+                self.move(int(nx), int(ny))
+                GLib.idle_add(self._end_clamp)
+        except Exception:
+            self._clamping = False
+        return False
+
+    def _end_clamp(self):
+        self._clamping = False
+        return False
+
+    def _begin_move(self, widget, event):
+        # Interactive window move. Earlier this was disabled because, with no
+        # compositor, a live drag re-exposed the whole window (and everything
+        # under it) on every motion event — an expose storm that pinned the CPU
+        # on the GPU-less stack. xcompmgr now backs the window in an off-screen
+        # pixmap, so we hand the drag to the window manager via
+        # _NET_WM_MOVERESIZE (begin_move_drag): the WM/compositor reposition the
+        # backing pixmap directly, with ZERO per-motion Python work, so dragging
+        # stays smooth on the CPU-only stack. A double-click still zooms.
+        if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
+            self._toggle_zoom()
+            return True
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1 and _ACCEL:
+            self.begin_move_drag(event.button, int(event.x_root),
+                                 int(event.y_root), event.time)
+            return True
+        return False
+
+    def _resize_grip(self):
+        # A small opaque tab floated over the window's bottom-right corner that
+        # starts a WM-driven interactive resize (begin_resize_drag), the resize
+        # analogue of the title-bar move. Like the move, the compositor backs the
+        # window so the resize repaints cheaply. The EventBox has its own window,
+        # so it MUST paint an opaque background (no-compositor black-safety) —
+        # the .resizegrip class fills it from the palette.
+        grip = Gtk.EventBox()
+        grip.set_halign(Gtk.Align.END)
+        grip.set_valign(Gtk.Align.END)
+        grip.set_size_request(16, 16)
+        grip.get_style_context().add_class("resizegrip")
+        grip.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        grip.connect("button-press-event", self._begin_resize)
+        grip.connect("realize", self._set_resize_cursor)
+        return grip
+
+    def _begin_resize(self, _widget, event):
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1 and _ACCEL:
+            self.begin_resize_drag(Gdk.WindowEdge.SOUTH_EAST, event.button,
+                                   int(event.x_root), int(event.y_root),
+                                   event.time)
+            return True
+        return False
+
+    def _set_resize_cursor(self, widget):
+        # Give the grip the diagonal-resize pointer so it reads as a handle.
+        try:
+            win = widget.get_window()
+            if win is not None:
+                win.set_cursor(Gdk.Cursor.new_for_display(
+                    widget.get_display(),
+                    Gdk.CursorType.BOTTOM_RIGHT_CORNER))
+        except Exception:
+            pass
+
+    def _toggle_zoom(self, *_):
+        # Zoom box: toggle between the default window size and maximized.
+        if getattr(self, "_zoomed", False):
+            self.unmaximize(); self._zoomed = False
+        else:
+            self.maximize(); self._zoomed = True
+
+    def _toggle_collapse(self, *_):
+        # Collapse box (WindowShade): roll the window up to just its title bar;
+        # click again to roll the body back down at its previous size.
+        self._collapsed = not getattr(self, "_collapsed", False)
+        if self._collapsed:
+            self._pre_collapse_size = self.get_size()   # remember to restore
+        for child in self._outer.get_children()[1:]:    # all but the title bar
+            child.set_visible(not self._collapsed)
+        if self._collapsed:
+            # Roll up (window-shade): keep the CURRENT width and let only the
+            # height clamp to the title-bar minimum. resize(1, 1) also clamped
+            # the WIDTH to the collapsed content minimum (~220px), snapping the
+            # window narrow instead of just rolling its body up.
+            self.resize(self._pre_collapse_size[0], 1)
+        else:
+            w, h = getattr(self, "_pre_collapse_size",
+                           getattr(self, "_home_size", (1180, 940)))
+            self.resize(w, h)
+
+    def _icon_btn(self, name, cb, sensitive=True):
+        b = Gtk.Button(); b.get_style_context().add_class("navbtn")
+        img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(name, 18,
+              "#3A362E" if sensitive else "#B8B3A6"))
+        # Show the glyph HERE, not via the window's show_all: a caller that
+        # sets no_show_all on the button (the Trash button, which only appears
+        # outside the Trash) then reveals it with set_visible(True), and
+        # set_visible does not recurse into children — so the icon stayed
+        # unshown and the toolbar carried a blank white square.
+        img.show()
+        b.add(img); b.set_sensitive(sensitive)
+        b._img = img                           # handle so we can recolor later
+        if cb:
+            b.connect("clicked", cb)
+        return b
+
+    def _set_nav(self, btn, name, on):
+        btn.set_sensitive(on)
+        btn._img.set_from_pixbuf(
+            nbicons.pixbuf(name, 18, "#3A362E" if on else "#B8B3A6"))
+
+    def _navbar(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        bar.get_style_context().add_class("navbar")
+        self.back_btn = self._icon_btn("back", lambda *_: self.go_back(), False)
+        self.fwd_btn = self._icon_btn("fwd", lambda *_: self.go_forward(), False)
+        bar.pack_start(self.back_btn, False, False, 0)
+        bar.pack_start(self.fwd_btn, False, False, 0)
+        bar.pack_start(self._icon_btn("up", lambda *_: self.go_up()), False, False, 0)
+        # file operations (pointer-driven; no keyboard focus). A thin divider
+        # separates navigation from actions.
+        sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        sep.get_style_context().add_class("navsep")
+        bar.pack_start(sep, False, False, 6)
+        # Copy / Cut / Paste are NOT on the toolbar: three more buttons pushed the
+        # bar past the window width, and all three are already available where a
+        # file operation is actually chosen — the right-click context menu (see
+        # _popup_context_menu) and the Edit menu. What stays here is what has no
+        # other home: New Folder and Rename.
+        # Kept as attributes because both are meaningless inside the Trash (a
+        # new folder there is nonsense, and renaming a trashed item breaks the
+        # name-keyed Put Back), so _update_nav hides them there.
+        self.folder_btns = []
+        for label, cb in (("New Folder", self._new_folder),
+                          ("Rename", self._begin_rename)):
+            b = Gtk.Button(label=label)
+            b.get_style_context().add_class("toolbtn")
+            b.set_no_show_all(True)
+            b.set_visible(True)
+            b.connect("clicked", lambda _w, fn=cb: fn())
+            bar.pack_start(b, False, False, 0)
+            self.folder_btns.append(b)
+        # paste_btn was the toolbar's Paste; keep the attribute so the
+        # clipboard-state updates that target it stay harmless no-ops.
+        self.paste_btn = None
+        hidden = Gtk.ToggleButton(label=_t("Hidden"))
+        hidden.get_style_context().add_class("toolbtn")
+        hidden.set_tooltip_text(_t("Show hidden files"))
+        hidden.set_active(self._show_hidden)   # reflect the restored preference
+        hidden.connect("toggled", self._on_toggle_hidden)
+        bar.pack_start(hidden, False, False, 0)
+        # Overflow / actions menu. Its entries (Remove from Applications, Restore
+        # removed apps) act on the Applications view, so the button lives with
+        # the left-hand tools; the menu items dim themselves when they don't
+        # apply (see _popup_actions_menu).
+        self.actions_btn = Gtk.Button(label=_t("Actions"))
+        self.actions_btn.get_style_context().add_class("toolbtn")
+        self.actions_btn.set_tooltip_text(_t("More actions"))
+        self.actions_btn.connect("clicked", self._popup_actions_menu)
+        bar.pack_start(self.actions_btn, False, False, 0)
+        self.crumb = Crumbs()
+        # The crumb bar is the flexible spacer between the left tools and the
+        # right cluster (mockup: flex:1 after the breadcrumb). Packing it to
+        # EXPAND — instead of a separate fixed gap widget — means on a narrow
+        # panel it yields its slack FIRST, so the search field and the view
+        # toggle can never be pushed off the right edge (clipped-elements fix);
+        # on a wide panel the pills sit left with empty space trailing, exactly
+        # as the mockup. Its children stay left-packed, so nothing stretches.
+        # A row of pills has no minimum of its own, though: a deep path
+        # ("Home > Documents > Projects > Archive 2025") made the trail alone
+        # ~330px wide, which pushed the search field and view switcher off the
+        # right edge of a 1024px panel where nothing could reach them. The same
+        # horizontal scroller the whole toolbar uses solves it one level down —
+        # EXTERNAL draws no scrollbar, and set_trail scrolls to the end so the
+        # folder you are actually in stays the pill you can see.
+        self._crumbscroll = Gtk.ScrolledWindow()
+        self._crumbscroll.set_policy(Gtk.PolicyType.EXTERNAL,
+                                     Gtk.PolicyType.NEVER)
+        self._crumbscroll.set_propagate_natural_width(True)
+        self._crumbscroll.set_propagate_natural_height(True)
+        self._crumbscroll.get_style_context().add_class("crumbscroll")
+        self._crumbscroll.add(self.crumb)
+        _unframe(self._crumbscroll)
+        bar.pack_start(self._crumbscroll, True, True, 10)
+        # right cluster: search, plus context-sensitive Trash actions. The
+        # window takes no keyboard focus (matchbox), so these are pointer-only.
+        search = Gtk.SearchEntry(); search.set_placeholder_text(_t("Search"))
+        search.set_size_request(150, -1)
+        self._search_h = search.connect("search-changed", self._on_search)
+        # Esc while searching clears the query and returns to the full listing.
+        search.connect("stop-search", lambda *_: search.set_text(""))
+        # Enter opens the top result without ever leaving the keyboard, which
+        # is the whole point of knowing the name: type "calc", press Enter,
+        # Calculator opens — from whatever folder you happened to be in.
+        search.connect("activate", self._on_search_activate)
+        self.search = search
+        # .toolbtn, not .navbtn: navbtn is the padding-free 32px square used for
+        # the icon-only arrows, so these two text buttons had their labels
+        # pressed right up against their borders.
+        self.empty_btn = Gtk.Button(label=_t("Empty Trash"))
+        self.empty_btn.get_style_context().add_class("toolbtn")
+        self.empty_btn.set_no_show_all(True)
+        self.empty_btn.connect("clicked", lambda *_: self._confirm_empty_trash())
+        self.restore_btn = Gtk.Button(label=_t("Put Back"))
+        self.restore_btn.get_style_context().add_class("toolbtn")
+        self.restore_btn.set_no_show_all(True)
+        self.restore_btn.set_tooltip_text(_t("Restore selected item to where it came from"))
+        self.restore_btn.connect("clicked", lambda *_: self._restore_selected())
+        self.trash_btn = self._icon_btn("trash", lambda *_: self._trash_selected())
+        self.trash_btn.set_tooltip_text(_t("Move selected item to Trash"))
+        self.trash_btn.set_no_show_all(True)
+        bar.pack_end(self._viewswitch(), False, False, 0)  # rightmost
+        bar.pack_end(search, False, False, 0)          # left of view switch
+        bar.pack_end(self.trash_btn, False, False, 0)  # left of search
+        bar.pack_end(self.empty_btn, False, False, 0)
+        bar.pack_end(self.restore_btn, False, False, 0)
+        # (no separate expanding gap: the crumb bar above is the flex spacer)
+        return bar
+
+    def _viewswitch(self):
+        # list / grid segmented toggle. List is the design's primary view; the
+        # active button takes a darker-beige fill (the design language reserves
+        # red for row/place selection + alerts, and never uses black chrome).
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        box.get_style_context().add_class("viewswitch")
+        self.view_list_btn = Gtk.Button()
+        self.view_list_btn.get_style_context().add_class("viewbtn")
+        self.view_list_btn.set_tooltip_text(_t("List view"))
+        li = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("viewlist", 16, "#1A1916"))
+        self.view_list_btn._img = li
+        self.view_list_btn.add(li)
+        self.view_list_btn.get_style_context().add_class("active")  # default
+        self.view_list_btn.connect("clicked", lambda *_: self._set_view("list"))
+        self.view_grid_btn = Gtk.Button()
+        self.view_grid_btn.get_style_context().add_class("viewbtn")
+        self.view_grid_btn.set_tooltip_text(_t("Grid view"))
+        ge = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("viewgrid", 16, "#3A362E"))
+        self.view_grid_btn._img = ge
+        self.view_grid_btn.add(ge)
+        self.view_grid_btn.connect("clicked", lambda *_: self._set_view("grid"))
+        box.pack_start(self.view_list_btn, False, False, 0)
+        box.pack_start(self.view_grid_btn, False, False, 0)
+        return box
+
+    def _set_view(self, mode):
+        if mode not in ("list", "grid"):
+            mode = "list"
+        self._view = mode
+        for btn, name, on in (
+                (self.view_list_btn, "viewlist", mode == "list"),
+                (self.view_grid_btn, "viewgrid", mode == "grid")):
+            ctx = btn.get_style_context()
+            (ctx.add_class if on else ctx.remove_class)("active")
+            btn._img.set_from_pixbuf(
+                nbicons.pixbuf(name, 16, "#1A1916" if on else "#3A362E"))
+        self._apply_view()
+        self._save_prefs()
+
+    def _apply_view(self):
+        # show the active view's scroller, hide the other. Called on every
+        # window show_all too, so a launched-app round trip can't reveal both.
+        if getattr(self, "_view", "list") == "grid":
+            self._list_sw.hide()
+            self._grid_sw.set_no_show_all(False)
+            self._grid_sw.show_all()
+        else:
+            self._grid_sw.hide()
+            self._list_sw.show_all()
+
+    def show_all(self):
+        super().show_all()
+        self._apply_view()
+
+    def _sidebar(self):
+        sb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        sb.get_style_context().add_class("sidebar")
+        # a smaller floor so the window can be resized down; the sidebar
+        # still lays out at its natural width whenever there is room.
+        sb.set_size_request(190, -1)
+        self._sb = sb
+        self._mounts_sig = None
+        self._fill_sidebar()
+        # re-read mounted volumes periodically so a USB stick inserted after
+        # launch appears in Devices without restarting the Finder.
+        GLib.timeout_add_seconds(5, self._poll_devices)
+        return sb
+
+    def _fill_sidebar(self):
+        for c in self._sb.get_children():
+            self._sb.remove(c)
+        self._sb_rows = []                     # rebuilt below by _sb_row
+        devs = self._devices()
+        self._mounts_sig = tuple(d[2] for d in devs)
+        self._sb.pack_start(self._sb_header("Devices"), False, False, 0)
+        for label, icon, rel in devs:
+            # removable volumes (mounted under /media) get an Eject button so the
+            # user can flush + unmount BEFORE pulling the stick — otherwise a
+            # just-copied file can be lost from the write cache.
+            if isinstance(rel, str) and rel.startswith("/media/"):
+                hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+                hb.pack_start(self._sb_row(label, icon, rel), True, True, 0)
+                ej = Gtk.Button()
+                ej.set_relief(Gtk.ReliefStyle.NONE)
+                ej.get_style_context().add_class("sbeject")
+                ej.set_tooltip_text(_t("Eject — flush and safely remove"))
+                ej.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("eject", 13, "#6E695E")))
+                ej.connect("clicked", lambda _b, m=rel: self._eject(m))
+                hb.pack_start(ej, False, False, 6)
+                self._sb.pack_start(hb, False, False, 0)
+            else:
+                self._sb.pack_start(self._sb_row(label, icon, rel), False, False, 0)
+        self._sb.pack_start(self._sb_header("Places"), False, False, 0)
+        for label, icon, rel in PLACES:
+            self._sb.pack_start(self._sb_row(label, icon, rel), False, False, 0)
+        self._sb.show_all()
+
+    def _eject(self, mnt):
+        # Leave the volume first if we're viewing it (an open cwd makes it busy),
+        # then sync (flush the write cache to the device) and unmount. sync is the
+        # belt to the mount's -o sync suspenders: it also flushes any driver-side
+        # buffering (exfat/ntfs) the mount option doesn't cover.
+        if self.abspath(self.rel).startswith(mnt):
+            self.load("")
+        try:
+            subprocess.run(["sync"], timeout=30)
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(["umount", mnt], capture_output=True, timeout=15)
+            ok = (r.returncode == 0)
+            err = (r.stderr or b"").decode(errors="replace").strip()
+        except Exception as e:
+            ok, err = False, str(e)
+        if ok:
+            self._flash_status(_t("Safe to remove the drive"))
+        else:
+            self._flash_status(_t("Eject failed — %s")
+                               % (err or _t("the drive is in use")))
+        self._fill_sidebar()
+
+    def _poll_devices(self):
+        try:
+            if tuple(d[2] for d in self._devices()) != self._mounts_sig:
+                self._fill_sidebar()
+        except Exception:
+            pass
+        return True
+
+    def _devices(self):
+        # "Local Disk" is the root filesystem; "Applications" reaches the app
+        # launcher (the Finder's default view) now that it is no longer a
+        # Places row. Append any real mounted volumes (USB sticks, extra disks)
+        # read live from /proc/mounts.
+        devs = [("Local Disk", "disk", "/"),
+                ("Applications", "packages", "Applications")]
+        real_fs = {"ext2", "ext3", "ext4", "vfat", "exfat", "ntfs", "ntfs3",
+                   "iso9660", "btrfs", "xfs", "f2fs", "msdos", "udf"}
+        try:
+            with open("/proc/mounts") as fh:
+                for ln in fh:
+                    p = ln.split()
+                    if len(p) < 3:
+                        continue
+                    dev, mnt, fstype = _unmount_esc(p[0]), _unmount_esc(p[1]), p[2]
+                    if fstype not in real_fs or mnt == "/":
+                        continue
+                    if mnt.startswith(("/proc", "/sys", "/dev", "/run", "/tmp")):
+                        continue
+                    devs.append((_volume_name(dev, mnt), "disk", mnt))
+        except OSError:
+            pass
+        return devs
+
+    def _sb_header(self, text):
+        l = Gtk.Label(label=text.upper(), xalign=0)
+        l.get_style_context().add_class("sbheader")
+        return l
+
+    def _sb_row(self, label, icon, rel):
+        row = Gtk.Button()
+        row.set_relief(Gtk.ReliefStyle.NONE)
+        row.get_style_context().add_class("sbrow")
+        if rel == self.rel:
+            row.get_style_context().add_class("selected")
+        box = Gtk.Box(spacing=12)
+        box.pack_start(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 18, "#3A362E")), False, False, 0)
+        box.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
+        row.add(box)
+        if rel is not None:
+            self._sb_rows.append((rel, row))
+            row.connect("clicked", lambda *_: self.load(rel))
+        return row
+
+    def _update_sidebar(self):
+        # keep the highlighted place in step with the folder actually shown
+        for rel, row in self._sb_rows:
+            ctx = row.get_style_context()
+            if rel == self.rel:
+                ctx.add_class("selected")
+            else:
+                ctx.remove_class("selected")
+
+    def _add_columns(self):
+        # name column: icon + text
+        col = Gtk.TreeViewColumn("Name")
+        icon = Gtk.CellRendererPixbuf(); icon.set_property("xpad", 6)
+        icon.set_property("ypad", 5)
+        txt = Gtk.CellRendererText()
+        txt.set_property("ypad", 5)
+        # Compress an over-long name to "…" when the window is narrower than it,
+        # instead of clipping it or forcing a horizontal scroll. Needs the column
+        # in FIXED sizing so it may shrink below the widest name (GROW_ONLY, the
+        # default, never shrinks) while still expanding to fill spare width.
+        txt.set_property("ellipsize", Pango.EllipsizeMode.END)
+        col.pack_start(icon, False); col.add_attribute(icon, "pixbuf", 0)
+        col.pack_start(txt, True); col.add_attribute(txt, "text", 1)
+        col.set_cell_data_func(txt, self._name_cell_data)
+        col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+        col.set_fixed_width(160)
+        col.set_min_width(80)
+        col.set_expand(True)
+        col.set_resizable(True)
+        col.set_sort_column_id(1)                  # Name -> sort by name
+        self.tree.append_column(col)
+        # inline rename: the Name cell becomes an editable entry on demand (F2 /
+        # Rename), commits on Enter. Kept non-editable otherwise so a click just
+        # selects (double-click still opens); _begin_rename flips it on.
+        txt.connect("edited", self._on_name_edited)
+        txt.connect("editing-canceled", lambda *_: self._end_rename_mode())
+        txt.connect("editing-started", self._on_edit_started)
+        self._name_renderer = txt
+        self._name_column = col
+        # Kind column (human descriptor, store index 8), between Name and Size
+        kr = Gtk.CellRendererText()
+        kr.set_property("ypad", 5)
+        kc = Gtk.TreeViewColumn("Kind", kr, text=8)
+        kc.set_min_width(90)
+        kc.set_sort_column_id(8)
+        self.tree.append_column(kc)
+        # Size sorts by the hidden byte-count (6); Date by hidden mtime (7).
+        for i, (title, align, sortid) in enumerate(
+                [("Size", 1.0, 6), ("Date Modified", 0.0, 7)], start=2):
+            r = Gtk.CellRendererText(); r.set_property("xalign", align)
+            r.set_property("ypad", 5)
+            if title == "Size":
+                # tabular figures: the mono family lines up file sizes on the
+                # decimal (design language reserves mono for counters).
+                r.set_property("family", "Liberation Mono")
+                r.set_property("family-set", True)
+            c = Gtk.TreeViewColumn(title, r, text=i)
+            c.set_min_width(80)
+            c.set_sort_column_id(sortid)
+            self.tree.append_column(c)
+        # folders group before files for every sort key. The starting order is
+        # the one the user last chose (persisted): sorting a folder newest-first
+        # is a standing preference, not something to re-ask on every launch.
+        for sid in SORT_COLUMNS:
+            self.store.set_sort_func(sid, self._sort_dirs_first, sid)
+        self.store.set_sort_column_id(
+            self._sort_col,
+            Gtk.SortType.DESCENDING if self._sort_desc
+            else Gtk.SortType.ASCENDING)
+        # GTK draws a heavy dark sort wedge on the active column header. It is a
+        # column gadget, not a themed CSS node, so it can't be toned down to
+        # match the quiet papertone heading (the header TEXT restyles, the wedge
+        # does not) and read as a clunky black arrow stranded in the wide Name
+        # column. Suppress it: click-to-sort still works, the list just reorders.
+        # Re-hidden after every sort change because GTK re-enables the indicator
+        # on the column it sorts; the hide is deferred to idle so it lands after
+        # GTK's own toggle rather than being overwritten by it.
+        self.store.connect("sort-column-changed", self._on_sort_changed)
+        self._hide_sort_indicators()
+
+    def _on_sort_changed(self, *_):
+        GLib.idle_add(self._hide_sort_indicators)
+        col, order = self.store.get_sort_column_id()
+        if col in SORT_COLUMNS:
+            self._sort_col = col
+            self._sort_desc = (order == Gtk.SortType.DESCENDING)
+            self._save_prefs()
+
+    def _hide_sort_indicators(self):
+        for c in self.tree.get_columns():
+            c.set_sort_indicator(False)
+        return False
+
+    def _sort_dirs_first(self, model, a, b, col):
+        da, db = model.get_value(a, 5), model.get_value(b, 5)  # is_dir
+        if da != db:
+            first = -1 if da else 1
+            # GTK negates the whole comparator result for a DESCENDING sort,
+            # which would flip folders to the bottom. Pre-negate so folders stay
+            # grouped first in both directions.
+            _c, order = model.get_sort_column_id()
+            if order == Gtk.SortType.DESCENDING:
+                first = -first
+            return first
+        va, vb = model.get_value(a, col), model.get_value(b, col)
+        if col == 1:                               # name: case-insensitive
+            va, vb = va.lower(), vb.lower()
+        return (va > vb) - (va < vb)
+
+    # ---- data ----
+    def abspath(self, rel):
+        # rel is either HOME-relative (e.g. "Documents") or, for whole-disk
+        # browsing, an absolute path (starts with "/").
+        if not rel:
+            return HOME
+        if rel.startswith("/"):
+            return os.path.normpath(rel)
+        return os.path.normpath(os.path.join(HOME, rel))
+
+    def load(self, rel, record=True, keep_filter=False):
+        # a real navigation clears any active search; a search-driven reload
+        # keeps it (keep_filter=True).
+        if not keep_filter and self._filter:
+            self._filter = ""
+            self.search.handler_block(self._search_h)
+            self.search.set_text("")
+            self.search.handler_unblock(self._search_h)
+        if not self._filter:
+            # no query, no results from elsewhere — and stop any walk of Home
+            # that is still running for the query we just dropped.
+            self._wide = []
+            self._schedule_wide_search()
+        self.rel = rel
+        full = self.abspath(rel)
+        if rel.startswith("/"):
+            name = os.path.basename(full) or "Computer"
+            parts = [p for p in full.split("/") if p]
+            # each pill navigates to that component's absolute path
+            trail = [(p, "/" + "/".join(parts[:i + 1]))
+                     for i, p in enumerate(parts)]
+            self.crumb.set_trail("Computer", trail, self.load)
+        else:
+            name = display_name(os.path.basename(full)) or "Home"
+            # show every path component, not just the leaf (Home > Documents >
+            # Projects), so a deep folder's breadcrumb is accurate.
+            parts = [p for p in rel.split("/") if p]
+            trail = [(display_name(p), "/".join(parts[:i + 1]))
+                     for i, p in enumerate(parts)]
+            self.crumb.set_trail("Home", trail, self.load)
+        self.title.set_text(name.upper())
+        entries = []
+        try:
+            for nm in sorted(os.listdir(full)):
+                if nm.startswith(".") and not self._show_hidden:
+                    continue
+                # Apps the user hid via "Remove from Applications" are dropped
+                # from the Applications listing (persisted; restorable). The
+                # .app file stays on disk — this only affects what is shown.
+                if (rel == "Applications" and nm.endswith(".app")
+                        and nm[:-4] in self._removed_apps):
+                    continue
+                # NB: do NOT apply self._filter here — cache the FULL listing so
+                # live search can re-filter it in memory (see _populate_store),
+                # without re-reading the directory on every keystroke.
+                p = os.path.join(full, nm)
+                isdir = os.path.isdir(p)
+                size_bytes = 0
+                mtime = 0.0
+                try:
+                    st = os.stat(p)
+                    mtime = st.st_mtime
+                    size_bytes = 0 if isdir else st.st_size
+                    size = size_text(nm, isdir, st.st_size)
+                    date = time.strftime("%-d %b %Y", time.localtime(st.st_mtime))
+                except (OSError, ValueError):
+                    # ValueError: %-d (glibc no-pad) is rejected by musl/uClibc;
+                    # without this it would escape load() and break the listing.
+                    size, date = "—", "—"
+                ic = "folder" if isdir else self._icon_for(nm)
+                # Two sizes of the SAME glyph: compact for the list rows, large
+                # for the grid cells. Both are memoized by nbicons, so a folder
+                # of many files sharing an icon still renders each size once.
+                entries.append((nbicons.pixbuf(ic, LIST_ICON_PX), nm, size, date,
+                                os.path.join(rel, nm) if rel else nm,
+                                isdir, size_bytes, mtime,
+                                self._kind_for(nm, isdir),
+                                nbicons.pixbuf(ic, GRID_ICON_PX)))
+        except OSError:
+            pass
+        # Cache the raw (unfiltered) disk listing and free-space figure so a
+        # live search can repopulate the store from memory alone.
+        self._raw_entries = entries
+        self._free = "—"
+        try:
+            stv = os.statvfs(full)
+            self._free = human(stv.f_bavail * stv.f_frsize) + " available"
+        except OSError:
+            pass
+        self._populate_store()
+
+        if record:
+            del self._history[self._hpos + 1:]      # drop forward history
+            if not self._history or self._history[-1] != rel:
+                self._history.append(rel)
+            self._hpos = len(self._history) - 1
+        self._update_nav()
+        self._watch_dir(full)
+
+    # ---- live directory watch ---------------------------------------------
+    # Without this the view is a one-shot snapshot: a file dropped into the
+    # shown folder by another app (e.g. a .gba the GBA IDE just exported to
+    # Documents) wouldn't appear until the user navigated away and back. Watch
+    # the current directory with an inotify-backed monitor and auto-refresh.
+    def _watch_dir(self, full):
+        old = getattr(self, "_dir_monitor", None)
+        if old is not None:
+            try:
+                old.cancel()
+            except Exception:
+                pass
+            self._dir_monitor = None
+        try:
+            mon = Gio.File.new_for_path(full).monitor_directory(
+                Gio.FileMonitorFlags.NONE, None)
+            mon.connect("changed", self._on_dir_changed)
+            self._dir_monitor = mon
+        except Exception:
+            self._dir_monitor = None       # no backend: view stays a snapshot
+
+    def _on_dir_changed(self, _mon, _f, _other, _event):
+        # A single copy/save fires several events; coalesce them into one reload.
+        if getattr(self, "_dir_reload_id", 0):
+            GLib.source_remove(self._dir_reload_id)
+        self._dir_reload_id = GLib.timeout_add(350, self._dir_reload_fire)
+
+    def _dir_reload_fire(self):
+        self._dir_reload_id = 0
+        if self._rename_active():
+            # never yank an in-progress inline rename out from under the user;
+            # the rename itself will trigger another change event when it lands.
+            self._dir_reload_id = GLib.timeout_add(700, self._dir_reload_fire)
+            return False
+        model, it = self._selected_iter()
+        sel = model.get_value(it, 1) if it is not None else None
+        self.load(self.rel, record=False, keep_filter=True)
+        if sel:
+            self._select_name(sel)         # keep the selection across the refresh
+        return False
+
+    def _rename_active(self):
+        for r in (getattr(self, "_name_renderer", None),
+                  getattr(self, "_grid_text_renderer", None)):
+            if r is not None and r.get_property("editable"):
+                return True
+        return False
+
+    def _populate_store(self):
+        # (Re)fill the visible model from the cached disk listing, applying the
+        # live search filter in MEMORY. Called by load() right after a disk read
+        # and by _on_search on every keystroke — the latter path touches no disk
+        # (no listdir / os.stat / statvfs), so typing stays smooth on swrast.
+        # self.store stays the filtered store (the finder selftests rely on it).
+        self.store.clear()
+        flt = self._filter
+        shown = [e for e in self._raw_entries
+                 if not flt or flt in e[1].lower()]
+        for e in shown:
+            self.store.append(list(e))
+        # Matches from the REST of Home, found by the background scan (see
+        # _schedule_wide_search). They sort into the same list as everything
+        # else; each one's Name cell says which folder it lives in, so a result
+        # from somewhere else is never mistaken for a file in this folder.
+        extra = 0
+        if flt:
+            for p in self._wide:
+                # a result can be deleted between the scan and a later refresh;
+                # listing a file that is gone is worse than not listing it
+                if not os.path.exists(p):
+                    continue
+                self.store.append(self._entry_for_path(p))
+                extra += 1
+        self.status.set_text(self._status_text(len(shown) + extra))
+        self._update_empty_state(len(shown) + extra)
+
+    def _entry_for_path(self, path):
+        """A store row for something found OUTSIDE the current folder.
+
+        Mirrors load()'s per-entry stat, keyed on an absolute path. Column 4
+        (the relative path everything else in the Finder opens through) is kept
+        Home-relative, so double-clicking a search result opens it exactly as
+        if you had walked to its folder yourself."""
+        nm = os.path.basename(path)
+        isdir = os.path.isdir(path)
+        size_bytes, mtime = 0, 0.0
+        try:
+            st = os.stat(path)
+            mtime = st.st_mtime
+            size_bytes = 0 if isdir else st.st_size
+            size = size_text(nm, isdir, st.st_size)
+            date = time.strftime("%-d %b %Y", time.localtime(st.st_mtime))
+        except (OSError, ValueError):
+            size, date = "—", "—"
+        ic = "folder" if isdir else self._icon_for(nm)
+        try:
+            rel = os.path.relpath(path, HOME)
+        except ValueError:
+            rel = path
+        return [nbicons.pixbuf(ic, LIST_ICON_PX), nm, size, date, rel,
+                isdir, size_bytes, mtime, self._kind_for(nm, isdir),
+                nbicons.pixbuf(ic, GRID_ICON_PX)]
+
+    # ---- whole-Home search -------------------------------------------------
+    def _schedule_wide_search(self):
+        """Queue the whole-Home scan that runs behind the in-folder filter.
+
+        Debounced, so a typist starts ONE walk of the disk instead of one per
+        keystroke, and generation-stamped, so a scan that finishes after the
+        query has moved on is thrown away rather than repopulating the list
+        with answers to a question nobody is asking any more."""
+        if self._wide_id:
+            GLib.source_remove(self._wide_id)
+            self._wide_id = 0
+        self._wide_gen += 1
+        self._searching = False
+        self._wide_capped = False
+        if len(self._filter) < SEARCH_MIN_CHARS:
+            return
+        self._wide_id = GLib.timeout_add(
+            SEARCH_DEBOUNCE_MS, self._fire_wide_search,
+            self._filter, self._wide_gen)
+
+    def _fire_wide_search(self, query, gen):
+        self._wide_id = 0
+        if gen != self._wide_gen:
+            return False
+        self._searching = True
+        self.status.set_text(self._status_text(len(self.store)))
+        threading.Thread(target=self._wide_scan, args=(query, gen),
+                         daemon=True).start()
+        return False
+
+    def _wide_scan(self, query, gen):
+        # Worker thread: walk Home for names containing the query. Touches no
+        # GTK at all — the hits go back to the main loop via idle_add.
+        hits = []
+        scanned = 0
+        capped = False
+        try:
+            for root, dirs, files in os.walk(HOME):
+                # Dotted folders are skipped: the Trash holds what the user
+                # threw away and .config is plumbing — neither is what "find my
+                # file" means.
+                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                for nm in dirs + sorted(files):
+                    scanned += 1
+                    if nm.startswith("."):
+                        continue
+                    if query in nm.lower():
+                        hits.append(os.path.join(root, nm))
+                        if len(hits) >= SEARCH_MAX_HITS:
+                            capped = True
+                            raise StopIteration
+                if scanned > SEARCH_MAX_SCAN:
+                    capped = True
+                    break
+        except StopIteration:
+            pass
+        except OSError:
+            pass
+        GLib.idle_add(self._wide_done, query, gen, hits, capped)
+
+    def _wide_done(self, query, gen, paths, capped=False):
+        if gen != self._wide_gen or query != self._filter:
+            return False                  # the query moved on: drop these
+        self._searching = False
+        self._wide_capped = capped
+        here = self.abspath(self.rel)
+        # Anything in the folder we are already showing is covered by the live
+        # in-memory filter, so listing it again would double every match.
+        self._wide = [p for p in paths if os.path.dirname(p) != here]
+        self._populate_store()
+        return False
+
+    def _status_text(self, n):
+        if self._filter:
+            # A search reads as matches, not as "items in this folder"; and
+            # while the rest of Home is still being walked it says so, so an
+            # early "1 match" is never mistaken for the final answer.
+            if getattr(self, "_wide_capped", False):
+                # a very common word can match thousands; the scan stops at a
+                # sane number, so the count must not claim to be all of them
+                txt = _t("Showing the first %d matches") % n
+            else:
+                txt = _t("%d match%s") % (n, "" if n == 1 else "es")
+            if self._searching:
+                txt += " · " + _t("looking through the rest of Home…")
+            return txt
+        # "1 items" is the kind of detail that makes software feel unfinished.
+        txt = _t("%d item%s") % (n, "" if n == 1 else "s")
+        # The free-space figure is best-effort (statvfs can fail on a folder
+        # that has just been removed, say). When we don't have it, say nothing
+        # rather than trailing the count with a bare em dash, which reads as
+        # something having gone wrong.
+        return txt if self._free == "—" else "%s · %s" % (txt, self._free)
+
+    def _update_empty_state(self, count):
+        # Show a friendly centered message when the view has nothing in it,
+        # distinguishing an empty folder from a search that matched nothing —
+        # a blank list otherwise reads as "the app broke" to a novice.
+        lbl = getattr(self, "_empty_label", None)
+        if lbl is None:
+            return
+        if count:
+            lbl.hide()
+            return
+        # Same voice as the shared file picker's empty states (de/nbpicker.py),
+        # so the two read as one product rather than two.
+        query = self.search.get_text().strip() if hasattr(self, "search") else ""
+        if self._filter and query:
+            if self._searching:
+                lbl.set_text(_t("Looking for “%s”…") % query)
+            elif len(self._filter) >= SEARCH_MIN_CHARS:
+                # the whole of Home was searched, not just this folder — say so,
+                # or the user goes hunting through folders we already read.
+                lbl.set_text(_t("Nothing in Home is called “%s”.") % query)
+            else:
+                lbl.set_text(_t("Nothing here matches “%s”.") % query)
+        elif self.rel == ".Trash":
+            # the Trash is a place, not a folder — say so in its own words
+            lbl.set_text(_t("The Trash is empty."))
+        else:
+            lbl.set_text(_t("This folder is empty."))
+        lbl.show()
+
+    def _update_nav(self):
+        self._set_nav(self.back_btn, "back", self._hpos > 0)
+        self._set_nav(self.fwd_btn, "fwd", self._hpos < len(self._history) - 1)
+        in_trash = (self.rel == ".Trash")
+        self.trash_btn.set_visible(not in_trash)
+        self.empty_btn.set_visible(in_trash)
+        self.restore_btn.set_visible(in_trash)
+        # New Folder / Rename make no sense in the Trash — and dropping them
+        # there is also what keeps the Trash toolbar (which gains Put Back and
+        # Empty Trash) inside a 1024px panel instead of pushing the view
+        # switcher off the right edge where it cannot be clicked.
+        for b in getattr(self, "folder_btns", ()):
+            b.set_visible(not in_trash)
+        self._update_sidebar()
+        # request a redraw so the new folder actually shows: on real hardware
+        # this repaints immediately; under the emulator it may wait for an
+        # expose, but it is never wrong to ask.
+        if self.get_window() is not None:
+            self.queue_draw()
+
+    def go_back(self):
+        if self._hpos > 0:
+            self._hpos -= 1
+            self.load(self._history[self._hpos], record=False)
+
+    def go_forward(self):
+        if self._hpos < len(self._history) - 1:
+            self._hpos += 1
+            self.load(self._history[self._hpos], record=False)
+
+    def _on_search(self, entry):
+        query = entry.get_text().strip().lower()
+        if query != self._filter:
+            self._wide = []       # those hits answered the previous question
+        self._filter = query
+        # Hot path (per keystroke): re-filter the CACHED listing in memory and
+        # repopulate the (still-filtered) store. No load() — no disk re-scan,
+        # no os.stat, no icon re-render. A real navigation (load) refreshes the
+        # cache from disk and clears the filter.
+        self._populate_store()
+        # ...and, a beat behind, look through the rest of Home too.
+        self._schedule_wide_search()
+
+    def _on_search_activate(self, _entry):
+        # Enter in the search box opens what was found: the row the user
+        # picked if they picked one, otherwise the first result.
+        _model, it = self._selected_iter()
+        if it is not None:
+            self._open_path(self.store.get_path(it))
+        elif len(self.store):
+            self._open_path(Gtk.TreePath.new_first())
+
+    def _open_selected(self):
+        _model, it = self._selected_iter()
+        if it is not None:
+            self._open_path(self.store.get_path(it))
+            return True
+        return False
+
+    def _on_toggle_hidden(self, btn):
+        self._show_hidden = btn.get_active()
+        self._save_prefs()
+        self.load(self.rel, record=False, keep_filter=True)
+
+    # ---- trash ----
+    def _trash_dir(self):
+        d = os.path.join(HOME, ".Trash")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+        return d
+
+    def _trash_selected(self):
+        model, it = self._selected_iter()
+        if it is None:
+            self._flash_status(_t("Select an item to move to Trash"))
+            return
+        src = self.abspath(model.get_value(it, 4))
+        if not os.path.exists(src):
+            self.load(self.rel, record=False, keep_filter=True)
+            self._flash_status(_t("That item no longer exists"))
+            return
+        base = os.path.basename(src)
+        dst = os.path.join(self._trash_dir(), base)
+        n = 1
+        while os.path.exists(dst):
+            dst = os.path.join(self._trash_dir(), "%s (%d)" % (base, n))
+            n += 1
+        try:
+            os.rename(src, dst)
+        except OSError:
+            self._flash_status(_t("Could not move '%s' to Trash") % base)
+            return
+        self._record_origin(os.path.basename(dst), src)
+        self._set_undo(_t("Move to Trash"), self._undo_move, dst, src,
+                       os.path.join(self._origins_dir(),
+                                    os.path.basename(dst)))
+        self.load(self.rel, record=False, keep_filter=True)
+        self._flash_undoable(_t("Moved “%s” to the Trash") % display_name(base))
+
+    # ---- undo (one step, for the actions that move or unmake something) ----
+    def _set_undo(self, label, fn, *args):
+        """Remember how to put the last action back. One step is deliberate:
+        it covers the stray click or the wrong row, which is what actually
+        happens, without pretending to a history nothing else in the OS keeps."""
+        self._undo = {"label": label, "fn": fn, "args": args}
+
+    def _undo_move(self, src, dst, origin_file=None):
+        # put a moved/trashed item back where it came from
+        if os.path.exists(dst) or not os.path.exists(src):
+            raise OSError("gone")
+        os.makedirs(os.path.dirname(dst) or HOME, exist_ok=True)
+        shutil.move(src, dst)
+        if origin_file:
+            try:
+                os.remove(origin_file)
+            except OSError:
+                pass
+
+    def _undo_remove(self, path):
+        # take back something the last action CREATED (a duplicate, a pasted
+        # copy, a new folder). Only ever removes what we just made.
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        elif os.path.exists(path):
+            os.remove(path)
+
+    def _do_undo(self):
+        u = self._undo
+        if not u:
+            self._flash_status(_t("There is nothing to undo"))
+            return
+        self._undo = None
+        try:
+            u["fn"](*u["args"])
+        except (OSError, shutil.Error):
+            self._flash_status(_t("Could not undo that"))
+            self.load(self.rel, record=False, keep_filter=True)
+            return
+        self.load(self.rel, record=False, keep_filter=True)
+        self._flash_status(_t("Undone — %s") % u["label"])
+
+    def _flash_undoable(self, msg):
+        # Say what happened AND how to take it back. The status bar is where
+        # the user is already looking after acting on a file, which makes it
+        # the one place Ctrl+Z can be taught without a manual.
+        self._flash_status("%s · %s" % (msg, _t("Ctrl+Z to undo")), 4000)
+
+    # -- permanent deletion, offered only inside the Trash --
+    def _confirm_delete_forever(self):
+        model, it = self._selected_iter()
+        if it is None:
+            self._flash_status(_t("Select an item to delete"))
+            return
+        name = model.get_value(it, 1)
+        path = self.abspath(model.get_value(it, 4))
+        if not os.path.exists(path):
+            self.load(self.rel, record=False, keep_filter=True)
+            return
+        # Name the thing being destroyed. "Are you sure?" over an unnamed item
+        # is how people delete the wrong file.
+        self._confirm(
+            _t("Delete Immediately"),
+            _t("Permanently erase “%s”? This cannot be undone.")
+            % display_name(name),
+            _t("Delete"), lambda: self._delete_forever(path, name))
+
+    def _delete_forever(self, path, name):
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except (OSError, shutil.Error):
+            self._flash_status(_t("Could not delete “%s”") % display_name(name))
+            return
+        try:
+            os.remove(os.path.join(self._origins_dir(), name))
+        except OSError:
+            pass
+        self._undo = None            # nothing can bring this back; don't imply it
+        self.load(self.rel, record=False, keep_filter=True)
+
+    # -- trash origin tracking, so items can be Put Back --
+    def _origins_dir(self):
+        d = os.path.join(self._trash_dir(), ".origins")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+        return d
+
+    def _record_origin(self, trashed_base, original):
+        try:
+            with open(os.path.join(self._origins_dir(), trashed_base), "w") as fh:
+                fh.write(original)
+        except OSError:
+            pass
+
+    def _restore_selected(self):
+        model, it = self._selected_iter()
+        if it is None:
+            self._flash_status(_t("Select an item to put back"))
+            return
+        name = model.get_value(it, 1)
+        src = os.path.join(self._trash_dir(), name)
+        if not os.path.exists(src):
+            return
+        origin_file = os.path.join(self._origins_dir(), name)
+        dest = ""
+        try:
+            with open(origin_file) as fh:
+                dest = fh.read().strip()
+        except OSError:
+            dest = ""
+        if not dest:
+            dest = os.path.join(HOME, name)        # fallback: restore to Home
+        parent = os.path.dirname(dest)
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            dest = os.path.join(HOME, name)
+            parent = HOME
+        if os.path.exists(dest):
+            dest = self._unique_path(parent, os.path.basename(dest), suffix=" copy")
+        try:
+            os.rename(src, dest)
+        except OSError:
+            try:
+                shutil.move(src, dest)
+            except (OSError, shutil.Error):
+                return
+        try:
+            os.remove(origin_file)
+        except OSError:
+            pass
+        self.load(self.rel, record=False, keep_filter=True)
+
+    def _empty_trash(self):
+        trash = self._trash_dir()
+        try:
+            names = os.listdir(trash)
+        except OSError:
+            return
+        for nm in names:
+            p = os.path.join(trash, nm)
+            if os.path.isdir(p):
+                for r, dirs, files in os.walk(p, topdown=False):
+                    for f in files:
+                        try: os.remove(os.path.join(r, f))
+                        except OSError: pass
+                    for d in dirs:
+                        try: os.rmdir(os.path.join(r, d))
+                        except OSError: pass
+                try: os.rmdir(p)
+                except OSError: pass
+            else:
+                try: os.remove(p)
+                except OSError: pass
+        self.load(self.rel, record=False, keep_filter=True)
+
+    def _confirm_empty_trash(self):
+        # Emptying the Trash erases its contents for good, so confirm first. The
+        # actual purge stays in _empty_trash (driven by both this confirmation
+        # and the headless selftests).
+        trash = self._trash_dir()
+        try:
+            items = [n for n in os.listdir(trash) if n != ".origins"]
+        except OSError:
+            items = []
+        if not items:
+            self._flash_status(_t("Trash is already empty"))
+            return
+        n = len(items)
+        # Name what is about to be destroyed. A bare count is not enough to
+        # decide by: "3 items" could be junk or could be the tax return, and
+        # the whole point of a confirmation is to let someone recognise the
+        # mistake before it is permanent.
+        items = sorted(items, key=lambda s: s.lower())
+        listed = ", ".join(display_name(i) for i in items[:3])
+        if n > 3:
+            listed = _t("%s and %d more") % (listed, n - 3)
+        self._confirm(
+            _t("Empty Trash"),
+            "%s\n\n%s" % (
+                _t("Permanently erase %d item%s from the Trash? This cannot "
+                   "be undone.") % (n, "" if n == 1 else "s"),
+                listed),
+            _t("Empty Trash"), self._empty_trash)
+
+    def _confirm(self, title, message, ok_label, on_yes):
+        # House-style modal confirmation for a destructive action. Reuses the
+        # Get Info dialog chrome; the primary button is signage-red — an alert,
+        # which is one of the two states (that and selection) the design language
+        # reserves red for.
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("finderinfo")
+        area = dlg.get_content_area()
+        area.set_spacing(0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.get_style_context().add_class("finderinfobox")
+        hd = Gtk.Label(label=title, xalign=0)
+        hd.get_style_context().add_class("finderinfoname")
+        box.pack_start(hd, False, False, 0)
+        msg = Gtk.Label(label=message, xalign=0)
+        msg.get_style_context().add_class("finderinfoval")
+        msg.set_line_wrap(True); msg.set_max_width_chars(38)
+        # START so max_width_chars can hold the dialog to a readable column: a
+        # message quoting a long file name would otherwise stretch it (see
+        # _show_info_dialog), and WORD_CHAR so that name can break.
+        msg.set_halign(Gtk.Align.START)
+        msg.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        msg.set_margin_top(10); msg.set_margin_bottom(18)
+        box.pack_start(msg, False, False, 0)
+        btnrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btnrow.set_halign(Gtk.Align.END)
+        cancel = Gtk.Button(label=_t("Cancel"))
+        cancel.get_style_context().add_class("finderinfocancel")
+        cancel.connect("clicked", lambda *_: dlg.destroy())
+        ok = Gtk.Button(label=ok_label)
+        ok.get_style_context().add_class("finderinfodanger")
+        ok.connect("clicked", lambda *_: (dlg.destroy(), on_yes()))
+        btnrow.pack_start(cancel, False, False, 0)
+        btnrow.pack_start(ok, False, False, 0)
+        box.pack_start(btnrow, False, False, 0)
+        area.add(box)
+        dlg.connect("key-press-event", self._info_key)     # Esc cancels
+        dlg.show_all()
+
+    # ---- file operations (copy / cut / paste / new folder) ----
+    def _selected_iter(self):
+        # read the selection from whichever view is active, so Copy/Cut/Trash
+        # work identically in list and grid mode. (List is the default, so the
+        # headless selftests — which drive w.tree — are unaffected.)
+        if getattr(self, "_view", "list") == "grid":
+            items = self.iconview.get_selected_items()
+            return self.store, (self.store.get_iter(items[0]) if items else None)
+        return self.tree.get_selection().get_selected()
+
+    def _selected_path(self):
+        model, it = self._selected_iter()
+        if it is None:
+            return None
+        return self.abspath(model.get_value(it, 4))
+
+    def _unique_path(self, dest_dir, base, suffix=""):
+        """A non-colliding path in dest_dir for `base`, optionally forcing a
+        ' copy' style suffix (used by Duplicate / paste-into-same-folder)."""
+        stem, ext = os.path.splitext(base)
+        cand = os.path.join(dest_dir, base)
+        if not suffix and not os.path.exists(cand):
+            return cand
+        n = 1
+        while True:
+            tag = " copy" if n == 1 else " copy %d" % n
+            cand = os.path.join(dest_dir, stem + tag + ext)
+            if not os.path.exists(cand):
+                return cand
+            n += 1
+
+    def _do_copy(self, src, dst):
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+
+    # ---- copying, with progress and a working Cancel ----------------------
+    # A copy used to run on the main loop, so copying a folder of photos to a
+    # USB stick froze the whole desktop for as long as it took, with nothing on
+    # screen to say why. Anything over COPY_ASYNC_BYTES now runs on a worker
+    # thread behind a progress dialog: the user can watch it, stop it, and if
+    # it fails (a full disk, a stick pulled out) the half-copy is cleaned up
+    # and the reason is said out loud instead of leaving debris behind.
+    def _copy_size(self, src):
+        """Bytes the copy will move (bounded walk for a folder)."""
+        try:
+            if os.path.isdir(src):
+                return self._dir_size(src)[0]
+            return os.path.getsize(src)
+        except OSError:
+            return 0
+
+    def _copy_job(self, src, dst, state):
+        # Worker thread. Copies file by file in chunks so progress advances and
+        # Cancel is answered promptly even inside one huge file.
+        def copy_one(s, d):
+            state["file"] = os.path.basename(s)
+            with open(s, "rb") as fi, open(d, "wb") as fo:
+                while True:
+                    if state["cancel"]:
+                        raise _CopyCancelled()
+                    buf = fi.read(COPY_CHUNK)
+                    if not buf:
+                        break
+                    fo.write(buf)
+                    state["done"] += len(buf)
+            try:
+                shutil.copystat(s, d)
+            except OSError:
+                pass
+
+        if os.path.isdir(src):
+            os.makedirs(dst, exist_ok=True)
+            for root, _dirs, files in os.walk(src):
+                rel = os.path.relpath(root, src)
+                out = dst if rel == "." else os.path.join(dst, rel)
+                os.makedirs(out, exist_ok=True)
+                for nm in sorted(files):
+                    copy_one(os.path.join(root, nm), os.path.join(out, nm))
+        else:
+            copy_one(src, dst)
+
+    def _copy_async(self, src, dst, on_done):
+        """Copy src -> dst behind a progress dialog. on_done(ok) runs on the
+        main loop afterwards, whether it finished, was cancelled or failed."""
+        state = {"cancel": False, "done": 0, "total": max(1, self._copy_size(src)),
+                 "file": os.path.basename(src), "error": None, "cancelled": False,
+                 "finished": False}
+        dlg, bar, namelbl = self._progress_dialog(
+            _t("Copying"), _t("Copying “%s”") % display_name(
+                os.path.basename(src)), state)
+
+        def tick():
+            if state["finished"]:
+                return False
+            frac = min(1.0, state["done"] / float(state["total"]))
+            bar.set_fraction(frac)
+            namelbl.set_text(state["file"])
+            return True
+
+        tick_id = GLib.timeout_add(150, tick)
+
+        def finish():
+            state["finished"] = True
+            GLib.source_remove(tick_id)
+            try:
+                dlg.destroy()
+            except Exception:
+                pass
+            ok = not (state["cancelled"] or state["error"])
+            if not ok:
+                # Leave nothing half-copied behind: dst is always a name that
+                # did not exist before, so removing it can only remove ours.
+                try:
+                    self._undo_remove(dst)
+                except (OSError, shutil.Error):
+                    pass
+            on_done(ok)
+            # after on_done, which reloads the view and rewrites the status bar
+            if not ok:
+                self._flash_status(
+                    _t("Copy stopped — nothing was changed")
+                    if state["cancelled"] else state["error"])
+            return False
+
+        def work():
+            try:
+                self._copy_job(src, dst, state)
+            except _CopyCancelled:
+                state["cancelled"] = True
+            except (OSError, shutil.Error) as exc:
+                state["error"] = self._copy_error_text(exc)
+            GLib.idle_add(finish)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def _copy_error_text(exc):
+        # Say what a person can act on. "Errno 28" is not a sentence.
+        import errno
+        code = getattr(exc, "errno", None)
+        if code == errno.ENOSPC:
+            return _t("There is not enough room to copy that here")
+        if code == errno.EACCES or code == errno.EPERM:
+            return _t("There was no permission to copy that here")
+        if code == errno.EROFS:
+            return _t("That place is read-only, so nothing can be copied to it")
+        return _t("The copy could not be finished")
+
+    def _progress_dialog(self, title, subtitle, state):
+        """House-style modal progress card: what is being copied, how far it
+        has got, and a Cancel that really stops it."""
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("finderinfo")
+        area = dlg.get_content_area(); area.set_spacing(0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.get_style_context().add_class("finderinfobox")
+        hd = Gtk.Label(label=title, xalign=0)
+        hd.get_style_context().add_class("finderinfoname")
+        box.pack_start(hd, False, False, 0)
+        sub = Gtk.Label(label=subtitle, xalign=0)
+        sub.get_style_context().add_class("finderinfokind")
+        sub.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        sub.set_max_width_chars(38)
+        sub.set_margin_top(4)
+        box.pack_start(sub, False, False, 0)
+        bar = Gtk.ProgressBar()
+        bar.get_style_context().add_class("finderprogress")
+        bar.set_margin_top(16)
+        box.pack_start(bar, False, False, 0)
+        namelbl = Gtk.Label(label="", xalign=0)
+        namelbl.get_style_context().add_class("finderinfokind")
+        namelbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        namelbl.set_max_width_chars(38)
+        namelbl.set_margin_top(8)
+        box.pack_start(namelbl, False, False, 0)
+        btnrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btnrow.set_halign(Gtk.Align.END); btnrow.set_margin_top(18)
+        cancel = Gtk.Button(label=_t("Cancel"))
+        cancel.get_style_context().add_class("finderinfocancel")
+        cancel.connect("clicked",
+                       lambda *_: state.__setitem__("cancel", True))
+        btnrow.pack_start(cancel, False, False, 0)
+        box.pack_start(btnrow, False, False, 0)
+        area.add(box)
+        dlg.connect("key-press-event", lambda _w, ev: (
+            state.__setitem__("cancel", True)
+            if ev.keyval == Gdk.KEY_Escape else None))
+        dlg.show_all()
+        return dlg, bar, namelbl
+
+    def _new_folder(self):
+        dest = self.abspath(self.rel)
+        base = "untitled folder"
+        path = os.path.join(dest, base)
+        n = 2
+        while os.path.exists(path):
+            path = os.path.join(dest, "%s %d" % (base, n))
+            n += 1
+        try:
+            os.makedirs(path)
+        except OSError:
+            self._flash_status(_t("Could not create a folder here"))
+            return
+        self._set_undo(_t("New Folder"), self._undo_remove, path)
+        # A freshly-made folder never matches an active search query, so
+        # keeping the filter would hide it — and repeated clicks would silently
+        # pile up invisible "untitled folder 2, 3, …". Clear the filter (the
+        # default keep_filter=False) so the new folder shows immediately.
+        self.load(self.rel, record=False)
+        # select it, scroll it into view, and drop straight into inline rename
+        # so the novice can type the folder's name over "untitled folder" — the
+        # standard new-folder flow. (Only when we're actually on screen: the
+        # headless selftests construct the Finder unmapped and just check the
+        # folder was created, so starting an editor there would be pointless.)
+        name = os.path.basename(path)
+        self._select_name(name)
+        if self.get_mapped():
+            self._begin_rename()
+
+    def _copy_selected(self):
+        # Copy leaves the item where it is, so without a word of feedback the
+        # novice can't tell it worked. Confirm it, and the Paste button lights up.
+        p = self._selected_path()
+        if p:
+            self._clipboard = (p, False)
+            self._update_paste()
+            self._flash_status(_t("Copied '%s'") % os.path.basename(p))
+        else:
+            self._flash_status(_t("Select an item to copy"))
+
+    def _cut_selected(self):
+        p = self._selected_path()
+        if p:
+            self._clipboard = (p, True)
+            self._update_paste()
+            self._flash_status(_t("Cut '%s' — open a folder, then Paste")
+                               % os.path.basename(p))
+        else:
+            self._flash_status(_t("Select an item to cut"))
+
+    def _paste(self):
+        if not self._clipboard:
+            return
+        src, is_cut = self._clipboard
+        if not os.path.exists(src):
+            self._clipboard = None
+            self._flash_status(_t("That item no longer exists"))
+            return
+        dest_dir = self.abspath(self.rel)
+        base = os.path.basename(src)
+        dst = os.path.join(dest_dir, base)
+        # pasting into the source's own folder (or a name clash) -> " copy"
+        same_dir = os.path.dirname(src) == dest_dir
+        if os.path.exists(dst) or (same_dir and not is_cut):
+            dst = self._unique_path(dest_dir, base, suffix=" copy")
+        if is_cut and self._same_filesystem(src, dest_dir):
+            # same disk: a move is a rename, so it is instant however big it is
+            try:
+                shutil.move(src, dst)
+            except (OSError, shutil.Error):
+                self._update_paste()
+                self._flash_status(_t("Could not paste here"))
+                return
+            self._clipboard = None          # cut is one-shot
+            self._update_paste()
+            self._set_undo(_t("Move"), self._undo_move, dst, src)
+            self.load(self.rel, record=False, keep_filter=True)
+            self._flash_undoable(_t("Moved “%s” here") % display_name(base))
+            return
+        if is_cut:
+            # A move to ANOTHER disk — a USB stick, nearly always — is really a
+            # full copy followed by a delete, so it costs exactly what a copy
+            # costs and gets the same progress card and the same Cancel. It
+            # offers no undo: putting it back would be another long copy, and
+            # the original is only removed once the new one is safely written.
+            self._clipboard = None
+            self._update_paste()
+
+            def moved(ok):
+                if ok:
+                    try:
+                        self._undo_remove(src)
+                    except (OSError, shutil.Error):
+                        pass
+                self.load(self.rel, record=False, keep_filter=True)
+                if ok:
+                    self._flash_status(_t("Moved “%s” here")
+                                       % display_name(base))
+            self._copy(src, dst, moved)
+            return
+        self._update_paste()
+
+        def done(ok):
+            if ok:
+                self._set_undo(_t("Paste"), self._undo_remove, dst)
+            self.load(self.rel, record=False, keep_filter=True)
+            if ok:
+                self._flash_undoable(_t("Copied “%s” here") % display_name(base))
+        self._copy(src, dst, done)
+
+    @staticmethod
+    def _same_filesystem(src, dest_dir):
+        """Would a move here be a rename (instant) or a real copy (slow)?
+        Unknown counts as the same disk — the cheap path is also the old one."""
+        try:
+            return os.stat(src).st_dev == os.stat(dest_dir).st_dev
+        except OSError:
+            return True
+
+    def _copy(self, src, dst, on_done):
+        """Copy, choosing the quiet path or the visible one. A small file is
+        instant, so a progress card would only flash; anything big enough to be
+        noticed gets one, with Cancel."""
+        big = self._copy_size(src) > COPY_ASYNC_BYTES
+        if big and self.get_mapped():
+            self._copy_async(src, dst, on_done)
+            return
+        try:
+            self._do_copy(src, dst)
+        except (OSError, shutil.Error) as exc:
+            try:
+                self._undo_remove(dst)      # never leave a half-copy behind
+            except (OSError, shutil.Error):
+                pass
+            # on_done first: it reloads the view, which rewrites the status bar
+            # (an earlier flash was overwritten before anyone could read it).
+            on_done(False)
+            self._flash_status(self._copy_error_text(exc))
+            return
+        on_done(True)
+
+    def _update_paste(self):
+        # There is no toolbar Paste button any more (paste_btn is None); the
+        # context/Edit menus build their own sensitivity from self._clipboard
+        # each time they open. Guard on the value, not just the attribute.
+        btn = getattr(self, "paste_btn", None)
+        if btn is not None:
+            btn.set_sensitive(self._clipboard is not None)
+
+    def _select_name(self, name):
+        # select the row with this name in whichever view is active and scroll
+        # it into view. Used after new-folder / rename / duplicate so the item
+        # the action produced is the one that stays highlighted.
+        for row in self.store:
+            if row[1] == name:
+                if getattr(self, "_view", "list") == "grid":
+                    self.iconview.select_path(row.path)
+                    self.iconview.scroll_to_path(row.path, False, 0, 0)
+                else:
+                    self.tree.get_selection().select_iter(row.iter)
+                    self.tree.scroll_to_cell(row.path, None, False, 0, 0)
+                return True
+        return False
+
+    # ---- rename (inline) ----
+    def _begin_rename(self):
+        # Turn the selected item's Name cell into an editable entry. The
+        # renderer is editable only for this edit (flipped back off when the
+        # edit commits or is cancelled), so ordinary clicks keep selecting and
+        # double-click keeps opening.
+        model, it = self._selected_iter()
+        if it is None:
+            self._flash_status(_t("Select an item to rename"))
+            return
+        path = model.get_path(it)
+        if getattr(self, "_view", "list") == "grid":
+            self._grid_text_renderer.set_property("editable", True)
+            self.iconview.grab_focus()
+            self.iconview.select_path(path)
+            self.iconview.set_cursor(path, self._grid_text_renderer, True)
+        else:
+            self._name_renderer.set_property("editable", True)
+            self.tree.grab_focus()
+            self.tree.set_cursor(path, self._name_column, True)
+
+    def _end_rename_mode(self):
+        # leave inline-edit mode: both renderers go non-editable again so a
+        # later single click can't accidentally start an edit.
+        for r in (getattr(self, "_name_renderer", None),
+                  getattr(self, "_grid_text_renderer", None)):
+            if r is not None:
+                r.set_property("editable", False)
+        return False
+
+    def _on_edit_started(self, _renderer, editable, path_str):
+        # Pre-select just the base name (not the extension) so retyping a rename
+        # keeps ".txt"/".png" intact — the standard rename affordance. GTK
+        # selects the whole cell text by default, so reselect on the next idle.
+        if not isinstance(editable, Gtk.Entry):
+            return
+        try:
+            it = self.store.get_iter_from_string(path_str)
+            name = self.store.get_value(it, 1)
+            is_dir = self.store.get_value(it, 5)
+        except (ValueError, TypeError):
+            return
+        stem = name if is_dir else (os.path.splitext(name)[0] or name)
+
+        def _select():
+            try:
+                editable.select_region(0, len(stem))
+            except Exception:
+                pass
+            return False
+        GLib.idle_add(_select)
+
+    def _name_cell_data(self, _owner, cell, model, it, _data=None):
+        """Draw the Name cell as the user should read it (see display_name).
+
+        Shared by the list column and the grid's text cell so the two views can
+        never disagree about what an item is called. A search result that lives
+        somewhere else carries a quiet note of the folder it came from —
+        without it, a whole-Home search is a list of names with no answer to
+        the question the user actually asked, which is *where is it*."""
+        name = display_name(model.get_value(it, 1))
+        where = self._result_location(model.get_value(it, 4))
+        if where:
+            # In the list the note trails the name on the same line; in the
+            # grid the cell is only ~130px wide, so trailing it there wrapped
+            # mid-phrase ("Tax notes.txt  in" / "Projects") and pulled the
+            # label off centre. Under a grid icon it gets its own line.
+            grid = _owner is getattr(self, "iconview", None)
+            cell.set_property(
+                "markup",
+                "%s%s<span foreground=\"#8A857A\" size=\"small\">%s</span>"
+                % (GLib.markup_escape_text(name), "\n" if grid else "   ",
+                   GLib.markup_escape_text(where)))
+        else:
+            cell.set_property("text", name)
+
+    def _result_location(self, rel):
+        """"in Documents" for a search hit from another folder, else "" — the
+        folder you are standing in needs no label."""
+        if not self._filter or not isinstance(rel, str):
+            return ""
+        parent = os.path.dirname(rel)
+        if parent == (self.rel or ""):
+            return ""
+        base = os.path.basename(parent)
+        return _t("in %s") % (display_name(base) if base else _t("Home"))
+
+    def _on_name_edited(self, _renderer, path_str, new_text):
+        # commit an inline rename: os.rename the item, then reload and keep the
+        # renamed item selected. Shared by the list and grid renderers (both
+        # drive self.store, so the path string maps straight to a store row).
+        self._end_rename_mode()
+        new_name = (new_text or "").strip()
+        try:
+            it = self.store.get_iter_from_string(path_str)
+        except (ValueError, TypeError):
+            return
+        if it is None:
+            return
+        old_name = self.store.get_value(it, 1)
+        old_abs = self.abspath(self.store.get_value(it, 4))
+        # the Name cell shows an app without its ".app" suffix, so the edited
+        # text comes back without it too; put it back before comparing or
+        # touching the filesystem, or renaming would strip it and the launcher
+        # would stop recognising the app.
+        if new_name and old_name.endswith(".app") \
+                and not new_name.endswith(".app"):
+            new_name += ".app"
+        if not new_name or new_name == old_name:
+            return
+        if new_name in (".", "..") or "/" in new_name:
+            self._flash_status(_t("A name cannot contain a slash"))
+            return
+        new_abs = os.path.join(os.path.dirname(old_abs), new_name)
+        if os.path.exists(new_abs):
+            self._flash_status(_t("An item named '%s' already exists") % new_name)
+            return
+        try:
+            os.rename(old_abs, new_abs)
+        except OSError:
+            self._flash_status(_t("Could not rename '%s'") % old_name)
+            return
+        self._set_undo(_t("Rename"), self._undo_move, new_abs, old_abs)
+        self.load(self.rel, record=False, keep_filter=True)
+        self._select_name(new_name)
+
+    # ---- duplicate ----
+    def _duplicate_selected(self):
+        # Copy the selected item alongside itself with a ' copy' suffix (files
+        # and, recursively, folders), then select the duplicate.
+        p = self._selected_path()
+        if not p:
+            self._flash_status(_t("Select an item to duplicate"))
+            return
+        if not os.path.exists(p):
+            self.load(self.rel, record=False, keep_filter=True)
+            self._flash_status(_t("That item no longer exists"))
+            return
+        dest_dir = os.path.dirname(p)
+        dst = self._unique_path(dest_dir, os.path.basename(p), suffix=" copy")
+
+        def done(ok):
+            if ok:
+                self._set_undo(_t("Duplicate"), self._undo_remove, dst)
+            self.load(self.rel, record=False, keep_filter=True)
+            if ok:
+                self._select_name(os.path.basename(dst))
+                self._flash_undoable(_t("Duplicated “%s”")
+                                     % display_name(os.path.basename(p)))
+        self._copy(p, dst, done)
+
+    # ---- right-click context menu ----
+    def _on_tree_button(self, tree, event):
+        if event.button != 3 or event.type != Gdk.EventType.BUTTON_PRESS:
+            return False
+        hit = tree.get_path_at_pos(int(event.x), int(event.y))
+        if hit is None:                       # empty space, not a row
+            tree.get_selection().unselect_all()
+            self._popup_background_menu(event)
+            return True
+        tree.grab_focus()
+        tree.get_selection().select_path(hit[0])
+        self._popup_context_menu(event)
+        return True
+
+    def _on_grid_button(self, iconview, event):
+        if event.button != 3 or event.type != Gdk.EventType.BUTTON_PRESS:
+            return False
+        path = iconview.get_path_at_pos(int(event.x), int(event.y))
+        if path is None:
+            iconview.unselect_all()
+            self._popup_background_menu(event)
+            return True
+        iconview.grab_focus()
+        iconview.select_path(path)
+        self._popup_context_menu(event)
+        return True
+
+    def _raise_menu(self, menu):
+        # Keep a popup menu in front of every window.
+        # A Gtk.Menu lives in its own override-redirect toplevel; on this
+        # no-compositor stack (matchbox, with the Finder itself floating as a
+        # dialog) that toplevel is not reliably stacked above the windows it
+        # belongs to, so a menu could open BEHIND the Finder. Raise the menu's
+        # own X window once it is mapped, when it actually exists.
+        def _do_raise(*_a):
+            try:
+                tl = menu.get_toplevel()
+                if tl is not None:
+                    gw = tl.get_window()
+                    if gw is not None:
+                        gw.raise_()
+            except Exception:
+                pass
+            return False
+        try:
+            menu.connect("map-event", _do_raise)
+        except Exception:
+            pass
+        GLib.idle_add(_do_raise)
+
+    def _popup_context_menu(self, event):
+        menu = Gtk.Menu()
+        menu.get_style_context().add_class("findermenu")
+        if self.rel == ".Trash":
+            # Inside the Trash the file-ops (Cut/Rename/Duplicate) are confusing
+            # or would break Put-Back's name-keyed origin tracking, so offer only
+            # what makes sense here: reopen, restore, destroy, or inspect.
+            rows = [(_t("Open"), self._context_open),
+                    (None, None),
+                    (_t("Put Back"), self._restore_selected),
+                    (_t("Delete Immediately…"), self._confirm_delete_forever),
+                    (None, None),
+                    (_t("Get Info"), self._get_info)]
+        else:
+            rows = [(_t("Open"), self._context_open),
+                    (None, None),
+                    (_t("Cut"), self._cut_selected),
+                    (_t("Copy"), self._copy_selected),
+                    (None, None),
+                    (_t("Rename"), self._begin_rename),
+                    (_t("Duplicate"), self._duplicate_selected),
+                    (_t("Move to Trash"), self._trash_selected),
+                    (None, None),
+                    (_t("Get Info"), self._get_info)]
+        for label, cb in rows:
+            if label is None:
+                menu.append(Gtk.SeparatorMenuItem())
+                continue
+            mi = Gtk.MenuItem(label=label)
+            mi.get_style_context().add_class("findermenuitem")
+            mi.connect("activate", lambda _m, fn=cb: fn())
+            menu.append(mi)
+        menu.show_all()
+        try:
+            menu.popup_at_pointer(event)          # GTK 3.22+
+            self._raise_menu(menu)
+        except (AttributeError, TypeError):
+            menu.popup(None, None, None, None, event.button, event.time)
+
+    def _popup_background_menu(self, event):
+        # Right-click on empty space: the folder-level actions a novice reaches
+        # for (New Folder, Paste) instead of nothing happening at all. Paste is
+        # dimmed until something is on the clipboard.
+        menu = Gtk.Menu()
+        menu.get_style_context().add_class("findermenu")
+        # Undo names the action it will take back, so it is never a leap of
+        # faith — and it is the first thing reached for after a wrong move.
+        undo_label = (_t("Undo %s") % self._undo["label"]) if self._undo \
+            else _t("Undo")
+        for label, cb, enabled in (
+                (undo_label, self._do_undo, self._undo is not None),
+                (None, None, False),
+                (_t("New Folder"), self._new_folder, True),
+                (_t("Paste"), self._paste, self._clipboard is not None)):
+            if label is None:
+                menu.append(Gtk.SeparatorMenuItem())
+                continue
+            mi = Gtk.MenuItem(label=label)
+            mi.get_style_context().add_class("findermenuitem")
+            mi.set_sensitive(enabled)
+            mi.connect("activate", lambda _m, fn=cb: fn())
+            menu.append(mi)
+        menu.show_all()
+        try:
+            menu.popup_at_pointer(event)
+            self._raise_menu(menu)
+        except (AttributeError, TypeError):
+            menu.popup(None, None, None, None, event.button, event.time)
+
+    def _context_open(self):
+        model, it = self._selected_iter()
+        if it is None:
+            return
+        self._open_path(model.get_path(it))
+
+    # ---- actions menu (Remove from / Restore removed Applications) ----
+    def _popup_actions_menu(self, btn):
+        # The navbar's overflow menu. Both entries operate on the Applications
+        # view, so they are only sensitive there: Remove needs an .app selected;
+        # Restore needs at least one previously-removed app.
+        menu = Gtk.Menu()
+        menu.get_style_context().add_class("findermenu")
+        in_apps = (self.rel == "Applications")
+        _model, it = self._selected_iter()
+        sel_app = None
+        if in_apps and it is not None:
+            nm = _model.get_value(it, 1)
+            if nm.endswith(".app"):
+                sel_app = nm[:-4]
+        rows = [("Remove from Applications", self._remove_selected_app,
+                 in_apps and sel_app is not None),
+                (None, None, False),
+                ("Restore Removed Apps…", self._restore_removed_apps_dialog,
+                 in_apps and bool(self._removed_apps))]
+        for label, cb, enabled in rows:
+            if label is None:
+                menu.append(Gtk.SeparatorMenuItem())
+                continue
+            mi = Gtk.MenuItem(label=label)
+            mi.get_style_context().add_class("findermenuitem")
+            mi.set_sensitive(enabled)
+            mi.connect("activate", lambda _m, fn=cb: fn())
+            menu.append(mi)
+        menu.show_all()
+        try:
+            menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST,
+                                 Gdk.Gravity.NORTH_WEST, None)
+            self._raise_menu(menu)
+        except (AttributeError, TypeError):
+            menu.popup(None, None, None, None, 0, Gtk.get_current_event_time())
+
+    def _remove_selected_app(self):
+        # Hide the selected app from the Applications listing (persisted). The
+        # .app file is never deleted — this is a listing preference, undone by
+        # Restore Removed Apps.
+        if self.rel != "Applications":
+            return
+        model, it = self._selected_iter()
+        if it is None:
+            self._flash_status(_t("Select an app to remove"))
+            return
+        nm = model.get_value(it, 1)
+        if not nm.endswith(".app"):
+            self._flash_status(_t("Only apps can be removed from Applications"))
+            return
+        disp = nm[:-4]
+        self._removed_apps.add(disp)
+        self._save_removed_apps()
+        self.load(self.rel, record=False, keep_filter=True)
+        self._flash_status(_t("Removed '%s' — restore it from Actions") % disp)
+
+    def _restore_removed_apps_dialog(self):
+        # A modal list of the removed apps, each with its own Restore button,
+        # plus Restore All. Sized to the live screen so it fits a small panel.
+        if not self._removed_apps:
+            self._flash_status(_t("No removed apps to restore"))
+            return
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("finderinfo")
+        sw_, sh_ = nbapp.screen_size()
+        dlg.set_default_size(min(420, max(300, sw_ - 120)),
+                             min(480, max(240, sh_ - 160)))
+        area = dlg.get_content_area(); area.set_spacing(0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.get_style_context().add_class("finderinfobox")
+        hd = Gtk.Label(label=_t("Removed Applications"), xalign=0)
+        hd.get_style_context().add_class("finderinfoname")
+        box.pack_start(hd, False, False, 0)
+        sub = Gtk.Label(
+            label=_t("Bring an app back to the Applications listing."), xalign=0)
+        sub.get_style_context().add_class("finderinfokind")
+        sub.set_line_wrap(True); sub.set_max_width_chars(40)
+        sub.set_halign(Gtk.Align.START)   # or max_width_chars never applies
+        sub.set_margin_top(4); sub.set_margin_bottom(14)
+        box.pack_start(sub, False, False, 0)
+
+        listbox = Gtk.ListBox()
+        listbox.get_style_context().add_class("restorelist")
+        listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        scr = Gtk.ScrolledWindow()
+        scr.get_style_context().add_class("restorescroll")
+        scr.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scr.set_min_content_height(120)
+        scr.add(listbox)
+        box.pack_start(scr, True, True, 0)
+
+        def add_row(disp):
+            row = Gtk.ListBoxRow()
+            row.get_style_context().add_class("restorerow")
+            rb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            mod = APP_MODULES.get(disp)
+            icname = (ICON_ALIAS.get(mod, mod) if mod else "packages")
+            rb.pack_start(Gtk.Image.new_from_pixbuf(
+                nbicons.pixbuf(icname, 24, "#3A362E")), False, False, 0)
+            lbl = Gtk.Label(label=disp, xalign=0)
+            lbl.get_style_context().add_class("finderinfoval")
+            rb.pack_start(lbl, True, True, 0)
+            rbtn = Gtk.Button(label=_t("Restore"))
+            rbtn.get_style_context().add_class("finderinfocancel")
+            rbtn.connect("clicked", self._on_restore_one, disp, row, listbox, dlg)
+            rb.pack_end(rbtn, False, False, 0)
+            row.add(rb)
+            listbox.add(row)
+
+        for disp in sorted(self._removed_apps):
+            add_row(disp)
+
+        btnrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btnrow.set_halign(Gtk.Align.END); btnrow.set_margin_top(16)
+        allbtn = Gtk.Button(label=_t("Restore All"))
+        allbtn.get_style_context().add_class("finderinfocancel")
+        allbtn.connect("clicked", self._on_restore_all, dlg)
+        done = Gtk.Button(label=_t("Done"))
+        done.get_style_context().add_class("finderinfobtn")
+        done.connect("clicked", lambda *_: dlg.destroy())
+        btnrow.pack_start(allbtn, False, False, 0)
+        btnrow.pack_start(done, False, False, 0)
+        box.pack_start(btnrow, False, False, 0)
+        area.add(box)
+        dlg.connect("key-press-event", self._info_key)
+        dlg.show_all()
+
+    def _on_restore_one(self, _btn, disp, row, listbox, dlg):
+        self._removed_apps.discard(disp)
+        self._save_removed_apps()
+        if self.rel == "Applications":
+            self.load(self.rel, record=False, keep_filter=True)
+        listbox.remove(row)
+        if not self._removed_apps:
+            dlg.destroy()
+
+    def _on_restore_all(self, _btn, dlg):
+        self._removed_apps.clear()
+        self._save_removed_apps()
+        if self.rel == "Applications":
+            self.load(self.rel, record=False, keep_filter=True)
+        dlg.destroy()
+
+    def _on_key_press(self, _w, event):
+        # Window-level shortcuts. This handler runs before focus-child delivery,
+        # so anything typed into a text field (the search box, the inline-rename
+        # entry) must fall through untouched — only the file-op keys act when no
+        # Gtk.Entry holds focus. Alt+arrows navigate and are safe even mid-type.
+        keyval = event.keyval
+        ctrl = bool(event.state & Gdk.ModifierType.CONTROL_MASK)
+        alt = bool(event.state & Gdk.ModifierType.MOD1_MASK)
+        if alt and keyval == Gdk.KEY_Left:
+            self.go_back(); return True
+        if alt and keyval == Gdk.KEY_Right:
+            self.go_forward(); return True
+        if alt and keyval == Gdk.KEY_Up:
+            self.go_up(); return True
+        if keyval == Gdk.KEY_F2:
+            _model, it = self._selected_iter()
+            if it is not None:
+                self._begin_rename()
+                return True
+            return False
+        if isinstance(self.get_focus(), Gtk.Entry):
+            return False               # typing in a field: leave every key alone
+        if ctrl and keyval in (Gdk.KEY_c, Gdk.KEY_C):
+            self._copy_selected(); return True
+        if ctrl and keyval in (Gdk.KEY_x, Gdk.KEY_X):
+            self._cut_selected(); return True
+        if ctrl and keyval in (Gdk.KEY_v, Gdk.KEY_V):
+            self._paste(); return True
+        if ctrl and keyval in (Gdk.KEY_z, Gdk.KEY_Z):
+            self._do_undo(); return True
+        if ctrl and keyval in (Gdk.KEY_f, Gdk.KEY_F):
+            self.search.grab_focus(); return True
+        if not ctrl and not alt and keyval == Gdk.KEY_Delete:
+            if self.rel == ".Trash":
+                # Already in the Trash: there is nowhere further to move it to,
+                # and "trashing" it again just renamed the file to "foo (1)"
+                # and broke its Put Back. Delete here means delete.
+                self._confirm_delete_forever()
+            else:
+                self._trash_selected()
+            return True
+        if not ctrl and not alt and keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            # close the loop on type-ahead: the row it jumped to opens on Enter
+            return self._open_selected()
+        if not ctrl and not alt and keyval == Gdk.KEY_Escape:
+            self._clear_typeahead()
+            return False
+        # Type-ahead: letters typed at the list jump to the item that starts
+        # with them. In a folder of a hundred files, knowing the name should be
+        # enough to reach it without hunting or scrolling.
+        if not ctrl and not alt:
+            ch = Gdk.keyval_to_unicode(keyval)
+            if ch and chr(ch).isprintable() and chr(ch) != " ":
+                self._type_ahead(chr(ch))
+                return True
+            if keyval == Gdk.KEY_BackSpace and self._typeahead:
+                self._type_ahead(None)
+                return True
+        return False
+
+    # ---- type-ahead --------------------------------------------------------
+    def _type_ahead(self, ch):
+        """Accumulate typed letters and select the first item they name.
+
+        Prefix first (what people expect from a file list), falling back to a
+        plain substring so a memorable word mid-name still finds it."""
+        if self._typeahead_id:
+            GLib.source_remove(self._typeahead_id)
+        self._typeahead_id = GLib.timeout_add(TYPEAHEAD_RESET_MS,
+                                              self._clear_typeahead)
+        if ch is None:
+            self._typeahead = self._typeahead[:-1]
+        else:
+            self._typeahead += ch
+        want = self._typeahead.lower()
+        if not want:
+            self._restore_status()
+            return
+        hit = None
+        for row in self.store:
+            nm = display_name(row[1]).lower()
+            if nm.startswith(want):
+                hit = row
+                break
+        if hit is None:
+            for row in self.store:
+                if want in display_name(row[1]).lower():
+                    hit = row
+                    break
+        if hit is None:
+            # say what was typed even when nothing matches, so the jump that
+            # did not happen is explained rather than simply ignored.
+            self._flash_status(_t("No item starts with “%s”") % self._typeahead)
+            return
+        self._select_name(hit[1])
+        self._flash_status(_t("Jump to “%s”") % self._typeahead)
+
+    def _clear_typeahead(self):
+        self._typeahead = ""
+        self._typeahead_id = 0
+        return False
+
+    # ---- get info ----
+    def _dir_size(self, path):
+        # total bytes under a folder (files only; symlinks not followed), with a
+        # soft cap so Get Info on a huge tree can't hang the UI.
+        total = 0
+        files = 0
+        for root, _dirs, names in os.walk(path):
+            for nm in names:
+                files += 1
+                try:
+                    total += os.lstat(os.path.join(root, nm)).st_size
+                except OSError:
+                    pass
+            if files > 50000:
+                break
+        return total, files
+
+    def _compute_dir_size(self, dlg, path, items, size_val):
+        # Walk the folder OFF the main loop so opening Get Info on a large tree
+        # never stalls the UI, then update the (still-open) dialog's Size field
+        # via GLib.idle_add. A liveness flag tied to the dialog's destroy keeps
+        # us from touching the label after the user closed the dialog.
+        if size_val is None:
+            return
+        alive = {"open": True}
+        dlg.connect("destroy", lambda *_: alive.__setitem__("open", False))
+
+        def work():
+            total, _n = self._dir_size(path)
+            GLib.idle_add(self._apply_dir_size, alive, size_val, total, items)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_dir_size(self, alive, size_val, total, items):
+        # Runs back on the main loop (idle_add); safe to touch GTK here.
+        if alive["open"]:
+            size_val.set_text(_t("%s  ·  %d items") % (human(total), items))
+        return False
+
+    def _get_info(self):
+        model, it = self._selected_iter()
+        if it is None:
+            return
+        name = model.get_value(it, 1)
+        is_dir = model.get_value(it, 5)
+        kind = model.get_value(it, 8)
+        path = self.abspath(model.get_value(it, 4))
+        try:
+            st = os.stat(path)
+        except OSError:
+            self._flash_status(_t("Could not read '%s'") % name)
+            return
+        if is_dir:
+            try:
+                items = len(os.listdir(path))
+            except OSError:
+                items = 0
+            # The recursive folder-size walk can stall the UI on a big tree, so
+            # don't run it on the main loop: open the dialog immediately with
+            # the size pending and fill it in from a worker thread once the walk
+            # finishes (see _compute_dir_size). The item count is a single
+            # listdir, so it's known right away.
+            size_txt = _t("Calculating…  ·  %d items") % items
+        else:
+            size_txt = "%s  ·  %s bytes" % (human(st.st_size),
+                                            format(st.st_size, ","))
+        try:
+            modified = time.strftime("%d %b %Y, %H:%M",
+                                     time.localtime(st.st_mtime))
+        except ValueError:
+            modified = "—"
+        icon = "folder" if is_dir else self._icon_for(name)
+        dlg, size_val = self._show_info_dialog(
+            name, icon, kind, size_txt, modified, path)
+        if is_dir:
+            self._compute_dir_size(dlg, path, items, size_val)
+
+    def _show_info_dialog(self, name, icon, kind, size_txt, modified, path):
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("finderinfo")
+        area = dlg.get_content_area()
+        area.set_spacing(0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.get_style_context().add_class("finderinfobox")
+        # header: the item's own glyph, its name, and its kind
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        head.get_style_context().add_class("finderinfohead")
+        head.pack_start(
+            Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 44, "#3A362E")),
+            False, False, 0)
+        htext = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        htext.set_valign(Gtk.Align.CENTER)
+        nm = Gtk.Label(label=name, xalign=0)
+        nm.get_style_context().add_class("finderinfoname")
+        nm.set_line_wrap(True); nm.set_max_width_chars(26)
+        # max_width_chars only bites when the label is allowed to be narrower
+        # than its box: at the default FILL it stretches to whatever the window
+        # will give, which let one long file name blow this dialog out to 979px.
+        # WORD_CHAR because a name or path can be one unbreakable run.
+        nm.set_halign(Gtk.Align.START)
+        nm.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        kd = Gtk.Label(label=kind, xalign=0)
+        kd.get_style_context().add_class("finderinfokind")
+        htext.pack_start(nm, False, False, 0)
+        htext.pack_start(kd, False, False, 0)
+        head.pack_start(htext, True, True, 0)
+        box.pack_start(head, False, False, 0)
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        sep.get_style_context().add_class("finderinfosep")
+        box.pack_start(sep, False, False, 0)
+        grid = Gtk.Grid()
+        grid.get_style_context().add_class("finderinfogrid")
+        grid.set_column_spacing(16)
+        grid.set_row_spacing(9)
+        size_val = None
+        vals = []
+        for r, (k, v) in enumerate((("Size", size_txt),
+                                    ("Modified", modified),
+                                    ("Where", path))):
+            kl = Gtk.Label(label=k, xalign=1)
+            kl.get_style_context().add_class("finderinfokey")
+            kl.set_valign(Gtk.Align.START)
+            vl = Gtk.Label(label=v, xalign=0)
+            vl.get_style_context().add_class("finderinfoval")
+            vl.set_line_wrap(True); vl.set_max_width_chars(34)
+            # same as the name above: cap the measure, and break mid-token so a
+            # long "Where" path (one unbroken run) actually wraps.
+            vl.set_halign(Gtk.Align.START)
+            vl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            vl.set_selectable(True)
+            if k == "Size":
+                size_val = vl              # updated once the folder walk lands
+            vals.append(vl)
+            grid.attach(kl, 0, r, 1, 1)
+            grid.attach(vl, 1, r, 1, 1)
+        box.pack_start(grid, False, False, 0)
+        btnrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        btnrow.set_halign(Gtk.Align.END)
+        done = Gtk.Button(label=_t("Done"))
+        done.get_style_context().add_class("finderinfobtn")
+        done.connect("clicked", lambda *_: dlg.destroy())
+        btnrow.pack_start(done, False, False, 0)
+        box.pack_start(btnrow, False, False, 0)
+        area.add(box)
+        dlg.connect("key-press-event", self._info_key)
+        dlg.show_all()
+        # The values are selectable so a path can be copied — but that also makes
+        # them focusable, and GTK focused the first one on open and selected all
+        # of its text, so Get Info appeared with the file's size mysteriously
+        # highlighted. Put the focus on Done, where it belongs, and drop the
+        # selection GTK made on the way (moving the focus does not clear it).
+        done.grab_focus()
+        for vl in vals:
+            vl.select_region(0, 0)
+        return dlg, size_val
+
+    def _info_key(self, dlg, event):
+        if event.keyval == Gdk.KEY_Escape:
+            dlg.destroy()
+            return True
+        return False
+
+    def _icon_for(self, name):
+        return icon_for(name)             # module-level twin (nbpicker shares it)
+
+    def _kind_for(self, name, isdir):
+        return kind_for(name, isdir)
+
+    def go_up(self):
+        if self.rel.startswith("/"):
+            parent = os.path.dirname(self.rel)
+            if parent and parent != self.rel:   # stop at "/"
+                self.load(parent)
+        elif self.rel:
+            self.load(os.path.dirname(self.rel))
+        else:
+            # at Home -> step out to the absolute parent of the home dir
+            parent = os.path.dirname(HOME)
+            if parent and parent != HOME:
+                self.load(parent)
+
+    def _on_open(self, tree, path, col):
+        self._open_path(path)
+
+    def _on_open_grid(self, iconview, path):
+        self._open_path(path)
+
+    def _open_path(self, path):
+        it = self.store.get_iter(path)
+        rel = self.store.get_value(it, 4)
+        name = self.store.get_value(it, 1)
+        full = self.abspath(rel)
+        if not os.path.exists(full):
+            # the item was deleted elsewhere since this listing was read: don't
+            # silently do nothing — refresh the view and say what happened.
+            self.load(self.rel, record=False, keep_filter=True)
+            self._flash_status(_t("'%s' no longer exists") % name)
+            return
+        if os.path.isdir(full):
+            self.load(rel)
+        elif name.endswith(".app"):
+            self.launch_app(name[:-4])
+        else:
+            # a plain document: open it in its owning app, passing the file as
+            # argv[1] (Media Viewer / Writer / E-book Reader read sys.argv[1]).
+            # The user's Settings ▸ Default Applications choice wins over the
+            # built-in mapping (see _default_app_for).
+            mod = self._default_app_for(os.path.splitext(name)[1].lower())
+            if mod:
+                self._launch_module(mod, file_arg=full)
+            else:
+                # no owning app: never fail silently. The row is already
+                # selected (double-click), so flash a note in the status bar.
+                self._flash_status(_t("No app for this file type"))
+
+    def _default_app_for(self, ext):
+        """Which module opens files of extension `ext`. The user's Settings ▸
+        Default Applications choice (settings.json 'default_apps': {ext:
+        module}) wins when it names a module that actually accepts a file path
+        (FILE_OPENERS); otherwise the built-in FILE_APPS mapping. Read fresh on
+        each open so a preference change takes effect without relaunching the
+        Finder. Never raises — a missing/garbage settings file just falls back
+        to FILE_APPS."""
+        chosen = None
+        try:
+            import json
+            cfg = os.path.join(HOME, ".config", "notebook", "settings.json")
+            with open(cfg) as fh:
+                data = json.load(fh)
+            da = data.get("default_apps") if isinstance(data, dict) else None
+            if isinstance(da, dict):
+                c = da.get(ext)
+                if isinstance(c, str) and c in FILE_OPENERS:
+                    chosen = c
+        except (OSError, ValueError, TypeError):
+            pass
+        return chosen or FILE_APPS.get(ext)
+
+    def launch_app(self, display_name, file_arg=None):
+        mod = APP_MODULES.get(display_name)
+        if not mod:
+            return
+        self._launch_module(mod, file_arg=file_arg)
+
+    def _launch_module(self, mod, file_arg=None):
+        # Spawn a DE app module, optionally handing it a file path as argv[1],
+        # then step out of the way while it owns the screen. Shared by the .app
+        # double-click, the panel, and document double-click.
+        script = os.path.join(DE_DIR, mod + ".py")
+        if os.path.exists(script):
+            argv = ["python3", script]
+            if file_arg:
+                argv.append(file_arg)
+            env = dict(os.environ, PYTHONPATH=DE_DIR)
+            try:
+                proc = subprocess.Popen(argv, env=env)
+            except OSError:
+                # python3 missing / fork failed: stay visible instead of
+                # hiding behind an app that never launched, and say so.
+                self._flash_status(_t("Could not open that app"))
+                return
+            # step out of the way while the app owns the screen: hidden,
+            # we can't shadow the fullscreen app or steal its focus
+            # (matchbox pins dialogs above main clients). Return when the
+            # app exits. The flag file tells the widget column to hide too.
+            try:
+                open("/tmp/nb-app-active", "w").close()
+            except Exception:
+                pass
+            self.hide()
+            GLib.child_watch_add(proc.pid, self._app_exited)
+        else:
+            # the owning app module isn't present on this image (e.g. a document
+            # whose app wasn't installed): tell the user instead of nothing.
+            self._flash_status(_t("That app is not available"))
+
+    def _flash_status(self, msg, restore_ms=2400):
+        # Show a transient message in the status bar, then restore the live item
+        # count. Non-silent feedback for actions with no visible result of their
+        # own (e.g. double-clicking a file type no installed app can open).
+        self.status.set_text(msg)
+        GLib.timeout_add(restore_ms, self._restore_status)
+
+    def _restore_status(self):
+        self.status.set_text(self._status_text(len(self.store)))
+        return False
+
+    def _other_apps_running(self, exclude_pid=None):
+        # Robust cross-process reconciliation: is any OTHER Notebook OS app
+        # (i.e. not the desktop home — finder/widgets) still running? The
+        # app-active flag is a shared boolean written by BOTH us and the shell,
+        # so it can't by itself tell us that a shell-launched app (e.g. a
+        # Calculator opened from the panel) is still up. Scan /proc for other
+        # python3 processes running a DE app script, excluding ourselves, the
+        # widget column, other Finder windows, and the app that just exited.
+        me = os.getpid()
+        try:
+            pids = [p for p in os.listdir("/proc") if p.isdigit()]
+        except OSError:
+            return False
+        for p in pids:
+            pid = int(p)
+            if pid == me or pid == exclude_pid:
+                continue
+            try:
+                with open("/proc/%s/cmdline" % p, "rb") as fh:
+                    parts = [a for a in fh.read().split(b"\0") if a]
+            except OSError:
+                continue
+            script = next((a.decode("utf-8", "replace") for a in parts
+                           if a.endswith(b".py")), None)
+            if not script or os.path.dirname(script) != DE_DIR:
+                continue
+            # Exclude the always-running desktop infrastructure (see session.sh:
+            # finder + widgets + shell + xflushd run for the whole session); any
+            # OTHER de/*.py is a real user app still holding the screen.
+            if os.path.basename(script)[:-3] not in (
+                    "finder", "widgets", "shell", "xflushd"):
+                return True
+        return False
+
+    def _app_exited(self, _pid, _status):
+        # Reconcile before reappearing: the app-active flag is shared with the
+        # shell, so another app (e.g. a Calculator launched from the panel) may
+        # still own the screen. Only drop the flag and return if NOTHING else
+        # is running; otherwise stay hidden and leave the flag in place for the
+        # last app to clear (the flag monitor brings us back once it's gone).
+        if self._other_apps_running(exclude_pid=_pid):
+            return
+        try:
+            os.remove("/tmp/nb-app-active")
+        except Exception:
+            pass
+        self.show_all()
+        self.present()
+        # the re-shown Finder is blank on swrast until a scanout flush (same
+        # first-paint issue as launched apps) — nudge it a few times.
+        GLib.timeout_add(200, self._nudge)
+        GLib.timeout_add(600, self._nudge)
+        GLib.timeout_add(1500, self._ensure_mapped)
+
+    def _nudge(self):
+        nbapp.nudge_paint()
+        return False
+
+
+FINDER_CSS = b"""
+.finder .window-frame { background: #F8F7F2; border: 1px solid #1A1916; }
+.finder .titlebar { background: #FCFBF8; border-bottom: 1px solid #1A1916;
+                    padding: 6px 14px; min-height: 44px; }
+.finder .winbox { min-width: 15px; min-height: 15px; padding: 0;
+                  background: #F8F7F2; border: 1px solid #1A1916; border-radius: 0;
+                  box-shadow: none; }
+.finder .wintitle { font-weight: 700; font-size: 14px; letter-spacing: 0.08em; }
+/* Toolbar palette: the bar and the controls on it are ONE surface.
+   These previously sat at #FBFAF6 (near-white) with a #C4BFB1 border on a
+   #F1EEE6 bar, so every control read as a pale chip pasted onto a darker
+   strip. The bar now uses the paper tone and the controls share it, separated
+   by the standard hairline (#C9C4B6, the same rule weight as the installer and
+   the new scrollbars), so the toolbar reads as one continuous surface. */
+.finder .navbar { background: #FCFBF8; border-bottom: 1px solid #C9C4B6;
+                  padding: 10px 16px; }
+.finder .navbtn { min-width: 32px; min-height: 32px; padding: 0;
+                  background: #FCFBF8; border: 1px solid #C9C4B6; border-radius: 2px;
+                  box-shadow: none; }
+.finder .navbtn:hover { background: #F1EEE6; }
+/* a disabled nav arrow (back/fwd/up at an end) dims to the mockup's greyed
+   face + border, so it reads as inactive instead of keeping the live swatch */
+.finder .navbtn:disabled { background: #F4F2EC; border-color: #DCD7C9; }
+.finder .navsep { color: #C9C4B6; min-width: 1px; margin: 4px 2px; }
+.finder .toolbtn { padding: 5px 12px; background: #FCFBF8; color: #2A2620;
+                   border: 1px solid #C9C4B6; border-radius: 2px; box-shadow: none;
+                   font-size: 13px; margin: 0 1px; }
+.finder .toolbtn:hover { background: #F1EEE6; }
+.finder .toolbtn:disabled { color: #B8B3A6; background: #F4F2EC; }
+.finder .crumb { font-size: 13px; color: #3A362E; padding: 3px 10px;
+                 background: #FCFBF8; border: 1px solid #C9C4B6;
+                 border-radius: 3px; box-shadow: none; margin: 0 1px; }
+.finder .crumb:hover { background: #F1EEE6; }
+.finder .crumb.active { background: #E6DFCE; color: #1A1916; font-weight: 600;
+                        border-color: #C9C4B6; }
+.finder .viewswitch { margin: 0 2px; }
+.finder .viewbtn { min-width: 30px; min-height: 30px; padding: 0 5px;
+                   background: #FCFBF8; color: #3A362E; border: 1px solid #C9C4B6;
+                   border-radius: 0; box-shadow: none; margin: 0; }
+.finder .viewbtn:first-child { border-radius: 2px 0 0 2px; }
+.finder .viewbtn:last-child { border-radius: 0 2px 2px 0; border-left-width: 0; }
+.finder .viewbtn:hover { background: #F1EEE6; }
+.finder .viewbtn.active { background: #E6DFCE; border-color: #C9C4B6; }
+.finder .filegrid { background: #F8F7F2; font-size: 13.5px; padding: 6px; }
+.finder .filegrid:selected, .finder .filegrid .cell:selected {
+                 background: #EAE3D2; color: #2A2620; }
+.finder .sidebar { background: #EFEBE0; border-right: 1px solid #D7D2C5;
+                   padding: 12px 10px; }
+.finder .sbheader { font-size: 11px; color: #8A857A; font-weight: 600;
+                    letter-spacing: 0.08em; padding: 12px 8px 6px; }
+.finder .sbrow { padding: 7px 12px; background: transparent; border: none;
+                 border-radius: 2px; box-shadow: none; margin: 1px 0;
+                 font-size: 14.5px; color: #2A2620; }
+.finder .sbrow:hover { background: #E3DCCB; }
+.finder .sbrow.selected { background: #EAE3D2; border-left: 3px solid #C8341E;
+                          font-weight: 600; }
+/* Eject, beside a removable volume: a quiet glyph on the sidebar surface. With
+   no rule of its own it fell back to the theme's default button and sat in the
+   sidebar as a bordered near-white chip among flat, borderless rows. */
+.finder .sbeject { background: transparent; border: none; box-shadow: none;
+                   padding: 3px 5px; min-width: 20px; min-height: 20px;
+                   border-radius: 2px; }
+.finder .sbeject:hover { background: #E3DCCB; }
+.finder .filelist { background: #F8F7F2; font-size: 14px; }
+/* Selected row: the warm selection tone, matching the grid view and the rest
+   of the system. It used to carry `border-left: 3px solid #C8341E` for the
+   design's single red row edge, but GTK3 paints a TreeView row one CELL at a
+   time, so that rule drew a red bar down the left of the Kind, Size AND Date
+   columns as well - four bars per row - and shifted every cell's text 3px
+   right the moment a row was clicked. There is no CSS handle for "the first
+   cell only" (a :first-child on the cell node matches nothing), so the edge is
+   dropped here; signage red still marks the current place in the sidebar. */
+.finder .filelist :selected { background: #EAE3D2; color: #2A2620; }
+/* Column headings read as quiet labels, not buttons. The theme's base button
+   rule gave every header cell a full 1px hairline, so the row came up as a
+   strip of bevelled beige boxes divided by vertical rules - the clunky "file
+   window heading" look. Drop every edge but a single bottom hairline so the
+   heading is one clean band of small-caps labels above the list. */
+.finder .filelist header button { background: #F1EEE6; color: #8A857A;
+                 font-size: 11px; font-weight: 600; border-radius: 0;
+                 letter-spacing: 0.08em; padding: 6px 10px;
+                 border: none; border-bottom: 1px solid #D7D2C5; }
+.finder .filelist header button:hover { background: #ECE7DB; }
+/* The sort-direction triangle GTK draws at the end of the active column: keep
+   it small and muted so it whispers which column is sorted instead of sitting
+   as a big dark wedge in the middle of the wide Name column. */
+.finder .filelist header button arrow,
+.finder header button arrow {
+                 color: #B7B1A3; opacity: 0.4;
+                 min-width: 10px; min-height: 10px; }
+.finder .statusbar { background: #F1EEE6; border-top: 1px solid #D7D2C5;
+                     color: #8A857A; font-size: 12.5px; padding: 7px 18px; }
+/* bottom-right resize grip: opaque (black-safe with no compositor), a hairline
+   corner tab that reads as a drag handle */
+.finder .resizegrip { background: #ECE8DD; border-top: 1px solid #C9C4B6;
+                      border-left: 1px solid #C9C4B6; }
+.finder .resizegrip:hover { background: #E3DCCB; }
+/* empty-folder / no-search-result message, centered over the empty view */
+.finder .emptystate { color: #A29C8E; font-size: 15px; font-weight: 500; }
+/* inline rename: the Name cell's entry, active-red to signal it is live */
+.finder .filelist entry, .finder .filegrid entry {
+                 background: #FFFFFF; color: #1A1916; caret-color: #C8341E;
+                 border: 1px solid #C8341E; border-radius: 2px; padding: 1px 4px; }
+/* right-click context menu */
+.findermenu { background: #FCFBF8; border: 1px solid #C4BFB1; padding: 4px 0; }
+.findermenu menuitem { padding: 5px 18px; color: #2A2620; font-size: 13.5px; }
+.findermenu menuitem:hover { background: #EAE3D2; color: #1A1916; }
+.findermenu separator { background: #D7D2C5; min-height: 1px; margin: 4px 0; }
+/* Get Info dialog */
+.finderinfo { background: #F8F7F2; border: 1px solid #C4BFB1; }
+.finderinfobox { padding: 22px 24px 18px; }
+.finderinfohead { margin-bottom: 14px; }
+.finderinfoname { font-size: 17px; font-weight: 700; color: #1A1916; }
+.finderinfokind { font-size: 12.5px; color: #8A857A; }
+.finderinfosep { background: #D7D2C5; min-height: 1px; margin-bottom: 14px; }
+.finderinfogrid { margin-bottom: 18px; }
+.finderinfokey { font-size: 12.5px; color: #8A857A; font-weight: 600; }
+.finderinfoval { font-size: 13px; color: #2A2620; }
+/* A button's own `color` does NOT reach its label: Papertone's `* { color: ink }`
+   matches the label node directly, and a direct match beats an inherited value,
+   so every light-on-dark button in this file has to name its label too. Without
+   this the Done button was ink on ink - a black slab with no visible text. */
+.finderinfobtn { padding: 6px 20px; background: #1A1916; color: #F4F2EC;
+                 border: 1px solid #1A1916; border-radius: 2px; box-shadow: none;
+                 font-size: 13px; }
+.finderinfobtn label, .finderinfobtn:hover label { color: #F4F2EC; }
+.finderinfobtn:hover { background: #2A2620; }
+/* Restore Removed Apps dialog: an opaque scroller + list (black-safe with no
+   compositor) with hairline-separated rows.
+   NOT scoped under .finder - this dialog is its own toplevel, so it never has
+   the Finder window as an ancestor and the whole block was dead: the list came
+   up as bare theme chrome with no row padding and the Restore buttons flush
+   against its border. */
+.restorescroll { background: #FCFBF8; border: 1px solid #D7D2C5;
+                 border-radius: 2px; }
+.restorelist { background: #FCFBF8; }
+.restorelist row { padding: 8px 12px; border-bottom: 1px solid #EDE9DF;
+                 background: #FCFBF8; }
+.restorelist row:last-child { border-bottom: none; }
+/* copy progress: the theme's papertone trough with the ink fill, given a
+   slightly heavier bar so it reads as the subject of the card rather than a
+   hairline. Never signage red: a copy is work in progress, not an alert. */
+.finderprogress trough { min-height: 7px; border-radius: 4px; }
+.finderprogress progress { min-height: 7px; border-radius: 4px; }
+/* confirm dialog: a light Cancel and a signage-red destructive primary */
+.finderinfocancel { padding: 6px 18px; background: #FBFAF6; color: #2A2620;
+                 border: 1px solid #C4BFB1; border-radius: 2px; box-shadow: none;
+                 font-size: 13px; }
+.finderinfocancel:hover { background: #ECE8DD; }
+.finderinfodanger { padding: 6px 20px; background: #C8341E; color: #F8F7F2;
+                 border: 1px solid #A82B18; border-radius: 2px; box-shadow: none;
+                 font-size: 13px; font-weight: 600; }
+.finderinfodanger label, .finderinfodanger:hover label { color: #F8F7F2; }
+.finderinfodanger:hover { background: #B32E1A; }
+/* The context menu is a real popup toplevel: without a rule for its decoration
+   node the compositor's shadow frame renders as theme grey around the card. */
+.findermenu decoration { background: #FCFBF8; box-shadow: none; }
+"""
+
+
+_FINDER_CSS_DONE = False
+
+
+def install_css():
+    # Idempotent: nbpicker calls this on every picker open, so guard against
+    # leaking a fresh CssProvider each time (matches nbapp.install_css).
+    global _FINDER_CSS_DONE
+    if _FINDER_CSS_DONE:
+        return
+    prov = Gtk.CssProvider(); prov.load_from_data(FINDER_CSS)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    _FINDER_CSS_DONE = True
+
+
+if __name__ == "__main__":
+    import sys
+    install_css()
+    start = sys.argv[1] if len(sys.argv) > 1 else "Applications"
+    w = Finder(start)
+    w.connect("destroy", Gtk.main_quit)
+    w.show_all()
+    Gtk.main()

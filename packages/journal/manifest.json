@@ -1,0 +1,10 @@
+{
+  "id": "journal",
+  "name": "Journal",
+  "kind": "Diary",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "journal",
+  "order": 40
+}

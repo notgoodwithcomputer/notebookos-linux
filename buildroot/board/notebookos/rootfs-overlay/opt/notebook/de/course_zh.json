@@ -1,0 +1,258 @@
+{
+  "code": "zh",
+  "name": "Mandarin",
+  "from": "English",
+  "note": "Pinyin only — learning to speak, not to read characters.",
+  "units": [
+    {
+      "title": "BASICS",
+      "skills": [
+        {
+          "name": "Greetings",
+          "words": [
+            {"t": "nǐ hǎo", "e": "hello", "ipa": "ni²¹⁴ xau²¹⁴"},
+            {"t": "zàijiàn", "e": "goodbye", "ipa": "tsai⁵¹ tɕjɛn⁵¹"},
+            {"t": "xièxie", "e": "thank you", "ipa": "ɕjɛ⁵¹ ɕjɛ"},
+            {"t": "qǐng", "e": "please", "ipa": "tɕʰiŋ²¹⁴"},
+            {"t": "duìbuqǐ", "e": "sorry", "ipa": "twei⁵¹ pu tɕʰi²¹⁴"},
+            {"t": "shì", "e": "yes", "ipa": "ʂʐ̩⁵¹"},
+            {"t": "bù", "e": "no", "ipa": "pu⁵¹"},
+            {"t": "zǎoshang hǎo", "e": "good morning", "ipa": "tsau²¹⁴ ʂaŋ xau²¹⁴"}
+          ],
+          "phrases": [
+            {"t": "nǐ hǎo ma", "e": "how are you", "ipa": "ni²¹⁴ xau²¹⁴ ma"},
+            {"t": "wǒ hěn hǎo", "e": "I am fine", "ipa": "wo²¹⁴ xən²¹⁴ xau²¹⁴"}
+          ]
+        },
+        {
+          "name": "People",
+          "words": [
+            {"t": "wǒ", "e": "I", "ipa": "wo²¹⁴"},
+            {"t": "nǐ", "e": "you", "ipa": "ni²¹⁴"},
+            {"t": "tā", "e": "he", "ipa": "tʰa⁵"},
+            {"t": "wǒmen", "e": "we", "ipa": "wo²¹⁴ mən"},
+            {"t": "tāmen", "e": "they", "ipa": "tʰa⁵ mən"},
+            {"t": "rén", "e": "person", "ipa": "ʐən³⁵"},
+            {"t": "nánrén", "e": "man", "ipa": "nan³⁵ ʐən³⁵"},
+            {"t": "nǚrén", "e": "woman", "ipa": "ny²¹⁴ ʐən³⁵"},
+            {"t": "péngyou", "e": "friend", "ipa": "pʰəŋ³⁵ jou"}
+          ],
+          "phrases": [
+            {"t": "wǒ jiào Ana", "e": "my name is Ana", "ipa": "wo²¹⁴ tɕjau⁵¹ a na"}
+          ]
+        },
+        {
+          "name": "Numbers",
+          "words": [
+            {"t": "yī", "e": "one", "ipa": "i⁵"},
+            {"t": "èr", "e": "two", "ipa": "ɑɻ⁵¹"},
+            {"t": "sān", "e": "three", "ipa": "san⁵"},
+            {"t": "sì", "e": "four", "ipa": "sɹ̩⁵¹"},
+            {"t": "wǔ", "e": "five", "ipa": "u²¹⁴"},
+            {"t": "liù", "e": "six", "ipa": "ljou⁵¹"},
+            {"t": "qī", "e": "seven", "ipa": "tɕʰi⁵"},
+            {"t": "bā", "e": "eight", "ipa": "pa⁵"},
+            {"t": "jiǔ", "e": "nine", "ipa": "tɕjou²¹⁴"},
+            {"t": "shí", "e": "ten", "ipa": "ʂʐ̩³⁵"}
+          ],
+          "phrases": [
+            {"t": "wǒ yǒu sān", "e": "I have three", "ipa": "wo²¹⁴ jou²¹⁴ san⁵"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "PEOPLE",
+      "skills": [
+        {
+          "name": "Family",
+          "words": [
+            {"t": "bàba", "e": "dad", "ipa": "pa⁵¹ pa"},
+            {"t": "māma", "e": "mom", "ipa": "ma⁵ ma"},
+            {"t": "érzi", "e": "son", "ipa": "ɑɻ³⁵ tsɹ̩"},
+            {"t": "nǚ'ér", "e": "daughter", "ipa": "ny²¹⁴ ɑɻ³⁵"},
+            {"t": "gēge", "e": "older brother", "ipa": "kɤ⁵ kɤ"},
+            {"t": "mèimei", "e": "younger sister", "ipa": "mei⁵¹ mei"},
+            {"t": "jiā", "e": "home", "ipa": "tɕja⁵"}
+          ],
+          "phrases": [
+            {"t": "wǒ ài wǒ jiā", "e": "I love my home", "ipa": "wo²¹⁴ ai⁵¹ wo²¹⁴ tɕja⁵"}
+          ]
+        },
+        {
+          "name": "Colors",
+          "words": [
+            {"t": "hóng", "e": "red", "ipa": "xʊŋ³⁵"},
+            {"t": "lán", "e": "blue", "ipa": "lan³⁵"},
+            {"t": "lǜ", "e": "green", "ipa": "ly⁵¹"},
+            {"t": "huáng", "e": "yellow", "ipa": "xwaŋ³⁵"},
+            {"t": "hēi", "e": "black", "ipa": "xei⁵"},
+            {"t": "bái", "e": "white", "ipa": "pai³⁵"}
+          ],
+          "phrases": [
+            {"t": "hóng píngguǒ", "e": "a red apple", "ipa": "xʊŋ³⁵ pʰiŋ³⁵ kwo²¹⁴"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "EVERYDAY",
+      "skills": [
+        {
+          "name": "Food",
+          "words": [
+            {"t": "shuǐ", "e": "water", "ipa": "ʂwei²¹⁴"},
+            {"t": "chá", "e": "tea", "ipa": "tʂʰa³⁵"},
+            {"t": "fàn", "e": "rice", "ipa": "fan⁵¹"},
+            {"t": "miànbāo", "e": "bread", "ipa": "mjɛn⁵¹ pau⁵"},
+            {"t": "ròu", "e": "meat", "ipa": "ʐou⁵¹"},
+            {"t": "chī", "e": "to eat", "ipa": "tʂʰʐ̩⁵"},
+            {"t": "hē", "e": "to drink", "ipa": "xɤ⁵"}
+          ],
+          "phrases": [
+            {"t": "wǒ chī fàn", "e": "I eat rice", "ipa": "wo²¹⁴ tʂʰʐ̩⁵ fan⁵¹"},
+            {"t": "wǒ hē chá", "e": "I drink tea", "ipa": "wo²¹⁴ xɤ⁵ tʂʰa³⁵"}
+          ]
+        },
+        {
+          "name": "Verbs",
+          "words": [
+            {"t": "shì", "e": "to be", "ipa": "ʂʐ̩⁵¹"},
+            {"t": "yǒu", "e": "to have", "ipa": "jou²¹⁴"},
+            {"t": "qù", "e": "to go", "ipa": "tɕʰy⁵¹"},
+            {"t": "kàn", "e": "to see", "ipa": "kʰan⁵¹"},
+            {"t": "shuō", "e": "to speak", "ipa": "ʂwo⁵"},
+            {"t": "xué", "e": "to learn", "ipa": "ɕɥe³⁵"},
+            {"t": "ài", "e": "to love", "ipa": "ai⁵¹"}
+          ],
+          "phrases": [
+            {"t": "wǒ xué zhōngwén", "e": "I learn Chinese", "ipa": "wo²¹⁴ ɕɥe³⁵ tʂʊŋ⁵ wən³⁵"},
+            {"t": "nǐ shuō zhōngwén ma", "e": "do you speak Chinese", "ipa": "ni²¹⁴ ʂwo⁵ tʂʊŋ⁵ wən³⁵ ma"}
+          ]
+        },
+        {
+          "name": "Describing",
+          "words": [
+            {"t": "dà", "e": "big", "ipa": "ta⁵¹"},
+            {"t": "xiǎo", "e": "small", "ipa": "ɕjau²¹⁴"},
+            {"t": "hǎo", "e": "good", "ipa": "xau²¹⁴"},
+            {"t": "měi", "e": "beautiful", "ipa": "mei²¹⁴"},
+            {"t": "xīn", "e": "new", "ipa": "ɕin⁵"},
+            {"t": "rè", "e": "hot", "ipa": "ʐɤ⁵¹"},
+            {"t": "lěng", "e": "cold", "ipa": "ləŋ²¹⁴"}
+          ],
+          "phrases": [
+            {"t": "dà fángzi", "e": "a big house", "ipa": "ta⁵¹ faŋ³⁵ tsɹ̩"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "GETTING AROUND",
+      "skills": [
+        {
+          "name": "Places",
+          "words": [
+            {"t": "fángzi", "e": "house", "ipa": "faŋ³⁵ tsɹ̩"},
+            {"t": "xuéxiào", "e": "school", "ipa": "ɕɥe³⁵ ɕjau⁵¹"},
+            {"t": "shāngdiàn", "e": "store", "ipa": "ʂaŋ⁵ tjɛn⁵¹"},
+            {"t": "chéngshì", "e": "city", "ipa": "tʂʰəŋ³⁵ ʂʐ̩⁵¹"},
+            {"t": "lù", "e": "road", "ipa": "lu⁵¹"},
+            {"t": "shìchǎng", "e": "market", "ipa": "ʂʐ̩⁵¹ tʂʰaŋ²¹⁴"},
+            {"t": "mén", "e": "door", "ipa": "mən³⁵"}
+          ],
+          "phrases": [
+            {"t": "xuéxiào hěn dà", "e": "the school is big", "ipa": "ɕɥe³⁵ ɕjau⁵¹ xən²¹⁴ ta⁵¹"},
+            {"t": "wǒ qù xuéxiào", "e": "I go to school", "ipa": "wo²¹⁴ tɕʰy⁵¹ ɕɥe³⁵ ɕjau⁵¹"}
+          ]
+        },
+        {
+          "name": "Time",
+          "words": [
+            {"t": "jīntiān", "e": "today", "ipa": "tɕin⁵ tʰjɛn⁵"},
+            {"t": "míngtiān", "e": "tomorrow", "ipa": "miŋ³⁵ tʰjɛn⁵"},
+            {"t": "xiànzài", "e": "now", "ipa": "ɕjɛn⁵¹ tsai⁵¹"},
+            {"t": "tiān", "e": "day", "ipa": "tʰjɛn⁵"},
+            {"t": "wǎnshang", "e": "evening", "ipa": "wan²¹⁴ ʂaŋ"},
+            {"t": "xīngqī", "e": "week", "ipa": "ɕiŋ⁵ tɕʰi⁵"},
+            {"t": "xiǎoshí", "e": "hour", "ipa": "ɕjau²¹⁴ ʂʐ̩³⁵"},
+            {"t": "nián", "e": "year", "ipa": "njɛn³⁵"}
+          ],
+          "phrases": [
+            {"t": "jīntiān hěn rè", "e": "today is hot", "ipa": "tɕin⁵ tʰjɛn⁵ xən²¹⁴ ʐɤ⁵¹"},
+            {"t": "jīntiān hěn lěng", "e": "today is cold", "ipa": "tɕin⁵ tʰjɛn⁵ xən²¹⁴ ləŋ²¹⁴"}
+          ]
+        },
+        {
+          "name": "Travel",
+          "words": [
+            {"t": "chē", "e": "car", "ipa": "tʂʰɤ⁵"},
+            {"t": "huǒchē", "e": "train", "ipa": "xwo²¹⁴ tʂʰɤ⁵"},
+            {"t": "fēijī", "e": "airplane", "ipa": "fei⁵ tɕi⁵"},
+            {"t": "zhèlǐ", "e": "here", "ipa": "tʂɤ⁵¹ li²¹⁴"},
+            {"t": "nàlǐ", "e": "there", "ipa": "na⁵¹ li²¹⁴"},
+            {"t": "yuǎn", "e": "far", "ipa": "ɥɛn²¹⁴"},
+            {"t": "jìn", "e": "near", "ipa": "tɕin⁵¹"}
+          ],
+          "phrases": [
+            {"t": "chē hěn xīn", "e": "the car is new", "ipa": "tʂʰɤ⁵ xən²¹⁴ ɕin⁵"},
+            {"t": "chē hěn dà", "e": "the car is big", "ipa": "tʂʰɤ⁵ xən²¹⁴ ta⁵¹"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "THE WORLD",
+      "skills": [
+        {
+          "name": "Animals",
+          "words": [
+            {"t": "gǒu", "e": "dog", "ipa": "kou²¹⁴"},
+            {"t": "māo", "e": "cat", "ipa": "mau⁵"},
+            {"t": "niǎo", "e": "bird", "ipa": "njau²¹⁴"},
+            {"t": "mǎ", "e": "horse", "ipa": "ma²¹⁴"},
+            {"t": "yú", "e": "fish", "ipa": "y³⁵"},
+            {"t": "niú", "e": "cow", "ipa": "njou³⁵"},
+            {"t": "jī", "e": "chicken", "ipa": "tɕi⁵"}
+          ],
+          "phrases": [
+            {"t": "wǒ yǒu gǒu", "e": "I have a dog", "ipa": "wo²¹⁴ jou²¹⁴ kou²¹⁴"},
+            {"t": "wǒ yǒu māo", "e": "I have a cat", "ipa": "wo²¹⁴ jou²¹⁴ mau⁵"}
+          ]
+        },
+        {
+          "name": "Nature",
+          "words": [
+            {"t": "tàiyáng", "e": "sun", "ipa": "tʰai⁵¹ jaŋ³⁵"},
+            {"t": "yuèliang", "e": "moon", "ipa": "ɥe⁵¹ ljaŋ"},
+            {"t": "shù", "e": "tree", "ipa": "ʂu⁵¹"},
+            {"t": "huā", "e": "flower", "ipa": "xwa⁵"},
+            {"t": "yǔ", "e": "rain", "ipa": "y²¹⁴"},
+            {"t": "hǎi", "e": "sea", "ipa": "xai²¹⁴"},
+            {"t": "tiānkōng", "e": "sky", "ipa": "tʰjɛn⁵ kʰʊŋ⁵"}
+          ],
+          "phrases": [
+            {"t": "tiānkōng hěn lán", "e": "the sky is blue", "ipa": "tʰjɛn⁵ kʰʊŋ⁵ xən²¹⁴ lan³⁵"},
+            {"t": "tàiyáng hěn dà", "e": "the sun is big", "ipa": "tʰai⁵¹ jaŋ³⁵ xən²¹⁴ ta⁵¹"}
+          ]
+        },
+        {
+          "name": "More Verbs",
+          "words": [
+            {"t": "zuò", "e": "to do", "ipa": "tswo⁵¹"},
+            {"t": "yào", "e": "to want", "ipa": "jau⁵¹"},
+            {"t": "néng", "e": "to be able", "ipa": "nəŋ³⁵"},
+            {"t": "mǎi", "e": "to buy", "ipa": "mai²¹⁴"},
+            {"t": "lái", "e": "to come", "ipa": "lai³⁵"},
+            {"t": "zhù", "e": "to live", "ipa": "tʂu⁵¹"},
+            {"t": "xiě", "e": "to write", "ipa": "ɕjɛ²¹⁴"}
+          ],
+          "phrases": [
+            {"t": "wǒ yào xué zhōngwén", "e": "I want to learn Chinese", "ipa": "wo²¹⁴ jau⁵¹ ɕɥe³⁵ tʂʊŋ⁵ wən³⁵"},
+            {"t": "wǒ yào hē chá", "e": "I want to drink tea", "ipa": "wo²¹⁴ jau⁵¹ xɤ⁵ tʂʰa³⁵"}
+          ]
+        }
+      ]
+    }
+  ]
+}

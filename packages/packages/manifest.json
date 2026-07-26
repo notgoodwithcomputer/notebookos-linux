@@ -1,0 +1,10 @@
+{
+  "id": "packages",
+  "name": "Packages",
+  "kind": "System",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "packages",
+  "order": 190
+}

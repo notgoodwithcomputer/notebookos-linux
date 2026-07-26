@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  .ms-scroll::-webkit-scrollbar { width: 12px; }
+  .ms-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Messages</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ CONVERSATIONS ============ -->
+      <div style="width:372px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:18px 20px;border-bottom:1px solid #D7D2C5;display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-size:19px;font-weight:700;color:#1A1916;">Mesh</div>
+          <div style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#6E7B57;"><div style="width:8px;height:8px;border-radius:50%;background:#6E7B57;"></div>4 nodes online</div>
+        </div>
+        <div class="ms-scroll" style="flex:1;overflow-y:auto;padding:8px;min-height:0;">
+          <sc-for list="{{ convos }}" as="c" hint-placeholder-count="4">
+            <div onClick="{{ c.onClick }}" style="{{ c.rowStyle }}" style-hover="background:#E6DFCE;">
+              <div style="{{ c.avatar }}">{{ c.initials }}</div>
+              <div style="min-width:0;flex:1;">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;">
+                  <span style="font-size:15.5px;color:#1A1916;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ c.name }}</span>
+                  <span style="font-size:11.5px;color:#A39D8F;flex:none;font-variant-numeric:tabular-nums;">{{ c.time }}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:3px;">
+                  <span style="{{ c.previewStyle }}">{{ c.preview }}</span>
+                  {{ c.badge }}
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- ============ THREAD ============ -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:#FCFBF8;">
+        <!-- thread header -->
+        <div style="flex:none;height:74px;display:flex;align-items:center;gap:16px;padding:0 32px;border-bottom:1px solid #E6E1D4;">
+          <div style="{{ headAvatar }}">{{ activeInitials }}</div>
+          <div style="flex:1;">
+            <div style="font-size:17px;font-weight:600;color:#1A1916;">{{ activeName }}</div>
+            <div style="font-size:12.5px;color:#8A857A;font-family:'Courier New',monospace;">{{ activeNode }}</div>
+          </div>
+          <div style="display:flex;align-items:flex-end;gap:3px;height:20px;">
+            <sc-for list="{{ signalBars }}" as="b" hint-placeholder-count="4">
+              <div style="{{ b.style }}"></div>
+            </sc-for>
+          </div>
+          <div style="font-size:12.5px;color:#8A857A;margin-left:6px;">{{ activeHeard }}</div>
+        </div>
+        <!-- messages -->
+        <div class="ms-scroll" style="flex:1;overflow-y:auto;padding:30px 40px;min-height:0;display:flex;flex-direction:column;">
+          <div style="max-width:760px;width:100%;margin:0 auto;">
+            <div style="text-align:center;margin-bottom:26px;"><span style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#B0AB9D;background:#FCFBF8;padding:0 12px;">Today</span></div>
+            <sc-for list="{{ thread }}" as="msg" hint-placeholder-count="5">
+              <div style="{{ msg.wrap }}">
+                <div style="{{ msg.bubble }}">{{ msg.text }}</div>
+                <div style="{{ msg.metaStyle }}">{{ msg.meta }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <!-- composer -->
+        <div style="flex:none;border-top:1px solid #E6E1D4;padding:18px 32px;background:#FBFAF6;">
+          <div style="display:flex;align-items:center;gap:14px;">
+            <div style="font-size:12px;color:#8A857A;font-family:'Courier New',monospace;border:1px solid #DCD7C9;border-radius:2px;padding:7px 10px;flex:none;">CH 4</div>
+            <input value="{{ draft }}" onChange="{{ onDraft }}" type="text" placeholder="Short message — keep it under 235 bytes" style="flex:1;height:44px;border:1px solid #C4BFB1;border-radius:2px;background:#FCFBF8;padding:0 16px;font-size:15px;color:#1A1916;outline:none;font-family:inherit;" />
+            <div style="font-size:12.5px;color:#9A958A;font-variant-numeric:tabular-nums;width:74px;text-align:right;flex:none;">{{ byteCount }}</div>
+            <div onClick="{{ onSend }}" style="{{ sendStyle }}">Send</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = {
+    now: new Date(2026, 5, 20, 9, 41, 0), active: 0, draft: "",
+    convos: [
+      { name: "Dey Okonkwo", node: "NODE-7F \u00b7 ch 4", color: "#4A5E73", signal: 4, heard: "online", unread: 0,
+        msgs: [
+          { me: false, text: "u up? the light is unreal rn", time: "08:40", via: "via NODE-7F" },
+          { me: true, text: "barely. coffee #2", time: "08:42", status: "Delivered \u00b7 2 hops" },
+          { me: false, text: "bring the small frame? owe u one", time: "08:55", via: "via NODE-22 \u2192 7F" },
+          { me: true, text: "ok. reading still 18:30?", time: "08:56", status: "Delivered \u00b7 1 hop" },
+          { me: false, text: "yes. corner seat held", time: "08:57", via: "via NODE-7F" },
+        ] },
+      { name: "Reuben Marsh", node: "NODE-12 \u00b7 ch 4", color: "#9A7B4F", signal: 2, heard: "last heard yesterday", unread: 1,
+        msgs: [
+          { me: false, text: "almanac rebound. come by brighton", time: "Yest", via: "via NODE-12" },
+          { me: true, text: "sunday?", time: "Yest", status: "Queued \u2014 next window 14:05" },
+        ] },
+      { name: "The Super", node: "NODE-01 \u00b7 ch 1", color: "#8A857A", signal: 4, heard: "online", unread: 0,
+        msgs: [
+          { me: false, text: "hot water back on 4C by noon", time: "06:40", via: "via NODE-01" },
+          { me: true, text: "thank you", time: "06:41", status: "Delivered \u00b7 1 hop" },
+        ] },
+      { name: "Greenlight Books", node: "NODE-88 \u00b7 ch 6", color: "#6E7B57", signal: 3, heard: "online", unread: 0,
+        msgs: [
+          { me: false, text: "doors at 6. you\u2019re on the list.", time: "09:30", via: "via NODE-88" },
+        ] },
+    ],
+  };
+
+  componentDidMount() { this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+  initialsOf(name) { return name.split(" ").filter((w) => /[A-Za-z]/.test(w[0])).slice(0, 2).map((w) => w[0]).join("").toUpperCase(); }
+
+  send() {
+    const d = this.state.draft.trim();
+    if (!d) return;
+    const idx = this.state.active;
+    this.setState((s) => {
+      const convos = s.convos.map((c, i) => i === idx
+        ? { ...c, msgs: c.msgs.concat([{ me: true, text: d, time: this.clockStr(), status: "Sending\u2026" }]) }
+        : c);
+      return { convos, draft: "" };
+    });
+    setTimeout(() => {
+      this.setState((s) => {
+        const convos = s.convos.map((c, i) => {
+          if (i !== idx) return c;
+          const msgs = c.msgs.slice();
+          const last = msgs.length - 1;
+          const hops = 1 + Math.floor(Math.random() * 2);
+          msgs[last] = { ...msgs[last], status: "Delivered \u00b7 " + hops + (hops === 1 ? " hop" : " hops") };
+          return { ...c, msgs };
+        });
+        return { convos };
+      });
+    }, 1300);
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    if (k === "signal") return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+    return S(R(5, 5, 14, 14, 1));
+  }
+
+  renderVals() {
+    const active = this.state.active;
+    const convos = this.state.convos.map((c, i) => {
+      const last = c.msgs[c.msgs.length - 1];
+      return {
+        name: c.name, time: last.time, initials: this.initialsOf(c.name),
+        preview: (last.me ? "You: " : "") + last.text,
+        previewStyle: "flex:1;font-size:13px;color:" + (c.unread ? "#1A1916;font-weight:500;" : "#8A857A;") + "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
+        badge: c.unread ? React.createElement("span", { style: { flex: "none", minWidth: "18px", height: "18px", padding: "0 5px", borderRadius: "9px", background: "#C8341E", color: "#fff", fontSize: "11px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" } }, c.unread) : null,
+        onClick: () => this.setState({ active: i }),
+        avatar: "width:44px;height:44px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;color:#fff;background:" + c.color + ";",
+        rowStyle: "display:flex;align-items:center;gap:13px;padding:11px 12px;border-radius:2px;cursor:pointer;margin-bottom:2px;"
+          + (i === active ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+      };
+    });
+
+    const ac = this.state.convos[active];
+    const thread = ac.msgs.map((m) => ({
+      text: m.text,
+      wrap: "display:flex;flex-direction:column;align-items:" + (m.me ? "flex-end" : "flex-start") + ";margin-bottom:16px;",
+      bubble: "max-width:62%;padding:11px 16px;border-radius:4px;font-size:15.5px;line-height:1.45;"
+        + (m.me ? "background:#1A1916;color:#FCFBF8;" : "background:#F1EEE6;color:#1A1916;"),
+      meta: m.time + (m.me ? "  \u00b7  " + (m.status || "") : "  \u00b7  " + (m.via || "")),
+      metaStyle: "font-size:11.5px;color:#A39D8F;margin-top:5px;font-variant-numeric:tabular-nums;",
+    }));
+
+    const signalBars = [0, 1, 2, 3].map((b) => ({
+      style: "width:4px;height:" + (6 + b * 4) + "px;border-radius:1px;background:" + (b < ac.signal ? "#1A1916" : "#D7D2C5") + ";",
+    }));
+
+    const bytes = new Blob([this.state.draft]).size;
+
+    return {
+      menus: ["File", "Edit", "Mesh", "View"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"),
+      convos, thread, signalBars,
+      activeName: ac.name, activeNode: ac.node, activeInitials: this.initialsOf(ac.name),
+      activeHeard: ac.heard,
+      headAvatar: "width:44px;height:44px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;color:#fff;background:" + ac.color + ";",
+      draft: this.state.draft,
+      onDraft: (e) => this.setState({ draft: e.target.value }),
+      onSend: () => this.send(),
+      byteCount: bytes + " / 235",
+      sendStyle: "flex:none;height:44px;padding:0 22px;display:flex;align-items:center;border-radius:2px;font-size:15px;font-weight:600;cursor:pointer;background:#1A1916;color:#FCFBF8;",
+    };
+  }
+}
+</script>
+</body>
+</html>

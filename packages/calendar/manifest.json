@@ -1,0 +1,10 @@
+{
+  "id": "calendar",
+  "name": "Calendar",
+  "kind": "Productivity",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "calendar",
+  "order": 70
+}

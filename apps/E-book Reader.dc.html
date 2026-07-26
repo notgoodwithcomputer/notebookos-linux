@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  .eb-scroll::-webkit-scrollbar { width: 12px; }
+  .eb-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #F3EEE2; border-radius: 8px; }
+  .eb-page::first-letter { initial-letter: 3; font-weight: 500; padding-right: 10px; color: #1A1916; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#F3EEE2;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">E-book Reader</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== LIBRARY ===================== -->
+    <sc-if value="{{ libraryOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onLibraryClose }}" style="position:absolute;inset:0;z-index:72;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:520px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:28px 30px;">
+          <div style="font-size:18px;font-weight:700;color:#1A1916;margin-bottom:4px;">Library</div>
+          <div style="font-size:13px;color:#8A857A;margin-bottom:18px;">Books sync over LoRa from nearby nodes.</div>
+          <sc-for list="{{ books }}" as="b" hint-placeholder-count="4">
+            <div style="{{ b.style }}">
+              <div style="width:34px;height:44px;flex:none;border:1px solid #1A1916;background:#EFE7D5;display:flex;align-items:center;justify-content:center;font-family:Newsreader,serif;font-size:15px;">{{ b.initial }}</div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-family:Newsreader,serif;font-size:17px;color:#1A1916;">{{ b.title }}</div>
+                <div style="font-size:12.5px;color:#8A857A;margin-top:2px;">{{ b.author }}</div>
+              </div>
+              <div style="{{ b.tagStyle }}">{{ b.tag }}</div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noBook }}" hint-placeholder-val="{{ false }}"><div style="padding:26px 0;text-align:center;font-size:13.5px;color:#A39D8F;">No books in the library</div></sc-if>
+          <div onClick="{{ onLibraryClose }}" style="margin:20px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">Done</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== READING BAR ===================== -->
+    <div style="height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:#F3EEE2;border-bottom:1px solid #E0DACC;">
+      <div style="display:flex;align-items:center;gap:14px;color:#3A362E;">
+        <div onClick="{{ onTocToggle }}" title="Contents" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;" style-hover="background:#E6DFCE;"><div style="width:19px;height:19px;display:flex;">{{ tocGlyph }}</div></div>
+        <div onClick="{{ onLibrary }}" title="Library" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;" style-hover="background:#E6DFCE;"><div style="width:19px;height:19px;display:flex;">{{ libraryGlyph }}</div></div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-family:Newsreader,serif;font-size:17px;color:#1A1916;">{{ bookTitle }}</div>
+        <div style="font-size:11.5px;letter-spacing:0.05em;color:#9A958A;text-transform:uppercase;">{{ bookAuthor }}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;color:#3A362E;">
+        <div onClick="{{ onSmaller }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:14px;font-weight:600;" style-hover="background:#E6DFCE;">A</div>
+        <div onClick="{{ onLarger }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:20px;font-weight:600;" style-hover="background:#E6DFCE;">A</div>
+        <div style="width:1px;height:20px;background:#E0DACC;margin:0 4px;"></div>
+        <div onClick="{{ onBookmark }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;" style-hover="background:#E6DFCE;"><div style="{{ bmColor }}">{{ bookmarkGlyph }}</div></div>
+      </div>
+    </div>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ TOC ============ -->
+      <sc-if value="{{ tocShown }}" hint-placeholder-val="{{ true }}">
+      <div style="width:308px;flex:none;background:#EEE8DA;border-right:1px solid #E0DACC;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:22px 24px 14px;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Contents</div>
+        <div class="eb-scroll" style="flex:1;overflow-y:auto;padding:0 12px 16px;min-height:0;">
+          <sc-for list="{{ toc }}" as="ch" hint-placeholder-count="6">
+            <div onClick="{{ ch.onClick }}" style="{{ ch.rowStyle }}" style-hover="background:#E4DCC9;">
+              <div style="{{ ch.numStyle }}">{{ ch.num }}</div>
+              <div style="min-width:0;flex:1;">
+                <div style="font-family:Newsreader,serif;font-size:16px;color:#1A1916;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ ch.title }}</div>
+                <div style="font-size:12px;color:#A39D8F;margin-top:2px;">{{ ch.page }}</div>
+              </div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noBook }}" hint-placeholder-val="{{ false }}"><div style="padding:24px 12px;font-size:13px;color:#A39D8F;">Library is empty</div></sc-if>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ============ READING AREA ============ -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">
+        <div class="eb-scroll" ref="{{ readRef }}" onScroll="{{ onReadScroll }}" style="flex:1;overflow-y:auto;min-height:0;">
+          <sc-if value="{{ hasBook }}" hint-placeholder-val="{{ true }}">
+          <div style="max-width:660px;margin:0 auto;padding:64px 24px 80px;">
+            <div style="text-align:center;margin-bottom:46px;">
+              <div style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:14px;">{{ activeNum }}</div>
+              <div style="font-family:Newsreader,serif;font-size:32px;color:#1A1916;">{{ activeTitle }}</div>
+            </div>
+            <div class="eb-page" style="{{ readStyle }}">{{ bodyNode }}</div>
+          </div>
+          </sc-if>
+          <sc-if value="{{ noBook }}" hint-placeholder-val="{{ false }}"><div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;"><div style="font-size:15px;color:#6E695E;">No books on this device</div><div style="font-size:13.5px;color:#A39D8F;">Books arrive over LoRa or from removable media.</div></div></sc-if>
+        </div>
+        <!-- progress -->
+        <div style="flex:none;padding:16px 40px 22px;background:#F3EEE2;border-top:1px solid #E0DACC;">
+          <sc-if value="{{ hasBook }}" hint-placeholder-val="{{ true }}"><div style="height:4px;background:#E0DACC;border-radius:3px;position:relative;margin-bottom:11px;">
+            <div style="{{ progFill }}"></div>
+            <div style="{{ progDot }}"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:12.5px;color:#8A857A;font-variant-numeric:tabular-nums;">
+            <span>{{ pageLabel }}</span>
+            <span>{{ progLabel }}</span>
+          </div></sc-if>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false, active: 0, fs: 21, bookmarked: true, tocShown: true, libraryOpen: false, prog: 0 };
+
+  tocData = [];
+
+  chapterText = {};
+
+  componentDidMount() {
+    this._esc = (e) => { if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen) { this.setState({ openMenu: null, aboutOpen: false }); } else { this.goHome(); } } };
+    window.addEventListener("keydown", this._esc); this.timer = setInterval(() => this.setState({ now: new Date() }), 10000); }
+  componentWillUnmount() {
+    window.removeEventListener("keydown", this._esc); clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const fill = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "currentColor" }, ...c);
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "toc": return S(L(4, 6, 20, 6), L(4, 12, 20, 12), L(4, 18, 14, 18));
+      case "library": return S(R(4, 4, 5, 16, 0.5), R(10.5, 4, 5, 16, 0.5), P("M17.5 5.5l3 .8-3 14-3-.8z"));
+      case "bookmark": return fill(P("M7 4h10a1 1 0 0 1 1 1v15l-6-3.4L6 20V5a1 1 0 0 1 1-1z"));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  goHomeCb = () => { try { if (window.parent !== window) window.parent.postMessage({ type: "nb-home" }, "*"); } catch (e) {} };
+
+  // ===== Notebook OS system chrome =====
+  appFile = "E-book Reader.dc.html";
+  appName = "E-book Reader";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File","Library","View","Go"]; }
+  appMenuItems(name) {
+    const S = this.state;
+    if (name === "File") return [this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" })];
+    if (name === "Library") {
+      const items = [this.mi("Open Library…", () => this.setState({ libraryOpen: true, openMenu: null }))];
+      if (this.bookList().length) items.push(this.msep());
+      this.bookList().forEach((b) => items.push(b.local
+        ? this.mi(b.title, () => this.setState({ libraryOpen: false, openMenu: null }), { check: "✓" })
+        : this.off(b.title, b.tag)));
+      return items;
+    }
+    if (name === "View") return [
+      this.mi("Larger Text", () => this.setState({ fs: Math.min(28, S.fs + 1), openMenu: null }), { hint: "⌘+" }),
+      this.mi("Smaller Text", () => this.setState({ fs: Math.max(16, S.fs - 1), openMenu: null }), { hint: "⌘−" }),
+      this.msep(),
+      this.mi(S.tocShown ? "Hide Contents" : "Show Contents", () => this.setState({ tocShown: !S.tocShown, openMenu: null })),
+    ];
+    if (name === "Go") {
+      const items = [
+        S.active > 0 ? this.mi("Previous Chapter", () => this.openChapter(S.active - 1)) : this.off("Previous Chapter"),
+        S.active < this.tocData.length - 1 ? this.mi("Next Chapter", () => this.openChapter(S.active + 1)) : this.off("Next Chapter"),
+        this.msep(),
+      ];
+      this.tocData.forEach((c, i) => items.push(this.mi(c.num + " · " + c.title, () => this.openChapter(i), { check: i === S.active ? "✓" : "" })));
+      return items;
+    }
+    return this.defaultAppMenu(name);
+  }
+  bookList() { return []; }
+  pageRanges = [];
+  openChapter(i) {
+    this.setState({ active: i, prog: 0, openMenu: null });
+    if (this.readEl) this.readEl.scrollTop = 0;
+  }
+  onReadScrollFn(e) {
+    const el = e.target;
+    const max = el.scrollHeight - el.clientHeight;
+    const p = max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0;
+    if (Math.abs(p - this.state.prog) > 0.004) this.setState({ prog: p });
+  }
+  defaultAppMenu(name) {
+    if (name === "File") return [this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" })];
+    return [this.off("Undo"), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS…", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart…", () => this.power("restart")),
+      this.mi("Shut Down…", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "✓" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 · strong"), this.off("NODE-22", "ch 4 · good"), this.off("NODE-7F", "ch 4 · strong"), this.off("NODE-88", "ch 6 · fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+  renderVals() {
+    const active = this.state.active;
+    const toc = this.tocData.map((c, i) => ({
+      num: c.num, title: c.title, page: c.page,
+      onClick: () => this.openChapter(i),
+      rowStyle: "display:flex;align-items:center;gap:14px;padding:11px 12px;border-radius:2px;cursor:pointer;margin-bottom:2px;"
+        + (i === active ? "background:#E2DAC6;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+      numStyle: "width:30px;flex:none;text-align:center;font-family:Newsreader,serif;font-size:16px;font-style:italic;color:"
+        + (i === active ? "#1A1916;" : "#A39D8F;"),
+    }));
+
+    const html = this.chapterText[active] || "";
+    const hasBook = this.tocData.length > 0;
+    const bodyNode = React.createElement("div", { key: active, dangerouslySetInnerHTML: { __html: html } });
+
+    return {
+      goHome: this.goHomeCb,
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"), tocGlyph: this.icon("toc"), libraryGlyph: this.icon("library"), bookmarkGlyph: this.icon("bookmark"),
+      bmColor: "width:18px;height:20px;display:flex;color:" + (this.state.bookmarked ? "#C8341E" : "#B5B0A3") + ";",
+      onBookmark: () => this.setState((s) => ({ bookmarked: !s.bookmarked })),
+      onSmaller: () => this.setState((s) => ({ fs: Math.max(16, s.fs - 1) })),
+      onLarger: () => this.setState((s) => ({ fs: Math.min(28, s.fs + 1) })),
+      toc, bodyNode,
+      tocShown: this.state.tocShown,
+      onTocToggle: () => this.setState({ tocShown: !this.state.tocShown }),
+      libraryOpen: this.state.libraryOpen,
+      onLibrary: () => this.setState({ libraryOpen: true }),
+      onLibraryClose: () => this.setState({ libraryOpen: false }),
+      books: this.bookList().map((b) => ({
+        title: b.title, author: b.author, tag: b.tag, initial: b.title[0],
+        tagStyle: "flex:none;font-size:11.5px;letter-spacing:0.04em;padding:4px 10px;border-radius:2px;" + (b.local ? "background:#1A1916;color:#FCFBF8;" : "background:#EFEBE0;color:#8A857A;"),
+        style: "display:flex;align-items:center;gap:14px;padding:11px 6px;border-bottom:1px solid #ECE7DA;" + (b.local ? "" : "opacity:0.72;"),
+      })),
+      readRef: (el) => { this.readEl = el; },
+      onReadScroll: (e) => this.onReadScrollFn(e),
+      progFill: "position:absolute;left:0;top:0;bottom:0;width:" + Math.round(this.state.prog * 100) + "%;background:#1A1916;border-radius:3px;",
+      progDot: (hasBook ? "" : "display:none;") + "position:absolute;left:" + Math.round(this.state.prog * 100) + "%;top:50%;width:13px;height:13px;border-radius:50%;background:#C8341E;transform:translate(-50%,-50%);",
+      pageLabel: (function (self) { const r = self.pageRanges[self.state.active]; if (!r) return ""; const len = r[1] - r[0] + 1; return "Page " + (r[0] + Math.floor(self.state.prog * (len - 1))) + " of 60"; })(this),
+      progLabel: (function (self) { const r = self.pageRanges[self.state.active]; if (!r) return ""; const len = r[1] - r[0] + 1; const min = Math.max(0, Math.round((1 - self.state.prog) * len * 1.2)); return Math.round(self.state.prog * 100) + "% · " + min + " min left in chapter"; })(this),
+      activeNum: hasBook ? "Chapter " + this.tocData[active].num : "", activeTitle: hasBook ? this.tocData[active].title : "", hasBook, noBook: !hasBook, bookTitle: hasBook ? "" : "No book open", bookAuthor: "",
+      readStyle: "font-family:Newsreader,serif;font-size:" + this.state.fs + "px;line-height:1.85;color:#2A2620;text-align:justify;hyphens:auto;",
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,262 @@
+{
+  "code": "es",
+  "name": "Spanish",
+  "from": "English",
+  "units": [
+    {
+      "title": "BASICS",
+      "skills": [
+        {
+          "name": "Greetings",
+          "words": [
+            {"t": "hola", "e": "hello", "ipa": "ˈo.la"},
+            {"t": "adiós", "e": "goodbye", "ipa": "a.ˈðjos"},
+            {"t": "gracias", "e": "thank you", "ipa": "ˈɡɾa.sjas"},
+            {"t": "por favor", "e": "please", "ipa": "poɾ fa.ˈβoɾ"},
+            {"t": "sí", "e": "yes", "ipa": "si"},
+            {"t": "no", "e": "no", "ipa": "no"},
+            {"t": "perdón", "e": "sorry", "ipa": "peɾ.ˈðon"},
+            {"t": "buenos días", "e": "good morning", "ipa": "ˈbwe.nos ˈði.as"},
+            {"t": "buenas noches", "e": "good night", "ipa": "ˈbwe.nas ˈno.tʃes"}
+          ],
+          "phrases": [
+            {"t": "¿Cómo estás?", "e": "How are you?", "ipa": "ˈko.mo es.ˈtas"},
+            {"t": "Me llamo Ana", "e": "My name is Ana", "ipa": "me ˈʝa.mo ˈa.na"}
+          ]
+        },
+        {
+          "name": "People",
+          "words": [
+            {"t": "yo", "e": "I", "ipa": "ʝo"},
+            {"t": "tú", "e": "you", "ipa": "tu"},
+            {"t": "él", "e": "he", "ipa": "el"},
+            {"t": "ella", "e": "she", "ipa": "ˈe.ʝa"},
+            {"t": "nosotros", "e": "we", "ipa": "no.ˈso.tɾos"},
+            {"t": "ellos", "e": "they", "ipa": "ˈe.ʝos"},
+            {"t": "hombre", "e": "man", "ipa": "ˈom.bɾe"},
+            {"t": "mujer", "e": "woman", "ipa": "mu.ˈxeɾ"},
+            {"t": "niño", "e": "boy", "ipa": "ˈni.ɲo"},
+            {"t": "niña", "e": "girl", "ipa": "ˈni.ɲa"}
+          ],
+          "phrases": [
+            {"t": "Él es un hombre", "e": "He is a man", "ipa": "el es un ˈom.bɾe"}
+          ]
+        },
+        {
+          "name": "Numbers",
+          "words": [
+            {"t": "uno", "e": "one", "ipa": "ˈu.no"},
+            {"t": "dos", "e": "two", "ipa": "dos"},
+            {"t": "tres", "e": "three", "ipa": "tɾes"},
+            {"t": "cuatro", "e": "four", "ipa": "ˈkwa.tɾo"},
+            {"t": "cinco", "e": "five", "ipa": "ˈsiŋ.ko"},
+            {"t": "seis", "e": "six", "ipa": "seis"},
+            {"t": "siete", "e": "seven", "ipa": "ˈsje.te"},
+            {"t": "ocho", "e": "eight", "ipa": "ˈo.tʃo"},
+            {"t": "nueve", "e": "nine", "ipa": "ˈnwe.βe"},
+            {"t": "diez", "e": "ten", "ipa": "djes"}
+          ],
+          "phrases": [
+            {"t": "Tengo dos hermanos", "e": "I have two brothers", "ipa": "ˈteŋ.ɡo dos eɾ.ˈma.nos"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "PEOPLE",
+      "skills": [
+        {
+          "name": "Family",
+          "words": [
+            {"t": "padre", "e": "father", "ipa": "ˈpa.ðɾe"},
+            {"t": "madre", "e": "mother", "ipa": "ˈma.ðɾe"},
+            {"t": "hijo", "e": "son", "ipa": "ˈi.xo"},
+            {"t": "hija", "e": "daughter", "ipa": "ˈi.xa"},
+            {"t": "hermano", "e": "brother", "ipa": "eɾ.ˈma.no"},
+            {"t": "hermana", "e": "sister", "ipa": "eɾ.ˈma.na"},
+            {"t": "familia", "e": "family", "ipa": "fa.ˈmi.lja"},
+            {"t": "amigo", "e": "friend", "ipa": "a.ˈmi.ɣo"}
+          ],
+          "phrases": [
+            {"t": "Ella es mi amiga", "e": "She is my friend", "ipa": "ˈe.ʝa es mi a.ˈmi.ɣa"}
+          ]
+        },
+        {
+          "name": "Colors",
+          "words": [
+            {"t": "rojo", "e": "red", "ipa": "ˈro.xo"},
+            {"t": "azul", "e": "blue", "ipa": "a.ˈsul"},
+            {"t": "verde", "e": "green", "ipa": "ˈbeɾ.ðe"},
+            {"t": "amarillo", "e": "yellow", "ipa": "a.ma.ˈɾi.ʝo"},
+            {"t": "negro", "e": "black", "ipa": "ˈne.ɣɾo"},
+            {"t": "blanco", "e": "white", "ipa": "ˈblaŋ.ko"}
+          ],
+          "phrases": [
+            {"t": "La manzana es roja", "e": "The apple is red", "ipa": "la man.ˈsa.na es ˈro.xa"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "EVERYDAY",
+      "skills": [
+        {
+          "name": "Food",
+          "words": [
+            {"t": "agua", "e": "water", "ipa": "ˈa.ɣwa"},
+            {"t": "pan", "e": "bread", "ipa": "pan"},
+            {"t": "leche", "e": "milk", "ipa": "ˈle.tʃe"},
+            {"t": "manzana", "e": "apple", "ipa": "man.ˈsa.na"},
+            {"t": "carne", "e": "meat", "ipa": "ˈkaɾ.ne"},
+            {"t": "café", "e": "coffee", "ipa": "ka.ˈfe"},
+            {"t": "queso", "e": "cheese", "ipa": "ˈke.so"}
+          ],
+          "phrases": [
+            {"t": "Yo como pan", "e": "I eat bread", "ipa": "ʝo ˈko.mo pan"},
+            {"t": "Bebo agua", "e": "I drink water", "ipa": "ˈbe.βo ˈa.ɣwa"}
+          ]
+        },
+        {
+          "name": "Verbs",
+          "words": [
+            {"t": "ser", "e": "to be", "ipa": "seɾ"},
+            {"t": "tener", "e": "to have", "ipa": "te.ˈneɾ"},
+            {"t": "ir", "e": "to go", "ipa": "iɾ"},
+            {"t": "ver", "e": "to see", "ipa": "beɾ"},
+            {"t": "hablar", "e": "to speak", "ipa": "a.ˈβlaɾ"},
+            {"t": "aprender", "e": "to learn", "ipa": "a.pɾen.ˈdeɾ"},
+            {"t": "comer", "e": "to eat", "ipa": "ko.ˈmeɾ"},
+            {"t": "beber", "e": "to drink", "ipa": "be.ˈβeɾ"}
+          ],
+          "phrases": [
+            {"t": "Aprendo español", "e": "I learn Spanish", "ipa": "a.ˈpɾen.do es.pa.ˈɲol"},
+            {"t": "¿Hablas español?", "e": "Do you speak Spanish?", "ipa": "ˈa.βlas es.pa.ˈɲol"}
+          ]
+        },
+        {
+          "name": "Describing",
+          "words": [
+            {"t": "grande", "e": "big", "ipa": "ˈɡɾan.de"},
+            {"t": "pequeño", "e": "small", "ipa": "pe.ˈke.ɲo"},
+            {"t": "bueno", "e": "good", "ipa": "ˈbwe.no"},
+            {"t": "bonito", "e": "beautiful", "ipa": "bo.ˈni.to"},
+            {"t": "nuevo", "e": "new", "ipa": "ˈnwe.βo"},
+            {"t": "caliente", "e": "hot", "ipa": "ka.ˈljen.te"},
+            {"t": "frío", "e": "cold", "ipa": "ˈfɾi.o"}
+          ],
+          "phrases": [
+            {"t": "Una casa grande", "e": "A big house", "ipa": "ˈu.na ˈka.sa ˈɡɾan.de"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "GETTING AROUND",
+      "skills": [
+        {
+          "name": "Places",
+          "words": [
+            {"t": "casa", "e": "house", "ipa": "ˈka.sa"},
+            {"t": "escuela", "e": "school", "ipa": "es.ˈkwe.la"},
+            {"t": "tienda", "e": "store", "ipa": "ˈtjen.da"},
+            {"t": "ciudad", "e": "city", "ipa": "sju.ˈðað"},
+            {"t": "calle", "e": "street", "ipa": "ˈka.ʝe"},
+            {"t": "mercado", "e": "market", "ipa": "meɾ.ˈka.ðo"},
+            {"t": "baño", "e": "bathroom", "ipa": "ˈba.ɲo"},
+            {"t": "puerta", "e": "door", "ipa": "ˈpweɾ.ta"}
+          ],
+          "phrases": [
+            {"t": "La escuela es grande", "e": "The school is big", "ipa": "la es.ˈkwe.la es ˈɡɾan.de"},
+            {"t": "Voy a la escuela", "e": "I go to the school", "ipa": "boi a la es.ˈkwe.la"}
+          ]
+        },
+        {
+          "name": "Time",
+          "words": [
+            {"t": "hoy", "e": "today", "ipa": "oi"},
+            {"t": "mañana", "e": "tomorrow", "ipa": "ma.ˈɲa.na"},
+            {"t": "ahora", "e": "now", "ipa": "a.ˈo.ɾa"},
+            {"t": "día", "e": "day", "ipa": "ˈdi.a"},
+            {"t": "noche", "e": "night", "ipa": "ˈno.tʃe"},
+            {"t": "semana", "e": "week", "ipa": "se.ˈma.na"},
+            {"t": "hora", "e": "hour", "ipa": "ˈo.ɾa"},
+            {"t": "año", "e": "year", "ipa": "ˈa.ɲo"}
+          ],
+          "phrases": [
+            {"t": "La semana tiene siete días", "e": "The week has seven days", "ipa": "la se.ˈma.na ˈtje.ne ˈsje.te ˈdi.as"},
+            {"t": "Hoy como en casa", "e": "Today I eat at home", "ipa": "oi ˈko.mo en ˈka.sa"}
+          ]
+        },
+        {
+          "name": "Travel",
+          "words": [
+            {"t": "coche", "e": "car", "ipa": "ˈko.tʃe"},
+            {"t": "tren", "e": "train", "ipa": "tɾen"},
+            {"t": "avión", "e": "airplane", "ipa": "a.ˈβjon"},
+            {"t": "aquí", "e": "here", "ipa": "a.ˈki"},
+            {"t": "allí", "e": "there", "ipa": "a.ˈʝi"},
+            {"t": "lejos", "e": "far", "ipa": "ˈle.xos"},
+            {"t": "cerca", "e": "near", "ipa": "ˈseɾ.ka"}
+          ],
+          "phrases": [
+            {"t": "El coche es nuevo", "e": "The car is new", "ipa": "el ˈko.tʃe es ˈnwe.βo"},
+            {"t": "El avión es grande", "e": "The airplane is big", "ipa": "el a.ˈβjon es ˈɡɾan.de"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "THE WORLD",
+      "skills": [
+        {
+          "name": "Animals",
+          "words": [
+            {"t": "perro", "e": "dog", "ipa": "ˈpe.ro"},
+            {"t": "gato", "e": "cat", "ipa": "ˈɡa.to"},
+            {"t": "pájaro", "e": "bird", "ipa": "ˈpa.xa.ɾo"},
+            {"t": "caballo", "e": "horse", "ipa": "ka.ˈβa.ʝo"},
+            {"t": "pez", "e": "fish", "ipa": "pes"},
+            {"t": "vaca", "e": "cow", "ipa": "ˈba.ka"},
+            {"t": "pollo", "e": "chicken", "ipa": "ˈpo.ʝo"}
+          ],
+          "phrases": [
+            {"t": "Tengo un perro", "e": "I have a dog", "ipa": "ˈteŋ.ɡo un ˈpe.ro"},
+            {"t": "El gato bebe leche", "e": "The cat drinks milk", "ipa": "el ˈɡa.to ˈbe.βe ˈle.tʃe"}
+          ]
+        },
+        {
+          "name": "Nature",
+          "words": [
+            {"t": "sol", "e": "sun", "ipa": "sol"},
+            {"t": "luna", "e": "moon", "ipa": "ˈlu.na"},
+            {"t": "árbol", "e": "tree", "ipa": "ˈaɾ.βol"},
+            {"t": "flor", "e": "flower", "ipa": "floɾ"},
+            {"t": "lluvia", "e": "rain", "ipa": "ˈʝu.βja"},
+            {"t": "mar", "e": "sea", "ipa": "maɾ"},
+            {"t": "cielo", "e": "sky", "ipa": "ˈsje.lo"}
+          ],
+          "phrases": [
+            {"t": "El cielo es azul", "e": "The sky is blue", "ipa": "el ˈsje.lo es a.ˈsul"},
+            {"t": "Veo el sol y la luna", "e": "I see the sun and the moon", "ipa": "ˈbe.o el sol i la ˈlu.na"}
+          ]
+        },
+        {
+          "name": "More Verbs",
+          "words": [
+            {"t": "hacer", "e": "to do", "ipa": "a.ˈseɾ"},
+            {"t": "querer", "e": "to want", "ipa": "ke.ˈɾeɾ"},
+            {"t": "poder", "e": "to be able", "ipa": "po.ˈðeɾ"},
+            {"t": "decir", "e": "to say", "ipa": "de.ˈsiɾ"},
+            {"t": "venir", "e": "to come", "ipa": "be.ˈniɾ"},
+            {"t": "comprar", "e": "to buy", "ipa": "kom.ˈpɾaɾ"},
+            {"t": "vivir", "e": "to live", "ipa": "bi.ˈβiɾ"}
+          ],
+          "phrases": [
+            {"t": "Quiero aprender español", "e": "I want to learn Spanish", "ipa": "ˈkje.ɾo a.pɾen.ˈdeɾ es.pa.ˈɲol"},
+            {"t": "Quiero comer pan", "e": "I want to eat bread", "ipa": "ˈkje.ɾo ko.ˈmeɾ pan"}
+          ]
+        }
+      ]
+    }
+  ]
+}

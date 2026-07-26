@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  .ac-scroll::-webkit-scrollbar { width: 12px; }
+  .ac-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Accounting</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== MONTH SUMMARY ===================== -->
+    <sc-if value="{{ reportOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onReportClose }}" style="position:absolute;inset:0;z-index:72;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:520px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:30px 32px;">
+          <div style="font-size:18px;font-weight:700;color:#1A1916;margin-bottom:4px;">Month Summary</div>
+          <div style="font-size:13px;color:#8A857A;margin-bottom:18px;">{{ reportSub }}</div>
+          <div style="display:grid;grid-template-columns:1fr 90px 90px 90px;padding:8px 0;border-bottom:1px solid #1A1916;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#8A857A;font-weight:600;">
+            <div>Envelope</div><div style="text-align:right;">In</div><div style="text-align:right;">Out</div><div style="text-align:right;">Net</div>
+          </div>
+          <sc-for list="{{ reportRows }}" as="r" hint-placeholder-count="6">
+            <div style="{{ r.style }}">
+              <div style="display:flex;align-items:center;gap:8px;"><div style="{{ r.dot }}"></div>{{ r.env }}</div>
+              <div style="text-align:right;font-variant-numeric:tabular-nums;">{{ r.inV }}</div>
+              <div style="text-align:right;font-variant-numeric:tabular-nums;">{{ r.outV }}</div>
+              <div style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">{{ r.net }}</div>
+            </div>
+          </sc-for>
+          <div onClick="{{ onReportClose }}" style="margin:22px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">Done</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ ENVELOPES SIDEBAR ============ -->
+      <div style="width:312px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:24px 24px 18px;border-bottom:1px solid #D7D2C5;">
+          <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:6px;">Cash on hand</div>
+          <div style="font-size:34px;font-weight:700;color:#1A1916;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;">{{ balance }}</div>
+          <div style="display:flex;align-items:center;gap:7px;margin-top:8px;font-size:12.5px;color:#8A857A;"><div style="width:14px;height:14px;display:flex;">{{ cashGlyph }}</div>Cash only · no cards, no banks</div>
+        </div>
+        <div class="ac-scroll" style="flex:1;overflow-y:auto;padding:16px 14px;min-height:0;">
+          <div style="font-size:11px;letter-spacing:0.13em;text-transform:uppercase;color:#A39D8F;font-weight:600;padding:0 10px;margin:4px 0 10px;">Envelopes</div>
+          <sc-for list="{{ envelopes }}" as="e" hint-placeholder-count="6">
+            <div onClick="{{ e.onClick }}" style="{{ e.rowStyle }}" style-hover="background:#E6DFCE;">
+              <div style="{{ e.dot }}"></div>
+              <span style="flex:1;font-size:15px;color:#1A1916;">{{ e.label }}</span>
+              <span style="font-size:14px;color:#3A362E;font-variant-numeric:tabular-nums;font-weight:500;">{{ e.amount }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- ============ LEDGER ============ -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">
+        <!-- summary -->
+        <div style="flex:none;display:flex;gap:0;padding:30px 48px 26px;">
+          <div style="flex:1;">
+            <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:8px;">{{ ledgerTitle }}</div>
+            <div style="font-size:28px;font-weight:700;color:#1A1916;letter-spacing:-0.01em;">{{ monthTitle }}</div>
+          </div>
+          <div style="display:flex;gap:36px;align-items:center;">
+            <div style="text-align:right;"><div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:5px;">In</div><div style="font-size:22px;font-weight:600;color:#1A1916;font-variant-numeric:tabular-nums;">{{ inTotal }}</div></div>
+            <div style="width:1px;height:40px;background:#E0DBCE;"></div>
+            <div style="text-align:right;"><div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:5px;">Out</div><div style="font-size:22px;font-weight:600;color:#1A1916;font-variant-numeric:tabular-nums;">{{ outTotal }}</div></div>
+          </div>
+        </div>
+        <!-- entry form -->
+        <div style="flex:none;margin:0 48px 6px;display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;border:1px solid #CFC9BA;border-radius:2px;background:#FBFAF6;">
+          <div style="font-size:13px;color:#8A857A;font-variant-numeric:tabular-nums;flex:none;">20 Jun</div>
+          <input value="{{ fDesc }}" onInput="{{ onFDesc }}" onKeyDown="{{ onFormKey }}" ref="{{ descRef }}" type="text" placeholder="Description" style="flex:1;height:36px;border:1px solid #DCD7C9;border-radius:2px;background:#FCFBF8;padding:0 10px;font-size:14px;color:#1A1916;outline:none;" />
+          <input value="{{ fAmt }}" onInput="{{ onFAmt }}" onKeyDown="{{ onFormKey }}" type="text" placeholder="0" style="width:96px;height:36px;border:1px solid #DCD7C9;border-radius:2px;background:#FCFBF8;padding:0 10px;font-size:14px;color:#1A1916;outline:none;text-align:right;font-variant-numeric:tabular-nums;" />
+          <div style="display:flex;border:1px solid #DCD7C9;border-radius:2px;overflow:hidden;flex:none;">
+            <div onClick="{{ onDirOut }}" style="{{ dirOutStyle }}">Out</div>
+            <div onClick="{{ onDirIn }}" style="{{ dirInStyle }}">In</div>
+          </div>
+          <select value="{{ fEnv }}" onChange="{{ onFEnv }}" style="height:36px;border:1px solid #DCD7C9;border-radius:2px;background:#FCFBF8;padding:0 8px;font-size:13.5px;color:#1A1916;outline:none;flex:none;">
+            <option value="Wallet">Wallet</option>
+            <option value="Rent">Rent</option>
+            <option value="Studio">Studio</option>
+            <option value="Groceries">Groceries</option>
+            <option value="Buffer">Buffer</option>
+          </select>
+          <div onClick="{{ onAddEntry }}" style="height:36px;padding:0 18px;display:flex;align-items:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:13.5px;font-weight:600;cursor:pointer;flex:none;" style-hover="background:#33302A;">Add</div>
+        </div>
+        <!-- header -->
+        <div style="flex:none;display:grid;grid-template-columns:96px 1fr 150px 120px 130px;align-items:center;padding:12px 48px;margin:8px 0 0;border-bottom:1px solid #1A1916;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#8A857A;font-weight:600;">
+          <div>Date</div><div>Description</div><div>Envelope</div><div style="text-align:right;">Amount</div><div style="text-align:right;">Balance</div>
+        </div>
+        <!-- rows -->
+        <div class="ac-scroll" style="flex:1;overflow-y:auto;padding:0 48px 50px;min-height:0;">
+          <sc-for list="{{ ledger }}" as="t" hint-placeholder-count="9">
+            <div style="display:grid;grid-template-columns:96px 1fr 150px 120px 130px;align-items:center;height:56px;border-bottom:1px solid #F0ECE0;">
+              <div style="font-size:14px;color:#8A857A;font-variant-numeric:tabular-nums;">{{ t.date }}</div>
+              <div style="font-size:15.5px;color:#1A1916;">{{ t.desc }}</div>
+              <div><div style="{{ t.tag }}"><div style="{{ t.tagDot }}"></div>{{ t.env }}</div></div>
+              <div style="{{ t.amtStyle }}">{{ t.amount }}</div>
+              <div style="text-align:right;font-size:15px;color:#3A362E;font-variant-numeric:tabular-nums;">{{ t.bal }}</div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ ledgerEmpty }}" hint-placeholder-val="{{ false }}"><div style="padding:60px 0;text-align:center;font-size:14px;color:#A39D8F;">No entries. Record one above.</div></sc-if>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false, activeEnv: 0, fDesc: "", fAmt: "", fEnv: "Wallet", fDir: "out", reportOpen: false };
+
+  envMeta = [
+    { label: "All cash", color: "#1A1916", amount: 0 },
+    { label: "Wallet", color: "#9A7B4F", amount: 0 },
+    { label: "Rent", color: "#4A5E73", amount: 0 },
+    { label: "Studio", color: "#6E7B57", amount: 0 },
+    { label: "Groceries", color: "#8A6D5B", amount: 0 },
+    { label: "Buffer", color: "#8A857A", amount: 0 },
+  ];
+
+  // oldest first
+  tx = [];
+  opening = 0;
+  envColors = { Wallet: "#9A7B4F", Rent: "#4A5E73", Studio: "#6E7B57", Groceries: "#8A6D5B", Buffer: "#8A857A" };
+
+  componentDidMount() {
+    this._esc = (e) => { if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen) { this.setState({ openMenu: null, aboutOpen: false }); } else { this.goHome(); } } };
+    window.addEventListener("keydown", this._esc); this.timer = setInterval(() => this.setState({ now: new Date() }), 10000); }
+  componentWillUnmount() {
+    window.removeEventListener("keydown", this._esc); clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; }
+  money(n) { const s = n < 0 ? "−" : ""; return s + "$" + Math.abs(n).toLocaleString(); }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "cash": return S(R(3, 7, 18, 10, 1.5), C(12, 12, 2.4), C(6, 12, 0.6), C(18, 12, 0.6));
+      case "plus": return S(L(12, 5, 12, 19), L(5, 12, 19, 12));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  goHomeCb = () => { try { if (window.parent !== window) window.parent.postMessage({ type: "nb-home" }, "*"); } catch (e) {} };
+
+  // ===== Notebook OS system chrome =====
+  appFile = "Accounting.dc.html";
+  appName = "Accounting";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File","Edit","View","Reports"]; }
+  appMenuItems(name) {
+    const S = this.state;
+    if (name === "File") return [
+      this.mi("New Entry", () => { this.setState({ openMenu: null }); if (this.descEl) this.descEl.focus(); }, { hint: "⌘N" }),
+      this.msep(),
+      this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" }),
+    ];
+    if (name === "Edit") return [this.off("Undo"), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste")];
+    if (name === "View") return this.envMeta.map((e, i) => this.mi(e.label, () => this.setState({ activeEnv: i, openMenu: null }), { check: S.activeEnv === i ? "✓" : "" }));
+    if (name === "Reports") return [this.mi("Month Summary…", () => this.setState({ reportOpen: true, openMenu: null }))];
+    return this.defaultAppMenu(name);
+  }
+  addEntry() {
+    const desc = this.state.fDesc.trim();
+    const amtN = Math.abs(parseFloat(this.state.fAmt));
+    if (!desc || !amtN || isNaN(amtN)) return;
+    const amt = this.state.fDir === "out" ? -amtN : amtN;
+    this.tx.push({ date: "20 Jun", desc: desc, env: this.state.fEnv, amt: amt });
+    const env = this.envMeta.find((e) => e.label === this.state.fEnv);
+    if (env) env.amount += amt;
+    this.setState({ fDesc: "", fAmt: "" });
+  }
+  defaultAppMenu(name) {
+    if (name === "File") return [this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" })];
+    return [this.off("Undo"), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS…", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart…", () => this.power("restart")),
+      this.mi("Shut Down…", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "✓" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 · strong"), this.off("NODE-22", "ch 4 · good"), this.off("NODE-7F", "ch 4 · strong"), this.off("NODE-88", "ch 6 · fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+  renderVals() {
+    const ae = this.state.activeEnv;
+    const allCash = this.envMeta.slice(1).reduce((a, e) => a + e.amount, 0);
+    const envelopes = this.envMeta.map((e, i) => ({
+      label: e.label, amount: this.money(i === 0 ? allCash : e.amount),
+      onClick: () => this.setState({ activeEnv: i }),
+      dot: "width:11px;height:11px;flex:none;border-radius:50%;background:" + e.color + ";",
+      rowStyle: "display:flex;align-items:center;gap:12px;padding:11px 10px;border-radius:2px;cursor:pointer;margin-bottom:2px;"
+        + (i === ae ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+
+    // running balance
+    let bal = this.opening;
+    const withBal = this.tx.map((t) => { bal += t.amt; return { ...t, bal }; });
+    const filterName = ae === 0 ? null : this.envMeta[ae].label;
+    const display = withBal.slice().reverse().filter((t) => !filterName || t.env === filterName);
+
+    const ledger = display.map((t) => ({
+      date: t.date, desc: t.desc, env: t.env,
+      amount: (t.amt > 0 ? "+" : "") + this.money(t.amt),
+      amtStyle: "text-align:right;font-size:15.5px;font-weight:600;font-variant-numeric:tabular-nums;color:#1A1916;",
+      bal: this.money(t.bal),
+      tag: "display:inline-flex;align-items:center;gap:7px;padding:4px 11px;background:#F1EEE6;border-radius:2px;font-size:12.5px;color:#3A362E;",
+      tagDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (this.envColors[t.env] || "#8A857A") + ";",
+    }));
+
+    const inTotal = this.tx.filter((t) => t.amt > 0).reduce((a, t) => a + t.amt, 0);
+    const outTotal = this.tx.filter((t) => t.amt < 0).reduce((a, t) => a + t.amt, 0);
+
+    return {
+      goHome: this.goHomeCb,
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"), cashGlyph: this.icon("cash"), plusGlyph: this.icon("plus"),
+      balance: this.money(allCash), envelopes, ledger,
+      monthTitle: ["January","February","March","April","May","June","July","August","September","October","November","December"][this.state.now.getMonth()] + " " + this.state.now.getFullYear(),
+      reportSub: ["January","February","March","April","May","June","July","August","September","October","November","December"][this.state.now.getMonth()] + " " + this.state.now.getFullYear() + " · cash only",
+      fDesc: this.state.fDesc, fAmt: this.state.fAmt, fEnv: this.state.fEnv,
+      onFDesc: (e) => this.setState({ fDesc: e.target.value }),
+      onFAmt: (e) => { const v = e.target.value; if (/^[\d.]*$/.test(v)) this.setState({ fAmt: v }); },
+      onFEnv: (e) => this.setState({ fEnv: e.target.value }),
+      onFormKey: (e) => { if (e.key === "Enter") this.addEntry(); },
+      onDirOut: () => this.setState({ fDir: "out" }),
+      onDirIn: () => this.setState({ fDir: "in" }),
+      dirOutStyle: "height:34px;padding:0 13px;display:flex;align-items:center;font-size:13px;font-weight:600;cursor:pointer;" + (this.state.fDir === "out" ? "background:#1A1916;color:#FCFBF8;" : "background:#FCFBF8;color:#3A362E;"),
+      dirInStyle: "height:34px;padding:0 13px;display:flex;align-items:center;font-size:13px;font-weight:600;cursor:pointer;border-left:1px solid #DCD7C9;" + (this.state.fDir === "in" ? "background:#1A1916;color:#FCFBF8;" : "background:#FCFBF8;color:#3A362E;"),
+      onAddEntry: () => this.addEntry(),
+      descRef: (el) => { this.descEl = el; },
+      reportOpen: this.state.reportOpen,
+      onReportClose: () => this.setState({ reportOpen: false }),
+      reportRows: (function (self) {
+        const envs = self.envMeta.slice(1).map((e) => e.label);
+        const rows = envs.map((env) => {
+          const inSum = self.tx.filter((t) => t.env === env && t.amt > 0).reduce((a, t) => a + t.amt, 0);
+          const outSum = self.tx.filter((t) => t.env === env && t.amt < 0).reduce((a, t) => a + t.amt, 0);
+          return { env: env, inV: inSum ? "+" + self.money(inSum) : "—", outV: outSum ? self.money(outSum) : "—", net: self.money(inSum + outSum),
+            dot: "width:9px;height:9px;border-radius:50%;flex:none;background:" + (self.envColors[env] || "#8A857A") + ";",
+            style: "display:grid;grid-template-columns:1fr 90px 90px 90px;align-items:center;padding:11px 0;border-bottom:1px solid #ECE7DA;font-size:14px;color:#1A1916;" };
+        });
+        const tIn = self.tx.filter((t) => t.amt > 0).reduce((a, t) => a + t.amt, 0);
+        const tOut = self.tx.filter((t) => t.amt < 0).reduce((a, t) => a + t.amt, 0);
+        rows.push({ env: "All envelopes", inV: "+" + self.money(tIn), outV: self.money(tOut), net: self.money(tIn + tOut),
+          dot: "width:9px;height:9px;flex:none;",
+          style: "display:grid;grid-template-columns:1fr 90px 90px 90px;align-items:center;padding:12px 0;font-size:14px;font-weight:700;color:#1A1916;" });
+        return rows;
+      })(this),
+      ledgerTitle: filterName ? filterName + " — ledger" : "All entries",
+      inTotal: inTotal ? "+" + this.money(inTotal) : "$0", outTotal: outTotal ? this.money(outTotal) : "$0", ledgerEmpty: ledger.length === 0,
+    };
+  }
+}
+</script>
+</body>
+</html>

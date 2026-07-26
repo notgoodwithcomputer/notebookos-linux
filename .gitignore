@@ -1,0 +1,88 @@
+# ============================================================
+#  NotebookOS
+#  The working tree is ~64GB; the tracked repo is ~175MB.
+#  Everything ignored here is regenerable build output, a large
+#  binary artifact, or a secret.
+#
+#  NOTE: buildroot/ ships its OWN .gitignore which already
+#  excludes buildroot/output/ (23G) and buildroot/dl/ (1.4G).
+#  It ALSO excludes buildroot/.config -- that file is force-added
+#  (`git add -f`) because it is the entire package selection and
+#  the build is not reproducible without it.
+# ============================================================
+
+# --- Secrets ------------------------------------------------
+# MOK.key is the private Secure Boot signing key. Never commit.
+# MOK.crt / MOK.cer are public certificates and ARE tracked.
+secureboot/MOK.key
+*.key
+*.pem
+*.p12
+*.pfx
+
+# --- Non-redistributable fonts ------------------------------
+# Helvetica / Helvetica Neue / Courier New are Monotype commercial
+# typefaces and must not be published. The free metric-compatible
+# replacements are tracked instead:
+#   Helvetica    -> assets/nimbus-sans/     (URW Nimbus Sans, AFPL/GPL)
+#   Courier New  -> assets/liberation_mono/ (Liberation, OFL)
+# Neither path below is referenced by the build; the shipped GTK
+# desktop uses usr/share/fonts/notebookos/ instead.
+/assets/helvetica-255/
+/web/fonts/Helvetica*.ttf
+/web/fonts/fonts.css
+
+# --- Separate repository ------------------------------------
+# The no-internet kernel fork is its own repo (a fork of
+# torvalds/linux, branch `no-internet`). Not a submodule --
+# clone it separately alongside this tree.
+/linux/
+
+# --- Kernel build output ------------------------------------
+/kbuild/
+/kbuild-desktop/
+
+# --- Release artifacts --------------------------------------
+# ISO / disk image / map pack. Ship these via GitHub Releases,
+# not git -- each one exceeds GitHub's 100MB per-file limit.
+/release/
+
+# --- Re-downloadable upstream blobs -------------------------
+# The 1.1GB xpack ARM toolchain download. The *trimmed* 52MB
+# toolchain that actually ships lives in the rootfs overlay and
+# IS tracked.
+/vendor-dl/
+
+# --- VM / boot harness (scripts kept, disk images dropped) ---
+/boot-work/*
+!/boot-work/*.py
+!/boot-work/*.sh
+
+# --- Map pipeline (encoders kept, OSM data dropped) ----------
+# Keeps nbpbf.py, osm2nbmap*.py, na_parallel.py, selftests.
+# Drops the 19GB north-america.osm.pbf and generated .nbm2.
+# pylibs/ is a vendored zstandard that nothing imports.
+/mapwork/*
+!/mapwork/*.py
+!/mapwork/*.sh
+
+# --- Large binary data formats, anywhere --------------------
+*.osm.pbf
+*.nbm2
+*.iso
+*.img
+*.ext2
+*.ext4
+*.squashfs
+*.pkl
+
+# --- Python -------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+
+# --- Local scratch ------------------------------------------
+/Screenshot from *.png
+/i18n_font_test.png
+/sr_font_test.png
+/scratchpad_marker_unused.txt

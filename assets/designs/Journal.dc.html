@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  [contenteditable] { outline: none; caret-color: #C8341E; }
+  ::selection { background: #F1D9D2; }
+  .jr-body p { margin: 0 0 22px; }
+  .jr-scroll::-webkit-scrollbar { width: 12px; }
+  .jr-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Journal</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ ENTRIES SIDEBAR ============ -->
+      <div style="width:344px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:24px 26px 20px;border-bottom:1px solid #D7D2C5;display:flex;align-items:baseline;justify-content:space-between;">
+          <div>
+            <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:8px;">Journal</div>
+            <div style="font-family:Newsreader,serif;font-size:24px;color:#1A1916;">2026</div>
+          </div>
+          <div style="width:34px;height:34px;border:1px solid #C4BFB1;border-radius:2px;background:#FCFBF8;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#2A2620;" style-hover="background:#ECE8DD;"><div style="width:17px;height:17px;display:flex;">{{ plusGlyph }}</div></div>
+        </div>
+        <div class="jr-scroll" style="flex:1;overflow-y:auto;padding:16px 14px;min-height:0;">
+          <sc-for list="{{ months }}" as="mo" hint-placeholder-count="2">
+            <div style="font-size:11px;letter-spacing:0.13em;text-transform:uppercase;color:#A39D8F;font-weight:600;padding:0 10px;margin:8px 0 8px;">{{ mo.label }}</div>
+            <sc-for list="{{ mo.entries }}" as="en" hint-placeholder-count="4">
+              <div onClick="{{ en.onClick }}" style="{{ en.rowStyle }}" style-hover="background:#E6DFCE;">
+                <div style="{{ en.dateBox }}">
+                  <div style="font-size:19px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums;">{{ en.day }}</div>
+                  <div style="font-size:10px;letter-spacing:0.04em;text-transform:uppercase;margin-top:3px;opacity:0.7;">{{ en.wd }}</div>
+                </div>
+                <div style="min-width:0;flex:1;">
+                  <div style="font-family:Newsreader,serif;font-size:16px;color:#1A1916;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ en.title }}</div>
+                  <div style="font-size:12.5px;color:#9A958A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">{{ en.preview }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- ============ EDITOR ============ -->
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">
+        <div style="height:54px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 36px;background:#FBFAF6;border-bottom:1px solid #E6E1D4;">
+          <div style="display:flex;align-items:center;gap:4px;">
+            <div onMouseDown="{{ onBold }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-weight:700;color:#2A2620;" style-hover="background:#EFEBE0;">B</div>
+            <div onMouseDown="{{ onItalic }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-style:italic;font-family:Newsreader,serif;color:#2A2620;" style-hover="background:#EFEBE0;">I</div>
+            <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+            <div onMouseDown="{{ onQuote }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ quoteGlyph }}</div></div>
+            <div onMouseDown="{{ onBullet }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ bulletGlyph }}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:18px;font-size:13.5px;color:#8A857A;">
+            <div style="font-variant-numeric:tabular-nums;">{{ wordCount }} words</div>
+            <div style="width:1px;height:16px;background:#E0DBCE;"></div>
+            <div style="display:flex;align-items:center;gap:8px;"><div style="{{ saveDot }}"></div><span>{{ saveText }}</span></div>
+          </div>
+        </div>
+        <div class="jr-scroll" style="flex:1;overflow-y:auto;min-height:0;background:#FCFBF8;">
+          <div style="max-width:720px;margin:0 auto;padding:72px 24px 160px;">
+            <div style="font-family:Newsreader,serif;font-size:44px;line-height:1.12;color:#1A1916;letter-spacing:-0.01em;margin-bottom:12px;">{{ activeDate }}</div>
+            <div style="font-size:13px;letter-spacing:0.04em;color:#A39D8F;margin-bottom:46px;">{{ activeMeta }}</div>
+            {{ bodyNode }}
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(2026, 5, 20, 9, 41, 0), activeIndex: 0, words: 0, saved: true, savedAt: "09:41" };
+
+  monthLabels = ["June 2026", "May 2026"];
+  entries = [
+    { mo: 0, day: "20", wd: "Sat", date: "Saturday, 20 June", meta: "Brooklyn \u00b7 clear, 71\u00b0 \u00b7 second coffee", title: "The held-breath hour", preview: "Woke before the alarm again.",
+      html: '<p>Woke before the alarm again. The block was doing its held-breath thing &mdash; that flat quiet after the last train and before the bakery vents start breathing out sugar.</p><p>Wrote a thousand words standing up at the chrome desk, which is the only way I can keep from editing the first sentence forty times. Most of them are bad. Three of them are not, and three is a number I can live on.</p><p>Sent Dey a LoRa note about the reading tonight. No reply yet. The not-knowing used to bother me; today it just feels like weather.</p>' },
+    { mo: 0, day: "18", wd: "Thu", date: "Thursday, 18 June", meta: "Brooklyn \u00b7 overcast, 64\u00b0", title: "Rent, in cash", preview: "Counted it twice on the kitchen table.",
+      html: '<p>Counted the rent twice on the kitchen table. Not because I doubted it &mdash; because counting is a way of touching something true.</p><p>The super nodded at the envelope like it was the most ordinary thing in the world, which, between us, it has become.</p>' },
+    { mo: 0, day: "11", wd: "Thu", date: "Thursday, 11 June", meta: "Greenpoint \u00b7 rain", title: "Borrowed time at the laundromat", preview: "Best ideas arrive at spin cycle.",
+      html: '<p>The best ideas arrive at the spin cycle, when there is nothing to do but watch other people&rsquo;s shirts pretend to be a storm.</p><p>Filled half a notebook. Lost the other half to the dryer, possibly forever.</p>' },
+    { mo: 1, day: "28", wd: "Wed", date: "Wednesday, 28 May", meta: "Brighton Beach \u00b7 windy, 58\u00b0", title: "The sea keeps its opinions", preview: "Walked out to the water to think.",
+      html: '<p>Walked out to the water to think, which is what I say when I mean I wanted to stop thinking for an hour.</p><p>The sea at Brighton in May is the color of a coin left in the rain. It keeps its opinions to itself. I am trying to learn how.</p>' },
+    { mo: 1, day: "21", wd: "Wed", date: "Wednesday, 21 May", meta: "Brooklyn \u00b7 clear, 66\u00b0", title: "A good chair, finally", preview: "The desk faces the window now.",
+      html: '<p>The desk faces the window now, on purpose. Chrome legs, pale wood, a lamp the color of weak tea.</p><p>Nothing on it earns its place unless I use it before noon. So far the lamp is winning.</p>' },
+  ];
+
+  componentDidMount() { this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); if (this.saveT) clearTimeout(this.saveT); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+
+  bodyRefCb = (el) => { this.editorEl = el; if (el) this.recount(); };
+  onEditCb = () => this.onEdit();
+  recount() {
+    if (!this.editorEl) return;
+    const txt = (this.editorEl.innerText || "").trim();
+    const n = txt ? (txt.match(/\S+/g) || []).length : 0;
+    if (n !== this.state.words) this.setState({ words: n });
+  }
+  onEdit() {
+    this.recount();
+    this.setState({ saved: false });
+    if (this.saveT) clearTimeout(this.saveT);
+    this.saveT = setTimeout(() => this.setState({ saved: true, savedAt: this.clockStr() }), 900);
+  }
+  selectEntry(i) {
+    if (i === this.state.activeIndex) return;
+    if (this.editorEl) this.entries[this.state.activeIndex].html = this.editorEl.innerHTML;
+    this.setState({ activeIndex: i, saved: true });
+  }
+  cmd(e, command, val) { e.preventDefault(); document.execCommand(command, false, val || null); setTimeout(() => this.recount(), 0); }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "quote": return S(P("M7 7h3.5v3.5c0 2-1.3 3.3-3.3 3.8"), P("M14 7h3.5v3.5c0 2-1.3 3.3-3.3 3.8"));
+      case "bullet": return S(C(5, 7, 1), L(9, 7, 20, 7), C(5, 12, 1), L(9, 12, 20, 12), C(5, 17, 1), L(9, 17, 20, 17));
+      case "plus": return S(L(12, 5, 12, 19), L(5, 12, 19, 12));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    const active = this.state.activeIndex;
+    const months = this.monthLabels.map((label, mi) => ({
+      label,
+      entries: this.entries
+        .map((e, i) => ({ e, i }))
+        .filter((o) => o.e.mo === mi)
+        .map(({ e, i }) => ({
+          day: e.day, wd: e.wd, title: e.title, preview: e.preview,
+          onClick: () => this.selectEntry(i),
+          rowStyle: "display:flex;align-items:center;gap:14px;padding:11px 10px;border-radius:2px;cursor:pointer;margin-bottom:3px;"
+            + (i === active ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+          dateBox: "width:42px;height:42px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:2px;"
+            + (i === active ? "background:#1A1916;color:#FCFBF8;" : "background:#E7E1D2;color:#6E695E;"),
+        })),
+    }));
+
+    const ae = this.entries[active];
+    const bodyNode = React.createElement("div", {
+      key: active, className: "jr-body", contentEditable: true,
+      ref: this.bodyRefCb, onInput: this.onEditCb,
+      style: { fontFamily: "Newsreader, serif", fontSize: "20.5px", lineHeight: 1.76, color: "#26241F", textWrap: "pretty" },
+      dangerouslySetInnerHTML: { __html: ae.html },
+    });
+
+    return {
+      menus: ["File", "Edit", "Format", "Insert", "View"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"), quoteGlyph: this.icon("quote"), bulletGlyph: this.icon("bullet"), plusGlyph: this.icon("plus"),
+      months, bodyNode,
+      activeDate: ae.date, activeMeta: ae.meta,
+      wordCount: this.state.words.toLocaleString(),
+      saveText: this.state.saved ? "Saved " + this.state.savedAt : "Saving\u2026",
+      saveDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (this.state.saved ? "#7FA98C" : "#C8341E") + ";",
+      onBold: (e) => this.cmd(e, "bold"), onItalic: (e) => this.cmd(e, "italic"),
+      onBullet: (e) => this.cmd(e, "insertUnorderedList"), onQuote: (e) => this.cmd(e, "formatBlock"),
+    };
+  }
+}
+</script>
+</body>
+</html>

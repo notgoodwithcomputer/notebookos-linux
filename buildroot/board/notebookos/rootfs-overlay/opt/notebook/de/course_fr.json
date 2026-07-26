@@ -1,0 +1,260 @@
+{
+  "code": "fr",
+  "name": "French",
+  "from": "English",
+  "units": [
+    {
+      "title": "BASICS",
+      "skills": [
+        {
+          "name": "Greetings",
+          "words": [
+            {"t": "bonjour", "e": "hello", "ipa": "bɔ̃.ʒuʁ"},
+            {"t": "au revoir", "e": "goodbye", "ipa": "o ʁə.vwaʁ"},
+            {"t": "merci", "e": "thank you", "ipa": "mɛʁ.si"},
+            {"t": "s'il vous plaît", "e": "please", "ipa": "sil vu plɛ"},
+            {"t": "oui", "e": "yes", "ipa": "wi"},
+            {"t": "non", "e": "no", "ipa": "nɔ̃"},
+            {"t": "pardon", "e": "sorry", "ipa": "paʁ.dɔ̃"},
+            {"t": "bonne nuit", "e": "good night", "ipa": "bɔn nɥi"}
+          ],
+          "phrases": [
+            {"t": "Comment ça va ?", "e": "How are you?", "ipa": "kɔ.mɑ̃ sa va"},
+            {"t": "Je m'appelle Ana", "e": "My name is Ana", "ipa": "ʒə ma.pɛl a.na"}
+          ]
+        },
+        {
+          "name": "People",
+          "words": [
+            {"t": "je", "e": "I", "ipa": "ʒə"},
+            {"t": "tu", "e": "you", "ipa": "ty"},
+            {"t": "il", "e": "he", "ipa": "il"},
+            {"t": "elle", "e": "she", "ipa": "ɛl"},
+            {"t": "nous", "e": "we", "ipa": "nu"},
+            {"t": "ils", "e": "they", "ipa": "il"},
+            {"t": "homme", "e": "man", "ipa": "ɔm"},
+            {"t": "femme", "e": "woman", "ipa": "fam"},
+            {"t": "garçon", "e": "boy", "ipa": "ɡaʁ.sɔ̃"},
+            {"t": "fille", "e": "girl", "ipa": "fij"}
+          ],
+          "phrases": [
+            {"t": "C'est un homme", "e": "He is a man", "ipa": "sɛ.t‿œ̃.n‿ɔm"}
+          ]
+        },
+        {
+          "name": "Numbers",
+          "words": [
+            {"t": "un", "e": "one", "ipa": "œ̃"},
+            {"t": "deux", "e": "two", "ipa": "dø"},
+            {"t": "trois", "e": "three", "ipa": "tʁwa"},
+            {"t": "quatre", "e": "four", "ipa": "katʁ"},
+            {"t": "cinq", "e": "five", "ipa": "sɛ̃k"},
+            {"t": "six", "e": "six", "ipa": "sis"},
+            {"t": "sept", "e": "seven", "ipa": "sɛt"},
+            {"t": "huit", "e": "eight", "ipa": "ɥit"},
+            {"t": "neuf", "e": "nine", "ipa": "nœf"},
+            {"t": "dix", "e": "ten", "ipa": "dis"}
+          ],
+          "phrases": [
+            {"t": "J'ai deux frères", "e": "I have two brothers", "ipa": "ʒe dø fʁɛʁ"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "PEOPLE",
+      "skills": [
+        {
+          "name": "Family",
+          "words": [
+            {"t": "père", "e": "father", "ipa": "pɛʁ"},
+            {"t": "mère", "e": "mother", "ipa": "mɛʁ"},
+            {"t": "fils", "e": "son", "ipa": "fis"},
+            {"t": "fille", "e": "daughter", "ipa": "fij"},
+            {"t": "frère", "e": "brother", "ipa": "fʁɛʁ"},
+            {"t": "sœur", "e": "sister", "ipa": "sœʁ"},
+            {"t": "famille", "e": "family", "ipa": "fa.mij"},
+            {"t": "ami", "e": "friend", "ipa": "a.mi"}
+          ],
+          "phrases": [
+            {"t": "Elle est mon amie", "e": "She is my friend", "ipa": "ɛl ɛ mɔ̃.n‿a.mi"}
+          ]
+        },
+        {
+          "name": "Colors",
+          "words": [
+            {"t": "rouge", "e": "red", "ipa": "ʁuʒ"},
+            {"t": "bleu", "e": "blue", "ipa": "blø"},
+            {"t": "vert", "e": "green", "ipa": "vɛʁ"},
+            {"t": "jaune", "e": "yellow", "ipa": "ʒon"},
+            {"t": "noir", "e": "black", "ipa": "nwaʁ"},
+            {"t": "blanc", "e": "white", "ipa": "blɑ̃"}
+          ],
+          "phrases": [
+            {"t": "La pomme est rouge", "e": "The apple is red", "ipa": "la pɔm ɛ ʁuʒ"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "EVERYDAY",
+      "skills": [
+        {
+          "name": "Food",
+          "words": [
+            {"t": "eau", "e": "water", "ipa": "o"},
+            {"t": "pain", "e": "bread", "ipa": "pɛ̃"},
+            {"t": "lait", "e": "milk", "ipa": "lɛ"},
+            {"t": "pomme", "e": "apple", "ipa": "pɔm"},
+            {"t": "viande", "e": "meat", "ipa": "vjɑ̃d"},
+            {"t": "café", "e": "coffee", "ipa": "ka.fe"},
+            {"t": "fromage", "e": "cheese", "ipa": "fʁɔ.maʒ"}
+          ],
+          "phrases": [
+            {"t": "Je mange du pain", "e": "I eat bread", "ipa": "ʒə mɑ̃ʒ dy pɛ̃"},
+            {"t": "Je bois de l'eau", "e": "I drink water", "ipa": "ʒə bwa də lo"}
+          ]
+        },
+        {
+          "name": "Verbs",
+          "words": [
+            {"t": "être", "e": "to be", "ipa": "ɛtʁ"},
+            {"t": "avoir", "e": "to have", "ipa": "a.vwaʁ"},
+            {"t": "aller", "e": "to go", "ipa": "a.le"},
+            {"t": "voir", "e": "to see", "ipa": "vwaʁ"},
+            {"t": "parler", "e": "to speak", "ipa": "paʁ.le"},
+            {"t": "apprendre", "e": "to learn", "ipa": "a.pʁɑ̃dʁ"},
+            {"t": "manger", "e": "to eat", "ipa": "mɑ̃.ʒe"},
+            {"t": "boire", "e": "to drink", "ipa": "bwaʁ"}
+          ],
+          "phrases": [
+            {"t": "J'apprends le français", "e": "I learn French", "ipa": "ʒa.pʁɑ̃ lə fʁɑ̃.sɛ"},
+            {"t": "Parlez-vous français ?", "e": "Do you speak French?", "ipa": "paʁ.le vu fʁɑ̃.sɛ"}
+          ]
+        },
+        {
+          "name": "Describing",
+          "words": [
+            {"t": "grand", "e": "big", "ipa": "ɡʁɑ̃"},
+            {"t": "petit", "e": "small", "ipa": "pə.ti"},
+            {"t": "bon", "e": "good", "ipa": "bɔ̃"},
+            {"t": "beau", "e": "beautiful", "ipa": "bo"},
+            {"t": "nouveau", "e": "new", "ipa": "nu.vo"},
+            {"t": "chaud", "e": "hot", "ipa": "ʃo"},
+            {"t": "froid", "e": "cold", "ipa": "fʁwa"}
+          ],
+          "phrases": [
+            {"t": "Une grande maison", "e": "A big house", "ipa": "yn ɡʁɑ̃d mɛ.zɔ̃"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "GETTING AROUND",
+      "skills": [
+        {
+          "name": "Places",
+          "words": [
+            {"t": "maison", "e": "house", "ipa": "mɛ.zɔ̃"},
+            {"t": "école", "e": "school", "ipa": "e.kɔl"},
+            {"t": "magasin", "e": "store", "ipa": "ma.ɡa.zɛ̃"},
+            {"t": "ville", "e": "city", "ipa": "vil"},
+            {"t": "rue", "e": "street", "ipa": "ʁy"},
+            {"t": "marché", "e": "market", "ipa": "maʁ.ʃe"},
+            {"t": "porte", "e": "door", "ipa": "pɔʁt"}
+          ],
+          "phrases": [
+            {"t": "L'école est grande", "e": "The school is big", "ipa": "le.kɔl ɛ ɡʁɑ̃d"},
+            {"t": "Je vais à l'école", "e": "I go to the school", "ipa": "ʒə vɛ a le.kɔl"}
+          ]
+        },
+        {
+          "name": "Time",
+          "words": [
+            {"t": "aujourd'hui", "e": "today", "ipa": "o.ʒuʁ.dɥi"},
+            {"t": "demain", "e": "tomorrow", "ipa": "də.mɛ̃"},
+            {"t": "maintenant", "e": "now", "ipa": "mɛ̃t.nɑ̃"},
+            {"t": "jour", "e": "day", "ipa": "ʒuʁ"},
+            {"t": "nuit", "e": "night", "ipa": "nɥi"},
+            {"t": "semaine", "e": "week", "ipa": "sə.mɛn"},
+            {"t": "heure", "e": "hour", "ipa": "œʁ"},
+            {"t": "année", "e": "year", "ipa": "a.ne"}
+          ],
+          "phrases": [
+            {"t": "La semaine a sept jours", "e": "The week has seven days", "ipa": "la sə.mɛn a sɛt ʒuʁ"},
+            {"t": "Aujourd'hui je mange du pain", "e": "Today I eat bread", "ipa": "o.ʒuʁ.dɥi ʒə mɑ̃ʒ dy pɛ̃"}
+          ]
+        },
+        {
+          "name": "Travel",
+          "words": [
+            {"t": "voiture", "e": "car", "ipa": "vwa.tyʁ"},
+            {"t": "train", "e": "train", "ipa": "tʁɛ̃"},
+            {"t": "avion", "e": "airplane", "ipa": "a.vjɔ̃"},
+            {"t": "ici", "e": "here", "ipa": "i.si"},
+            {"t": "là", "e": "there", "ipa": "la"},
+            {"t": "loin", "e": "far", "ipa": "lwɛ̃"},
+            {"t": "près", "e": "near", "ipa": "pʁɛ"}
+          ],
+          "phrases": [
+            {"t": "La voiture est nouvelle", "e": "The car is new", "ipa": "la vwa.tyʁ ɛ nu.vɛl"},
+            {"t": "L'avion est grand", "e": "The airplane is big", "ipa": "la.vjɔ̃ ɛ ɡʁɑ̃"}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "THE WORLD",
+      "skills": [
+        {
+          "name": "Animals",
+          "words": [
+            {"t": "chien", "e": "dog", "ipa": "ʃjɛ̃"},
+            {"t": "chat", "e": "cat", "ipa": "ʃa"},
+            {"t": "oiseau", "e": "bird", "ipa": "wa.zo"},
+            {"t": "cheval", "e": "horse", "ipa": "ʃə.val"},
+            {"t": "poisson", "e": "fish", "ipa": "pwa.sɔ̃"},
+            {"t": "vache", "e": "cow", "ipa": "vaʃ"},
+            {"t": "poulet", "e": "chicken", "ipa": "pu.lɛ"}
+          ],
+          "phrases": [
+            {"t": "J'ai un chien", "e": "I have a dog", "ipa": "ʒe œ̃ ʃjɛ̃"},
+            {"t": "Le chat boit du lait", "e": "The cat drinks milk", "ipa": "lə ʃa bwa dy lɛ"}
+          ]
+        },
+        {
+          "name": "Nature",
+          "words": [
+            {"t": "soleil", "e": "sun", "ipa": "sɔ.lɛj"},
+            {"t": "lune", "e": "moon", "ipa": "lyn"},
+            {"t": "arbre", "e": "tree", "ipa": "aʁbʁ"},
+            {"t": "fleur", "e": "flower", "ipa": "flœʁ"},
+            {"t": "pluie", "e": "rain", "ipa": "plɥi"},
+            {"t": "mer", "e": "sea", "ipa": "mɛʁ"},
+            {"t": "ciel", "e": "sky", "ipa": "sjɛl"}
+          ],
+          "phrases": [
+            {"t": "Le ciel est bleu", "e": "The sky is blue", "ipa": "lə sjɛl ɛ blø"},
+            {"t": "Je vois le soleil", "e": "I see the sun", "ipa": "ʒə vwa lə sɔ.lɛj"}
+          ]
+        },
+        {
+          "name": "More Verbs",
+          "words": [
+            {"t": "faire", "e": "to do", "ipa": "fɛʁ"},
+            {"t": "vouloir", "e": "to want", "ipa": "vu.lwaʁ"},
+            {"t": "pouvoir", "e": "to be able", "ipa": "pu.vwaʁ"},
+            {"t": "dire", "e": "to say", "ipa": "diʁ"},
+            {"t": "venir", "e": "to come", "ipa": "və.niʁ"},
+            {"t": "acheter", "e": "to buy", "ipa": "aʃ.te"},
+            {"t": "vivre", "e": "to live", "ipa": "vivʁ"}
+          ],
+          "phrases": [
+            {"t": "Je veux apprendre le français", "e": "I want to learn French", "ipa": "ʒə vø a.pʁɑ̃dʁ lə fʁɑ̃.sɛ"},
+            {"t": "Je veux manger du pain", "e": "I want to eat bread", "ipa": "ʒə vø mɑ̃.ʒe dy pɛ̃"}
+          ]
+        }
+      ]
+    }
+  ]
+}

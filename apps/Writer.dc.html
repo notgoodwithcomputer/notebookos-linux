@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  [contenteditable] { outline: none; caret-color: #C8341E; }
+  ::selection { background: #F1D9D2; }
+  .wr-body p { margin: 0 0 22px; }
+  .wr-scroll::-webkit-scrollbar { width: 12px; }
+  .wr-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR (system menu bar) ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Writer</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== LINK DIALOG ===================== -->
+    <sc-if value="{{ linkOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onLinkCancel }}" style="position:absolute;inset:0;z-index:72;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:420px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:26px 28px;">
+          <div style="font-size:16px;font-weight:700;color:#1A1916;margin-bottom:14px;">Insert Link</div>
+          <input value="{{ linkUrl }}" onInput="{{ onLinkUrl }}" type="text" placeholder="notebook://document or node address" style="width:100%;height:40px;border:1px solid #C4BFB1;border-radius:2px;background:#FCFBF8;padding:0 12px;font-size:14px;color:#1A1916;outline:none;" />
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
+            <div onClick="{{ onLinkCancel }}" style="height:38px;padding:0 18px;display:flex;align-items:center;border:1px solid #C4BFB1;color:#3A362E;border-radius:2px;font-size:14px;cursor:pointer;background:#FCFBF8;" style-hover="background:#ECE8DD;">Cancel</div>
+            <div onClick="{{ onLinkInsert }}" style="height:38px;padding:0 18px;display:flex;align-items:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">Insert</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== FORMAT BAR ===================== -->
+    <sc-if value="{{ formatBarShown }}" hint-placeholder-val="{{ true }}">
+    <div style="height:54px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 36px;background:#FBFAF6;border-bottom:1px solid #E6E1D4;z-index:4;">
+      <div style="display:flex;align-items:center;gap:4px;">
+        <!-- paragraph style -->
+        <div onClick="{{ onStyleMenu }}" style="display:flex;align-items:center;gap:9px;height:34px;padding:0 13px;border:1px solid #DCD7C9;border-radius:2px;cursor:pointer;background:#FCFBF8;" style-hover="background:#F1EDE2;">
+          <span style="font-family:Newsreader,serif;font-size:16px;color:#1A1916;">Style</span>
+          <span style="font-size:11px;color:#8A857A;">▾</span>
+        </div>
+        <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+        <!-- B I U -->
+        <div onMouseDown="{{ onBold }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-weight:700;color:#2A2620;" style-hover="background:#EFEBE0;">B</div>
+        <div onMouseDown="{{ onItalic }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-style:italic;font-family:Newsreader,serif;color:#2A2620;" style-hover="background:#EFEBE0;">I</div>
+        <div onMouseDown="{{ onUnderline }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:16px;text-decoration:underline;color:#2A2620;" style-hover="background:#EFEBE0;">U</div>
+        <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+        <!-- link quote -->
+        <div onMouseDown="{{ onLinkBtn }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ linkGlyph }}</div></div>
+        <div onMouseDown="{{ onQuote }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ quoteGlyph }}</div></div>
+        <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+        <!-- lists -->
+        <div onMouseDown="{{ onBullet }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ bulletGlyph }}</div></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:18px;font-size:13.5px;color:#8A857A;">
+        <div style="font-variant-numeric:tabular-nums;">{{ wordCount }} words</div>
+        <div style="width:1px;height:16px;background:#E0DBCE;"></div>
+        <div style="display:flex;align-items:center;gap:8px;"><div style="{{ saveDot }}"></div><span>{{ saveText }}</span></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ===================== WRITING CANVAS ===================== -->
+    <div class="wr-scroll" style="flex:1;overflow-y:auto;min-height:0;background:#FCFBF8;">
+      <div style="max-width:744px;margin:0 auto;padding:84px 24px 160px;">
+        <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:26px;">Draft</div>
+        <h1 contenteditable="true" ref="{{ titleRef }}" style="font-family:Newsreader,serif;font-weight:500;font-size:50px;line-height:1.12;color:#1A1916;margin:0 0 18px;letter-spacing:-0.01em;">Untitled</h1>
+        <div contenteditable="true" ref="{{ subRef }}" style="font-family:Newsreader,serif;font-style:italic;font-size:24px;line-height:1.4;color:#79736A;margin:0 0 44px;"></div>
+        <div class="wr-body" contenteditable="true" ref="{{ bodyRef }}" onInput="{{ onEdit }}" style="font-family:Newsreader,serif;font-size:20.5px;line-height:1.74;color:#26241F;text-wrap:pretty;"><p><br></p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = {
+    now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false,
+    words: 0, focusMode: false, linkOpen: false, linkUrl: "",
+    saved: true,
+    savedAt: (() => { const n = new Date(), p = (x) => (x < 10 ? "0" + x : "" + x); return p(n.getHours()) + ":" + p(n.getMinutes()); })(),
+  };
+
+  componentDidMount() {
+    this._esc = (e) => { if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen) { this.setState({ openMenu: null, aboutOpen: false }); } else { this.goHome(); } } };
+    window.addEventListener("keydown", this._esc);
+    this.timer = setInterval(() => {
+      this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) }));
+    }, 1000);
+  }
+  componentWillUnmount() {
+    window.removeEventListener("keydown", this._esc); clearInterval(this.timer); if (this.saveT) clearTimeout(this.saveT); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() {
+    const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const n = this.state.now;
+    return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()];
+  }
+
+  setEditor(el) {
+    this.editorEl = el;
+    if (el && !this._counted) { this._counted = true; this.recount(); }
+  }
+  recount() {
+    if (!this.editorEl) return;
+    const txt = (this.editorEl.innerText || "").trim();
+    const n = txt ? (txt.match(/\S+/g) || []).length : 0;
+    this.setState({ words: n });
+  }
+  onEdit() {
+    this.recount();
+    this.setState({ saved: false });
+    if (this.saveT) clearTimeout(this.saveT);
+    this.saveT = setTimeout(() => {
+      this.setState({ saved: true, savedAt: this.clockStr() });
+    }, 900);
+  }
+  cmd(e, command) { e.preventDefault(); document.execCommand(command, false, null); setTimeout(() => this.recount(), 0); }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "link": return S(P("M10.5 13.5a4 4 0 0 0 5.7 0l2-2a4 4 0 0 0-5.7-5.7l-1 1"), P("M13.5 10.5a4 4 0 0 0-5.7 0l-2 2a4 4 0 0 0 5.7 5.7l1-1"));
+      case "quote": return S(P("M7 7h3.5v3.5c0 2-1.3 3.3-3.3 3.8"), P("M14 7h3.5v3.5c0 2-1.3 3.3-3.3 3.8"));
+      case "bullet": return S(C(5, 7, 1), L(9, 7, 20, 7), C(5, 12, 1), L(9, 12, 20, 12), C(5, 17, 1), L(9, 17, 20, 17));
+      case "image": return S(R(3.5, 5, 17, 14, 1.5), C(9, 10, 1.6), P("M4 17l5-4.5 4 3 3-2.5 4 4"));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  goHomeCb = () => { try { if (window.parent !== window) window.parent.postMessage({ type: "nb-home" }, "*"); } catch (e) {} };
+
+  // ===== Notebook OS system chrome =====
+  appFile = "Writer.dc.html";
+  appName = "Writer";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File","Edit","Format","Insert","View"]; }
+  appMenuItems(name) {
+    if (name === "File") return [this.mi("New Document", () => this.newDoc()), this.mi("Save", () => this.markSaved(), { hint: "⌘S" }), this.msep(), this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" })];
+    if (name === "Edit") return this.editMenu();
+    if (name === "Format") return [this.mi("Bold", () => this.fmt("bold"), { hint: "⌘B" }), this.mi("Italic", () => this.fmt("italic"), { hint: "⌘I" }), this.mi("Underline", () => this.fmt("underline"), { hint: "⌘U" }), this.msep(), this.mi("Body", () => this.styleBlock("p")), this.mi("Heading", () => this.styleBlock("h2")), this.mi("Block Quote", () => this.styleBlock("blockquote")), this.msep(), this.mi("Bulleted List", () => this.fmt("insertUnorderedList"))];
+    if (name === "Insert") return [this.mi("Link…", () => this.openLinkDialog()), this.mi("Horizontal Rule", () => this.fmt("insertHorizontalRule"))];
+    if (name === "View") return [this.mi(this.state.focusMode ? "Show Toolbar" : "Focus Mode", () => this.setState({ focusMode: !this.state.focusMode, openMenu: null }), { check: this.state.focusMode ? "✓" : "" })];
+    if (name === "__style") return [this.mi("Body", () => this.styleBlock("p")), this.mi("Heading", () => this.styleBlock("h2")), this.mi("Quote", () => this.styleBlock("blockquote"))];
+    return this.defaultAppMenu(name);
+  }
+  newDoc() {
+    if (this.titleEl) this.titleEl.textContent = "Untitled";
+    if (this.subEl) this.subEl.textContent = "";
+    if (this.editorEl) this.editorEl.innerHTML = "<p><br></p>";
+    this.recount();
+    this.setState({ openMenu: null, saved: true, savedAt: this.clockStr() });
+  }
+  openLinkDialog() {
+    const sel = window.getSelection();
+    this._savedRange = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+    this.setState({ linkOpen: true, linkUrl: "", openMenu: null });
+  }
+  insertLink() {
+    const url = (this.state.linkUrl || "").trim();
+    this.setState({ linkOpen: false });
+    if (!url || !this._savedRange) return;
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(this._savedRange);
+    document.execCommand("createLink", false, url);
+  }
+  defaultAppMenu(name) {
+    if (name === "File") return [this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" })];
+    return [this.off("Undo"), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS…", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart…", () => this.power("restart")),
+      this.mi("Shut Down…", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "✓" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 · strong"), this.off("NODE-22", "ch 4 · good"), this.off("NODE-7F", "ch 4 · strong"), this.off("NODE-88", "ch 6 · fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+  execCmd(command, val) { document.execCommand(command, false, val || null); }
+  selectAllBody() { if (!this.editorEl) return; const r = document.createRange(); r.selectNodeContents(this.editorEl); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); if (this.editorEl.focus) this.editorEl.focus(); }
+  markSaved() { this.setState({ saved: true, savedAt: this.clockStr(), openMenu: null }); }
+  styleBlock(tag) { this.setState({ openMenu: null }); if (this.editorEl && this.editorEl.focus) this.editorEl.focus(); document.execCommand("formatBlock", false, tag); }
+  fmt(cmd) { this.execCmd(cmd); this.setState({ openMenu: null }); }
+  editMenu() { return [this.mi("Undo", () => this.fmt("undo"), { hint: "⌘Z" }), this.mi("Redo", () => this.fmt("redo")), this.msep(), this.mi("Select All", () => { this.selectAllBody(); this.setState({ openMenu: null }); }, { hint: "⌘A" }), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste")]; }
+  countOf(html) { const t = String(html).replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ").trim(); return t ? (t.match(/\S+/g) || []).length : 0; }
+  renderVals() {
+    return {
+      goHome: this.goHomeCb,
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"),
+      linkGlyph: this.icon("link"), quoteGlyph: this.icon("quote"),
+      bulletGlyph: this.icon("bullet"), imageGlyph: this.icon("image"),
+      wordCount: this.state.words.toLocaleString(),
+      saveText: this.state.saved ? "Saved " + this.state.savedAt : "Saving…",
+      saveDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (this.state.saved ? "#7FA98C" : "#C8341E") + ";",
+      bodyRef: (el) => this.setEditor(el),
+      onEdit: () => this.onEdit(),
+      onBold: (e) => this.cmd(e, "bold"),
+      onItalic: (e) => this.cmd(e, "italic"),
+      onUnderline: (e) => this.cmd(e, "underline"),
+      onBullet: (e) => this.cmd(e, "insertUnorderedList"),
+      onQuote: (e) => this.cmd(e, "formatBlock"),
+      onLinkBtn: (e) => { e.preventDefault(); this.openLinkDialog(); },
+      formatBarShown: !this.state.focusMode,
+      onStyleMenu: (e) => this.toggleMenu("__style", e),
+      linkOpen: this.state.linkOpen, linkUrl: this.state.linkUrl,
+      onLinkUrl: (e) => this.setState({ linkUrl: e.target.value }),
+      onLinkInsert: () => this.insertLink(),
+      onLinkCancel: () => this.setState({ linkOpen: false }),
+      titleRef: (el) => { this.titleEl = el; },
+      subRef: (el) => { this.subEl = el; },
+    };
+  }
+}
+</script>
+</body>
+</html>

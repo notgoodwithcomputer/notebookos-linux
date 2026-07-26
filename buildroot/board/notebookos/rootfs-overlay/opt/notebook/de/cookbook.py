@@ -1,0 +1,1918 @@
+#!/usr/bin/env python3
+"""
+Cookbook — recipe manager for Notebook OS (native GTK).
+
+Two-pane layout: a sidebar of category chips and a recipe list, and a main
+recipe page with a photo-caption band, a category kicker, a title field, a
+description field, a Time / Makes / Effort field strip, and Ingredients +
+Method columns. Ships empty (no recipes, no categories) per the no-seed rule;
+a technical empty state names the New Recipe action.
+
+The whole library persists to $NB_HOME/.config/notebook/cookbook.json on every
+edit — this file is the sole source of truth. The File menu adds a recipe (New
+Recipe) and renders the current recipe to a PDF under $NB_HOME/Documents
+(Export to PDF); there is no file open / save / save-as.
+"""
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("Pango", "1.0")
+from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
+
+import os
+import json
+import re
+import time
+import cairo
+
+import nbapp
+import nbicons
+import nbprint
+from nbi18n import _t  # noqa: E402
+
+# The whole library (categories, recipes, the active category filter and the
+# current selection) is written to $NB_HOME/.config/notebook/cookbook.json on
+# every edit so nothing is lost across a close or reboot — this file is the
+# sole source of truth. The File menu's Export to PDF renders the current
+# recipe to a PDF under $NB_HOME/Documents; there is no file open / save.
+HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
+CFG_DIR = os.path.join(HOME, ".config", "notebook")
+COOKBOOK_FILE = os.path.join(CFG_DIR, "cookbook.json")
+DOCUMENTS = os.path.join(HOME, "Documents")
+
+# ---------------------------------------------------------------- quantities
+# Cooking for six from a recipe written for four means doing ten sums in your
+# head at the stove. The amount column is free text ("500g", "1 large",
+# "1 1/2 tbsp", "to taste"), so scaling reads the number off the FRONT of it and
+# leaves everything else exactly as written — an amount with no number ("to
+# taste", "a pinch") is passed through untouched rather than guessed at.
+_QTY_RE = re.compile(r"^\s*(\d+\s+\d+/\d+|\d+/\d+|\d+(?:[.,]\d+)?)(\s*)(.*)$")
+_NUM_RE = re.compile(r"\d+")
+
+
+def _read_qty(text):
+    """The leading quantity of an amount as a float, or None."""
+    try:
+        if " " in text and "/" in text:              # "1 1/2"
+            whole, frac = text.split(None, 1)
+            num, den = frac.split("/")
+            return int(whole) + int(num) / float(den)
+        if "/" in text:                              # "3/4"
+            num, den = text.split("/")
+            return int(num) / float(den)
+        return float(text.replace(",", "."))
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def _fmt_qty(value):
+    """A scaled quantity back as text: whole numbers stay whole, anything else
+    keeps at most two decimals with no trailing zeros."""
+    if abs(value - round(value)) < 0.005:
+        return "%d" % round(value)
+    return ("%.2f" % value).rstrip("0").rstrip(".")
+
+
+def scale_amount(amount, factor):
+    """`amount` with its leading quantity multiplied by `factor`. Text with no
+    leading number ("to taste") comes back unchanged."""
+    if factor == 1:
+        return amount
+    m = _QTY_RE.match(amount or "")
+    if not m:
+        return amount
+    value = _read_qty(m.group(1))
+    if value is None:
+        return amount
+    rest = m.group(3)
+    # A range ("2-3 sprigs") has to scale at both ends, or doubling it produces
+    # the nonsense "4-3 sprigs".
+    rng = re.match(r"^-\s*(\d+(?:[.,]\d+)?)(.*)$", rest)
+    if rng:
+        top = _read_qty(rng.group(1))
+        if top is not None:
+            rest = "-" + _fmt_qty(top * factor) + rng.group(2)
+    return _fmt_qty(value * factor) + m.group(2) + rest
+
+
+def base_servings(makes):
+    """The number a recipe's free-text yield is written for ("Serves 4" -> 4,
+    "Makes 12" -> 12), or None when it names no number to scale from."""
+    m = _NUM_RE.search(makes or "")
+    if not m:
+        return None
+    n = int(m.group(0))
+    return n if 1 <= n <= 999 else None
+
+
+def restate_servings(makes, n):
+    """The yield line with its number swapped for `n`, so "Serves 4" becomes
+    "Serves 6" and "Makes 12 buns" becomes "Makes 18 buns"."""
+    if not makes:
+        return "%d" % n
+    return _NUM_RE.sub(str(n), makes, count=1)
+
+
+class Cookbook(nbapp.AppWindow):
+    app_name = "Cookbook"
+    menus = ("File", "Edit", "View", "Cook")
+
+    def __init__(self):
+        super().__init__()
+        self._install_css()
+
+        # data model
+        self.cats = []          # list of category name strings
+        self.recipes = []       # list of dicts: {title, cat, desc, time,
+                                #                 makes, effort, ing, steps}
+        self.active_cat = 0     # 0 == "All"; else index into cats + 1
+        self.sel = -1           # index into self.recipes
+        self._save_timer = None
+        self.meta_entries = {}  # field -> Gtk.Entry for the stat strip
+        # Cook mode: which step is showing, what the recipe is written for, and
+        # what it is being cooked for now (scaling is display-only — see
+        # scale_amount — so none of this is ever written to the recipe).
+        self._cook_i = 0
+        self._cook_base = None
+        self._cook_n = None
+
+        # Restore the cookbook library (categories + recipes) from its autosave.
+        # On first run there is no file, so the model stays empty and the app
+        # opens on its "No recipes" empty state (ships-empty rule).
+        self._load_state()
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        row.set_hexpand(True)
+        row.set_vexpand(True)
+        self.content.pack_start(row, True, True, 0)
+
+        self._side = self._build_sidebar()
+        row.pack_start(self._side, False, False, 0)
+        row.pack_start(self._build_main(), True, True, 0)
+
+        self.rebuild_chips()
+        self.rebuild_list()
+        self._refresh_editor()
+
+        # Flush the final (possibly still-debounced) edit when the window
+        # closes so no typed input is lost.
+        self.connect("destroy", self._on_destroy)
+
+    # ------------------------------------------------------------------ sidebar
+    def _build_sidebar(self):
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        side.set_size_request(344, -1)
+        side.get_style_context().add_class("sidebar")
+
+        # category chips
+        chipwrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        chipwrap.get_style_context().add_class("chipwrap")
+        self.chipbox = Gtk.FlowBox()
+        self.chipbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.chipbox.set_max_children_per_line(30)
+        self.chipbox.set_column_spacing(7)
+        self.chipbox.set_row_spacing(7)
+        self.chipbox.set_homogeneous(False)
+        self.chipbox.get_style_context().add_class("chipflow")
+        chipwrap.pack_start(self.chipbox, False, False, 0)
+        side.pack_start(chipwrap, False, False, 0)
+
+        # recipe list
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.listbox.get_style_context().add_class("recipelist")
+        self.listbox.connect("row-activated", self._on_row_activated)
+        scroll.add(self.listbox)
+        side.pack_start(scroll, True, True, 0)
+
+        # new recipe button
+        foot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        foot.get_style_context().add_class("sidefoot")
+        newbtn = Gtk.Button(label=_t("+ New Recipe"))
+        newbtn.set_relief(Gtk.ReliefStyle.NONE)
+        newbtn.get_style_context().add_class("newrecipe")
+        newbtn.connect("clicked", lambda *_: self.new_recipe())
+        foot.pack_start(newbtn, False, False, 0)
+        side.pack_start(foot, False, False, 0)
+        return side
+
+    def rebuild_chips(self):
+        for c in self.chipbox.get_children():
+            self.chipbox.remove(c)
+        labels = ["All"] + list(self.cats)
+        for i, name in enumerate(labels):
+            btn = Gtk.Button(label=name)
+            btn.set_relief(Gtk.ReliefStyle.NONE)
+            ctx = btn.get_style_context()
+            ctx.add_class("chip")
+            if i == self.active_cat:
+                ctx.add_class("active")
+            btn.connect("clicked", self._on_chip, i)
+            self.chipbox.add(btn)
+        # add-category chip
+        add = Gtk.Button(label=_t("+ Category"))
+        add.set_relief(Gtk.ReliefStyle.NONE)
+        add.get_style_context().add_class("chipadd")
+        add.connect("clicked", lambda *_: self._new_category())
+        self.chipbox.add(add)
+        self.chipbox.show_all()
+
+    def _on_chip(self, _btn, idx):
+        self.active_cat = idx
+        self.sel = -1
+        self.rebuild_chips()
+        self.rebuild_list()
+        self._refresh_editor()
+
+    def rebuild_list(self):
+        for c in self.listbox.get_children():
+            self.listbox.remove(c)
+        cat_filter = self.cats[self.active_cat - 1] if self.active_cat > 0 else None
+        visible = [(i, r) for i, r in enumerate(self.recipes)
+                   if cat_filter is None or r["cat"] == cat_filter]
+        if not visible:
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            row.set_activatable(False)
+            lbl = Gtk.Label(label=_t("No recipes"))
+            lbl.get_style_context().add_class("emptylist")
+            row.add(lbl)
+            self.listbox.add(row)
+        else:
+            for idx, r in visible:
+                self.listbox.add(self._recipe_row(idx, r))
+        self.listbox.show_all()
+
+    def _recipe_row(self, idx, r):
+        row = Gtk.ListBoxRow()
+        row._idx = idx
+        ctx = row.get_style_context()
+        ctx.add_class("reciperow")
+        selected = idx == self.sel
+        if selected:
+            ctx.add_class("selected")
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        # small bookmark icon (red when selected, muted otherwise)
+        try:
+            pb = nbicons.pixbuf(
+                "bookmark", 16, "#C8341E" if selected else "#B3AE9F")
+            icon = Gtk.Image.new_from_pixbuf(pb)
+        except Exception:
+            # icon rendering must never block a row from building
+            icon = Gtk.Image()
+        icon.get_style_context().add_class("ricon")
+        icon.set_valign(Gtk.Align.START)
+        outer.pack_start(icon, False, False, 0)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        title = Gtk.Label(label=r["title"] or "Untitled recipe", xalign=0)
+        title.set_ellipsize(Pango.EllipsizeMode.END)
+        title.get_style_context().add_class("rtitle")
+        meta = Gtk.Label(label=self._row_meta(r), xalign=0)
+        meta.set_ellipsize(Pango.EllipsizeMode.END)
+        meta.get_style_context().add_class("rmeta")
+        # keep handles so field edits can update this row's text in place
+        # (see _update_row_titles) instead of rebuilding the whole sidebar.
+        row._title_lbl = title
+        row._meta_lbl = meta
+        box.pack_start(title, False, False, 0)
+        box.pack_start(meta, False, False, 0)
+        outer.pack_start(box, True, True, 0)
+        row.add(outer)
+        return row
+
+    def _row_meta(self, r):
+        """Compose the 'Category · time · yield' line, degrading gracefully to
+        an ingredient count when the descriptive fields are empty."""
+        bits = [(r.get("cat") or "No category")]
+        for key in ("time", "makes"):
+            v = (r.get(key) or "").strip()
+            if v:
+                bits.append(v)
+        if len(bits) == 1:
+            n_ing = len([x for x in (r.get("ing") or "").split("\n") if x.strip()])
+            bits.append("%d ingredient%s" % (n_ing, "" if n_ing == 1 else "s"))
+        return "  ·  ".join(bits)
+
+    def _on_row_activated(self, _lb, row):
+        if hasattr(row, "_idx"):
+            self.sel = row._idx
+            self.rebuild_list()
+            self._refresh_editor()
+
+    # --------------------------------------------------------------------- main
+    def _build_main(self):
+        self.stack = Gtk.Stack()
+        self.stack.get_style_context().add_class("mainpane")
+
+        # empty state
+        empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        empty.set_valign(Gtk.Align.CENTER)
+        empty.set_halign(Gtk.Align.CENTER)
+        self.empty_title = Gtk.Label(label=_t("No recipes"))
+        self.empty_title.get_style_context().add_class("emptytitle")
+        self.empty_hint = Gtk.Label(label=_t("Click + New Recipe to add one"))
+        self.empty_hint.get_style_context().add_class("emptyhint")
+        empty.pack_start(self.empty_title, False, False, 0)
+        empty.pack_start(self.empty_hint, False, False, 0)
+        self.stack.add_named(empty, "empty")
+
+        # editor / reader
+        editor = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+        # photo-caption band
+        hero = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        hero.get_style_context().add_class("herowrap")
+        # No image subsystem is available, so the band stores a text caption
+        # for the dish. Wrap it in an EventBox (a bare Box gets no button
+        # events) so a click opens the caption editor.
+        photo_evt = Gtk.EventBox()
+        photo_evt.set_hexpand(True)
+        photo_evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        photo_evt.set_tooltip_text(_t("Set photo caption"))
+        photo_evt.connect("button-press-event", self._edit_photo)
+        photo = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        photo.get_style_context().add_class("herophoto")
+        photo.set_hexpand(True)
+        self.photo_caption = Gtk.Label(label=_t("No photo caption"))
+        self.photo_caption.get_style_context().add_class("herocap")
+        self.photo_caption.set_halign(Gtk.Align.CENTER)
+        self.photo_caption.set_valign(Gtk.Align.CENTER)
+        photo.pack_start(self.photo_caption, True, True, 0)
+        photo_evt.add(photo)
+        hero.pack_start(photo_evt, True, True, 0)
+        editor.pack_start(hero, False, False, 0)
+
+        # header block
+        head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        head.get_style_context().add_class("edhead")
+
+        topline = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.kicker = Gtk.Label(label="", xalign=0)
+        self.kicker.get_style_context().add_class("edkicker")
+        self.savestate = Gtk.Label(label=_t("Saved"), xalign=1)
+        self.savestate.get_style_context().add_class("savestate")
+        topline.pack_start(self.kicker, False, False, 0)
+        topline.pack_end(self.savestate, False, False, 0)
+        head.pack_start(topline, False, False, 0)
+
+        self.title_entry = Gtk.Entry()
+        self.title_entry.set_placeholder_text(_t("Untitled recipe"))
+        self.title_entry.set_has_frame(False)
+        self.title_entry.get_style_context().add_class("edtitle")
+        self.title_entry.connect("changed", self._on_title_changed)
+        head.pack_start(self.title_entry, False, False, 0)
+
+        self.desc_entry = Gtk.Entry()
+        self.desc_entry.set_placeholder_text(_t("Description"))
+        self.desc_entry.set_has_frame(False)
+        self.desc_entry.get_style_context().add_class("eddesc")
+        self.desc_entry.connect("changed", self._on_desc_changed)
+        head.pack_start(self.desc_entry, False, False, 0)
+
+        # The stat strip, with the way into cook mode beside it — the point at
+        # which someone stops reading a recipe and starts making it.
+        metarow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        metarow.pack_start(self._build_metabar(), False, False, 0)
+        cookbtn = Gtk.Button(label=_t("Start cooking"))
+        cookbtn.set_relief(Gtk.ReliefStyle.NONE)
+        cookbtn.get_style_context().add_class("startcook")
+        cookbtn.set_valign(Gtk.Align.END)
+        cookbtn.set_tooltip_text(
+            _t("Follow the method a step at a time, in large type"))
+        cookbtn.connect("clicked", self._enter_cook)
+        metarow.pack_end(cookbtn, False, False, 0)
+        head.pack_start(metarow, False, False, 0)
+        editor.pack_start(head, False, False, 0)
+
+        # ingredients + method columns
+        cols = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=44)
+        cols.get_style_context().add_class("edcols")
+        cols.set_vexpand(True)
+        # The ingredients column keeps its 320px measure while there is room and
+        # gives width back on a small panel, so Method never collapses to three
+        # words a line (see _fit_columns). The handler hangs off the Stack, not
+        # off `cols`: a hidden Stack page is never allocated, but it still
+        # counts towards the window's minimum width.
+        self._ing_w = 0
+
+        ing_box, self.ing_view, self.ing_render, self.ing_stack, \
+            self.ing_edit_btn = self._panel(
+                "INGREDIENTS", "One ingredient per line (name - amount)",
+                320, "ing")
+        self.ing_box = ing_box
+        self.ing_view.get_buffer().connect("changed", self._on_ing_changed)
+        cols.pack_start(ing_box, False, False, 0)
+
+        steps_box, self.steps_view, self.steps_render, self.steps_stack, \
+            self.steps_edit_btn = self._panel(
+                "METHOD", "Write each step on its own line", -1, "steps")
+        self.steps_view.get_buffer().connect("changed", self._on_steps_changed)
+        cols.pack_start(steps_box, True, True, 0)
+
+        editor.pack_start(cols, True, True, 0)
+        self.stack.add_named(editor, "editor")
+
+        cook = self._build_cook()
+        self.stack.add_named(cook, "cook")
+
+        self.stack.connect("size-allocate", self._fit_columns)
+        # GtkStack ignores set_visible_child_name for not-yet-visible children;
+        # mark every child visible up front so switching works before show_all.
+        empty.show_all()
+        editor.show_all()
+        cook.show_all()
+        return self.stack
+
+    # ------------------------------------------------------------- cook mode
+    def _build_cook(self):
+        """The page you actually cook from: one step at a time in large type,
+        the (scalable) ingredients beside it, and buttons big enough to hit with
+        the back of a floury hand. The recipe page is for writing a recipe down;
+        this is for standing at the stove with it."""
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page.get_style_context().add_class("cookpage")
+
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        head.get_style_context().add_class("cookhead")
+        self.cook_title = Gtk.Label(label="", xalign=0)
+        self.cook_title.get_style_context().add_class("cooktitle")
+        self.cook_title.set_ellipsize(Pango.EllipsizeMode.END)
+        head.pack_start(self.cook_title, True, True, 0)
+
+        # Servings stepper — presentational only. It never writes to the
+        # recipe, so halving a cake to try it can't quietly rewrite the book.
+        self.cook_scaler = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                                   spacing=0)
+        self.cook_scaler.get_style_context().add_class("scaler")
+        self.cook_scaler.set_valign(Gtk.Align.CENTER)
+        less = Gtk.Button(label="–")
+        less.set_relief(Gtk.ReliefStyle.NONE)
+        less.get_style_context().add_class("scalebtn")
+        less.set_tooltip_text(_t("Cook less"))
+        less.connect("clicked", lambda *_: self._cook_resize(-1))
+        self.cook_serves = Gtk.Label(label="")
+        self.cook_serves.get_style_context().add_class("scaleval")
+        more = Gtk.Button(label="+")
+        more.set_relief(Gtk.ReliefStyle.NONE)
+        more.get_style_context().add_class("scalebtn")
+        more.set_tooltip_text(_t("Cook more"))
+        more.connect("clicked", lambda *_: self._cook_resize(1))
+        self.cook_scaler.pack_start(less, False, False, 0)
+        self.cook_scaler.pack_start(self.cook_serves, False, False, 0)
+        self.cook_scaler.pack_start(more, False, False, 0)
+        # Show the CHILDREN now and mark only the container no-show-all: a
+        # container flagged no-show-all is skipped by show_all() entirely, so
+        # its children would never be shown and a later .show() on it would
+        # reveal an empty box (which is exactly what it did).
+        for child in (less, self.cook_serves, more):
+            child.show()
+        self.cook_scaler.set_no_show_all(True)
+        head.pack_start(self.cook_scaler, False, False, 0)
+
+        done = Gtk.Button(label=_t("Done"))
+        done.set_relief(Gtk.ReliefStyle.NONE)
+        done.get_style_context().add_class("cookdone")
+        done.set_valign(Gtk.Align.CENTER)
+        done.connect("clicked", lambda *_: self._exit_cook())
+        head.pack_start(done, False, False, 0)
+        page.pack_start(head, False, False, 0)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        body.set_vexpand(True)
+
+        ingwrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        ingwrap.get_style_context().add_class("cookings")
+        ingwrap.set_size_request(300, -1)
+        ihd = Gtk.Label(label=_t("INGREDIENTS"), xalign=0)
+        ihd.get_style_context().add_class("cookinghd")
+        ingwrap.pack_start(ihd, False, False, 0)
+        iscroll = Gtk.ScrolledWindow()
+        iscroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        iscroll.set_vexpand(True)
+        self.cook_ing = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        iscroll.add(self.cook_ing)
+        ingwrap.pack_start(iscroll, True, True, 0)
+        body.pack_start(ingwrap, False, False, 0)
+
+        stepcol = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        stepcol.get_style_context().add_class("cooksteps")
+        stepcol.set_hexpand(True)
+        self.cook_pos = Gtk.Label(label="", xalign=0)
+        self.cook_pos.get_style_context().add_class("cookpos")
+        stepcol.pack_start(self.cook_pos, False, False, 0)
+        stepscroll = Gtk.ScrolledWindow()
+        stepscroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        stepscroll.set_vexpand(True)
+        self.cook_step = Gtk.Label(label="", xalign=0)
+        self.cook_step.set_line_wrap(True)
+        self.cook_step.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        # The same 46-character reading measure the recipe page's steps use —
+        # at 26px that is a comfortable line, and pinning it (halign START)
+        # stops a step running the full width of a big screen.
+        self.cook_step.set_max_width_chars(46)
+        self.cook_step.set_halign(Gtk.Align.START)
+        self.cook_step.set_valign(Gtk.Align.START)
+        self.cook_step.get_style_context().add_class("cooksteptext")
+        stepbody = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        stepbody.pack_start(self.cook_step, False, False, 0)
+        # What is coming, in small muted type: worth knowing while something is
+        # already on the heat, and it stops the page reading as one line of
+        # text stranded in a lot of paper.
+        self.cook_peek = Gtk.Label(label="", xalign=0)
+        self.cook_peek.set_line_wrap(True)
+        self.cook_peek.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self.cook_peek.set_max_width_chars(52)
+        self.cook_peek.set_halign(Gtk.Align.START)
+        self.cook_peek.get_style_context().add_class("cookpeek")
+        stepbody.pack_start(self.cook_peek, False, False, 0)
+        stepscroll.add(stepbody)
+        stepcol.pack_start(stepscroll, True, True, 0)
+
+        navrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        navrow.set_halign(Gtk.Align.END)
+        navrow.set_vexpand(False)
+        self.cook_back = Gtk.Button(label=_t("Back"))
+        self.cook_back.set_relief(Gtk.ReliefStyle.NONE)
+        self.cook_back.get_style_context().add_class("cooknav")
+        self.cook_back.connect("clicked", lambda *_: self._cook_move(-1))
+        self.cook_next = Gtk.Button(label=_t("Next step"))
+        self.cook_next.set_relief(Gtk.ReliefStyle.NONE)
+        self.cook_next.get_style_context().add_class("cooknav")
+        self.cook_next.get_style_context().add_class("cooknext")
+        self.cook_next.connect("clicked", lambda *_: self._cook_move(1))
+        navrow.pack_start(self.cook_back, False, False, 0)
+        navrow.pack_start(self.cook_next, False, False, 0)
+        stepcol.pack_start(navrow, False, False, 0)
+        body.pack_start(stepcol, True, True, 0)
+
+        page.pack_start(body, True, True, 0)
+        return page
+
+    def _cook_steps(self, r):
+        return [ln.strip() for ln in (r.get("steps") or "").split("\n")
+                if ln.strip()]
+
+    def _enter_cook(self, *_):
+        """Open the current recipe in cook mode, at its first step."""
+        r = self._cur()
+        if r is None:
+            return
+        self._cook_i = 0
+        self._cook_base = base_servings(r.get("makes", ""))
+        self._cook_n = self._cook_base
+        self._refresh_cook()
+        # The recipe list is for choosing what to make; while you are making it
+        # the page is worth more than the list, and a 26px step needs the width.
+        try:
+            self._side.hide()
+        except Exception:
+            pass
+        self.stack.set_visible_child_name("cook")
+
+    def _exit_cook(self, *_):
+        """Back to the recipe page. Nothing was changed, so there is nothing to
+        save or discard."""
+        try:
+            self._side.show()
+        except Exception:
+            pass
+        if self.stack.get_visible_child_name() == "cook":
+            self.stack.set_visible_child_name("editor")
+
+    def _cook_move(self, delta):
+        r = self._cur()
+        if r is None:
+            return
+        steps = self._cook_steps(r)
+        if not steps:
+            return
+        self._cook_i = max(0, min(self._cook_i + delta, len(steps) - 1))
+        self._refresh_cook()
+
+    def _cook_resize(self, delta):
+        """Cook for more or fewer people. Only the shown amounts change."""
+        if not self._cook_base:
+            return
+        self._cook_n = max(1, min((self._cook_n or 1) + delta, 99))
+        self._refresh_cook()
+
+    def _refresh_cook(self):
+        r = self._cur()
+        if r is None:
+            return
+        self.cook_title.set_text(r.get("title") or _t("Untitled recipe"))
+
+        factor = 1.0
+        if self._cook_base and self._cook_n:
+            factor = self._cook_n / float(self._cook_base)
+        if self._cook_base:
+            self.cook_serves.set_text(
+                restate_servings(r.get("makes", ""), self._cook_n))
+            self.cook_scaler.show()
+        else:
+            self.cook_scaler.hide()
+
+        for c in self.cook_ing.get_children():
+            self.cook_ing.remove(c)
+        lines = [ln for ln in (r.get("ing") or "").split("\n") if ln.strip()]
+        if not lines:
+            lbl = Gtk.Label(label=_t("No ingredients"), xalign=0)
+            lbl.get_style_context().add_class("cookingempty")
+            self.cook_ing.pack_start(lbl, False, False, 0)
+        for ln in lines:
+            name, amount = self._split_ing(ln)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            row.get_style_context().add_class("cookingrow")
+            nm = Gtk.Label(label=name, xalign=0)
+            nm.set_line_wrap(True)
+            nm.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            nm.set_valign(Gtk.Align.START)
+            nm.get_style_context().add_class("cookingname")
+            row.pack_start(nm, True, True, 0)
+            if amount:
+                al = Gtk.Label(label=scale_amount(amount, factor), xalign=1)
+                al.set_valign(Gtk.Align.START)
+                al.set_halign(Gtk.Align.END)
+                al.set_margin_top(3)   # optically level with the serif name
+                al.get_style_context().add_class("cookingamt")
+                row.pack_end(al, False, False, 0)
+            self.cook_ing.pack_start(row, False, False, 0)
+        self.cook_ing.show_all()
+
+        steps = self._cook_steps(r)
+        if not steps:
+            self.cook_pos.set_text(_t("No method"))
+            self.cook_step.set_text(
+                _t("Write the steps on the recipe page and they will appear "
+                   "here, one at a time."))
+            self.cook_peek.set_text("")
+            self.cook_back.set_sensitive(False)
+            self.cook_next.set_sensitive(False)
+            return
+        self._cook_i = max(0, min(self._cook_i, len(steps) - 1))
+        # Translate in sentence case (the catalog's key) and upper-case after,
+        # so this eyebrow reuses the same string the rest of the OS carries
+        # instead of needing a shouted duplicate in four languages.
+        self.cook_pos.set_text(
+            (_t("Step %d of %d") % (self._cook_i + 1, len(steps))).upper())
+        self.cook_step.set_text(steps[self._cook_i])
+        if self._cook_i + 1 < len(steps):
+            self.cook_peek.set_text(
+                _t("Next: %s") % steps[self._cook_i + 1])
+        else:
+            self.cook_peek.set_text(_t("That is the last step."))
+        self.cook_back.set_sensitive(self._cook_i > 0)
+        self.cook_next.set_sensitive(self._cook_i < len(steps) - 1)
+
+    def _on_key(self, w, ev):
+        """In cook mode the arrows (and Space) walk the steps and Esc closes it,
+        so a recipe can be followed without hunting for a small button. Anything
+        else, and any other page, falls through to the base handler."""
+        try:
+            if self.stack.get_visible_child_name() == "cook":
+                kv = ev.keyval
+                if kv == Gdk.KEY_Escape:
+                    self._exit_cook()
+                    return True
+                if kv in (Gdk.KEY_Right, Gdk.KEY_Down, Gdk.KEY_space,
+                          Gdk.KEY_Page_Down):
+                    self._cook_move(1)
+                    return True
+                if kv in (Gdk.KEY_Left, Gdk.KEY_Up, Gdk.KEY_BackSpace,
+                          Gdk.KEY_Page_Up):
+                    self._cook_move(-1)
+                    return True
+        except Exception:
+            pass
+        return super()._on_key(w, ev)
+
+    def _fit_columns(self, _stack, alloc):
+        """Share the recipe page between Ingredients and Method.
+
+        Ingredients is a narrow ledger and Method is prose, so the design fixes
+        Ingredients at 320px — but on a 1024-wide screen that left Method about
+        170px, roughly three words a line. Give Ingredients its 320px whenever
+        the page is wide enough and let it shrink (never below 200px) when it
+        is not. Setting the same width twice is a no-op, so this settles on the
+        first allocation instead of looping."""
+        inner = alloc.width - 144 - 44      # .edcols padding + the column gap
+        w = max(200, min(320, int(inner * 0.42)))
+        if w != self._ing_w:
+            self._ing_w = w
+            self.ing_box.set_size_request(w, -1)
+
+    def _build_metabar(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        bar.get_style_context().add_class("metabar")
+        bar.set_halign(Gtk.Align.START)
+        specs = [("TIME", "time"), ("MAKES", "makes"), ("EFFORT", "effort")]
+        for i, (cap, field) in enumerate(specs):
+            cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            ctx = cell.get_style_context()
+            ctx.add_class("metacell")
+            if i > 0:
+                ctx.add_class("metadiv")
+            cl = Gtk.Label(label=cap, xalign=0)
+            cl.get_style_context().add_class("metacap")
+            ent = Gtk.Entry()
+            ent.set_has_frame(False)
+            ent.set_placeholder_text("—")
+            ent.set_width_chars(10)
+            ent.get_style_context().add_class("metaval")
+            ent.connect("changed", self._on_meta_changed, field)
+            cell.pack_start(cl, False, False, 0)
+            cell.pack_start(ent, False, False, 0)
+            self.meta_entries[field] = ent
+            bar.pack_start(cell, False, False, 0)
+        return bar
+
+    def _panel(self, heading, placeholder, width, kind):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.get_style_context().add_class("edpanel")
+        if width > 0:
+            box.set_size_request(width, -1)
+
+        # ruled heading row: the section title on the left, a small "Edit"
+        # affordance on the right that flips the panel to its editable text.
+        hdrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        hdrow.get_style_context().add_class("edpanelhd")
+        hd = Gtk.Label(label=heading, xalign=0)
+        hd.get_style_context().add_class("edpanelhdtext")
+        hd.set_valign(Gtk.Align.CENTER)
+        hdrow.pack_start(hd, True, True, 0)
+        edit_btn = Gtk.Button(label=_t("Edit"))
+        edit_btn.set_relief(Gtk.ReliefStyle.NONE)
+        edit_btn.set_valign(Gtk.Align.CENTER)
+        edit_btn.get_style_context().add_class("paneledit")
+        edit_btn.connect("clicked", self._toggle_panel_edit, kind)
+        hdrow.pack_end(edit_btn, False, False, 0)
+        box.pack_start(hdrow, False, False, 0)
+
+        # two children — the structured read view, and the raw text editor —
+        # swapped instantly (NONE transition; crossfade stalls under swrast).
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.NONE)
+
+        view_scroll = Gtk.ScrolledWindow()
+        view_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        view_scroll.set_vexpand(True)
+        render_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        render_box.get_style_context().add_class("renderlist")
+        view_scroll.add(render_box)
+        stack.add_named(view_scroll, "view")
+
+        edit_scroll = Gtk.ScrolledWindow()
+        # EXTERNAL, not NEVER, horizontally: NEVER passes the TextView's own
+        # width request up as a hard minimum (a text view asks for the width of
+        # its longest UNWRAPPED line), which alone made the window 130px wider
+        # than a 1024-wide screen. The view wraps at whatever width it gets, so
+        # there is never anything to scroll sideways.
+        edit_scroll.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.AUTOMATIC)
+        edit_scroll.set_vexpand(True)
+        view = Gtk.TextView()
+        view.set_wrap_mode(Gtk.WrapMode.WORD)
+        view.set_pixels_below_lines(10)
+        view.set_pixels_inside_wrap(8)
+        view.get_style_context().add_class("edbox")
+        view._placeholder = placeholder
+        self._attach_placeholder(view)
+        edit_scroll.add(view)
+        stack.add_named(edit_scroll, "edit")
+
+        box.pack_start(stack, True, True, 0)
+        return box, view, render_box, stack, edit_btn
+
+    # -------------------------------------------------------------- placeholder
+    def _attach_placeholder(self, view):
+        buf = view.get_buffer()
+        view._ph_active = False
+
+        def show_ph():
+            if buf.get_char_count() == 0 and not view.has_focus():
+                view._ph_active = True
+                buf.set_text(view._placeholder)
+                view.get_style_context().add_class("placeholder")
+
+        def hide_ph():
+            if view._ph_active:
+                view._ph_active = False
+                buf.set_text("")
+                view.get_style_context().remove_class("placeholder")
+
+        def on_focus_in(*_):
+            hide_ph()
+            return False
+
+        def on_focus_out(*_):
+            show_ph()
+            return False
+
+        view.connect("focus-in-event", on_focus_in)
+        view.connect("focus-out-event", on_focus_out)
+        view._show_ph = show_ph
+        view._hide_ph = hide_ph
+        show_ph()
+
+    def _view_text(self, view):
+        if getattr(view, "_ph_active", False):
+            return ""
+        buf = view.get_buffer()
+        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+
+    def _set_view(self, view, text):
+        buf = view.get_buffer()
+        view._ph_active = False
+        view.get_style_context().remove_class("placeholder")
+        buf.set_text(text or "")
+        if not text:
+            view._show_ph()
+
+    # -------------------------------------------------- structured rendering
+    def _render_placeholder(self, box, text, kind):
+        # The empty read view doubles as an affordance: clicking the hint drops
+        # straight into that column's text editor, so a novice never has to hunt
+        # for the small "Edit" control just to add a first line.
+        evt = Gtk.EventBox()
+        evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        evt.set_tooltip_text(_t("Click to add"))
+        lbl = Gtk.Label(label=text, xalign=0)
+        # Wrap it: on one line this hint is the widest thing in an empty
+        # recipe, and it alone set the window's minimum width (1018px of the
+        # 1024 budget, with nothing left for a longer translation).
+        lbl.set_line_wrap(True)
+        lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        lbl.get_style_context().add_class("renderph")
+        evt.add(lbl)
+        evt.connect("button-press-event",
+                    lambda *_: self._enter_panel_edit(kind))
+        box.pack_start(evt, False, False, 0)
+
+    def _enter_panel_edit(self, kind):
+        """Flip a column into its text editor (backs the clickable empty-state
+        hint). No-op when it is already editing or no recipe is open."""
+        if self._cur() is None:
+            return True
+        stack = self.ing_stack if kind == "ing" else self.steps_stack
+        btn = self.ing_edit_btn if kind == "ing" else self.steps_edit_btn
+        if stack.get_visible_child_name() != "edit":
+            self._toggle_panel_edit(btn, kind)
+        return True
+
+    def _render_ingredients(self, text):
+        """Lay the raw 'name — amount' lines out as a two-column ledger:
+        ingredient name flush left, amount right-aligned in muted grey."""
+        box = self.ing_render
+        for c in box.get_children():
+            box.remove(c)
+        lines = [ln for ln in (text or "").split("\n") if ln.strip()]
+        if not lines:
+            self._render_placeholder(box, self.ing_view._placeholder, "ing")
+        else:
+            for ln in lines:
+                box.pack_start(self._ingredient_row(ln), False, False, 0)
+        box.show_all()
+
+    def _split_ing(self, line):
+        """Split an ingredient line into (name, amount). The amount may follow
+        the name after ' - ' (a plain, keyboard-typable hyphen padded with
+        spaces) or an em/en dash; a line with no separator is all name and gets
+        no amount column. The spaces around the hyphen keep hyphenated names
+        (e.g. self-raising flour) intact."""
+        for sep in ("—", " – ", " - "):
+            if sep in line:
+                name, _, amount = line.partition(sep)
+                return name.strip(), amount.strip()
+        return line.strip(), ""
+
+    def _ingredient_row(self, line):
+        name, amount = self._split_ing(line)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.get_style_context().add_class("ingrow")
+        nm = Gtk.Label(label=name, xalign=0)
+        # An ingredient you cannot read is useless, and on a 1024-wide screen
+        # this column is only ~200px: ellipsizing turned "Preserved lemons,
+        # quartered" into "Preserved lemons, quart...". Wrap onto a second line
+        # instead — the row simply grows a little taller.
+        nm.set_line_wrap(True)
+        nm.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        nm.set_valign(Gtk.Align.START)
+        nm.get_style_context().add_class("ingname")
+        row.pack_start(nm, True, True, 0)
+        if amount:
+            al = Gtk.Label(label=amount, xalign=1)
+            al.set_line_wrap(True)                     # a wordy amount wraps
+            al.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            al.set_max_width_chars(16)                 # but never widens the
+            al.set_halign(Gtk.Align.END)               # column (halign, since
+            al.set_valign(Gtk.Align.START)             # max-width-chars alone
+            al.get_style_context().add_class("ingamt")  # does not cap a FILL
+            row.pack_end(al, False, False, 0)          # child)
+        return row
+
+    def _render_steps(self, text):
+        """Render each method line as a numbered row: a thin-outline circle
+        holding the step index, then the step's serif prose."""
+        box = self.steps_render
+        for c in box.get_children():
+            box.remove(c)
+        lines = [ln for ln in (text or "").split("\n") if ln.strip()]
+        if not lines:
+            self._render_placeholder(box, self.steps_view._placeholder, "steps")
+        else:
+            for i, ln in enumerate(lines):
+                box.pack_start(self._step_row(i + 1, ln.strip()),
+                               False, False, 0)
+        box.show_all()
+
+    def _step_row(self, n, text):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        row.get_style_context().add_class("steprow")
+        num = Gtk.Label(label=str(n))
+        num.set_valign(Gtk.Align.START)
+        num.set_halign(Gtk.Align.START)
+        num.get_style_context().add_class("stepnum")
+        row.pack_start(num, False, False, 0)
+        body = Gtk.Label(label=text, xalign=0)
+        body.set_line_wrap(True)
+        # WORD_CHAR, not WORD: a single very long word (a pasted link, say)
+        # cannot then set a minimum width the window has to grow to.
+        body.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        body.set_xalign(0)
+        body.set_valign(Gtk.Align.START)
+        body.set_max_width_chars(46)
+        # max_width_chars only caps what the label ASKS for; left to fill its
+        # column the step still wrapped at the full window width, so on a wide
+        # screen a method line ran right across the page. Pinning it to the
+        # start keeps the 46-character reading measure the design specifies.
+        body.set_halign(Gtk.Align.START)
+        body.get_style_context().add_class("steptext")
+        row.pack_start(body, True, True, 0)
+        return row
+
+    def _toggle_panel_edit(self, btn, kind):
+        """Flip a column between its structured read view and the raw text
+        editor. The buffer's changed handler writes through on every keystroke,
+        so leaving edit mode just needs a re-render — persistence is unchanged."""
+        r = self._cur()
+        if r is None:
+            return
+        view = self.ing_view if kind == "ing" else self.steps_view
+        stack = self.ing_stack if kind == "ing" else self.steps_stack
+        if stack.get_visible_child_name() != "edit":
+            self._loading = True
+            self._set_view(view, r.get(kind, ""))
+            self._loading = False
+            stack.set_visible_child_name("edit")
+            btn.set_label(_t("Done"))
+            view.grab_focus()
+        else:
+            stack.set_visible_child_name("view")
+            btn.set_label(_t("Edit"))
+            if kind == "ing":
+                self._render_ingredients(r.get("ing", ""))
+            else:
+                self._render_steps(r.get("steps", ""))
+
+    # ------------------------------------------------------------------ actions
+    def new_recipe(self):
+        cat = self.cats[self.active_cat - 1] if self.active_cat > 0 else None
+        # Build through the canonical dict shape so every render/edit/persist
+        # path finds the full key set (including "photo").
+        self.recipes.append(self._make_recipe(cat=cat))
+        self.sel = len(self.recipes) - 1
+        self.rebuild_list()
+        self._refresh_editor()
+        self._touch()
+
+    def _make_recipe(self, **fields):
+        """Build a recipe dict with the full default key set (the same shape
+        new_recipe() produces), overlaid with the supplied fields. Guarantees
+        every render/edit path finds the keys it expects."""
+        rec = {"title": "", "cat": None, "desc": "", "time": "", "makes": "",
+               "effort": "", "ing": "", "steps": "", "photo": ""}
+        rec.update(fields)
+        return rec
+
+    def _cur(self):
+        if 0 <= self.sel < len(self.recipes):
+            return self.recipes[self.sel]
+        return None
+
+    def _refresh_editor(self):
+        # This always lands on the recipe page or an empty state, so bring the
+        # recipe list back if cook mode had hidden it (View ▸ Next Recipe and
+        # the category filters are still reachable from in there).
+        try:
+            getattr(self, "_side").show()
+        except Exception:
+            pass
+        r = self._cur()
+        if r is None:
+            # Distinguish three empty states so the main pane never contradicts
+            # the sidebar. In particular: when the active category filter is
+            # empty but recipes exist elsewhere, the sidebar list shows nothing
+            # to choose, so don't prompt "Select a recipe from the list" —
+            # name the empty category instead (state-consistency fix).
+            if not self.recipes:
+                self.empty_title.set_text("No recipes")
+                self.empty_hint.set_text("Click + New Recipe to add one")
+            elif not self._visible_indices():
+                cat = (self.cats[self.active_cat - 1]
+                       if self.active_cat > 0 else None)
+                self.empty_title.set_text(
+                    "No recipes in “%s”" % cat if cat else "No recipes")
+                self.empty_hint.set_text("Click + New Recipe to add one")
+            else:
+                self.empty_title.set_text("No recipe selected")
+                self.empty_hint.set_text("Select a recipe from the list")
+            self.stack.set_visible_child_name("empty")
+            return
+        self._loading = True
+        self.kicker.set_text((r.get("cat") or "No category").upper())
+        self.title_entry.set_text(r.get("title", ""))
+        self.desc_entry.set_text(r.get("desc", ""))
+        for field, ent in self.meta_entries.items():
+            ent.set_text(r.get(field, ""))
+        self._render_ingredients(r.get("ing", ""))
+        self._render_steps(r.get("steps", ""))
+        # switching recipes always lands on the read view with a fresh "Edit"
+        # affordance, even if the previous recipe was left mid-edit.
+        self.ing_stack.set_visible_child_name("view")
+        self.steps_stack.set_visible_child_name("view")
+        self.ing_edit_btn.set_label(_t("Edit"))
+        self.steps_edit_btn.set_label(_t("Edit"))
+        self.photo_caption.set_text(self._photo_text(r))
+        self.savestate.set_markup('<span foreground="#7FA98C">● </span>Saved %s'
+                                  % time.strftime("%H:%M"))
+        self.stack.set_visible_child_name("editor")
+        self._loading = False
+
+    def _on_title_changed(self, entry):
+        r = self._cur()
+        if r is None or getattr(self, "_loading", False):
+            return
+        r["title"] = entry.get_text()
+        self.kicker.set_text((r.get("cat") or "No category").upper())
+        self.photo_caption.set_text(self._photo_text(r))
+        self._update_row_titles()
+        self._touch()
+
+    def _on_desc_changed(self, entry):
+        r = self._cur()
+        if r is None or getattr(self, "_loading", False):
+            return
+        r["desc"] = entry.get_text()
+        self._touch()
+
+    def _on_meta_changed(self, entry, field):
+        r = self._cur()
+        if r is None or getattr(self, "_loading", False):
+            return
+        r[field] = entry.get_text()
+        self._update_row_titles()
+        self._touch()
+
+    def _on_ing_changed(self, buf):
+        r = self._cur()
+        if r is None or getattr(self, "_loading", False) or \
+                getattr(self.ing_view, "_ph_active", False):
+            return
+        r["ing"] = self._view_text(self.ing_view)
+        self._update_row_titles()
+        self._touch()
+
+    def _on_steps_changed(self, buf):
+        r = self._cur()
+        if r is None or getattr(self, "_loading", False) or \
+                getattr(self.steps_view, "_ph_active", False):
+            return
+        r["steps"] = self._view_text(self.steps_view)
+        self._touch()
+
+    def _update_row_titles(self):
+        """Refresh the selected recipe's sidebar row in place — a field edit
+        (title / time / makes / ingredients) changes only that one row's
+        title and meta text, so mutate its existing Gtk.Labels rather than
+        tearing down and rebuilding the whole list (each row of which re-runs
+        an nbicons bookmark encode). Structural changes — new/delete/select/
+        category switch — still go through rebuild_list()."""
+        r = self._cur()
+        if r is None:
+            return
+        row = self._find_row(self.sel)
+        if row is None:
+            # The edited recipe isn't in the current filtered view (shouldn't
+            # happen on an edit path, since only a visible row can be selected)
+            # — fall back to a full rebuild to stay correct.
+            self.rebuild_list()
+            return
+        title_lbl = getattr(row, "_title_lbl", None)
+        if title_lbl is not None:
+            title_lbl.set_text(r["title"] or "Untitled recipe")
+        meta_lbl = getattr(row, "_meta_lbl", None)
+        if meta_lbl is not None:
+            meta_lbl.set_text(self._row_meta(r))
+
+    def _find_row(self, idx):
+        """Locate the current sidebar ListBoxRow for recipe index `idx`."""
+        for row in self.listbox.get_children():
+            if getattr(row, "_idx", None) == idx:
+                return row
+        return None
+
+    def _touch(self):
+        self.savestate.set_markup('<span foreground="#C8341E">● </span>Editing…')
+        if self._save_timer:
+            GLib.source_remove(self._save_timer)
+        self._save_timer = GLib.timeout_add(900, self._mark_saved)
+
+    def _mark_saved(self):
+        # The debounce has fired: perform the REAL disk write, and only claim
+        # "Saved" once the bytes have actually reached the file.
+        if self._save_state():
+            self.savestate.set_markup('<span foreground="#7FA98C">● </span>Saved %s'
+                                      % time.strftime("%H:%M"))
+        else:
+            self.savestate.set_markup(
+                '<span foreground="#C8341E">● </span>Not saved')
+        self._save_timer = None
+        return False
+
+    # ------------------------------------------------------------- persistence
+    def _serialize(self):
+        """Build the on-disk dict for the whole cookbook (categories, recipes,
+        the active filter and the selection) written to the autosave file."""
+        return {
+            "cats": list(self.cats),
+            "active_cat": self.active_cat,
+            "sel": self.sel,
+            "recipes": [
+                {"title": r.get("title", ""), "cat": r.get("cat"),
+                 "desc": r.get("desc", ""), "time": r.get("time", ""),
+                 "makes": r.get("makes", ""), "effort": r.get("effort", ""),
+                 "ing": r.get("ing", ""), "steps": r.get("steps", ""),
+                 "photo": r.get("photo", "")}
+                for r in self.recipes],
+        }
+
+    def _apply_data(self, data):
+        """Replace the in-memory model from a parsed autosave dict. Every loaded
+        recipe is normalised through the add-path dict shape so all render/edit
+        paths find their keys. Callers are responsible for rebuilding the UI."""
+        cats = []
+        for c in data.get("cats", []):
+            c = str(c).strip()
+            if c and c not in cats:
+                cats.append(c)
+        recipes = []
+        for r in data.get("recipes", []):
+            if not isinstance(r, dict):
+                continue
+            fields = {}
+            for k in ("title", "desc", "time", "makes", "effort",
+                      "ing", "steps", "photo"):
+                v = r.get(k)
+                if isinstance(v, str):
+                    fields[k] = v
+            cat = r.get("cat")
+            fields["cat"] = cat if (isinstance(cat, str) and cat.strip()) \
+                else None
+            recipes.append(self._make_recipe(**fields))
+        self.cats = cats
+        self.recipes = recipes
+        active = data.get("active_cat", 0)
+        self.active_cat = active if (isinstance(active, int)
+                                     and 0 <= active <= len(cats)) else 0
+        sel = data.get("sel", -1)
+        self.sel = sel if (isinstance(sel, int) and 0 <= sel < len(recipes)) \
+            else (0 if recipes else -1)
+
+    def _load_state(self):
+        """Restore the session-recovery cookbook from disk. On a missing file
+        (first run) or any read/parse error, leave the model empty so the app
+        opens on its 'No recipes' empty state (ships-empty rule)."""
+        try:
+            with open(COOKBOOK_FILE) as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                return
+            self._apply_data(data)
+        except Exception:
+            # First run (no file) or unreadable/corrupt data → empty library.
+            return
+
+    def _save_state(self):
+        """Persist the session-recovery cookbook. Never raises — a failed write
+        must not crash the app. Returns True only once the bytes have reached
+        the file."""
+        try:
+            nbapp.atomic_write_json(COOKBOOK_FILE, self._serialize())
+            return True
+        except Exception:
+            return False
+
+    # ------------------------------------------------- PDF export (File menu)
+    # cookbook.json stays the sole source of truth (autosaved on every edit).
+    # The File menu offers a one-way render of the CURRENT recipe — its
+    # category eyebrow, title, description, the time/makes/effort meta and the
+    # Ingredients + Method sections — to a paginated PDF under $NB_HOME/
+    # Documents. There is no file open / save.
+    def _flash_status(self, text, ok=False):
+        """Surface a transient status line in the recipe page's save indicator,
+        matching the save chip's dot styling — a muted green dot for success,
+        signage-red for a problem (crash-safe)."""
+        color = "#7FA98C" if ok else "#C8341E"
+        try:
+            self.savestate.set_markup(
+                '<span foreground="%s">● </span>%s'
+                % (color, GLib.markup_escape_text(text)))
+        except Exception:
+            pass
+
+    def _pdf_name(self, r):
+        """A neutral PDF filename derived from the recipe title."""
+        raw = r.get("title", "") or "recipe"
+        words = "".join(c if c.isalnum() else " " for c in raw).split()
+        base = "-".join(words).lower()[:70] if words else "recipe"
+        return base + ".pdf"
+
+    def _export_pdf(self, *_a):
+        """Render the current recipe to a PDF under $NB_HOME/Documents. Reports
+        a neutral status line in the save indicator; never crashes on a bad
+        path/write. cookbook.json remains the sole source of truth."""
+        r = self._cur()
+        if r is None:
+            self._flash_status("No recipe to export")
+            return
+        name = self._pdf_name(r)
+        try:
+            os.makedirs(DOCUMENTS, exist_ok=True)
+            self._render_pdf(os.path.join(DOCUMENTS, name), r)
+        except Exception:
+            self._flash_status("Export failed")
+            return
+        # Success: the autosave state is unchanged, so only update the label.
+        # Name the destination folder so the file is findable in the Finder.
+        self._flash_status("Exported to Documents", ok=True)
+
+    def _print_recipe(self, *_a):
+        """Print the current recipe via the shared themed Print dialog. Reuses
+        the exact same renderer as Export to PDF, so the printed page matches
+        the exported file byte-for-byte. The no-printer case is handled inside
+        nbprint (it reports 'no printer' in the dialog)."""
+        r = self._cur()
+        if r is None:
+            self._flash_status("No recipe to print")
+            return
+
+        def make_pdf(path):
+            # Bind the recipe at dialog time so a later selection change can't
+            # print a different recipe than the one the user was looking at.
+            self._render_pdf(path, r)
+
+        try:
+            nbprint.print_document(self, make_pdf, job_name="Recipe")
+        except Exception:
+            # A dialog/spooler failure must never crash the app.
+            self._flash_status("Print failed")
+
+    def _render_pdf(self, path, r):
+        """Draw recipe `r` onto a cairo PDF at `path`, paginating when the
+        cursor overflows the page. Serif body + ink palette to match the
+        recipe page."""
+        PW, PH = 612.0, 792.0            # US Letter, points
+        ML, MR, MT, MB = 64.0, 64.0, 72.0, 64.0
+        text_w = PW - ML - MR
+        surf = cairo.PDFSurface(path, PW, PH)
+        cr = cairo.Context(surf)
+        y = [MT]                         # cursor top, boxed so helpers can bump it
+
+        def ink(hexc):
+            rr, gg, bb = nbicons._hex(hexc)
+            cr.set_source_rgb(rr, gg, bb)
+
+        def face(bold, italic=False):
+            cr.select_font_face(
+                "Serif",
+                cairo.FONT_SLANT_ITALIC if italic else cairo.FONT_SLANT_NORMAL,
+                cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL)
+
+        def wrap(text, size, bold, italic):
+            face(bold, italic)
+            cr.set_font_size(size)
+            lines, cur = [], ""
+            for w in text.split(" "):
+                trial = w if not cur else cur + " " + w
+                if not cur or cr.text_extents(trial)[2] <= text_w:
+                    cur = trial
+                else:
+                    lines.append(cur)
+                    cur = w
+            lines.append(cur)
+            return lines
+
+        def emit(text, size, bold, color, italic=False,
+                 gap_before=0.0, gap_after=0.0):
+            lh = size * 1.4
+            y[0] += gap_before
+            for ln in (wrap(text, size, bold, italic) if text else [""]):
+                if y[0] + lh > PH - MB:
+                    surf.show_page()
+                    y[0] = MT
+                face(bold, italic)
+                cr.set_font_size(size)
+                ink(color)
+                cr.move_to(ML, y[0] + size)
+                cr.show_text(ln)
+                y[0] += lh
+            y[0] += gap_after
+
+        # Header: category eyebrow, title, description, meta, then a hairline.
+        emit((r.get("cat") or "No category").upper(), 9.5, False, "#6E695E",
+             gap_after=6)
+        emit(r.get("title", "") or "Untitled recipe", 26, True, "#1A1916",
+             gap_after=3)
+        desc = (r.get("desc") or "").strip()
+        if desc:
+            emit(desc, 12, False, "#6E695E", italic=True, gap_after=4)
+        meta_bits = []
+        for cap, key in (("Time", "time"), ("Makes", "makes"),
+                         ("Effort", "effort")):
+            v = (r.get(key) or "").strip()
+            if v:
+                meta_bits.append("%s: %s" % (cap, v))
+        if meta_bits:
+            emit("      ".join(meta_bits), 10, False, "#9A958A", gap_after=6)
+        if y[0] + 1 <= PH - MB:
+            ink("#ECE7DA")
+            cr.set_line_width(1.0)
+            cr.move_to(ML, y[0])
+            cr.line_to(PW - MR, y[0])
+            cr.stroke()
+        y[0] += 18
+
+        # Ingredients: one row per non-empty line; normalise the em-dash
+        # 'name — amount' separator the editor uses.
+        emit("INGREDIENTS", 11, True, "#6E695E", gap_after=6)
+        ing = [ln.strip() for ln in (r.get("ing") or "").split("\n")
+               if ln.strip()]
+        if ing:
+            for ln in ing:
+                nm, amount = self._split_ing(ln)
+                line = "%s — %s" % (nm, amount) if amount else nm
+                emit(line, 11, False, "#26241F", gap_after=2)
+        else:
+            emit("No ingredients", 11, False, "#A39D8F", italic=True)
+
+        # Method: each non-empty line becomes a numbered step.
+        emit("METHOD", 11, True, "#6E695E", gap_before=16, gap_after=6)
+        steps = [ln.strip() for ln in (r.get("steps") or "").split("\n")
+                 if ln.strip()]
+        if steps:
+            for i, ln in enumerate(steps):
+                emit("%d.  %s" % (i + 1, ln), 11, False, "#26241F",
+                     gap_after=4)
+        else:
+            emit("No method", 11, False, "#A39D8F", italic=True)
+
+        surf.finish()
+
+    def _on_destroy(self, *_):
+        # Final flush on window close so the last (possibly still-debounced)
+        # edit is written before we exit.
+        if self._save_timer:
+            try:
+                GLib.source_remove(self._save_timer)
+            except Exception:
+                pass
+            self._save_timer = None
+        self._save_state()
+        return False
+
+    def _dialog_escape(self, dlg):
+        """Wire Esc to dismiss a decorationless modal dialog. These dialogs are
+        separate windows with their own key focus, so the app-window Esc handler
+        never sees their events — without this, Esc would be dead in the dialog
+        and a novice's instinct to press it to back out would do nothing."""
+        dlg.connect(
+            "key-press-event",
+            lambda _w, e: (dlg.destroy() or True)
+            if e.keyval == Gdk.KEY_Escape else False)
+
+    def _new_category(self):
+        dlg = Gtk.Dialog(title="New Category", transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("catdlg")
+        area = dlg.get_content_area()
+        area.set_spacing(0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        box.get_style_context().add_class("catdlgbox")
+        hd = Gtk.Label(label=_t("New Category"), xalign=0)
+        hd.get_style_context().add_class("catdlgtitle")
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(_t("Category name"))
+        entry.get_style_context().add_class("catdlgentry")
+        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btns.set_halign(Gtk.Align.END)
+        cancel = Gtk.Button(label=_t("Cancel"))
+        cancel.get_style_context().add_class("dlgcancel")
+        ok = Gtk.Button(label=_t("Add"))
+        ok.get_style_context().add_class("dlgprimary")
+        btns.pack_start(cancel, False, False, 0)
+        btns.pack_start(ok, False, False, 0)
+        box.pack_start(hd, False, False, 0)
+        box.pack_start(entry, False, False, 0)
+        box.pack_start(btns, False, False, 0)
+        area.add(box)
+
+        def commit(*_):
+            v = entry.get_text().strip()
+            if v and v not in self.cats:
+                self.cats.append(v)
+                self.active_cat = len(self.cats)
+                self.sel = -1
+                self.rebuild_chips()
+                self.rebuild_list()
+                self._refresh_editor()
+                self._touch()
+            dlg.destroy()
+
+        cancel.connect("clicked", lambda *_: dlg.destroy())
+        ok.connect("clicked", commit)
+        entry.connect("activate", commit)
+        self._dialog_escape(dlg)
+        dlg.show_all()
+        entry.grab_focus()
+
+    def _delete_active_category(self):
+        """Remove the currently-filtered category (a specific chip must be
+        active — 'All' is not a category). Recipes are not deleted."""
+        if self.active_cat <= 0:
+            return
+        ci = self.active_cat - 1
+        if not (0 <= ci < len(self.cats)):
+            return
+        name = self.cats[ci]
+        n = len([r for r in self.recipes if r.get("cat") == name])
+        if n:
+            msg = ("Delete the category “%s”? The %d recipe%s in it stay%s in "
+                   "your cookbook, filed under No category."
+                   % (name, n, "" if n == 1 else "s", "s" if n == 1 else ""))
+        else:
+            msg = ("Delete the category “%s”? No recipes are filed under it."
+                   % name)
+        self._confirm("Delete Category", msg, "Delete",
+                      lambda: self._remove_category(ci))
+
+    def _remove_category(self, ci):
+        """Delete category index `ci`, reassigning its recipes to No category
+        (cat=None) so nothing is lost, then fix up the active filter."""
+        if not (0 <= ci < len(self.cats)):
+            return
+        name = self.cats[ci]
+        for r in self.recipes:
+            if r.get("cat") == name:
+                r["cat"] = None
+        del self.cats[ci]
+        # Keep the active filter pointing at a valid chip: clear to All if the
+        # deleted category was active, else shift down if it sat after it.
+        if self.active_cat == ci + 1:
+            self.active_cat = 0
+        elif self.active_cat > ci + 1:
+            self.active_cat -= 1
+        self.rebuild_chips()
+        self.rebuild_list()
+        self._refresh_editor()
+        self._touch()
+
+    def _confirm(self, title, message, ok_label, on_yes):
+        """Modal confirmation for a destructive action (mirrors the New Category
+        dialog). Runs `on_yes` only when the primary button is pressed."""
+        dlg = Gtk.Dialog(title=title, transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("catdlg")
+        area = dlg.get_content_area()
+        area.set_spacing(0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        box.get_style_context().add_class("catdlgbox")
+        hd = Gtk.Label(label=title, xalign=0)
+        hd.get_style_context().add_class("catdlgtitle")
+        msg = Gtk.Label(label=message, xalign=0)
+        msg.set_line_wrap(True)
+        msg.set_line_wrap_mode(Pango.WrapMode.WORD)
+        msg.set_max_width_chars(40)
+        msg.get_style_context().add_class("catdlgmsg")
+        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btns.set_halign(Gtk.Align.END)
+        cancel = Gtk.Button(label=_t("Cancel"))
+        cancel.get_style_context().add_class("dlgcancel")
+        ok = Gtk.Button(label=ok_label)
+        ok.get_style_context().add_class("dlgok")
+        btns.pack_start(cancel, False, False, 0)
+        btns.pack_start(ok, False, False, 0)
+        box.pack_start(hd, False, False, 0)
+        box.pack_start(msg, False, False, 0)
+        box.pack_start(btns, False, False, 0)
+        area.add(box)
+        cancel.connect("clicked", lambda *_: dlg.destroy())
+        ok.connect("clicked", lambda *_: (dlg.destroy(), on_yes()))
+        self._dialog_escape(dlg)
+        dlg.show_all()
+        # focus the safe default so a stray Space/Return cancels, not deletes
+        cancel.grab_focus()
+
+    def _photo_text(self, r):
+        """Caption line for the photo band: the recipe's stored caption when
+        set, else a prompt that says what clicking the band does (it read
+        "No photo caption", which named the empty state without ever telling a
+        first-time cook the band was theirs to write in)."""
+        note = ((r or {}).get("photo") or "").strip()
+        return ("Photo: " + note) if note else "Click to add a caption"
+
+    def _edit_photo(self, *_):
+        """Click on the photo band: capture a text caption for the current
+        recipe (no image subsystem, so the band stores a text note). Mirrors
+        the New Category dialog."""
+        r = self._cur()
+        if r is None:
+            return True
+        dlg = Gtk.Dialog(title="Photo Caption", transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("catdlg")
+        area = dlg.get_content_area()
+        area.set_spacing(0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        box.get_style_context().add_class("catdlgbox")
+        hd = Gtk.Label(label=_t("Photo Caption"), xalign=0)
+        hd.get_style_context().add_class("catdlgtitle")
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(_t("Photo caption or note"))
+        entry.get_style_context().add_class("catdlgentry")
+        # Wide enough for a real caption, and wound back to the first character:
+        # the box opened scrolled to the END of the saved text, so an existing
+        # caption read as "...amb, just out of the oven" with its start hidden.
+        entry.set_width_chars(30)
+        entry.set_text(r.get("photo", "") or "")
+        entry.set_position(0)
+        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btns.set_halign(Gtk.Align.END)
+        cancel = Gtk.Button(label=_t("Cancel"))
+        cancel.get_style_context().add_class("dlgcancel")
+        ok = Gtk.Button(label=_t("Save"))
+        ok.get_style_context().add_class("dlgprimary")
+        btns.pack_start(cancel, False, False, 0)
+        btns.pack_start(ok, False, False, 0)
+        box.pack_start(hd, False, False, 0)
+        box.pack_start(entry, False, False, 0)
+        box.pack_start(btns, False, False, 0)
+        area.add(box)
+
+        def commit(*_):
+            cur = self._cur()
+            if cur is not None:
+                cur["photo"] = entry.get_text().strip()
+                self.photo_caption.set_text(self._photo_text(cur))
+                self._touch()
+            dlg.destroy()
+
+        cancel.connect("clicked", lambda *_: dlg.destroy())
+        ok.connect("clicked", commit)
+        entry.connect("activate", commit)
+        self._dialog_escape(dlg)
+        dlg.show_all()
+        entry.grab_focus()
+        return True
+
+    # --------------------------------------------------------------------- menus
+    def menu_items(self, name):
+        if name == "File":
+            # cookbook.json is the sole source of truth (autosaved on every
+            # edit). File offers only the in-memory New Recipe action plus a
+            # one-way render of the current recipe to a PDF under
+            # $NB_HOME/Documents — no file open / save / save-as.
+            return [("New Recipe", self.new_recipe),
+                    nbapp.SEP,
+                    ("Export to PDF", self._export_pdf),
+                    ("Print…", self._print_recipe),
+                    nbapp.SEP,
+                    ("Close    Esc", self.close)]
+        if name == "View":
+            # category filters (mirror the sidebar chips) + list navigation
+            items = [(("•  " if self.active_cat == 0 else "     ") + "All Recipes",
+                      lambda: self._on_chip(None, 0))]
+            for i, c in enumerate(self.cats):
+                items.append(
+                    (("•  " if self.active_cat == i + 1 else "     ") + c,
+                     lambda idx=i + 1: self._on_chip(None, idx)))
+            items += [nbapp.SEP,
+                      ("Next Recipe", lambda: self._select_relative(1)),
+                      ("Previous Recipe", lambda: self._select_relative(-1))]
+            return items
+        if name == "Cook":
+            has = self._cur() is not None
+            has_cat = self.active_cat > 0
+            return [("Start cooking", (lambda: self._enter_cook())
+                     if has else None),
+                    nbapp.SEP,
+                    ("New Recipe", lambda: self.new_recipe()),
+                    ("New Category…", lambda: self._new_category()),
+                    ("Delete Category…",
+                     (lambda: self._delete_active_category())
+                     if has_cat else None),
+                    nbapp.SEP,
+                    ("Duplicate Recipe",
+                     (lambda: self._duplicate_current()) if has else None),
+                    ("Delete Recipe…",
+                     (lambda: self._confirm_delete_current()) if has else None)]
+        return super().menu_items(name)
+
+    def _visible_indices(self):
+        """Recipe indices currently shown, honouring the active category."""
+        cat_filter = self.cats[self.active_cat - 1] if self.active_cat > 0 else None
+        return [i for i, r in enumerate(self.recipes)
+                if cat_filter is None or r.get("cat") == cat_filter]
+
+    def _select_relative(self, delta):
+        vis = self._visible_indices()
+        if not vis:
+            return
+        if self.sel in vis:
+            pos = min(max(vis.index(self.sel) + delta, 0), len(vis) - 1)
+        else:
+            pos = 0 if delta >= 0 else len(vis) - 1
+        self.sel = vis[pos]
+        self.rebuild_list()
+        self._refresh_editor()
+
+    def _duplicate_current(self):
+        r = self._cur()
+        if r is None:
+            return
+        copy = dict(r)
+        copy["title"] = (r.get("title") or "Untitled recipe") + " (copy)"
+        self.recipes.insert(self.sel + 1, copy)
+        self.sel += 1
+        self.rebuild_list()
+        self._refresh_editor()
+        self._touch()
+
+    def _confirm_delete_current(self):
+        """Ask before removing the current recipe (destructive, no undo). Only
+        reachable when a recipe is selected (the menu item disables otherwise)."""
+        r = self._cur()
+        if r is None:
+            return
+        title = r.get("title") or "Untitled recipe"
+        self._confirm(
+            "Delete Recipe",
+            "Delete “%s”? This cannot be undone." % title,
+            "Delete", self._delete_current)
+
+    def _delete_current(self):
+        if not (0 <= self.sel < len(self.recipes)):
+            return
+        # Remember the deleted recipe's position within the *filtered* view so
+        # its neighbour is picked from the same category, not by global index.
+        vis_before = self._visible_indices()
+        pos = vis_before.index(self.sel) if self.sel in vis_before else 0
+        del self.recipes[self.sel]
+        # Pick the next selection from the currently-filtered set so the active
+        # category filter is honoured. The old code used a global index, which
+        # could land on a recipe hidden by the filter — or blank the sidebar
+        # while recipes still existed in other categories.
+        vis = self._visible_indices()
+        if vis:
+            self.sel = vis[min(pos, len(vis) - 1)]
+        elif self.recipes:
+            # Deleted the last recipe in this category: fall back to "All" so
+            # the remaining recipes stay visible instead of a misleading empty
+            # sidebar, then select the first of them.
+            self.active_cat = 0
+            self.sel = 0
+            self.rebuild_chips()
+        else:
+            self.sel = -1
+        self.rebuild_list()
+        self._refresh_editor()
+        self._touch()
+
+    # ---------------------------------------------------------------------- css
+    def _install_css(self):
+        css = b"""
+        .sidebar { background: #F1EEE6; border-right: 1px solid #D7D2C5; }
+        .chipwrap { padding: 20px 20px 16px; border-bottom: 1px solid #D7D2C5; }
+        .chipflow { background: transparent; }
+        .chip { min-height: 28px; padding: 0 13px; border-radius: 2px;
+                font-size: 13px; font-weight: 500; border: 1px solid #DCD7C9;
+                background: #FCFBF8; color: #3A362E; box-shadow: none; }
+        .chip:hover { background: #EFEAE0; }
+        .chip.active { background: #EAE3D2; color: #C8341E; font-weight: 600;
+                       border: 1px solid #CFC4AC; }
+        .chip.active:hover { background: #EAE3D2; }
+        .chipadd { min-height: 28px; padding: 0 12px; border-radius: 2px;
+                   font-size: 13px; color: #8A857A; background: transparent;
+                   border: 1px dashed #B5B0A3; box-shadow: none; }
+        .chipadd:hover { background: #E3DCCB; }
+        /* The theme's `* { color: ink }` lands straight on a button's label
+           node, so a colour set on the button alone never reaches its text:
+           every button whose label is not ink has to name the label as well. */
+        .chip label { color: #3A362E; }
+        .chip.active label { color: #C8341E; font-weight: 600; }
+        .chipadd label { color: #8A857A; }
+
+        .recipelist { background: #F1EEE6; padding: 12px; }
+        .recipelist row { padding: 0; }
+        .reciperow { padding: 12px 12px; border-radius: 2px; margin-bottom: 2px;
+                     border-left: 3px solid transparent; }
+        .reciperow:hover { background: #E6DFCE; }
+        .reciperow.selected { background: #EAE3D2; border-left: 3px solid #C8341E; }
+        .ricon { margin-top: 2px; }
+        .rtitle { font-family: "Newsreader","Liberation Serif",serif;
+                  font-size: 16px; color: #1A1916; }
+        .rmeta { font-size: 11px; letter-spacing: 0.3px; color: #9A958A; }
+        .emptylist { padding: 34px 12px; font-size: 11px; letter-spacing: 2px;
+                     color: #A39D8F; font-weight: 600; }
+
+        .sidefoot { border-top: 1px solid #D7D2C5; padding: 14px 18px; }
+        .newrecipe { min-height: 40px; border: 1px solid #C4BFB1; border-radius: 2px;
+                     background: #FCFBF8; font-size: 14px; font-weight: 600;
+                     color: #1A1916; box-shadow: none; }
+        .newrecipe:hover { background: #EFEAE0; }
+
+        .mainpane { background: #FCFBF8; }
+        .emptytitle { font-size: 15px; color: #6E695E; }
+        .emptyhint { font-size: 13px; color: #A39D8F; }
+
+        .herowrap { padding: 18px 36px 6px; }
+        .herophoto { min-height: 148px; background: #F1EEE6;
+                     border: 1px solid #D7D2C5; border-radius: 2px; }
+        .herocap { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                   font-size: 12px; letter-spacing: 1px; color: #A79F8E; }
+
+        .edhead { padding: 20px 72px 6px; }
+        .edkicker { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                    font-size: 11px; letter-spacing: 2px; color: #A39D8F;
+                    font-weight: 600; }
+        .savestate { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                     font-size: 12px; color: #8A857A; }
+        .edtitle { font-family: "Newsreader","Liberation Serif",serif;
+                   font-size: 40px; color: #1A1916; background: transparent;
+                   border: none; padding: 0; margin-top: 8px; }
+        .eddesc { font-family: "Newsreader","Liberation Serif",serif;
+                  font-style: italic; font-size: 17px; color: #6E695E;
+                  background: transparent; border: none; padding: 0;
+                  margin-top: 6px; }
+
+        .metabar { margin-top: 20px; border: 1px solid #D7D2C5; border-radius: 2px;
+                   background: #FBFAF6; }
+        .metacell { padding: 9px 20px 10px; }
+        .metadiv { border-left: 1px solid #D7D2C5; }
+        .metacap { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                   font-size: 10px; letter-spacing: 1.5px; color: #A39D8F;
+                   font-weight: 600; }
+        .metaval { font-family: "Newsreader","Liberation Serif",serif;
+                   font-size: 16px; color: #1A1916; background: transparent;
+                   border: none; padding: 0; min-height: 0; }
+
+        .edcols { padding: 26px 72px 40px; }
+        .edpanel { background: transparent; border: none; }
+        .edpanelhd { padding: 0 0 8px; border-bottom: 1px solid #C9C4B6; }
+        .edpanelhdtext { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                         font-size: 11px; letter-spacing: 2px; color: #6E695E;
+                         font-weight: 600; }
+        .paneledit { min-height: 0; padding: 0 2px; background: transparent;
+                     border: none; box-shadow: none;
+                     font-family: "Nimbus Sans","Helvetica",sans-serif;
+                     font-size: 11px; letter-spacing: 1px; color: #A79F8E; }
+        .paneledit label { color: #A79F8E; letter-spacing: 1px; }
+        .paneledit:hover, .paneledit:hover label { color: #1A1916; }
+        .edbox { font-family: "Newsreader","Liberation Serif",serif;
+                 font-size: 16px; color: #1A1916; background: transparent;
+                 padding: 16px 0 0; caret-color: #C8341E; }
+        .edbox text { background: transparent; }
+        .edbox text selection { background-color: #F1D9D2; color: #1A1916; }
+        .edbox.placeholder text { color: #A39D8F; }
+
+        .renderlist { padding: 16px 0 0; background: transparent; }
+        .renderph { font-family: "Newsreader","Liberation Serif",serif;
+                    font-size: 16px; color: #A39D8F; }
+        .ingrow { padding: 6px 0; }
+        .ingname { font-family: "Newsreader","Liberation Serif",serif;
+                   font-size: 16px; color: #1A1916; }
+        .ingamt { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                  font-size: 12px; letter-spacing: 0.5px; color: #A79F8E; }
+        .steprow { padding: 3px 0 15px; }
+        .stepnum { min-width: 26px; min-height: 26px;
+                   border: 1px solid #C7C1B2; border-radius: 13px;
+                   color: #8A857A;
+                   font-family: "Nimbus Sans","Helvetica",sans-serif;
+                   font-size: 12px; }
+        .steptext { font-family: "Newsreader","Liberation Serif",serif;
+                    font-size: 16px; color: #33302A; }
+
+        /* Cook mode: one step at a time, in the largest type in the OS, with
+           targets you can hit without looking. Same papertone surfaces, no new
+           colours -- the only accent is the one primary button. */
+        .cookpage { background: #FCFBF8; }
+        .cookhead { padding: 20px 36px 18px; border-bottom: 1px solid #D7D2C5;
+                    background: #FBFAF6; }
+        .cooktitle { font-family: "Newsreader","Liberation Serif",serif;
+                     font-size: 28px; color: #1A1916; }
+        .scaler { border: 1px solid #C4BFB1; border-radius: 2px;
+                  background: #FCFBF8; }
+        .scalebtn { min-width: 38px; min-height: 38px; padding: 0;
+                    background: transparent; border: none; box-shadow: none;
+                    font-size: 19px; color: #3A362E; }
+        .scalebtn label { color: #3A362E; }
+        .scalebtn:hover { background: #EFEAE0; }
+        .scaleval { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                    font-size: 14px; font-weight: 600; color: #1A1916;
+                    padding: 0 14px; }
+        .cookdone { min-height: 40px; padding: 0 20px; border-radius: 2px;
+                    border: 1px solid #C4BFB1; background: #FCFBF8;
+                    box-shadow: none; font-size: 14px; color: #3A362E; }
+        .cookdone label { color: #3A362E; }
+        .cookdone:hover { background: #ECE8DD; }
+        .cookings { background: #F8F7F2; border-right: 1px solid #D7D2C5;
+                    padding: 24px 26px 24px 36px; }
+        .cookinghd { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                     font-size: 11px; letter-spacing: 2px; color: #6E695E;
+                     font-weight: 600; padding-bottom: 12px;
+                     border-bottom: 1px solid #C9C4B6; }
+        .cookingrow { padding: 9px 0; border-bottom: 1px solid #ECE7DA; }
+        .cookingname { font-family: "Newsreader","Liberation Serif",serif;
+                       font-size: 17px; color: #1A1916; }
+        .cookingamt { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                      font-size: 14px; font-weight: 600; color: #3A362E; }
+        .cookingempty { font-family: "Newsreader","Liberation Serif",serif;
+                        font-size: 16px; color: #A39D8F; padding-top: 14px; }
+        .cooksteps { padding: 24px 36px 26px; }
+        .cookpos { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                   font-size: 11px; letter-spacing: 2px; color: #A39D8F;
+                   font-weight: 600; padding-bottom: 18px; }
+        .cooksteptext { font-family: "Newsreader","Liberation Serif",serif;
+                        font-size: 26px; color: #1A1916; }
+        .cookpeek { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                    font-size: 13px; color: #A39D8F; padding-top: 26px; }
+        .cooknav { min-height: 48px; padding: 0 26px; border-radius: 2px;
+                   border: 1px solid #C4BFB1; background: #FCFBF8;
+                   box-shadow: none; font-size: 15px; color: #1A1916;
+                   margin-top: 18px; }
+        .cooknav label { color: #1A1916; }
+        .cooknav:hover { background: #ECE8DD; }
+        .cooknav:disabled, .cooknav:disabled label { color: #B3AE9F; }
+        .cooknext { background: #1A1916; border: 1px solid #1A1916; }
+        .cooknext, .cooknext label { color: #FCFBF8; }
+        .cooknext:hover { background: #2A2823; }
+        .cooknext:disabled { background: #E6E1D4; border-color: #D7D2C5; }
+        .cooknext:disabled, .cooknext:disabled label { color: #B3AE9F; }
+        .startcook { min-height: 40px; padding: 0 20px; border-radius: 2px;
+                     border: 1px solid #C4BFB1; background: #FCFBF8;
+                     box-shadow: none; font-size: 14px; font-weight: 600;
+                     color: #1A1916; margin-top: 20px; }
+        .startcook label { color: #1A1916; font-weight: 600; }
+        .startcook:hover { background: #EFEAE0; }
+
+        .catdlg, .catdlgbox { background: #F8F7F2; }
+        .catdlgbox { padding: 26px 28px; border: 1px solid #C4BFB1; }
+        .catdlgtitle { font-size: 16px; font-weight: 700; color: #1A1916; }
+        .catdlgmsg { font-size: 14px; color: #3A362E; }
+        .catdlgentry { min-height: 40px; border: 1px solid #C4BFB1; border-radius: 2px;
+                       background: #FCFBF8; font-size: 15px; color: #1A1916; }
+        .dlgcancel { min-height: 38px; padding: 0 18px; border: 1px solid #C4BFB1;
+                     color: #3A362E; border-radius: 2px; font-size: 14px;
+                     background: #FCFBF8; box-shadow: none; }
+        .dlgcancel:hover { background: #ECE8DD; }
+        .dlgok { min-height: 38px; padding: 0 18px; background: #C8341E;
+                 color: #FCFBF8; border-radius: 2px; font-size: 14px;
+                 font-weight: 600; box-shadow: none; border: 1px solid #C8341E; }
+        .dlgok:hover { background: #B12D19; border-color: #B12D19; }
+        .dlgok label { color: #FCFBF8; font-weight: 600; }
+        /* non-destructive primary (Add / Save): dark ink, never signage-red;
+           red is reserved for active/alert (the destructive .dlgok). */
+        .dlgprimary { min-height: 38px; padding: 0 18px; background: #1A1916;
+                      color: #FCFBF8; border-radius: 2px; font-size: 14px;
+                      font-weight: 600; box-shadow: none;
+                      border: 1px solid #1A1916; }
+        .dlgprimary:hover { background: #2A2823; border-color: #2A2823; }
+        .dlgprimary label { color: #FCFBF8; font-weight: 600; }
+        """
+        prov = Gtk.CssProvider()
+        try:
+            prov.load_from_data(css)
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(), prov,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+        except Exception:
+            # Styling is cosmetic: a CSS parse error or a missing default
+            # screen must not stop the app window from constructing.
+            pass
+
+
+if __name__ == "__main__":
+    nbapp.run(Cookbook)

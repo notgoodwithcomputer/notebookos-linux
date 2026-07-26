@@ -1,0 +1,25 @@
+config BR2_PACKAGE_PICOM
+	bool "picom"
+	depends on BR2_PACKAGE_XORG7
+	depends on BR2_USE_MMU # fork()
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	select BR2_PACKAGE_LIBXCB
+	select BR2_PACKAGE_XCB_UTIL
+	select BR2_PACKAGE_XCB_UTIL_IMAGE
+	select BR2_PACKAGE_XCB_UTIL_RENDERUTIL
+	select BR2_PACKAGE_PIXMAN
+	select BR2_PACKAGE_LIBCONFIG
+	select BR2_PACKAGE_LIBEV
+	select BR2_PACKAGE_UTHASH
+	help
+	  picom is a lightweight standalone compositor for Xorg,
+	  suitable for use with window managers that do not provide
+	  compositing. It advertises _NET_WM_CM_S0 and implements the
+	  _NET_WM_FRAME_DRAWN frame-sync protocol, which drives GTK3's
+	  compositor-synced frame clock.
+
+	  https://github.com/yshui/picom
+
+comment "picom needs a toolchain w/ threads"
+	depends on BR2_PACKAGE_XORG7
+	depends on !BR2_TOOLCHAIN_HAS_THREADS

@@ -1,0 +1,10 @@
+{
+  "id": "writer",
+  "name": "Writer",
+  "kind": "Word Processor",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "writer",
+  "order": 10
+}

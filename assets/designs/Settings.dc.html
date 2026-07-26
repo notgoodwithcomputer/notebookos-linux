@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  input { font-family: inherit; }
+  .co-scroll::-webkit-scrollbar { width: 12px; }
+  .co-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<!--
+  ============================================================================
+  liberty-ave · SETTINGS
+  Full-screen app surface. In the composited desktop this fills the region
+  BELOW the 26px system menu bar (no menu bar is drawn here — app content only).
+  Palette: warm paper #F8F7F2 / #F4F2EC / #FCFBF8, sidebar #EFEBE0 / selection
+  #EAE3D2, ink #1A1916, a SINGLE red accent #C8341E used sparingly, hairlines.
+  Fields tagged with the "LIVE" pill (and marked <!-- LIVE --> below) render
+  REAL system data at runtime; all other values are representative layout text.
+  ============================================================================
+-->
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;position:relative;">
+
+    <!-- ===================== LEFT NAV ===================== -->
+    <div style="width:340px;flex:none;background:#EFEBE0;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+
+      <!-- title block -->
+      <div style="flex:none;padding:34px 28px 24px;border-bottom:1px solid #D7D2C5;">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <div style="width:14px;height:14px;border-radius:50%;background:#C8341E;flex:none;"></div>
+          <div style="font-size:22px;font-weight:700;letter-spacing:0.01em;color:#1A1916;">Settings</div>
+        </div>
+        <div style="font-size:13.5px;color:#9A958A;margin-top:8px;padding-left:28px;">System preferences</div>
+      </div>
+
+      <!-- section list -->
+      <div style="flex:1;overflow-y:auto;padding:20px 14px;min-height:0;">
+        <div style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#A29C8E;font-weight:600;padding:0 10px;margin-bottom:10px;">System</div>
+        <sc-for list="{{ nav }}" as="s" hint-placeholder-count="5">
+          <div onClick="{{ s.onClick }}" style="{{ s.rowStyle }}" style-hover="background:#E3DCCB;">
+            <div style="{{ s.iconStyle }}">{{ s.glyph }}</div>
+            <span>{{ s.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- nav footer -->
+      <div style="flex:none;padding:18px 28px;border-top:1px solid #D7D2C5;">
+        <div style="font-size:12.5px;color:#A29C8E;font-variant-numeric:tabular-nums;">liberty-ave v2</div>
+        <div style="font-size:11.5px;color:#BBB4A5;margin-top:3px;">build 2026-06-30</div>
+      </div>
+    </div>
+
+    <!-- ===================== CONTENT PANE ===================== -->
+    <div class="co-scroll" style="flex:1;overflow-y:auto;min-height:0;background:#FCFBF8;">
+
+      <!-- ---------- DISPLAY ---------- -->
+      <sc-if value="{{ paneDisplay }}" hint-placeholder-val="{{ true }}">
+      <div style="max-width:940px;margin:0 auto;padding:60px 72px 90px;">
+        <div style="font-family:Newsreader,serif;font-size:42px;line-height:1.05;color:#1A1916;letter-spacing:-0.01em;">Display</div>
+        <div style="font-size:17px;color:#79736A;margin-top:9px;">Screen resolution and interface scaling</div>
+        <div style="border-top:1px solid #1A1916;margin-top:34px;"></div>
+
+        <!-- UI scale control -->
+        <div style="padding:34px 0 34px;border-bottom:1px solid #ECE7DA;">
+          <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:8px;">Interface scale <span style="display:inline-block;margin-left:8px;font-size:9.5px;letter-spacing:0.12em;font-weight:700;color:#9A958A;border:1px solid #D8D2C4;border-radius:2px;padding:1px 5px;vertical-align:middle;">LIVE</span></div>
+          <div style="font-size:14px;color:#79736A;margin-bottom:18px;">Scales all text and controls. Mirrors the active gfx scale.</div>
+          <!-- LIVE: current UI scale (resolution-independent gfx scale) -->
+          <div style="display:inline-flex;border:1px solid #1A1916;border-radius:2px;overflow:hidden;">
+            <sc-for list="{{ scaleCells }}" as="c" hint-placeholder-count="4">
+              <div onClick="{{ c.onClick }}" style="{{ c.style }}">{{ c.label }}</div>
+            </sc-for>
+          </div>
+          <!-- preview card -->
+          <div style="margin-top:26px;border:1px solid #E4DFD2;border-radius:2px;background:#F8F7F2;padding:22px 24px;">
+            <div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#B0AB9D;font-weight:600;margin-bottom:12px;">Preview</div>
+            <div style="font-family:Newsreader,serif;font-size:24px;color:#26241F;line-height:1.35;">The quick brown fox jumps over the lazy dog.</div>
+            <div style="font-size:14px;color:#9A958A;margin-top:8px;">Text and controls render at {{ scaleLabel }}.</div>
+          </div>
+        </div>
+
+        <!-- read-only display fields -->
+        <sc-for list="{{ displayFields }}" as="f" hint-placeholder-count="4">
+          <div style="display:grid;grid-template-columns:220px 1fr;align-items:baseline;padding:18px 0;border-bottom:1px solid #ECE7DA;">
+            <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">{{ f.label }}</div>
+            <div style="{{ f.valStyle }}">{{ f.value }}{{ f.tag }}</div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <!-- ---------- DATE & TIME ---------- -->
+      <sc-if value="{{ paneClock }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width:940px;margin:0 auto;padding:60px 72px 90px;">
+        <div style="font-family:Newsreader,serif;font-size:42px;line-height:1.05;color:#1A1916;letter-spacing:-0.01em;">Date &amp; Time</div>
+        <div style="font-size:17px;color:#79736A;margin-top:9px;">System clock, calendar, and time zone</div>
+        <div style="border-top:1px solid #1A1916;margin-top:34px;"></div>
+
+        <!-- live clock -->
+        <!-- LIVE: rtc_wall_seconds / clock_monotonic_ns -->
+        <div style="padding:30px 0 30px;border-bottom:1px solid #ECE7DA;display:flex;align-items:flex-end;gap:26px;">
+          <div style="font-family:Newsreader,serif;font-size:74px;line-height:0.86;color:#1A1916;font-variant-numeric:tabular-nums;letter-spacing:-0.01em;">{{ clock }}</div>
+          <div style="padding-bottom:9px;">
+            <div style="font-size:19px;color:#2A2620;">{{ dateFull }}</div>
+            <div style="font-size:14px;color:#9A958A;margin-top:5px;">Coordinated Universal Time <span style="display:inline-block;margin-left:6px;font-size:9.5px;letter-spacing:0.12em;font-weight:700;color:#9A958A;border:1px solid #D8D2C4;border-radius:2px;padding:1px 5px;vertical-align:middle;">LIVE</span></div>
+          </div>
+        </div>
+
+        <!-- 24-hour toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:26px 0;border-bottom:1px solid #ECE7DA;">
+          <div>
+            <div style="font-size:17px;color:#1A1916;font-weight:500;">24-hour clock</div>
+            <div style="font-size:14px;color:#79736A;margin-top:5px;">Show time as {{ clockModeDesc }}.</div>
+          </div>
+          <div onClick="{{ onToggle24 }}" style="{{ toggleTrackStyle }}">
+            <div style="width:24px;height:24px;border-radius:50%;background:#FCFBF8;box-shadow:0 1px 2px rgba(26,25,22,0.28);"></div>
+          </div>
+        </div>
+
+        <!-- fields -->
+        <sc-for list="{{ clockFields }}" as="f" hint-placeholder-count="4">
+          <div style="display:grid;grid-template-columns:220px 1fr;align-items:baseline;padding:18px 0;border-bottom:1px solid #ECE7DA;">
+            <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">{{ f.label }}</div>
+            <div style="{{ f.valStyle }}">{{ f.value }}{{ f.tag }}</div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <!-- ---------- KEYBOARD ---------- -->
+      <sc-if value="{{ paneKeyboard }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width:940px;margin:0 auto;padding:60px 72px 90px;">
+        <div style="font-family:Newsreader,serif;font-size:42px;line-height:1.05;color:#1A1916;letter-spacing:-0.01em;">Keyboard</div>
+        <div style="font-size:17px;color:#79736A;margin-top:9px;">Layout and text input</div>
+        <div style="border-top:1px solid #1A1916;margin-top:34px;"></div>
+
+        <!-- layout list -->
+        <div style="padding:32px 0 34px;border-bottom:1px solid #ECE7DA;">
+          <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:16px;">Layout</div>
+          <div style="border:1px solid #DCD7C9;border-radius:2px;overflow:hidden;background:#FCFBF8;">
+            <sc-for list="{{ kbRows }}" as="k" hint-placeholder-count="5">
+              <div onClick="{{ k.onClick }}" style="{{ k.rowStyle }}" style-hover="background:#F0ECE0;">
+                <span style="font-size:15.5px;color:#1A1916;{{ k.nameWeight }}">{{ k.name }}</span>
+                <span style="font-size:13px;color:#9A958A;">{{ k.desc }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <!-- repeat sliders (representative) -->
+        <div style="display:grid;grid-template-columns:220px 1fr;align-items:center;padding:24px 0;border-bottom:1px solid #ECE7DA;">
+          <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Key repeat rate</div>
+          <div style="display:flex;align-items:center;gap:16px;">
+            <span style="font-size:12.5px;color:#B0AB9D;">Slow</span>
+            <div style="position:relative;flex:1;max-width:360px;height:6px;border-radius:3px;background:#E4DFD2;">
+              <div style="position:absolute;left:0;top:0;height:6px;width:62%;border-radius:3px;background:#1A1916;"></div>
+              <div style="position:absolute;left:62%;top:50%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#FCFBF8;border:1.5px solid #1A1916;"></div>
+            </div>
+            <span style="font-size:12.5px;color:#B0AB9D;">Fast</span>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:220px 1fr;align-items:center;padding:24px 0;border-bottom:1px solid #ECE7DA;">
+          <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Delay until repeat</div>
+          <div style="display:flex;align-items:center;gap:16px;">
+            <span style="font-size:12.5px;color:#B0AB9D;">Long</span>
+            <div style="position:relative;flex:1;max-width:360px;height:6px;border-radius:3px;background:#E4DFD2;">
+              <div style="position:absolute;left:0;top:0;height:6px;width:38%;border-radius:3px;background:#1A1916;"></div>
+              <div style="position:absolute;left:38%;top:50%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#FCFBF8;border:1.5px solid #1A1916;"></div>
+            </div>
+            <span style="font-size:12.5px;color:#B0AB9D;">Short</span>
+          </div>
+        </div>
+
+        <!-- fields -->
+        <sc-for list="{{ keyboardFields }}" as="f" hint-placeholder-count="2">
+          <div style="display:grid;grid-template-columns:220px 1fr;align-items:baseline;padding:18px 0;border-bottom:1px solid #ECE7DA;">
+            <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">{{ f.label }}</div>
+            <div style="{{ f.valStyle }}">{{ f.value }}{{ f.tag }}</div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <!-- ---------- USERS ---------- -->
+      <sc-if value="{{ paneUsers }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width:940px;margin:0 auto;padding:60px 72px 90px;">
+        <div style="font-family:Newsreader,serif;font-size:42px;line-height:1.05;color:#1A1916;letter-spacing:-0.01em;">Users</div>
+        <div style="font-size:17px;color:#79736A;margin-top:9px;">Accounts on this computer</div>
+        <div style="border-top:1px solid #1A1916;margin-top:34px;"></div>
+
+        <div style="padding:30px 0 0;">
+          <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:16px;">Accounts <span style="display:inline-block;margin-left:8px;font-size:9.5px;letter-spacing:0.12em;font-weight:700;color:#9A958A;border:1px solid #D8D2C4;border-radius:2px;padding:1px 5px;vertical-align:middle;">LIVE</span></div>
+          <!-- LIVE: system account roster -->
+          <div style="border:1px solid #DCD7C9;border-radius:2px;overflow:hidden;background:#FCFBF8;">
+            <sc-for list="{{ userRows }}" as="u" hint-placeholder-count="3">
+              <div onClick="{{ u.onClick }}" style="{{ u.rowStyle }}" style-hover="background:#F0ECE0;">
+                <div style="{{ u.avatar }}">{{ u.initials }}</div>
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:16px;color:#1A1916;font-weight:500;">{{ u.name }}</div>
+                  <div style="font-size:13px;color:#9A958A;margin-top:3px;">{{ u.sub }}</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex:none;">
+                  <div style="{{ u.statusDot }}"></div>
+                  <span style="font-size:13.5px;color:#79736A;">{{ u.status }}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <!-- add user -->
+          <div style="margin-top:22px;display:inline-flex;align-items:center;gap:9px;height:40px;padding:0 18px;border:1px solid #C4BFB1;border-radius:2px;background:#FCFBF8;color:#3A362E;font-size:14.5px;cursor:pointer;" style-hover="background:#ECE8DD;">
+            <span style="font-size:19px;line-height:1;color:#9A958A;">+</span> Add User…
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ---------- ABOUT ---------- -->
+      <sc-if value="{{ paneAbout }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width:940px;margin:0 auto;padding:60px 72px 90px;">
+        <!-- masthead -->
+        <div style="display:flex;align-items:center;gap:20px;">
+          <div style="width:46px;height:46px;color:#C8341E;display:flex;flex:none;">{{ snailGlyph }}</div>
+          <div style="font-family:Newsreader,serif;font-size:48px;line-height:1;color:#1A1916;letter-spacing:-0.01em;">liberty-ave</div>
+        </div>
+        <div style="font-size:16px;color:#79736A;margin-top:16px;">A from-scratch operating system · LoRa-only networking</div>
+        <div style="border-top:1px solid #1A1916;margin-top:34px;"></div>
+
+        <!-- LIVE: computer name / owner / kernel version / smp_cpu_count / pmm / apic_ticks / mount table / lora -->
+        <sc-for list="{{ aboutFields }}" as="f" hint-placeholder-count="9">
+          <div style="display:grid;grid-template-columns:240px 1fr;align-items:baseline;padding:18px 0;border-bottom:1px solid #ECE7DA;">
+            <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">{{ f.label }}</div>
+            <div style="{{ f.valStyle }}">{{ f.value }}{{ f.tag }}</div>
+          </div>
+        </sc-for>
+
+        <div style="margin-top:36px;font-size:13.5px;color:#A29C8E;line-height:1.6;max-width:640px;">
+          liberty-ave is a 64-bit x86_64 operating system built from scratch — modular-monolithic kernel, DOS volumes with Unix semantics, and a LoRa-only network stack. No TCP/IP.
+        </div>
+      </div>
+      </sc-if>
+
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080},&quot;clockFormat&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;24-hour&quot;,&quot;12-hour&quot;],&quot;default&quot;:&quot;24-hour&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  state = {
+    now: new Date(2026, 5, 30, 9, 41, 0),
+    sel: 0,          // 0 Display · 1 Date&Time · 2 Keyboard · 3 Users · 4 About
+    scaleIdx: 2,     // representative: 150%
+    clock24: true,
+    kbSel: 0,        // US QWERTY
+    userSel: 0,      // ben (Administrator, you)
+  };
+
+  sections = [
+    { label: "Display", k: "display" },
+    { label: "Date & Time", k: "clock" },
+    { label: "Keyboard", k: "keyboard" },
+    { label: "Users", k: "users" },
+    { label: "About", k: "info" },
+  ];
+
+  scales = ["100%", "125%", "150%", "200%"];
+
+  kbLayouts = [
+    { name: "US QWERTY", desc: "United States · default" },
+    { name: "UK QWERTY", desc: "United Kingdom" },
+    { name: "Dvorak", desc: "Simplified" },
+    { name: "Colemak", desc: "Ergonomic" },
+    { name: "German QWERTZ", desc: "Deutschland" },
+  ];
+
+  usersData = [
+    { name: "Ben Whiting", handle: "ben", type: "Administrator", status: "Signed in", online: true, color: "#4A5E73", you: true },
+    { name: "Dey Okonkwo", handle: "dey", type: "Standard", status: "Offline", online: false, color: "#9A7B4F", you: false },
+    { name: "Guest", handle: "guest", type: "Standard · Disabled", status: "Disabled", online: false, color: "#8A857A", you: false },
+  ];
+
+  componentDidMount() { this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 1000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() {
+    const n = this.state.now;
+    if (!this.state.clock24) {
+      let h = n.getHours(); const ap = h >= 12 ? "PM" : "AM";
+      h = h % 12; if (h === 0) h = 12;
+      return h + ":" + this.pad(n.getMinutes()) + " " + ap;
+    }
+    return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes());
+  }
+  dateFull() {
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const n = this.state.now;
+    return days[n.getDay()] + ", " + n.getDate() + " " + months[n.getMonth()] + " " + n.getFullYear();
+  }
+  dateISO() { const n = this.state.now; return n.getFullYear() + "-" + this.pad(n.getMonth() + 1) + "-" + this.pad(n.getDate()); }
+
+  liveTag() {
+    return React.createElement("span", { style: {
+      display: "inline-block", marginLeft: "10px", fontSize: "9.5px", letterSpacing: "0.12em",
+      fontWeight: 700, color: "#9A958A", border: "1px solid #D8D2C4", borderRadius: "2px",
+      padding: "1px 5px", verticalAlign: "middle", textTransform: "uppercase",
+    } }, "Live");
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "display": return S(R(3, 5, 18, 12, 1.5), L(8.5, 20, 15.5, 20), L(12, 17, 12, 20));
+      case "clock": return S(C(12, 12, 8.5), L(12, 12, 12, 7), L(12, 12, 15.5, 13.5));
+      case "keyboard": return S(R(2.5, 6.5, 19, 11, 2),
+        L(6, 10, 6.6, 10), L(9, 10, 9.6, 10), L(12, 10, 12.6, 10), L(15, 10, 15.6, 10), L(18, 10, 18, 10),
+        L(6, 12.8, 6.6, 12.8), L(9, 12.8, 9.6, 12.8), L(12, 12.8, 12.6, 12.8), L(15, 12.8, 15.6, 12.8), L(18, 12.8, 18, 12.8),
+        L(8.5, 15, 15.5, 15));
+      case "users": return S(C(9, 8.5, 3), P("M3.4 18.6c0-3.7 11.2-3.7 11.2 0"), C(16.3, 9.2, 2.4), P("M15 12.5c2.9-.7 5.7 1 5.7 4.2"));
+      case "info": return S(C(12, 12, 8.5), C(12, 8.3, 0.35), L(12, 11.4, 12, 16.6));
+      case "snail": return S(C(14, 11, 5.6), C(14, 11, 2.7), C(14, 11, 0.4),
+        P("M8.7 15.6C6.2 17.3 3.2 17.3 3.2 17.3"), P("M3.2 17.3c-1.5 0-1.5-3.1 1-3.7"),
+        L(4, 13.6, 3, 11.4), L(4.3, 13.7, 5.4, 11.6));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  fieldRows(arr) {
+    return arr.map((f) => ({
+      label: f.label, value: f.value,
+      tag: f.live ? this.liveTag() : null,
+      valStyle: "font-size:17px;color:#1A1916;" + (f.mono ? "font-family:'Courier New',monospace;letter-spacing:0.02em;" : ""),
+    }));
+  }
+
+  renderVals() {
+    const sel = this.state.sel;
+
+    const nav = this.sections.map((s, i) => ({
+      label: s.label, glyph: this.icon(s.k),
+      onClick: () => this.setState({ sel: i }),
+      iconStyle: "width:20px;height:20px;flex:none;display:flex;color:" + (i === sel ? "#1A1916" : "#3A362E") + ";",
+      rowStyle: "display:flex;align-items:center;gap:14px;padding:11px 14px;border-radius:2px;cursor:pointer;font-size:15.5px;margin-bottom:2px;color:"
+        + (i === sel ? "#1A1916" : "#2A2620") + ";"
+        + (i === sel ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;font-weight:600;" : ""),
+    }));
+
+    const scaleCells = this.scales.map((s, i) => ({
+      label: s,
+      onClick: () => this.setState({ scaleIdx: i }),
+      style: "height:44px;display:flex;align-items:center;padding:0 24px;font-size:15px;cursor:pointer;font-variant-numeric:tabular-nums;"
+        + (i > 0 ? "border-left:1px solid #1A1916;" : "")
+        + (i === this.state.scaleIdx ? "background:#1A1916;color:#FCFBF8;font-weight:600;" : "background:#FCFBF8;color:#2A2620;"),
+    }));
+
+    const kbRows = this.kbLayouts.map((l, i) => ({
+      name: l.name, desc: l.desc,
+      onClick: () => this.setState({ kbSel: i }),
+      nameWeight: i === this.state.kbSel ? "font-weight:600;" : "",
+      rowStyle: "display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid #ECE7DA;cursor:pointer;"
+        + (i === this.state.kbSel ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+
+    const userRows = this.usersData.map((u, i) => ({
+      name: u.name, initials: u.handle.slice(0, 2).toUpperCase(),
+      sub: u.handle + " · " + u.type + (u.you ? " · you" : ""),
+      status: u.status,
+      statusDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (u.online ? "#6E7B57" : "#C4BFB1") + ";",
+      onClick: () => this.setState({ userSel: i }),
+      avatar: "width:46px;height:46px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;color:#fff;background:" + u.color + ";",
+      rowStyle: "display:flex;align-items:center;gap:16px;padding:16px 18px;border-bottom:1px solid #ECE7DA;cursor:pointer;"
+        + (i === this.state.userSel ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+
+    return {
+      nav,
+      paneDisplay: sel === 0, paneClock: sel === 1, paneKeyboard: sel === 2, paneUsers: sel === 3, paneAbout: sel === 4,
+
+      // Display
+      scaleCells, scaleLabel: this.scales[this.state.scaleIdx],
+      displayFields: this.fieldRows([
+        { label: "Resolution", value: "1280 × 800", live: true },
+        { label: "Color depth", value: "32-bit · 8:8:8:8" },
+        { label: "Graphics", value: "virtio-gpu", live: true },
+        { label: "Framebuffer", value: "Linear · write-combine" },
+      ]),
+
+      // Date & Time
+      clock: this.clockStr(), dateFull: this.dateFull(),
+      clockModeDesc: this.state.clock24 ? "13:00 (24-hour)" : "1:00 PM (12-hour)",
+      onToggle24: () => this.setState((s) => ({ clock24: !s.clock24 })),
+      toggleTrackStyle: "width:52px;height:30px;border-radius:15px;padding:3px;display:flex;align-items:center;cursor:pointer;flex:none;"
+        + (this.state.clock24 ? "background:#C8341E;justify-content:flex-end;" : "background:#CFC9BB;justify-content:flex-start;"),
+      clockFields: this.fieldRows([
+        { label: "Date", value: this.dateISO(), live: true },
+        { label: "Time", value: this.clockStr() + " UTC", live: true },
+        { label: "Time zone", value: "UTC · Coordinated Universal Time" },
+        { label: "Clock source", value: "CMOS RTC · hardware" },
+      ]),
+
+      // Keyboard
+      kbRows,
+      keyboardFields: this.fieldRows([
+        { label: "Input device", value: "PS/2 Keyboard · i8042", live: true },
+        { label: "Modifier", value: "Caps Lock" },
+      ]),
+
+      // Users
+      userRows,
+
+      // About
+      snailGlyph: this.icon("snail"),
+      aboutFields: this.fieldRows([
+        { label: "Computer name", value: "liberty-ave", live: true },
+        { label: "Owner", value: "Ben Whiting", live: true },
+        { label: "System", value: "liberty-ave v2 · build 2026-06-30", live: true },
+        { label: "Kernel", value: "x86_64 · modular-monolithic" },
+        { label: "Processors", value: "4 cores online", live: true },
+        { label: "Memory", value: "8189 MiB", live: true },
+        { label: "Uptime", value: "3 h 24 m", live: true },
+        { label: "Storage", value: "C: FAT32 · D: ext4 · E: FAT32 (USB)", live: true },
+        { label: "Network", value: "LoRa · 4 nodes · 915 MHz", live: true },
+      ]),
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "id": "contacts",
+  "name": "Contacts",
+  "kind": "Utility",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "contacts",
+  "order": 120
+}

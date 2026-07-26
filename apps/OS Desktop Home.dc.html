@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  input { font-family: inherit; }
+  a { color: #1A1916; } a:hover { color: #C8341E; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#DED4C2;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== MENU BAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:50;position:relative;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Finder</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">{{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== MENU DROPDOWN ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="6">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">{{ aboutMem }}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">{{ aboutStorage }}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+            
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== POWER ===================== -->
+    <sc-if value="{{ powerOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onPowerClick }}" style="position:absolute;inset:0;z-index:90;background:#15140F;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;">
+        <sc-if value="{{ powerShowChrome }}" hint-placeholder-val="{{ true }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:132px;height:60px;object-fit:contain;display:block;"></sc-if>
+        <sc-if value="{{ powerShowChrome }}" hint-placeholder-val="{{ true }}"><div style="font-size:17px;color:#B5B0A3;letter-spacing:0.04em;">{{ powerText }}</div></sc-if>
+        <sc-if value="{{ powerOffMode }}" hint-placeholder-val="{{ true }}">
+          <div onClick="{{ onBoot }}" style="height:42px;padding:0 24px;display:flex;align-items:center;border:1px solid #4A463E;color:#F4F2EC;border-radius:2px;font-size:14.5px;cursor:pointer;" style-hover="background:#26241F;">Power on</div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- ===================== DESKTOP ===================== -->
+    <div onDoubleClick="{{ onDesktopDouble }}" style="flex:1;position:relative;min-height:0;">
+
+      <!-- ============ WIDGETS ============ -->
+      <sc-if value="{{ showWidgets }}" hint-placeholder-val="{{ true }}">
+      <div onDoubleClick="{{ stopClick }}" style="position:absolute;top:56px;right:64px;width:540px;display:flex;flex-direction:column;gap:36px;">
+        <div style="background:#F8F7F2;border:1px solid #1A1916;flex:none;box-shadow:3px 3px 0 rgba(26,25,22,0.10);">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #1A1916;">
+            <div style="font-size:17px;font-weight:700;letter-spacing:0.02em;">Tasks</div>
+            <div style="font-size:13px;color:#8A857A;font-variant-numeric:tabular-nums;">{{ tasksSummary }}</div>
+          </div>
+          <div style="padding:6px 22px 16px;">
+            <sc-for list="{{ tasks }}" as="task" hint-placeholder-count="6">
+              <div onClick="{{ task.onToggle }}" style="display:flex;align-items:center;gap:15px;padding:12px 0;border-bottom:1px solid #E7E2D6;cursor:pointer;">
+                <div style="{{ task.boxStyle }}">{{ task.check }}</div>
+                <div style="{{ task.textStyle }}">{{ task.t }}</div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ tasksEmpty }}" hint-placeholder-val="{{ false }}"><div style="padding:34px 0 28px;text-align:center;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:#A39D8F;">No open tasks</div></sc-if>
+          </div>
+        </div>
+        <div style="background:#F8F7F2;border:1px solid #1A1916;flex:none;box-shadow:3px 3px 0 rgba(26,25,22,0.10);">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #1A1916;flex:none;">
+            <div style="font-size:17px;font-weight:700;letter-spacing:0.02em;">{{ calTitle }}</div>
+            <div style="font-size:13px;color:#8A857A;">{{ dateLong }}</div>
+          </div>
+          <div style="padding:16px 22px 6px;flex:none;">
+            <div style="display:grid;grid-template-columns:repeat(7,1fr);margin-bottom:6px;">
+              <sc-for list="{{ weekdays }}" as="w" hint-placeholder-count="7">
+                <div style="text-align:center;font-size:11px;letter-spacing:0.06em;color:#9A958A;font-weight:600;">{{ w }}</div>
+              </sc-for>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(7,1fr);">
+              <sc-for list="{{ calCells }}" as="cell" hint-placeholder-count="30">
+                <div style="height:42px;display:flex;align-items:center;justify-content:center;position:relative;">
+                  <div style="{{ cell.pill }}">{{ cell.day }}</div>
+                  {{ cell.dot }}
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="padding:14px 22px 18px;border-top:1px solid #E7E2D6;">
+            <div style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#9A958A;margin-bottom:11px;">Today</div>
+            <sc-for list="{{ events }}" as="ev" hint-placeholder-count="4">
+              <div style="display:flex;gap:16px;padding:6px 0;align-items:baseline;">
+                <div style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:#1A1916;width:48px;flex:none;">{{ ev.time }}</div>
+                <div style="font-family:Newsreader,serif;font-size:18px;color:#2A2620;">{{ ev.title }}</div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ eventsEmpty }}" hint-placeholder-val="{{ false }}"><div style="padding:4px 0 8px;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:#A39D8F;">Nothing scheduled</div></sc-if>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ============ FINDER WINDOWS ============ -->
+      <sc-for list="{{ windows }}" as="win" hint-placeholder-count="1">
+      <div onMouseDown="{{ win.onActivate }}" onDoubleClick="{{ stopClick }}" style="{{ win.frameStyle }}">
+
+        <!-- title bar -->
+        <div onMouseDown="{{ win.onDragStart }}" onDoubleClick="{{ win.onShade }}" style="{{ win.titleBarStyle }}">
+          <div onClick="{{ win.onClose }}" onMouseDown="{{ stopMD }}" title="Close" style="width:15px;height:15px;border:1px solid #1A1916;background:#F8F7F2;flex:none;cursor:pointer;" style-hover="background:#E6DFCE;"></div>
+          <div style="flex:1;display:flex;justify-content:center;pointer-events:none;"><div style="font-size:14px;font-weight:700;letter-spacing:0.08em;">{{ win.title }}</div></div>
+          <div style="display:flex;gap:8px;flex:none;">
+            <div onClick="{{ win.onShade }}" onMouseDown="{{ stopMD }}" title="Collapse" style="width:15px;height:15px;border:1px solid #1A1916;background:#F8F7F2;cursor:pointer;display:flex;align-items:flex-start;" style-hover="background:#E6DFCE;"><div style="height:4px;width:100%;border-bottom:1px solid #1A1916;"></div></div>
+            <div onClick="{{ win.onZoom }}" onMouseDown="{{ stopMD }}" title="Zoom" style="width:15px;height:15px;border:1px solid #1A1916;background:#F8F7F2;cursor:pointer;padding:1.5px;" style-hover="background:#E6DFCE;"><div style="width:100%;height:100%;border:1px solid #1A1916;"></div></div>
+          </div>
+        </div>
+
+        <sc-if value="{{ win.notShaded }}" hint-placeholder-val="{{ true }}">
+        <!-- nav toolbar -->
+        <div style="height:54px;flex:none;border-bottom:1px solid #D7D2C5;display:flex;align-items:center;gap:14px;padding:0 16px;background:#F1EEE6;">
+          <div style="display:flex;gap:6px;">
+            <div onClick="{{ win.onBack }}" title="Back" style="{{ win.backBtnStyle }}"><div style="width:18px;height:18px;display:flex;">{{ backGlyph }}</div></div>
+            <div onClick="{{ win.onFwd }}" title="Forward" style="{{ win.fwdBtnStyle }}"><div style="width:18px;height:18px;display:flex;">{{ fwdGlyph }}</div></div>
+            <div onClick="{{ win.onUp }}" title="Up" style="{{ win.upBtnStyle }}"><div style="width:18px;height:18px;display:flex;">{{ upGlyph }}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;background:#FBFAF6;border:1px solid #C4BFB1;border-radius:2px;height:32px;padding:0 6px;">
+            <sc-for list="{{ win.crumbs }}" as="c" hint-placeholder-count="2">
+              <sc-if value="{{ c.sepBefore }}" hint-placeholder-val="{{ false }}"><span style="color:#B0AB9D;font-size:13px;">›</span></sc-if>
+              <div onClick="{{ c.onClick }}" style="{{ c.style }}">{{ c.label }}</div>
+            </sc-for>
+          </div>
+          <div style="flex:1;"></div>
+          <div style="display:flex;align-items:center;gap:8px;background:#FBFAF6;border:1px solid #C4BFB1;border-radius:2px;height:32px;padding:0 11px;width:210px;">
+            <div style="width:15px;height:15px;color:#9A958A;display:flex;flex:none;">{{ searchGlyph }}</div>
+            <input value="{{ win.search }}" onInput="{{ win.onSearch }}" type="text" placeholder="Search" style="border:none;background:transparent;outline:none;font-size:13.5px;color:#2A2620;width:100%;" />
+          </div>
+          <div style="display:flex;border:1px solid #C4BFB1;border-radius:2px;overflow:hidden;">
+            <div onClick="{{ win.onGridView }}" title="Icons" style="{{ win.gridBtnStyle }}"><div style="width:16px;height:16px;display:flex;">{{ gridGlyph }}</div></div>
+            <div onClick="{{ win.onListView }}" title="List" style="{{ win.listBtnStyle }}"><div style="width:16px;height:16px;display:flex;">{{ listGlyph }}</div></div>
+          </div>
+        </div>
+
+        <!-- body -->
+        <div style="flex:1;display:flex;min-height:0;">
+          <sc-if value="{{ showSidebar }}" hint-placeholder-val="{{ true }}">
+          <div style="width:236px;flex:none;background:#EFEBE0;border-right:1px solid #D7D2C5;padding:18px 12px;overflow:hidden;">
+            <div style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#A29C8E;font-weight:600;padding:0 8px;margin-bottom:8px;">Devices</div>
+            <sc-for list="{{ win.devices }}" as="p" hint-placeholder-count="1">
+              <div onClick="{{ p.onClick }}" style="{{ p.rowStyle }}" style-hover="background:#E3DCCB;"><div style="width:18px;height:18px;color:#3A362E;display:flex;flex:none;">{{ p.glyph }}</div><span>{{ p.label }}</span></div>
+            </sc-for>
+            <div style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#A29C8E;font-weight:600;padding:0 8px;margin:20px 0 8px;">Places</div>
+            <sc-for list="{{ win.places }}" as="p" hint-placeholder-count="7">
+              <div onClick="{{ p.onClick }}" style="{{ p.rowStyle }}" style-hover="background:#E3DCCB;"><div style="width:18px;height:18px;color:#3A362E;display:flex;flex:none;">{{ p.glyph }}</div><span>{{ p.label }}</span></div>
+            </sc-for>
+          </div>
+          </sc-if>
+
+          <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">
+            <sc-if value="{{ win.listViewOn }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:none;display:grid;grid-template-columns:1fr 92px 168px;align-items:center;height:34px;padding:0 18px;border-bottom:1px solid #D7D2C5;background:#F1EEE6;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#8A857A;font-weight:600;">
+              <div>Name</div>
+              <div style="text-align:right;">Size</div>
+              <div style="padding-left:24px;">Date Modified</div>
+            </div>
+            <div style="flex:1;overflow-y:auto;">
+              <sc-for list="{{ win.listData }}" as="row" hint-placeholder-count="10">
+                <div onClick="{{ row.onClick }}" onDoubleClick="{{ row.onDouble }}" style="{{ row.style }}" style-hover="background:#F0ECE0;">
+                  <div style="display:flex;align-items:center;gap:13px;min-width:0;">
+                    <div style="width:22px;height:22px;color:#1A1916;display:flex;flex:none;">{{ row.glyph }}</div>
+                    <span style="font-size:14.5px;color:#1A1916;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ row.name }}</span>
+                  </div>
+                  <div style="font-size:13.5px;color:#6E695E;text-align:right;font-variant-numeric:tabular-nums;">{{ row.size }}</div>
+                  <div style="font-size:13.5px;color:#6E695E;padding-left:24px;font-variant-numeric:tabular-nums;">{{ row.modified }}</div>
+                </div>
+              </sc-for>
+              <sc-if value="{{ win.isEmpty }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:48px 0;text-align:center;font-size:13.5px;color:#A39D8F;">{{ win.emptyLabel }}</div>
+              </sc-if>
+            </div>
+            </sc-if>
+            <sc-if value="{{ win.iconViewOn }}" hint-placeholder-val="{{ false }}">
+            <div style="flex:1;overflow-y:auto;padding:30px 26px 12px;">
+              <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px 4px;align-content:start;">
+                <sc-for list="{{ win.listData }}" as="row" hint-placeholder-count="10">
+                  <div onClick="{{ row.onClick }}" onDoubleClick="{{ row.onDouble }}" style="{{ row.iconStyle }}" style-hover="background:#F0ECE0;">
+                    <div style="width:44px;height:44px;color:#1A1916;display:flex;align-items:center;justify-content:center;">{{ row.glyph }}</div>
+                    <span style="font-size:13px;color:#1A1916;font-weight:500;text-align:center;line-height:1.25;">{{ row.name }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <sc-if value="{{ win.isEmpty }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:48px 0;text-align:center;font-size:13.5px;color:#A39D8F;">{{ win.emptyLabel }}</div>
+              </sc-if>
+            </div>
+            </sc-if>
+            <div style="flex:none;height:32px;border-top:1px solid #D7D2C5;background:#F1EEE6;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:12.5px;color:#8A857A;font-variant-numeric:tabular-nums;">
+              <div>{{ win.statusLeft }}</div>
+              <div>{{ diskAvail }}</div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ win.gripShown }}" hint-placeholder-val="{{ true }}">
+        <div onMouseDown="{{ win.onResizeStart }}" title="Resize" style="position:absolute;right:-1px;bottom:-1px;width:19px;height:19px;cursor:nwse-resize;z-index:6;background:#F1EEE6;border:1px solid #1A1916;background-image:repeating-linear-gradient(135deg, transparent 0 4px, #A29C8E 4px 5px);"></div>
+        </sc-if>
+      </div>
+      </sc-for>
+
+    </div>
+
+    <!-- ===================== LAUNCHED APP ===================== -->
+    <sc-if value="{{ appOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;z-index:40;background:#DED4C2;">
+      {{ appFrame }}
+    </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080},&quot;clockFormat&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;24-hour&quot;,&quot;12-hour&quot;],&quot;default&quot;:&quot;24-hour&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;showSidebar&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;showWidgets&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  state = {
+    now: new Date(),
+    windows: [],
+    nextId: 2,
+    activeId: 1,
+    openMenu: null, menuLeft: 12, aboutOpen: false, power: null,
+    openApp: null,
+    showSidebar: true, showWidgets: true,
+    tasks: [],
+    sys: {}, lora: { node: "NODE-3C", heard: [] },
+  };
+
+  sysApps = [
+    ["Writer", "Writer.dc.html"],
+    ["Novel", "Novel.dc.html"],
+    ["Academic Notes", "Academic Notes.dc.html"],
+    ["Journal", "Journal.dc.html"],
+    ["Screenplay", "Screenplay.dc.html"],
+    ["Tasks", "Tasks.dc.html"],
+    ["Calendar", "Calendar.dc.html"],
+    ["Cookbook", "Cookbook.dc.html"],
+    ["E-book Reader", "E-book Reader.dc.html"],
+    ["Calculator", "Scientific Calculator.dc.html"],
+    ["Accounting", "Accounting.dc.html"],
+    ["Contacts", "Contacts.dc.html"],
+    ["Messages", "Messages.dc.html"],
+    ["2048", "2048.dc.html"],
+    ["Tetris", "Tetris.dc.html"],
+    ["Illustrator", "Illustrator.dc.html"],
+    ["Sequencer", "Sequencer.dc.html"],
+    ["Video Editor", "Video Editor.dc.html"],
+    ["Media Viewer", "Media Viewer.dc.html"],
+    ["Music", "Music.dc.html"],
+    ["Packages", "Packages.dc.html"],
+  ];
+
+  buildFS() {
+    const app = (n, f, k, size, mod) => ({ name: n, type: "app", file: f, k, size, mod });
+    const doc = (n, appFile, size, mod) => ({ name: n, type: "doc", app: appFile, size, mod });
+    const folder = (n, mod, children) => ({ name: n, type: "folder", mod, children });
+    const sys = (n, size, mod) => ({ name: n, type: "sys", size, mod });
+    this.fs = {
+      name: "Local Disk", type: "disk", children: [
+        folder("Home", "Today, 09:12", [
+          folder("Desktop", "1 May 2026", []),
+          folder("Documents", "19 Jun 2026", [
+            doc("Reading List", "Writer.dc.html", "4 KB", "19 Jun 2026"),
+            doc("Lecture Notes", "Academic Notes.dc.html", "9 KB", "18 Jun 2026"),
+            doc("Monthly Budget", "Accounting.dc.html", "12 KB", "18 Jun 2026"),
+          ]),
+          folder("Manuscripts", "Today, 09:12", [
+            doc("Novel Manuscript", "Novel.dc.html", "214 KB", "Yesterday, 22:08"),
+            doc("Essay Draft", "Writer.dc.html", "36 KB", "Today, 09:12"),
+            doc("Screenplay Draft", "Screenplay.dc.html", "58 KB", "14 Jun 2026"),
+            doc("User Guide", "E-book Reader.dc.html", "1.1 MB", "1 May 2026"),
+          ]),
+          folder("Music", "1 May 2026", []),
+          folder("Applications", "9 Jun 2026", [
+            app("Writer", "Writer.dc.html", "writer", "1.2 MB", "9 Jun 2026"),
+            app("Novel", "Novel.dc.html", "novel", "2.4 MB", "9 Jun 2026"),
+            app("Academic Notes", "Academic Notes.dc.html", "academic", "880 KB", "9 Jun 2026"),
+            app("Journal", "Journal.dc.html", "journal", "640 KB", "9 Jun 2026"),
+            app("Screenplay", "Screenplay.dc.html", "screenplay", "1.1 MB", "9 Jun 2026"),
+            app("Tasks", "Tasks.dc.html", "tasks", "420 KB", "9 Jun 2026"),
+            app("Calendar", "Calendar.dc.html", "calendar", "510 KB", "9 Jun 2026"),
+            app("Cookbook", "Cookbook.dc.html", "cookbook", "1.8 MB", "9 Jun 2026"),
+            app("E-book Reader", "E-book Reader.dc.html", "ebook", "2.1 MB", "9 Jun 2026"),
+            app("Calculator", "Scientific Calculator.dc.html", "calculator", "360 KB", "9 Jun 2026"),
+            app("Accounting", "Accounting.dc.html", "accounting", "720 KB", "9 Jun 2026"),
+            app("Contacts", "Contacts.dc.html", "contacts", "290 KB", "9 Jun 2026"),
+            app("Messages", "Messages.dc.html", "messages", "1.4 MB", "9 Jun 2026"),
+            app("2048", "2048.dc.html", "g2048", "180 KB", "9 Jun 2026"),
+            app("Tetris", "Tetris.dc.html", "tetris", "210 KB", "9 Jun 2026"),
+            app("Illustrator", "Illustrator.dc.html", "illustrator", "2.6 MB", "9 Jun 2026"),
+            app("Sequencer", "Sequencer.dc.html", "sequencer", "3.4 MB", "9 Jun 2026"),
+            app("Video Editor", "Video Editor.dc.html", "videoeditor", "4.1 MB", "9 Jun 2026"),
+            app("Media Viewer", "Media Viewer.dc.html", "mediaviewer", "980 KB", "9 Jun 2026"),
+            app("Music", "Music.dc.html", "music", "1.6 MB", "9 Jun 2026"),
+            app("Packages", "Packages.dc.html", "packages", "740 KB", "9 Jun 2026"),
+          ]),
+        ]),
+        folder("System", "1 May 2026", [
+          sys("notebook.kernel", "8.2 MB", "1 May 2026"),
+          sys("mesh-radio.driver", "1.1 MB", "1 May 2026"),
+          sys("papertone.theme", "340 KB", "1 May 2026"),
+          sys("helvetica.typeface", "2.8 MB", "1 May 2026"),
+          sys("newsreader.typeface", "3.1 MB", "1 May 2026"),
+        ]),
+        folder("Trash", "1 May 2026", []),
+      ],
+    };
+  }
+
+  events = [];
+
+  newWindow(path) {
+    const n = this.state.windows.length;
+    return {
+      id: this.state.nextId,
+      path: path || ["Home", "Applications"],
+      hist: [path || ["Home", "Applications"]], histIdx: 0,
+      sel: null, search: "", view: "list",
+      x: 64 + (n % 5) * 40, y: 56 + (n % 5) * 40,
+      w: 1160, h: 640,
+      shaded: false, zoomed: false,
+    };
+  }
+
+  componentDidMount() {
+    this.buildFS();
+    const first = { id: 1, path: ["Home", "Applications"], hist: [["Home", "Applications"]], histIdx: 0, sel: null, search: "", view: "list", x: 64, y: 56, w: 1160, h: 922, shaded: false, zoomed: false };
+    this.setState({ windows: [first] });
+    if (this.props.showSidebar === false) this.setState({ showSidebar: false });
+    if (this.props.showWidgets === false) this.setState({ showWidgets: false });
+    this.timer = setInterval(() => this.setState({ now: new Date() }), 10000);
+    this.msgHandler = (e) => {
+      const d = e.data || {};
+      if (d.type === "nbos-home") this.setState({ openApp: null });
+      if (d.type === "nbos-launch" && d.file) this.setState({ openApp: d.file });
+      if (d.type === "nbos-power" && d.mode) { if (d.mode === "restart") this.restart(); else if (d.mode === "off") this.setState({ power: "off", openApp: null, openMenu: null }); else this.setState({ power: "sleep", openMenu: null }); }
+    };
+    window.addEventListener("message", this.msgHandler);
+    this.keyHandler = (e) => { if (e.key === "Escape") this.setState({ openMenu: null, aboutOpen: false }); };
+    window.addEventListener("keydown", this.keyHandler);
+    this.moveHandler = (e) => {
+      if (this._resize) {
+        const root = document.querySelector("[data-nbos-root]");
+        if (!root) return;
+        const scale = root.getBoundingClientRect().width / 1920;
+        const nw = this._resize.w + (e.clientX - this._resize.mx) / scale;
+        const nh = this._resize.h + (e.clientY - this._resize.my) / scale;
+        const rid = this._resize.id;
+        this.setState((s) => ({ windows: s.windows.map((w) => w.id === rid ? { ...w, w: Math.round(Math.max(480, Math.min(1920, nw))), h: Math.round(Math.max(320, Math.min(1034, nh))) } : w) }));
+        return;
+      }
+      if (!this._drag) return;
+      const root = document.querySelector("[data-nbos-root]");
+      if (!root) return;
+      const scale = root.getBoundingClientRect().width / 1920;
+      const nx = this._drag.wx + (e.clientX - this._drag.mx) / scale;
+      const ny = this._drag.wy + (e.clientY - this._drag.my) / scale;
+      const id = this._drag.id;
+      this.setState((s) => ({
+        windows: s.windows.map((w) => w.id === id
+          ? { ...w, x: Math.max(-w.w + 200, Math.min(1920 - 120, nx)), y: Math.max(0, Math.min(1034 - 90, ny)) }
+          : w),
+      }));
+    };
+    this.upHandler = () => { this._drag = null; this._resize = null; };
+    window.addEventListener("mousemove", this.moveHandler);
+    window.addEventListener("mouseup", this.upHandler);
+    try {
+      fetch("/api/system").then((r) => r.ok ? r.json() : null).then((d) => { if (d) this.setState({ sys: d }); }).catch(() => {});
+      fetch("/api/lora").then((r) => r.ok ? r.json() : null).then((d) => { if (d) this.setState({ lora: d }); }).catch(() => {});
+    } catch (e) {}
+  }
+  componentDidUpdate() {
+    const app = this.state.openApp;
+    const host = this._frameHost;
+    if (!app) { this._lastLoaded = null; return; }
+    if (!host) return;
+    if (this._lastLoaded === app && host.firstChild) return;
+    this._lastLoaded = app;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    const fr = document.createElement("iframe");
+    fr.title = "Application";
+    fr.style.cssText = "width:100%;height:100%;border:none;display:block;background:#FCFBF8;";
+    fr.src = encodeURI(app);
+    host.appendChild(fr);
+  }
+  componentWillUnmount() {
+    clearInterval(this.timer);
+    window.removeEventListener("message", this.msgHandler);
+    window.removeEventListener("keydown", this.keyHandler);
+    window.removeEventListener("mousemove", this.moveHandler);
+    window.removeEventListener("mouseup", this.upHandler);
+    if (this.rebootT) clearTimeout(this.rebootT);
+  }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() {
+    const n = this.state.now;
+    if ((this.props.clockFormat || "24-hour") === "12-hour") {
+      let h = n.getHours(); const ap = h >= 12 ? "PM" : "AM"; h = h % 12; if (h === 0) h = 12;
+      return h + ":" + this.pad(n.getMinutes()) + " " + ap;
+    }
+    return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes());
+  }
+  months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + this.months[n.getMonth()]; }
+
+  // ---------- window management ----------
+  activeWin() { return this.state.windows.find((w) => w.id === this.state.activeId) || this.state.windows[this.state.windows.length - 1] || null; }
+  updateWin(id, patch) { this.setState((s) => ({ windows: s.windows.map((w) => (w.id === id ? { ...w, ...patch } : w)) })); }
+  activate(id) {
+    this.setState((s) => {
+      if (s.windows.length && s.windows[s.windows.length - 1].id === id && s.activeId === id) return null;
+      const win = s.windows.find((w) => w.id === id);
+      if (!win) return null;
+      return { windows: s.windows.filter((w) => w.id !== id).concat([win]), activeId: id };
+    });
+  }
+  openWindow(path) {
+    const win = this.newWindow(path);
+    this.setState((s) => ({ windows: s.windows.concat([win]), nextId: s.nextId + 1, activeId: win.id, openMenu: null }));
+  }
+  closeWindow(id) {
+    this.setState((s) => {
+      const windows = s.windows.filter((w) => w.id !== id);
+      return { windows, activeId: windows.length ? windows[windows.length - 1].id : 0 };
+    });
+  }
+  startDrag(e, id) {
+    this.activate(id);
+    const win = this.state.windows.find((w) => w.id === id);
+    if (!win) return;
+    this._drag = { id, mx: e.clientX, my: e.clientY, wx: win.x, wy: win.y };
+    e.preventDefault();
+  }
+
+  // ---------- file system nav ----------
+  nodeAt(path) {
+    if (!this.fs) this.buildFS();
+    if (!path.length) return this.fs;
+    let node = this.fs;
+    for (const seg of path) {
+      if (!node.children) return null;
+      node = node.children.find((c) => c.name === seg);
+      if (!node) return null;
+    }
+    return node;
+  }
+  navTo(id, path) {
+    const win = this.state.windows.find((w) => w.id === id);
+    if (!win) return;
+    const hist = win.hist.slice(0, win.histIdx + 1);
+    hist.push(path);
+    this.updateWin(id, { path, hist, histIdx: hist.length - 1, sel: null, search: "", shaded: false });
+    this.setState({ openMenu: null });
+  }
+  goBack(id) { const w = this.state.windows.find((x) => x.id === id); if (w && w.histIdx > 0) this.updateWin(id, { histIdx: w.histIdx - 1, path: w.hist[w.histIdx - 1], sel: null, search: "" }); this.setState({ openMenu: null }); }
+  goFwd(id) { const w = this.state.windows.find((x) => x.id === id); if (w && w.histIdx < w.hist.length - 1) this.updateWin(id, { histIdx: w.histIdx + 1, path: w.hist[w.histIdx + 1], sel: null, search: "" }); this.setState({ openMenu: null }); }
+  goUp(id) { const w = this.state.windows.find((x) => x.id === id); if (w && w.path.length > 0) this.navTo(id, w.path.slice(0, -1)); }
+
+  openNode(id, n) {
+    if (n.type === "folder" || n.type === "disk") this.navTo(id, n.type === "disk" ? [] : this.pathOf(n));
+    else if (n.type === "app") this.launchApp(n.file);
+    else if (n.type === "doc") this.launchApp(n.app);
+  }
+  pathOf(target) {
+    const walk = (node, path) => {
+      if (node === target) return path;
+      if (!node.children) return null;
+      for (const c of node.children) { const r = walk(c, path.concat([c.name])); if (r) return r; }
+      return null;
+    };
+    return walk(this.fs, []) || [];
+  }
+  moveToTrash(id) {
+    const win = this.state.windows.find((w) => w.id === id);
+    if (!win || !win.sel) return;
+    const folder = this.nodeAt(win.path);
+    const trash = this.nodeAt(["Trash"]);
+    if (!folder || !trash) return;
+    const idx = folder.children.findIndex((c) => c.name === win.sel && c.type === "doc");
+    if (idx === -1) return;
+    const [item] = folder.children.splice(idx, 1);
+    item.mod = "Today, " + this.clockStr();
+    trash.children.push(item);
+    this.updateWin(id, { sel: null });
+    this.setState({ openMenu: null });
+  }
+  emptyTrash() { const t = this.nodeAt(["Trash"]); if (t) t.children = []; this.setState({ openMenu: null }); }
+
+  // ---------- system chrome ----------
+  goHome() { this.setState({ openApp: null, openMenu: null }); }
+  launchApp(file) { this.setState({ openApp: file, openMenu: null }); }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+
+  menuItemsFor(name) {
+    const S = this.state;
+    const aw = this.activeWin();
+    if (name === "__logo") {
+      return [
+        this.mi("About Notebook OS\u2026", () => this.setState({ aboutOpen: true, openMenu: null })),
+        this.msep(),
+        this.mi("Sleep", () => this.setState({ power: "sleep", openMenu: null })),
+        this.mi("Restart\u2026", () => this.restart()),
+        this.mi("Shut Down\u2026", () => this.setState({ power: "off", openApp: null, openMenu: null })),
+      ];
+    }
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => this.goHome(), { check: S.openApp ? "" : "\u2713" }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: S.openApp === a[1] ? "\u2713" : "" })))));
+      return items;
+    }
+    if (name === "__lora") {
+      const heard = (S.lora && S.lora.heard) || [];
+      const heardRows = heard.length
+        ? heard.map((node) => this.off(node.id, "ch " + node.channel))
+        : [this.off("No nodes heard", "")];
+      return heardRows.concat([
+        this.msep(),
+        this.off("This machine: NODE-3C", "915 MHz"),
+      ]);
+    }
+    if (name === "File") {
+      const folder = aw ? this.nodeAt(aw.path) : null;
+      const selNode = folder && aw.sel ? folder.children.find((c) => c.name === aw.sel) : null;
+      return [
+        this.mi("New Finder Window", () => this.openWindow(aw ? aw.path.slice() : undefined), { hint: "\u2318N" }),
+        aw ? this.mi("Close Window", () => { this.closeWindow(aw.id); this.setState({ openMenu: null }); }, { hint: "\u2318W" }) : this.off("Close Window"),
+        this.msep(),
+        selNode ? this.mi("Open", () => { this.openNode(aw.id, selNode); this.setState({ openMenu: null }); }) : this.off("Open"),
+        selNode && selNode.type === "doc" ? this.mi("Move to Trash", () => this.moveToTrash(aw.id)) : this.off("Move to Trash"),
+        this.msep(),
+        (() => { const trash = this.nodeAt(["Trash"]); return trash && trash.children.length ? this.mi("Empty Trash\u2026", () => this.emptyTrash()) : this.off("Empty Trash\u2026"); })(),
+      ];
+    }
+    if (name === "Edit") return [this.off("Undo"), this.msep(), this.off("Cut"), this.off("Copy"), this.off("Paste"), this.off("Select All")];
+    if (name === "View") {
+      return [
+        aw ? this.mi("as Icons", () => { this.updateWin(aw.id, { view: "icons" }); this.setState({ openMenu: null }); }, { check: aw.view === "icons" ? "\u2713" : "" }) : this.off("as Icons"),
+        aw ? this.mi("as List", () => { this.updateWin(aw.id, { view: "list" }); this.setState({ openMenu: null }); }, { check: aw.view === "list" ? "\u2713" : "" }) : this.off("as List"),
+        this.msep(),
+        this.mi(S.showSidebar ? "Hide Sidebar" : "Show Sidebar", () => this.setState({ showSidebar: !S.showSidebar, openMenu: null })),
+        this.mi(S.showWidgets ? "Hide Widgets" : "Show Widgets", () => this.setState({ showWidgets: !S.showWidgets, openMenu: null })),
+      ];
+    }
+    if (name === "Go") {
+      if (!aw) return [this.off("No window open")];
+      const go = (p) => this.mi(p[p.length - 1] || "Local Disk", () => this.navTo(aw.id, p));
+      return [
+        aw.histIdx > 0 ? this.mi("Back", () => this.goBack(aw.id)) : this.off("Back"),
+        aw.histIdx < aw.hist.length - 1 ? this.mi("Forward", () => this.goFwd(aw.id)) : this.off("Forward"),
+        aw.path.length > 0 ? this.mi("Enclosing Folder", () => this.goUp(aw.id)) : this.off("Enclosing Folder"),
+        this.msep(),
+        go(["Home"]), go(["Home", "Desktop"]), go(["Home", "Documents"]), go(["Home", "Manuscripts"]), go(["Home", "Music"]), go(["Home", "Applications"]),
+        this.msep(),
+        go(["Trash"]),
+      ];
+    }
+    return [];
+  }
+  restart() {
+    this.setState({ power: "restart", openMenu: null, openApp: null });
+    this.rebootT = setTimeout(() => this.setState({ power: null }), 1800);
+  }
+  toggle(i) { this.setState((s) => { const t = s.tasks.slice(); t[i] = { ...t[i], done: !t[i].done }; return { tasks: t }; }); }
+
+  // ---------- icons ----------
+  icon(k) {
+    const E = React.createElement;
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "writer": return S(R(5, 3, 14, 18, 1), L(8, 8, 16, 8), L(8, 12, 16, 12), L(8, 16, 13, 16));
+      case "novel": return S(P("M12 6C9.5 4 6.5 4 4 5V18.5C6.5 17.5 9.5 17.5 12 19"), P("M12 6c2.5-2 5.5-2 8-1v13.5c-2.5-1-5.5-1-8 0"), L(12, 6, 12, 19));
+      case "academic": return S(P("M2.5 9 12 5l9.5 4L12 13z"), P("M6.5 11v4.3c0 1.7 11 1.7 11 0V11"), L(21.5, 9, 21.5, 13.5));
+      case "journal": return S(R(5, 3.5, 14, 17, 1), L(9, 3.5, 9, 20.5), P("M13 3.5v6l1.5-1.4L16 9.5v-6"));
+      case "screenplay": return S(R(3.5, 8.5, 17, 11.5, 1), P("M3.8 8.5 4.7 5l15.7 1.2L19.7 9"), L(8, 8.5, 9.2, 5.3), L(13, 8.5, 14.2, 5.8));
+      case "tasks": return S(R(4, 4, 16, 16, 2.5), P("M8 12.2 10.8 15 16 9"));
+      case "calendar": return S(R(4, 5, 16, 15, 1.5), L(4, 9.2, 20, 9.2), L(8, 3.5, 8, 6.5), L(16, 3.5, 16, 6.5));
+      case "cookbook": return S(P("M5 10.5h14v2.5c0 3.3-3.1 5.5-7 5.5s-7-2.2-7-5.5z"), L(3.2, 11.5, 5, 11.5), L(19, 11.5, 20.8, 11.5), L(7, 8, 17, 8), L(12, 8, 12, 6.6));
+      case "ebook": return S(R(5, 3, 14, 18, 2), L(8, 7, 16, 7), L(8, 10.5, 16, 10.5), L(8, 14, 13, 14), C(12, 18, 0.5));
+      case "calculator": return S(R(5, 3, 14, 18, 1.5), R(8, 6, 8, 3, 0.5), C(9, 13, 0.6), C(12, 13, 0.6), C(15, 13, 0.6), C(9, 16, 0.6), C(12, 16, 0.6), C(15, 16, 0.6));
+      case "accounting": return S(R(3, 7, 18, 10, 1.5), C(12, 12, 2.4), C(6, 12, 0.6), C(18, 12, 0.6));
+      case "contacts": return S(C(12, 8.5, 3.2), P("M5.5 19c0-4 13-4 13 0"));
+      case "messages": return S(R(4, 5, 16, 10, 2), P("M9 15v4l4-4"), C(9, 10, 0.6), C(12, 10, 0.6), C(15, 10, 0.6));
+      case "g2048": return S(R(4, 4, 7, 7, 1), R(13, 4, 7, 7, 1), R(4, 13, 7, 7, 1), R(13, 13, 7, 7, 1));
+      case "tetris": return S(R(4, 4, 5.3, 5.3, 0.5), R(9.3, 4, 5.3, 5.3, 0.5), R(14.6, 4, 5.3, 5.3, 0.5), R(9.3, 9.3, 5.3, 5.3, 0.5));
+      case "illustrator": return S(P("M15.5 3.5l5 5-8.5 8.5h-5v-5z"), P("M7 16c-2 0-3 1-3.5 4 3-.5 4-1.5 4-3.5"));
+      case "sequencer": return S(L(6, 4, 6, 20), L(12, 4, 12, 20), L(18, 4, 18, 20), C(6, 9, 1.7), C(12, 15, 1.7), C(18, 7, 1.7));
+      case "videoeditor": return S(R(3, 5, 18, 14, 1.5), L(8, 5, 8, 19), L(16, 5, 16, 19), L(3, 9.5, 8, 9.5), L(3, 14.5, 8, 14.5), L(16, 9.5, 21, 9.5), L(16, 14.5, 21, 14.5));
+      case "mediaviewer": return S(R(3, 5, 18, 14, 1.5), C(8.5, 10, 1.5), P("M4 17l5-5 3.5 3.5L16 12l4 5"));
+      case "music": return S(P("M9 18V6l10-2v12"), C(7, 18, 2), C(17, 16, 2));
+      case "packages": return S(P("M12 3l8 4.5v9L12 21l-8-4.5v-9z"), P("M4 7.5l8 4.5 8-4.5"), L(12, 12, 12, 21));
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "folder": return S(P("M3 7.5a1 1 0 0 1 1-1h5l2 2.2h8a1 1 0 0 1 1 1v8.8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"));
+      case "doc": return S(P("M6 3h8l4 4v14H6z"), P("M14 3v4h4"), L(9, 12, 15, 12), L(9, 15.5, 13, 15.5));
+      case "sys": return S(C(12, 12, 3), P("M12 4.5v2.2M12 17.3v2.2M4.5 12h2.2M17.3 12h2.2M6.7 6.7l1.6 1.6M15.7 15.7l1.6 1.6M17.3 6.7l-1.6 1.6M8.3 15.7l-1.6 1.6"));
+      case "home": return S(P("M4 11 12 4l8 7"), P("M6 11v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-8"), R(10, 14, 4, 6, 0.4));
+      case "desktop": return S(R(3, 5, 18, 12, 1), L(8.5, 20, 15.5, 20), L(12, 17, 12, 20));
+      case "disk": return S(R(3, 6.5, 18, 11, 1.5), C(17, 12, 0.9), L(6, 10, 12, 10));
+      case "trash": return S(L(5, 7, 19, 7), P("M7 7l1 13h8l1-13"), P("M9.5 7V4.2h5V7"), L(10.5, 10.5, 10.5, 17), L(13.5, 10.5, 13.5, 17));
+      case "search": return S(C(11, 11, 6), L(15.4, 15.4, 20, 20));
+      case "viewlist": return S(C(5, 6.5, 0.9), L(9, 6.5, 20, 6.5), C(5, 12, 0.9), L(9, 12, 20, 12), C(5, 17.5, 0.9), L(9, 17.5, 20, 17.5));
+      case "viewgrid": return S(R(4, 4, 7, 7, 1), R(13, 4, 7, 7, 1), R(4, 13, 7, 7, 1), R(13, 13, 7, 7, 1));
+      case "back": return S(P("M15 5l-7 7 7 7"));
+      case "fwd": return S(P("M9 5l7 7-7 7"));
+      case "up": return S(P("M5 13l7-7 7 7"), L(12, 6, 12, 20));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+  glyphFor(n) {
+    if (n.type === "app") return this.icon(n.k);
+    if (n.type === "folder") return this.icon(n.name === "Trash" ? "trash" : n.name === "Desktop" ? "desktop" : n.name === "Home" ? "home" : "folder");
+    if (n.type === "disk") return this.icon("disk");
+    if (n.type === "sys") return this.icon("sys");
+    return this.icon("doc");
+  }
+  check() { const E = React.createElement; return E("svg", { viewBox: "0 0 24 24", width: 13, height: 13, fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", strokeLinejoin: "round" }, E("path", { d: "M5 12.5 10 17.5 19 7" })); }
+
+  winVals(win, isTop) {
+    const folder = this.nodeAt(win.path) || this.fs;
+    const q = win.search.trim().toLowerCase();
+    let items = (folder.children || []).slice();
+    if (q) items = items.filter((c) => c.name.toLowerCase().indexOf(q) !== -1);
+    const id = win.id;
+
+    const listData = items.map((n) => ({
+      name: n.name,
+      size: n.type === "folder" || n.type === "disk" ? (n.children ? n.children.length + (n.children.length === 1 ? " item" : " items") : "\u2014") : n.size,
+      modified: n.mod || "\u2014",
+      glyph: this.glyphFor(n),
+      onClick: () => this.updateWin(id, { sel: n.name }),
+      onDouble: () => this.openNode(id, n),
+      style: "display:grid;grid-template-columns:1fr 92px 168px;align-items:center;height:42px;padding:0 18px;border-bottom:1px solid #ECE7DA;cursor:pointer;"
+        + (win.sel === n.name ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+      iconStyle: "display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 8px;border-radius:3px;cursor:pointer;"
+        + (win.sel === n.name ? "background:#EAE3D2;box-shadow:inset 0 0 0 2px rgba(200,52,30,0.55);" : ""),
+    }));
+
+    const inHome = win.path[0] === "Home";
+    const crumbSegs = inHome ? win.path : ["Local Disk"].concat(win.path);
+    const crumbs = crumbSegs.map((seg, i) => {
+      const isLast = i === crumbSegs.length - 1;
+      const target = inHome ? win.path.slice(0, i + 1) : win.path.slice(0, i);
+      return {
+        label: seg, sepBefore: i > 0,
+        onClick: () => { if (!isLast) this.navTo(id, target); },
+        style: isLast
+          ? "display:flex;align-items:center;padding:0 9px;height:24px;background:#E6DFCE;border-radius:2px;font-size:13.5px;font-weight:600;color:#1A1916;"
+          : "display:flex;align-items:center;padding:0 9px;height:24px;color:#3A362E;cursor:pointer;border-radius:2px;font-size:13.5px;",
+      };
+    });
+
+    const placeDefs = [
+      { label: "Home", k: "home", path: ["Home"] },
+      { label: "Desktop", k: "desktop", path: ["Home", "Desktop"] },
+      { label: "Documents", k: "folder", path: ["Home", "Documents"] },
+      { label: "Manuscripts", k: "folder", path: ["Home", "Manuscripts"] },
+      { label: "Music", k: "folder", path: ["Home", "Music"] },
+      { label: "Applications", k: "folder", path: ["Home", "Applications"] },
+      { label: "Trash", k: "trash", path: ["Trash"] },
+    ];
+    const pathKey = win.path.join("/");
+    const places = placeDefs.map((p) => ({
+      label: p.label, glyph: this.icon(p.k),
+      onClick: () => this.navTo(id, p.path),
+      rowStyle: "display:flex;align-items:center;gap:12px;padding:8px 14px;border-radius:2px;cursor:pointer;font-size:14.5px;color:#2A2620;"
+        + (pathKey === p.path.join("/") ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;font-weight:600;" : ""),
+    }));
+    const devices = [{
+      label: "Local Disk", glyph: this.icon("disk"),
+      onClick: () => this.navTo(id, []),
+      rowStyle: "display:flex;align-items:center;gap:12px;padding:8px 14px;border-radius:2px;cursor:pointer;font-size:14.5px;color:#2A2620;"
+        + (win.path.length === 0 ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;font-weight:600;" : ""),
+    }];
+
+    const total = (folder.children || []).length;
+    const statusLeft = q
+      ? listData.length + " of " + total + (total === 1 ? " item matches" : " items match")
+      : total + (total === 1 ? " item" : " items") + (win.sel ? " \u00b7 1 selected" : "");
+
+    const zoomed = win.zoomed && !win.shaded;
+    const x = zoomed ? 24 : win.x, y = zoomed ? 20 : win.y;
+    const w = zoomed ? 1872 : win.w, h = zoomed ? 990 : win.h;
+
+    return {
+      id, title: folder.name === "Local Disk" ? "LOCAL DISK" : folder.name.toUpperCase(),
+      frameStyle: "position:absolute;left:" + Math.round(x) + "px;top:" + Math.round(y) + "px;width:" + w + "px;"
+        + (win.shaded ? "" : "height:" + h + "px;")
+        + "background:#F8F7F2;border:1px solid #1A1916;display:flex;flex-direction:column;"
+        + (isTop ? "box-shadow:4px 4px 0 rgba(26,25,22,0.16);" : "box-shadow:2px 2px 0 rgba(26,25,22,0.08);"),
+      titleBarStyle: "height:44px;flex:none;display:flex;align-items:center;gap:12px;padding:0 14px;cursor:grab;"
+        + (win.shaded ? "" : "border-bottom:1px solid #1A1916;")
+        + (isTop ? "background:#FCFBF8;" : "background:#F1EEE6;"),
+      notShaded: !win.shaded,
+      onActivate: () => this.activate(id),
+      onDragStart: (e) => this.startDrag(e, id),
+      gripShown: !win.shaded && !zoomed,
+      onResizeStart: (e) => { e.stopPropagation(); e.preventDefault(); this.activate(id); this._resize = { id, mx: e.clientX, my: e.clientY, w, h }; },
+      onClose: () => this.closeWindow(id),
+      onShade: () => this.updateWin(id, { shaded: !win.shaded }),
+      onZoom: () => this.updateWin(id, { zoomed: !win.zoomed, shaded: false }),
+      onBack: () => this.goBack(id), onFwd: () => this.goFwd(id), onUp: () => this.goUp(id),
+      backBtnStyle: this.navBtn(win.histIdx > 0), fwdBtnStyle: this.navBtn(win.histIdx < win.hist.length - 1), upBtnStyle: this.navBtn(win.path.length > 0),
+      crumbs,
+      search: win.search,
+      onSearch: (e) => this.updateWin(id, { search: e.target.value }),
+      listViewOn: win.view === "list", iconViewOn: win.view === "icons",
+      onListView: () => this.updateWin(id, { view: "list" }),
+      onGridView: () => this.updateWin(id, { view: "icons" }),
+      gridBtnStyle: "width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-right:1px solid #C4BFB1;" + (win.view === "icons" ? "background:#1A1916;color:#F4F2EC;" : "background:#FBFAF6;color:#9A958A;"),
+      listBtnStyle: "width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;" + (win.view === "list" ? "background:#1A1916;color:#F4F2EC;" : "background:#FBFAF6;color:#9A958A;"),
+      listData, places, devices, statusLeft,
+      isEmpty: listData.length === 0,
+      emptyLabel: q ? "No items match the search." : "This folder is empty.",
+    };
+  }
+  navBtn(enabled) {
+    return enabled
+      ? "width:32px;height:32px;border:1px solid #C4BFB1;background:#FBFAF6;display:flex;align-items:center;justify-content:center;color:#3A362E;cursor:pointer;border-radius:2px;"
+      : "width:32px;height:32px;border:1px solid #DCD7C9;background:#F4F2EC;display:flex;align-items:center;justify-content:center;color:#C4BFB1;cursor:default;border-radius:2px;";
+  }
+
+  renderVals() {
+    if (!this.fs) this.buildFS();
+    const S = this.state;
+    const windows = S.windows.map((w, i) => this.winVals(w, i === S.windows.length - 1));
+
+    const menuNames = ["File", "Edit", "View", "Go"];
+    const menus = menuNames.map((n) => ({
+      label: n,
+      onClick: (e) => this.toggleMenu(n, e),
+      onEnter: (e) => this.enterMenu(n, e),
+      style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : ""),
+    }));
+    const menuItems = S.openMenu ? this.menuItemsFor(S.openMenu) : [];
+    const menuPanelStyle = S.openMenu === "__lora"
+      ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+      : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;";
+
+    const tasks = S.tasks.map((t, i) => ({
+      t: t.t,
+      onToggle: () => this.toggle(i),
+      boxStyle: t.done
+        ? "width:21px;height:21px;border:1.5px solid #1A1916;background:#1A1916;color:#F8F7F2;display:flex;align-items:center;justify-content:center;flex:none;"
+        : "width:21px;height:21px;border:1.5px solid #9A958A;background:transparent;display:flex;align-items:center;justify-content:center;flex:none;",
+      check: t.done ? this.check() : null,
+      textStyle: t.done ? "font-size:15.5px;color:#A8A296;text-decoration:line-through;" : "font-size:15.5px;color:#2A2620;",
+    }));
+    const now = S.now;
+    const dim = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const lead = (new Date(now.getFullYear(), now.getMonth(), 1).getDay() + 6) % 7;
+    const td = now.getDate();
+    const eventDays = [];
+    const calCells = [];
+    for (let b = 0; b < lead; b++) calCells.push({ day: "", pill: "width:34px;height:34px;", dot: null });
+    for (let d = 1; d <= dim; d++) {
+      const today = d === td;
+      calCells.push({
+        day: d,
+        pill: today
+          ? "width:34px;height:34px;border-radius:50%;background:#C8341E;color:#FFFFFF;display:flex;align-items:center;justify-content:center;font-size:14.5px;font-weight:700;font-variant-numeric:tabular-nums;"
+          : "width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:14.5px;color:#2A2620;font-variant-numeric:tabular-nums;",
+        dot: (eventDays.indexOf(d) !== -1 && !today)
+          ? React.createElement("span", { style: { position: "absolute", bottom: "4px", left: "50%", transform: "translateX(-50%)", width: "5px", height: "5px", borderRadius: "50%", background: "#C8341E" } })
+          : null,
+      });
+    }
+
+    return {
+      menus, menuOpen: !!S.openMenu, menuItems, menuPanelStyle,
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      clock: this.clockStr(), dateLong: this.dateLong(),
+      signalGlyph: this.icon("signal"),
+      backGlyph: this.icon("back"), fwdGlyph: this.icon("fwd"), upGlyph: this.icon("up"),
+      searchGlyph: this.icon("search"), gridGlyph: this.icon("viewgrid"), listGlyph: this.icon("viewlist"),
+      loraNodes: "· " + (S.lora.heard ? S.lora.heard.length : 0) + " nodes",
+      diskAvail: (S.sys.disk_free ? S.sys.disk_free + " available" : "—"),
+      aboutMem: S.sys.mem_total_kb ? Math.round(S.sys.mem_total_kb / 1024) + " MB · " + Math.round((S.sys.mem_avail_kb || 0) / 1024) + " MB free" : "—",
+      aboutStorage: (S.sys.disk_total_bytes ? (Math.round(S.sys.disk_total_bytes / 1e9) + " GB · " + (S.sys.disk_free || "—") + " available") : "—"),
+      aboutOpen: S.aboutOpen,
+      onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+      stopMD: (e) => e.stopPropagation(),
+      powerOpen: !!S.power,
+      powerOffMode: S.power === "off",
+      powerText: S.power === "off" ? "It is now safe to power off." : S.power === "restart" ? "Restarting\u2026" : "",
+      powerShowChrome: S.power !== "sleep",
+      onPowerClick: () => { if (S.power === "sleep") this.setState({ power: null }); },
+      onBoot: () => this.setState({ power: null }),
+      windows,
+      onDesktopDouble: () => this.openWindow(),
+      showSidebar: S.showSidebar, showWidgets: S.showWidgets,
+      tasks, tasksEmpty: S.tasks.length === 0, eventsEmpty: this.events.length === 0,
+      tasksSummary: S.tasks.length ? S.tasks.filter((t) => t.done).length + " / " + S.tasks.length + " done" : "",
+      events: this.events, calCells, calTitle: this.months[now.getMonth()] + " " + now.getFullYear(), weekdays: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+      appOpen: !!S.openApp,
+      appFrame: S.openApp ? React.createElement("div", { key: "appframe", ref: (el) => { this._frameHost = el; }, style: { width: "100%", height: "100%" } }) : null,
+    };
+  }
+}
+</script>
+</body>
+</html>

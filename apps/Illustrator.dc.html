@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  input { font-family: inherit; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== MENU BAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:50;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Illustrator</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== SYSTEM MENUS ===================== -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ===================== ABOUT ===================== -->
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== TOOL RIBBON ===================== -->
+    <div style="height:88px;flex:none;border-bottom:1px solid #D7D2C5;background:#F1EEE6;display:flex;align-items:center;gap:22px;padding:0 20px;">
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Tools</div>
+        <div style="display:flex;gap:4px;">
+          <sc-for list="{{ tools }}" as="t" hint-placeholder-count="8">
+            <div onClick="{{ t.onClick }}" title="{{ t.name }}" style="{{ t.style }}"><div style="width:18px;height:18px;display:flex;">{{ t.glyph }}</div></div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="width:1px;height:56px;background:#DCD7C9;"></div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Size</div>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <sc-for list="{{ sizes }}" as="s" hint-placeholder-count="4">
+            <div onClick="{{ s.onClick }}" style="{{ s.style }}"><div style="{{ s.dot }}"></div></div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="width:1px;height:56px;background:#DCD7C9;"></div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;">Colors</div>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <div style="{{ currentChip }}"></div>
+          <div style="display:grid;grid-template-columns:repeat(8,22px);grid-auto-rows:22px;gap:4px;">
+            <sc-for list="{{ swatches }}" as="c" hint-placeholder-count="16">
+              <div onClick="{{ c.onClick }}" style="{{ c.style }}"></div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#8A857A;">
+        <div style="{{ saveDot }}"></div><span>{{ saveText }}</span>
+      </div>
+    </div>
+
+    <!-- ===================== WORKSPACE ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;background:#DED4C2;min-width:0;overflow:hidden;">
+        <div style="position:relative;width:1180px;height:640px;flex:none;box-shadow:0 0 0 1px #1A1916, 4px 4px 0 rgba(26,25,22,0.12);background-image:conic-gradient(#E9E4D6 0 25%, #F8F6F0 0 50%, #E9E4D6 0 75%, #F8F6F0 0);background-size:20px 20px;">
+          <sc-for list="{{ layerCanvases }}" as="ly" hint-placeholder-count="1">
+            <canvas ref="{{ ly.refCb }}" width="1180" height="640" style="{{ ly.style }}"></canvas>
+          </sc-for>
+          <canvas ref="{{ overlayRef }}" width="1180" height="640" style="position:absolute;inset:0;pointer-events:none;"></canvas>
+          <div onMouseDown="{{ onDown }}" onMouseMove="{{ onMove }}" onMouseUp="{{ onUp }}" onMouseLeave="{{ onLeave }}" style="position:absolute;inset:0;cursor:crosshair;"></div>
+        </div>
+      </div>
+
+      <!-- layers panel -->
+      <sc-if value="{{ panelShown }}" hint-placeholder-val="{{ true }}">
+      <div style="width:300px;flex:none;border-left:1px solid #D7D2C5;background:#F1EEE6;display:flex;flex-direction:column;">
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #D7D2C5;">
+          <div style="font-size:13px;letter-spacing:0.1em;text-transform:uppercase;color:#1A1916;font-weight:700;">Layers</div>
+          <div style="display:flex;gap:6px;">
+            <div onClick="{{ onAddLayer }}" title="New layer" style="width:28px;height:28px;border:1px solid #C4BFB1;background:#FBFAF6;border-radius:2px;display:flex;align-items:center;justify-content:center;color:#1A1916;cursor:pointer;" style-hover="background:#ECE8DD;"><div style="width:15px;height:15px;display:flex;">{{ plusGlyph }}</div></div>
+            <div onClick="{{ onDeleteLayer }}" title="Delete layer" style="{{ deleteBtnStyle }}"><div style="width:15px;height:15px;display:flex;">{{ trashGlyph }}</div></div>
+          </div>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:10px;">
+          <sc-for list="{{ layerRows }}" as="ly" hint-placeholder-count="2">
+            <div onClick="{{ ly.onSelect }}" style="{{ ly.rowStyle }}" style-hover="background:#E6DFCE;">
+              <div onClick="{{ ly.onToggle }}" title="Show / hide" style="{{ ly.eyeStyle }}"><div style="width:15px;height:15px;display:flex;">{{ ly.eyeGlyph }}</div></div>
+              <span style="flex:1;font-size:14px;color:#1A1916;">{{ ly.name }}</span>
+              <span style="font-size:11.5px;color:#9A958A;font-variant-numeric:tabular-nums;">{{ ly.opacityLabel }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex:none;border-top:1px solid #D7D2C5;padding:16px 18px;">
+          <div style="display:flex;justify-content:space-between;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:8px;">
+            <span>Opacity</span><span style="font-variant-numeric:tabular-nums;">{{ activeOpacity }}%</span>
+          </div>
+          <input value="{{ activeOpacity }}" onInput="{{ onOpacity }}" type="range" min="0" max="100" style="width:100%;accent-color:#1A1916;" />
+        </div>
+      </div>
+      </sc-if>
+    </div>
+
+    <!-- ===================== STATUS BAR ===================== -->
+    <div style="height:32px;flex:none;border-top:1px solid #D7D2C5;background:#F1EEE6;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:12.5px;color:#8A857A;font-variant-numeric:tabular-nums;">
+      <div>{{ statusTool }}</div>
+      <div>{{ cursorPos }}</div>
+      <div>1180 × 640 px · {{ layerCount }}</div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = {
+    now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false,
+    tool: "brush", size: 4, color: "#1A1916",
+    layers: [{ id: 1, name: "Background", visible: true, opacity: 100 }],
+    active: 1, nextId: 2,
+    panelShown: true, saved: true, savedAt: (() => { const n = new Date(), p = (x) => (x < 10 ? "0" + x : "" + x); return p(n.getHours()) + ":" + p(n.getMinutes()); })(),
+    cursor: null,
+  };
+
+  toolDefs = [
+    ["pencil", "Pencil"], ["brush", "Brush"], ["eraser", "Eraser"], ["fill", "Fill"],
+    ["picker", "Color Picker"], ["line", "Line"], ["rect", "Rectangle"], ["ellipse", "Ellipse"],
+  ];
+  sizeDefs = [2, 4, 8, 14];
+  palette = ["#1A1916", "#3A362E", "#8A857A", "#C9C4B6", "#FCFBF8", "#C8341E", "#9A7B4F", "#B98A4E", "#DCCBA2", "#EFE7D5", "#4A5E73", "#566E86", "#6E7B57", "#7E8A66", "#8A6D5B", "#A8895A"];
+
+  componentDidMount() {
+    if (!this.layerEls) this.layerEls = {};
+    if (!this.layerContent) this.layerContent = {};
+    if (!this.undoStack) this.undoStack = [];
+    this._esc = (e) => {
+      if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen) { this.setState({ openMenu: null, aboutOpen: false }); } else { this.goHome(); } }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); this.undo(); }
+    };
+    window.addEventListener("keydown", this._esc);
+    this.timer = setInterval(() => this.setState({ now: new Date() }), 10000);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this._esc); clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January","February","March","April","May","June","July","August","September","October","November","December"][n.getMonth()]; }
+
+  appFile = "Illustrator.dc.html";
+  appName = "Illustrator";
+  sysApps = [["Writer","Writer.dc.html"],["Novel","Novel.dc.html"],["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Screenplay","Screenplay.dc.html"],["Tasks","Tasks.dc.html"],["Calendar","Calendar.dc.html"],["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Accounting","Accounting.dc.html"],["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"],["2048","2048.dc.html"],["Tetris","Tetris.dc.html"],["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"],["Packages","Packages.dc.html"]];
+  appMenuNames() { return ["File", "Edit", "View", "Layer"]; }
+  appMenuItems(name) {
+    const S = this.state;
+    const activeLayer = S.layers.find((l) => l.id === S.active);
+    if (name === "File") return [
+      this.mi("New Canvas", () => this.newCanvas(), { hint: "\u2318N" }),
+      this.mi("Save", () => this.setState({ saved: true, savedAt: this.clockStr(), openMenu: null }), { hint: "\u2318S" }),
+      this.msep(),
+      this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" }),
+    ];
+    if (name === "Edit") return [
+      this.undoStack.length ? this.mi("Undo", () => { this.undo(); this.setState({ openMenu: null }); }, { hint: "\u2318Z" }) : this.off("Undo", "\u2318Z"),
+      this.msep(),
+      this.mi("Clear Layer", () => this.clearLayer()),
+    ];
+    if (name === "View") return [
+      this.mi(S.panelShown ? "Hide Layers Panel" : "Show Layers Panel", () => this.setState({ panelShown: !S.panelShown, openMenu: null })),
+    ];
+    if (name === "Layer") return [
+      this.mi("New Layer", () => this.addLayer()),
+      S.active !== 1 && activeLayer ? this.mi("Merge Down", () => this.mergeDown()) : this.off("Merge Down"),
+      S.active !== 1 && activeLayer ? this.mi("Delete Layer", () => this.deleteLayer()) : this.off("Delete Layer", "background"),
+    ];
+    return [this.off("No actions")];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS\u2026", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart\u2026", () => this.power("restart")),
+      this.mi("Shut Down\u2026", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "\u2713" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 \u00b7 strong"), this.off("NODE-22", "ch 4 \u00b7 good"), this.off("NODE-7F", "ch 4 \u00b7 strong"), this.off("NODE-88", "ch 6 \u00b7 fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+
+  // ---------- canvas plumbing ----------
+  ctxFor(id) { const el = this.layerEls[id]; return el ? el.getContext("2d") : null; }
+  snapshotAll() {
+    this.state.layers.forEach((l) => {
+      const ctx = this.ctxFor(l.id);
+      if (ctx) this.layerContent[l.id] = ctx.getImageData(0, 0, 1180, 640);
+    });
+  }
+  makeRefCb(id) {
+    return (el) => {
+      if (!this.layerEls) { this.layerEls = {}; this.layerContent = this.layerContent || {}; this.undoStack = this.undoStack || []; }
+      const prev = this.layerEls[id];
+      this.layerEls[id] = el;
+      if (el && el !== prev) {
+        const ctx = el.getContext("2d");
+        if (this.layerContent[id]) ctx.putImageData(this.layerContent[id], 0, 0);
+        else if (id === 1) { ctx.fillStyle = "#FFFFFF"; ctx.fillRect(0, 0, 1180, 640); this.layerContent[1] = ctx.getImageData(0, 0, 1180, 640); }
+      }
+    };
+  }
+  pushUndo() {
+    const ctx = this.ctxFor(this.state.active);
+    if (!ctx) return;
+    this.undoStack.push({ id: this.state.active, data: ctx.getImageData(0, 0, 1180, 640) });
+    if (this.undoStack.length > 12) this.undoStack.shift();
+  }
+  undo() {
+    const u = this.undoStack.pop();
+    if (!u) return;
+    const ctx = this.ctxFor(u.id);
+    if (ctx) { ctx.putImageData(u.data, 0, 0); this.layerContent[u.id] = u.data; }
+    this.setState({ saved: false });
+  }
+  getPos(e) {
+    const box = e.currentTarget.getBoundingClientRect();
+    const scale = box.width / 1180;
+    return { x: Math.round((e.clientX - box.left) / scale), y: Math.round((e.clientY - box.top) / scale) };
+  }
+  onDownFn(e) {
+    const S = this.state;
+    const p = this.getPos(e);
+    const layer = S.layers.find((l) => l.id === S.active);
+    if (!layer || !layer.visible) return;
+    if (S.tool === "picker") { this.pickColor(p); return; }
+    this.pushUndo();
+    this._drawing = { start: p, last: p };
+    if (S.tool === "fill") { this.floodFill(p.x, p.y); this.endStroke(); return; }
+    if (S.tool === "pencil" || S.tool === "brush" || S.tool === "eraser") this.strokeSeg(p, p);
+  }
+  onMoveFn(e) {
+    const p = this.getPos(e);
+    this.setState({ cursor: p });
+    if (!this._drawing) return;
+    const S = this.state;
+    if (S.tool === "pencil" || S.tool === "brush" || S.tool === "eraser") { this.strokeSeg(this._drawing.last, p); this._drawing.last = p; }
+    else if (S.tool === "line" || S.tool === "rect" || S.tool === "ellipse") this.previewShape(this._drawing.start, p);
+  }
+  onUpFn(e) {
+    if (!this._drawing) return;
+    const S = this.state;
+    const p = this.getPos(e);
+    if (S.tool === "line" || S.tool === "rect" || S.tool === "ellipse") {
+      const octx = this.overlayEl.getContext("2d");
+      octx.clearRect(0, 0, 1180, 640);
+      const ctx = this.ctxFor(S.active);
+      if (ctx) this.drawShape(ctx, this._drawing.start, p);
+    }
+    this.endStroke();
+  }
+  endStroke() {
+    this._drawing = null;
+    const ctx = this.ctxFor(this.state.active);
+    if (ctx) this.layerContent[this.state.active] = ctx.getImageData(0, 0, 1180, 640);
+    this.setState({ saved: false });
+  }
+  strokeSeg(a, b) {
+    const S = this.state;
+    const ctx = this.ctxFor(S.active);
+    if (!ctx) return;
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.lineWidth = S.tool === "pencil" ? 2 : S.size;
+    if (S.tool === "eraser") { ctx.globalCompositeOperation = "destination-out"; ctx.strokeStyle = "rgba(0,0,0,1)"; ctx.lineWidth = Math.max(S.size, 8); }
+    else ctx.strokeStyle = S.color;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.restore();
+  }
+  drawShape(ctx, a, b) {
+    const S = this.state;
+    ctx.save();
+    ctx.strokeStyle = S.color; ctx.lineWidth = S.size; ctx.lineCap = "round";
+    ctx.beginPath();
+    if (S.tool === "line") { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+    else if (S.tool === "rect") ctx.rect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+    else ctx.ellipse((a.x + b.x) / 2, (a.y + b.y) / 2, Math.abs(b.x - a.x) / 2, Math.abs(b.y - a.y) / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  previewShape(a, b) {
+    if (!this.overlayEl) return;
+    const octx = this.overlayEl.getContext("2d");
+    octx.clearRect(0, 0, 1180, 640);
+    this.drawShape(octx, a, b);
+  }
+  floodFill(x, y) {
+    const ctx = this.ctxFor(this.state.active);
+    if (!ctx) return;
+    const img = ctx.getImageData(0, 0, 1180, 640);
+    const d = img.data;
+    const idx = (y * 1180 + x) * 4;
+    const target = [d[idx], d[idx + 1], d[idx + 2], d[idx + 3]];
+    const c = this.hexToRgb(this.state.color);
+    if (target[0] === c[0] && target[1] === c[1] && target[2] === c[2] && target[3] === 255) return;
+    const match = (i) => d[i] === target[0] && d[i + 1] === target[1] && d[i + 2] === target[2] && d[i + 3] === target[3];
+    const stack = [[x, y]];
+    while (stack.length) {
+      const [px, py] = stack.pop();
+      if (px < 0 || px >= 1180 || py < 0 || py >= 640) continue;
+      const i = (py * 1180 + px) * 4;
+      if (!match(i)) continue;
+      d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
+      stack.push([px + 1, py], [px - 1, py], [px, py + 1], [px, py - 1]);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  hexToRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+  pickColor(p) {
+    const tmp = document.createElement("canvas");
+    tmp.width = 1180; tmp.height = 640;
+    const tctx = tmp.getContext("2d");
+    this.state.layers.forEach((l) => {
+      const el = this.layerEls[l.id];
+      if (el && l.visible) { tctx.globalAlpha = l.opacity / 100; tctx.drawImage(el, 0, 0); }
+    });
+    const d = tctx.getImageData(p.x, p.y, 1, 1).data;
+    if (d[3] === 0) return;
+    const hex = "#" + [d[0], d[1], d[2]].map((v) => this.pad2(v.toString(16))).join("").toUpperCase();
+    this.setState({ color: hex, tool: "brush" });
+  }
+  pad2(s) { return s.length === 1 ? "0" + s : s; }
+
+  // ---------- layer ops ----------
+  addLayer() {
+    this.snapshotAll();
+    const id = this.state.nextId;
+    this.setState({
+      layers: this.state.layers.concat([{ id, name: "Layer " + id, visible: true, opacity: 100 }]),
+      nextId: id + 1, active: id, openMenu: null, saved: false,
+    });
+  }
+  deleteLayer() {
+    const S = this.state;
+    if (S.active === 1) return;
+    this.snapshotAll();
+    delete this.layerContent[S.active];
+    delete this.layerEls[S.active];
+    this.undoStack = this.undoStack.filter((u) => u.id !== S.active);
+    this.setState({ layers: S.layers.filter((l) => l.id !== S.active), active: 1, openMenu: null, saved: false });
+  }
+  mergeDown() {
+    const S = this.state;
+    const idx = S.layers.findIndex((l) => l.id === S.active);
+    if (idx <= 0) return;
+    const below = S.layers[idx - 1];
+    const cur = S.layers[idx];
+    const bctx = this.ctxFor(below.id);
+    const cel = this.layerEls[cur.id];
+    if (bctx && cel) {
+      bctx.save(); bctx.globalAlpha = cur.opacity / 100; bctx.drawImage(cel, 0, 0); bctx.restore();
+      this.layerContent[below.id] = bctx.getImageData(0, 0, 1180, 640);
+    }
+    this.snapshotAll();
+    delete this.layerContent[cur.id];
+    delete this.layerEls[cur.id];
+    this.setState({ layers: S.layers.filter((l) => l.id !== cur.id), active: below.id, openMenu: null, saved: false });
+  }
+  clearLayer() {
+    this.pushUndo();
+    const ctx = this.ctxFor(this.state.active);
+    if (ctx) {
+      ctx.clearRect(0, 0, 1180, 640);
+      if (this.state.active === 1) { ctx.fillStyle = "#FFFFFF"; ctx.fillRect(0, 0, 1180, 640); }
+      this.layerContent[this.state.active] = ctx.getImageData(0, 0, 1180, 640);
+    }
+    this.setState({ openMenu: null, saved: false });
+  }
+  newCanvas() {
+    this.layerContent = {};
+    this.undoStack = [];
+    Object.keys(this.layerEls).forEach((id) => {
+      const el = this.layerEls[id];
+      if (el) el.getContext("2d").clearRect(0, 0, 1180, 640);
+    });
+    const bctx = this.ctxFor(1);
+    if (bctx) { bctx.fillStyle = "#FFFFFF"; bctx.fillRect(0, 0, 1180, 640); this.layerContent[1] = bctx.getImageData(0, 0, 1180, 640); }
+    this.setState({ layers: [{ id: 1, name: "Background", visible: true, opacity: 100 }], active: 1, nextId: 2, openMenu: null, saved: true, savedAt: this.clockStr() });
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "pencil": return S(P("M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"), L(13.5, 7.5, 16.5, 10.5));
+      case "brush": return S(P("M15.5 3.5l5 5-8.5 8.5h-5v-5z"), P("M7 16c-2 0-3 1-3.5 4 3-.5 4-1.5 4-3.5"));
+      case "eraser": return S(P("M4 15l8-8 6 6-6 6H8z"), L(4, 19, 20, 19));
+      case "fill": return S(P("M8 3l9 9-7 7-7-7z"), P("M19 14c1.2 1.6 2 2.8 2 4a2 2 0 1 1-4 0c0-1.2.8-2.4 2-4z"));
+      case "picker": return S(P("M14 6l4 4"), P("M6 18l-2 2"), P("M6 18l8.5-8.5 2 2L8 20H6z"), P("M16.5 3.5a2 2 0 0 1 3 3l-2 2-3-3z"));
+      case "line": return S(L(5, 19, 19, 5));
+      case "rect": return S(R(4, 6, 16, 12, 0));
+      case "ellipse": return S(E("ellipse", { cx: 12, cy: 12, rx: 8, ry: 5.5 }));
+      case "plus": return S(L(12, 5, 12, 19), L(5, 12, 19, 12));
+      case "trash": return S(L(5, 7, 19, 7), P("M7 7l1 13h8l1-13"), P("M9.5 7V4.2h5V7"));
+      case "eye": return S(P("M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"), C(12, 12, 2.6));
+      case "eyeoff": return S(P("M2.5 12S6 5.5 12 5.5c2 0 3.8.7 5.3 1.7M21.5 12S18 18.5 12 18.5c-2 0-3.8-.7-5.3-1.7"), L(4, 20, 20, 4));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    const S = this.state;
+    const tools = this.toolDefs.map(([id, name]) => ({
+      name, glyph: this.icon(id),
+      onClick: () => this.setState({ tool: id }),
+      style: "width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;border:1px solid "
+        + (S.tool === id ? "#1A1916;background:#1A1916;color:#F4F2EC;" : "#C4BFB1;background:#FBFAF6;color:#3A362E;"),
+    }));
+    const sizes = this.sizeDefs.map((sz) => ({
+      onClick: () => this.setState({ size: sz }),
+      style: "width:32px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;border:1px solid "
+        + (S.size === sz ? "#1A1916;background:#E6DFCE;" : "#DCD7C9;background:#FBFAF6;"),
+      dot: "width:" + Math.min(sz + 2, 18) + "px;height:" + Math.min(sz + 2, 18) + "px;border-radius:50%;background:#1A1916;",
+    }));
+    const swatches = this.palette.map((c) => ({
+      onClick: () => this.setState({ color: c }),
+      style: "width:22px;height:22px;cursor:pointer;background:" + c + ";border:1px solid " + (S.color === c ? "#C8341E;box-shadow:inset 0 0 0 2px #FCFBF8;" : "#B5B0A3;"),
+    }));
+    const layersRev = S.layers.slice().reverse();
+    const layerRows = layersRev.map((l) => ({
+      name: l.name,
+      opacityLabel: l.opacity + "%",
+      onSelect: () => this.setState({ active: l.id }),
+      onToggle: (e) => { e.stopPropagation(); this.setState({ layers: S.layers.map((x) => x.id === l.id ? { ...x, visible: !x.visible } : x) }); },
+      eyeGlyph: this.icon(l.visible ? "eye" : "eyeoff"),
+      eyeStyle: "width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:" + (l.visible ? "#1A1916" : "#B5B0A3") + ";",
+      rowStyle: "display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:2px;cursor:pointer;margin-bottom:2px;"
+        + (S.active === l.id ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+    const layerCanvases = S.layers.map((l, i) => ({
+      refCb: this.makeRefCb(l.id),
+      style: "position:absolute;inset:0;z-index:" + (i + 1) + ";opacity:" + (l.opacity / 100) + ";" + (l.visible ? "" : "visibility:hidden;"),
+    }));
+    const activeLayer = S.layers.find((l) => l.id === S.active) || S.layers[0];
+    const toolName = (this.toolDefs.find(([id]) => id === S.tool) || ["", ""])[1];
+    return {
+      ...this.sysMenuVals(),
+      clock: this.clockStr(), dateLong: this.dateLong(),
+      signalGlyph: this.icon("signal"), plusGlyph: this.icon("plus"), trashGlyph: this.icon("trash"),
+      tools, sizes, swatches,
+      currentChip: "width:44px;height:44px;border:1px solid #1A1916;background:" + S.color + ";",
+      layerCanvases, layerRows,
+      overlayRef: (el) => { this.overlayEl = el; },
+      onDown: (e) => this.onDownFn(e), onMove: (e) => this.onMoveFn(e),
+      onUp: (e) => this.onUpFn(e), onLeave: (e) => { if (this._drawing) this.onUpFn(e); this.setState({ cursor: null }); },
+      onAddLayer: () => this.addLayer(),
+      onDeleteLayer: () => this.deleteLayer(),
+      deleteBtnStyle: S.active === 1
+        ? "width:28px;height:28px;border:1px solid #E0DBCE;background:#F4F2EC;border-radius:2px;display:flex;align-items:center;justify-content:center;color:#C4BFB1;cursor:default;"
+        : "width:28px;height:28px;border:1px solid #C4BFB1;background:#FBFAF6;border-radius:2px;display:flex;align-items:center;justify-content:center;color:#1A1916;cursor:pointer;",
+      panelShown: S.panelShown,
+      activeOpacity: activeLayer.opacity,
+      onOpacity: (e) => this.setState({ layers: S.layers.map((x) => x.id === S.active ? { ...x, opacity: parseInt(e.target.value, 10) } : x) }),
+      statusTool: toolName + " \u00b7 " + activeLayer.name,
+      cursorPos: S.cursor ? S.cursor.x + ", " + S.cursor.y : "",
+      layerCount: S.layers.length + (S.layers.length === 1 ? " layer" : " layers"),
+      saveDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (S.saved ? "#7FA98C" : "#C8341E") + ";",
+      saveText: S.saved ? "Saved " + S.savedAt : "Unsaved changes",
+    };
+  }
+}
+</script>
+</body>
+</html>

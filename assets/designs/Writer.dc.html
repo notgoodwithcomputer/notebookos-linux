@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  [contenteditable] { outline: none; caret-color: #C8341E; }
+  [contenteditable]:empty:before { content: attr(data-ph); color: #B7B1A3; }
+  ::selection { background: #F1D9D2; }
+  .wr-body p { margin: 0 0 22px; }
+  .wr-scroll::-webkit-scrollbar { width: 12px; }
+  .wr-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR (system menu bar) ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Writer</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="5">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== FORMAT BAR ===================== -->
+    <div style="height:54px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 36px;background:#FBFAF6;border-bottom:1px solid #E6E1D4;z-index:4;">
+      <div style="display:flex;align-items:center;gap:4px;">
+        <!-- paragraph style -->
+        <div style="display:flex;align-items:center;gap:9px;height:34px;padding:0 13px;border:1px solid #DCD7C9;border-radius:2px;cursor:pointer;background:#FCFBF8;" style-hover="background:#F1EDE2;">
+          <span style="font-family:Newsreader,serif;font-size:16px;color:#1A1916;">Body</span>
+          <span style="font-size:11px;color:#8A857A;">▾</span>
+        </div>
+        <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+        <!-- B I U -->
+        <div onMouseDown="{{ onBold }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-weight:700;color:#2A2620;" style-hover="background:#EFEBE0;">B</div>
+        <div onMouseDown="{{ onItalic }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:17px;font-style:italic;font-family:Newsreader,serif;color:#2A2620;" style-hover="background:#EFEBE0;">I</div>
+        <div onMouseDown="{{ onUnderline }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;font-size:16px;text-decoration:underline;color:#2A2620;" style-hover="background:#EFEBE0;">U</div>
+        <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+        <!-- link quote -->
+        <div onMouseDown="{{ onLink }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ linkGlyph }}</div></div>
+        <div onMouseDown="{{ onQuote }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ quoteGlyph }}</div></div>
+        <div style="width:1px;height:22px;background:#DCD7C9;margin:0 10px;"></div>
+        <!-- lists -->
+        <div onMouseDown="{{ onBullet }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ bulletGlyph }}</div></div>
+        <div onMouseDown="{{ onImage }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:2px;cursor:pointer;color:#2A2620;" style-hover="background:#EFEBE0;"><div style="width:19px;height:19px;display:flex;">{{ imageGlyph }}</div></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:18px;font-size:13.5px;color:#8A857A;">
+        <div style="font-variant-numeric:tabular-nums;">{{ wordCount }} words</div>
+        <div style="width:1px;height:16px;background:#E0DBCE;"></div>
+        <div style="display:flex;align-items:center;gap:8px;"><div style="{{ saveDot }}"></div><span>{{ saveText }}</span></div>
+      </div>
+    </div>
+
+    <!-- ===================== WRITING CANVAS ===================== -->
+    <div class="wr-scroll" style="flex:1;overflow-y:auto;min-height:0;background:#FCFBF8;">
+      <div style="max-width:744px;margin:0 auto;padding:84px 24px 160px;">
+        <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:26px;">Essays — Draft</div>
+        <h1 contenteditable="true" data-ph="Title" style="font-family:Newsreader,serif;font-weight:500;font-size:50px;line-height:1.12;color:#1A1916;margin:0 0 18px;letter-spacing:-0.01em;">The Long Way Home</h1>
+        <div contenteditable="true" data-ph="Add a subtitle\u2026" style="font-family:Newsreader,serif;font-style:italic;font-size:24px;line-height:1.4;color:#79736A;margin:0 0 44px;">Notes written at a chrome desk, in the hour before the bakeries open.</div>
+        <div class="wr-body" contenteditable="true" ref="{{ bodyRef }}" onInput="{{ onEdit }}" style="font-family:Newsreader,serif;font-size:20.5px;line-height:1.74;color:#26241F;text-wrap:pretty;">
+          <p>There is an hour in this city — after the last express has rattled through and before the bakeries light their ovens — when the whole block seems to be holding its breath. I have learned to write inside it.</p>
+          <p>The desk faces the window on purpose: chrome legs, a slab of pale wood, a lamp the color of weak tea. Nothing on it earns its place unless I use it before noon.</p>
+          <h2 style="font-family:Newsreader,serif;font-weight:500;font-size:31px;line-height:1.2;color:#1A1916;margin:42px 0 18px;">What the morning is for</h2>
+          <p>Mostly the morning is for getting the first sentence wrong, and then wrong again, until the wrongness wears a groove the right one can slide into. It is slow work and it does not photograph well.</p>
+          <blockquote style="margin:34px 0;padding:4px 0 4px 24px;border-left:2px solid #1A1916;font-style:italic;color:#3A362E;">A paragraph is just a room you build to stand in for a while. If the light is good, you stay.</blockquote>
+          <p>By the time the trains fill again I have usually traded the essay I meant to write for the one that actually needed writing. This is not a loss. It is the long way home, which is the only way I seem to know.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = {
+    now: new Date(2026, 5, 20, 9, 41, 0),
+    words: 0,
+    saved: true,
+    savedAt: "09:41",
+  };
+
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) }));
+    }, 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); if (this.saveT) clearTimeout(this.saveT); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() {
+    const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const n = this.state.now;
+    return d[n.getDay()] + " " + n.getDate() + " June";
+  }
+
+  setEditor(el) {
+    this.editorEl = el;
+    if (el && !this._counted) { this._counted = true; this.recount(); }
+  }
+  recount() {
+    if (!this.editorEl) return;
+    const txt = (this.editorEl.innerText || "").trim();
+    const n = txt ? (txt.match(/\S+/g) || []).length : 0;
+    this.setState({ words: n });
+  }
+  onEdit() {
+    this.recount();
+    this.setState({ saved: false });
+    if (this.saveT) clearTimeout(this.saveT);
+    this.saveT = setTimeout(() => {
+      this.setState({ saved: true, savedAt: this.clockStr() });
+    }, 900);
+  }
+  cmd(e, command) { e.preventDefault(); document.execCommand(command, false, null); setTimeout(() => this.recount(), 0); }
+
+  icon(k) {
+    const E = React.createElement;
+    const L = (x1, y1, x2, y2) => E("line", { x1, y1, x2, y2 });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    switch (k) {
+      case "signal": return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+      case "link": return S(P("M10.5 13.5a4 4 0 0 0 5.7 0l2-2a4 4 0 0 0-5.7-5.7l-1 1"), P("M13.5 10.5a4 4 0 0 0-5.7 0l-2 2a4 4 0 0 0 5.7 5.7l1-1"));
+      case "quote": return S(P("M7 7h3.5v3.5c0 2-1.3 3.3-3.3 3.8"), P("M14 7h3.5v3.5c0 2-1.3 3.3-3.3 3.8"));
+      case "bullet": return S(C(5, 7, 1), L(9, 7, 20, 7), C(5, 12, 1), L(9, 12, 20, 12), C(5, 17, 1), L(9, 17, 20, 17));
+      case "image": return S(R(3.5, 5, 17, 14, 1.5), C(9, 10, 1.6), P("M4 17l5-4.5 4 3 3-2.5 4 4"));
+      default: return S(R(5, 5, 14, 14, 1));
+    }
+  }
+
+  renderVals() {
+    return {
+      menus: ["File", "Edit", "Format", "Insert", "View"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"),
+      linkGlyph: this.icon("link"), quoteGlyph: this.icon("quote"),
+      bulletGlyph: this.icon("bullet"), imageGlyph: this.icon("image"),
+      wordCount: this.state.words.toLocaleString(),
+      saveText: this.state.saved ? "Saved " + this.state.savedAt : "Saving\u2026",
+      saveDot: "width:8px;height:8px;border-radius:50%;flex:none;background:" + (this.state.saved ? "#7FA98C" : "#C8341E") + ";",
+      bodyRef: (el) => this.setEditor(el),
+      onEdit: () => this.onEdit(),
+      onBold: (e) => this.cmd(e, "bold"),
+      onItalic: (e) => this.cmd(e, "italic"),
+      onUnderline: (e) => this.cmd(e, "underline"),
+      onBullet: (e) => this.cmd(e, "insertUnorderedList"),
+      onQuote: (e) => this.cmd(e, "formatBlock"),
+      onLink: (e) => { e.preventDefault(); },
+      onImage: (e) => { e.preventDefault(); },
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  a { color: #1A1916; } a:hover { color: #C8341E; }
+  .ck-scroll::-webkit-scrollbar { width: 12px; }
+  .ck-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+  textarea.ck-box { width: 100%; height: 100%; border: none; background: transparent; resize: none; outline: none; padding: 16px 18px; font-family: Newsreader, serif; font-size: 17px; line-height: 1.75; color: #1A1916; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div data-nbos-root="true" style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div onClick="{{ onLogoMenu }}" title="Notebook OS" style="{{ logoBtnStyle }}"><img src="assets/nbos-logo.png" alt="Notebook OS" style="width:34px;height:16px;object-fit:contain;display:block;"></div>
+        <div onClick="{{ onAppMenu }}" style="{{ appNameStyle }}" style-hover="background:#1A1916;color:#F4F2EC;">Cookbook</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div onClick="{{ m.onClick }}" onMouseEnter="{{ m.onEnter }}" style="{{ m.style }}" style-hover="background:#1A1916;color:#F4F2EC;">{{ m.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div onClick="{{ onLoraMenu }}" style="{{ loraBtnStyle }}"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· 4 nodes</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseMenu }}" style="position:absolute;inset:0;z-index:55;"></div>
+      <div style="{{ menuPanelStyle }}">
+        <sc-for list="{{ menuItems }}" as="it" hint-placeholder-count="5">
+          <sc-if value="{{ it.sep }}" hint-placeholder-val="{{ false }}"><div style="height:1px;background:#D7D2C5;margin:5px 10px;"></div></sc-if>
+          <sc-if value="{{ it.on }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ it.onClick }}" onMouseEnter="{{ it.onEnter }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+              <span style="width:14px;flex:none;font-size:12px;">{{ it.check }}</span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.55;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.subRow }}" hint-placeholder-val="{{ false }}">
+            <div onMouseEnter="{{ it.onEnter }}" style="{{ it.rowStyle }}">
+              <span style="width:14px;flex:none;font-size:12px;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:11px;">&#9656;</span>
+              <sc-if value="{{ it.subOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:calc(100% - 5px);top:-7px;z-index:61;min-width:220px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;">
+                  <sc-for list="{{ it.subItems }}" as="si" hint-placeholder-count="3">
+                    <div onClick="{{ si.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#1A1916;cursor:pointer;" style-hover="background:#1A1916;color:#F4F2EC;">
+                      <span style="width:14px;flex:none;font-size:12px;">{{ si.check }}</span>
+                      <span style="flex:1;white-space:nowrap;">{{ si.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ it.offRow }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;color:#B5B0A3;cursor:default;">
+              <span style="width:14px;flex:none;"></span>
+              <span style="flex:1;white-space:nowrap;">{{ it.label }}</span>
+              <span style="font-size:12px;opacity:0.7;white-space:nowrap;">{{ it.hint }}</span>
+            </div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ aboutOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAbout }}" style="position:absolute;inset:0;z-index:70;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:440px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:36px 38px 30px;">
+          <img src="assets/nbos-logo.png" alt="Notebook OS" style="width:84px;height:38px;object-fit:contain;display:block;margin:0 auto 16px;">
+          <div style="text-align:center;font-size:23px;font-weight:700;color:#1A1916;">Notebook OS</div>
+          <div style="text-align:center;font-size:13px;color:#8A857A;margin:6px 0 22px;">Version 1.0</div>
+          <div style="border-top:1px solid #E0DBCE;padding-top:16px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Memory</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">128 MB · 74 MB free</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Storage</span><span style="color:#1A1916;font-variant-numeric:tabular-nums;">4 GB · 1.4 GB available</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#8A857A;">Radio</span><span style="color:#1A1916;">LoRa 915 MHz · NODE-3C</span></div>
+          </div>
+          <div onClick="{{ onCloseAbout }}" style="margin:24px auto 0;width:96px;height:38px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">OK</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ catDlgOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCatCancel }}" style="position:absolute;inset:0;z-index:72;background:rgba(26,25,22,0.18);display:flex;align-items:center;justify-content:center;">
+        <div onClick="{{ stopClick }}" style="width:420px;background:#F8F7F2;border:1px solid #1A1916;box-shadow:4px 4px 0 rgba(26,25,22,0.15);padding:26px 28px;">
+          <div style="font-size:16px;font-weight:700;color:#1A1916;margin-bottom:14px;">{{ catDlgTitle }}</div>
+          <input value="{{ catDlgVal }}" onInput="{{ onCatVal }}" onKeyDown="{{ onCatKey }}" type="text" placeholder="Category name" style="width:100%;height:40px;border:1px solid #C4BFB1;border-radius:2px;background:#FCFBF8;padding:0 12px;font-size:15px;color:#1A1916;outline:none;font-family:inherit;" />
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
+            <div onClick="{{ onCatCancel }}" style="height:38px;padding:0 18px;display:flex;align-items:center;border:1px solid #C4BFB1;color:#3A362E;border-radius:2px;font-size:14px;cursor:pointer;background:#FCFBF8;" style-hover="background:#EFEAE0;">Cancel</div>
+            <div onClick="{{ onCatOk }}" style="height:38px;padding:0 18px;display:flex;align-items:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">{{ catDlgOk }}</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <div style="flex:1;display:flex;min-height:0;">
+      <div style="width:344px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:20px 20px 16px;border-bottom:1px solid #D7D2C5;">
+          <div style="display:flex;flex-wrap:wrap;gap:7px;">
+            <sc-for list="{{ collections }}" as="col" hint-placeholder-count="2">
+              <div onClick="{{ col.onClick }}" onDoubleClick="{{ col.onRename }}" title="{{ col.tip }}" style="{{ col.style }}">{{ col.label }}</div>
+            </sc-for>
+            <div onClick="{{ onNewCat }}" title="New Category" style="height:30px;padding:0 12px;display:flex;align-items:center;border:1px dashed #B5B0A3;border-radius:2px;font-size:13px;color:#8A857A;cursor:pointer;" style-hover="background:#E3DCCB;">+ Category</div>
+          </div>
+        </div>
+        <div class="ck-scroll" style="flex:1;overflow-y:auto;padding:14px;min-height:0;">
+          <sc-for list="{{ recipes }}" as="r" hint-placeholder-count="4">
+            <div onClick="{{ r.onClick }}" style="{{ r.rowStyle }}" style-hover="background:#E6DFCE;">
+              <div style="font-family:Newsreader,serif;font-size:17px;color:#1A1916;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.title }}</div>
+              <div style="font-size:12.5px;color:#9A958A;margin-top:4px;">{{ r.meta }}</div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noRecipes }}" hint-placeholder-val="{{ false }}"><div style="padding:34px 12px;text-align:center;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:#A39D8F;">No recipes</div></sc-if>
+        </div>
+        <div style="flex:none;border-top:1px solid #D7D2C5;padding:14px 18px;">
+          <div onClick="{{ onNewRecipe }}" style="display:flex;align-items:center;justify-content:center;height:40px;border:1px solid #C4BFB1;border-radius:2px;background:#FCFBF8;cursor:pointer;font-size:14px;font-weight:600;color:#1A1916;" style-hover="background:#EFEAE0;">+ New Recipe</div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:0;background:#FCFBF8;display:flex;flex-direction:column;">
+        <sc-if value="{{ hasSel }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:none;padding:30px 48px 18px;">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;">
+              <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;">{{ activeCat }}</div>
+              <div style="font-size:13px;color:#8A857A;">{{ saveText }}</div>
+            </div>
+            <input value="{{ activeTitle }}" onInput="{{ onTitle }}" type="text" placeholder="Untitled recipe" style="width:100%;border:none;background:transparent;outline:none;font-family:Newsreader,serif;font-size:42px;color:#1A1916;letter-spacing:-0.01em;padding:0;" />
+          </div>
+          <div style="flex:1;display:flex;gap:26px;padding:4px 48px 40px;min-height:0;">
+            <div style="width:430px;flex:none;display:flex;flex-direction:column;min-height:0;border:1px solid #D7D2C5;border-radius:2px;background:#FBFAF6;">
+              <div style="flex:none;padding:13px 18px;border-bottom:1px solid #E6E1D4;font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#1A1916;font-weight:700;">Ingredients</div>
+              <div style="flex:1;min-height:0;"><textarea class="ck-box" value="{{ activeIng }}" onInput="{{ onIng }}" placeholder="One ingredient per line"></textarea></div>
+            </div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;border:1px solid #D7D2C5;border-radius:2px;background:#FBFAF6;">
+              <div style="flex:none;padding:13px 18px;border-bottom:1px solid #E6E1D4;font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#1A1916;font-weight:700;">Steps</div>
+              <div style="flex:1;min-height:0;"><textarea class="ck-box" value="{{ activeSteps }}" onInput="{{ onSteps }}" placeholder="Write each step on its own line"></textarea></div>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ noSel }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;">
+            <div style="font-size:15px;color:#6E695E;">{{ emptyTitle }}</div>
+            <div style="font-size:13.5px;color:#A39D8F;">{{ emptyHint }}</div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(), openMenu: null, menuLeft: 12, aboutOpen: false, activeCol: 0, sel: -1, catDlg: null, catDlgVal: "", saved: true };
+  cats = [];
+  recipes = [];
+  componentDidMount() {
+    this._key = (e) => {
+      if (e.key === "Escape") { if (this.state.openMenu || this.state.aboutOpen || this.state.catDlg) this.setState({ openMenu: null, aboutOpen: false, catDlg: null }); else this.goHome(); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") { e.preventDefault(); this.newRecipe(); }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); this.markSaved(); }
+    };
+    window.addEventListener("keydown", this._key);
+    this.timer = setInterval(() => this.setState({ now: new Date() }), 10000);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this._key); clearInterval(this.timer); if (this._saveT) clearTimeout(this._saveT); }
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " " + ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][n.getMonth()]; }
+  signalIcon() { const E = React.createElement; return E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, E("path", { d: "M2 11.5a14 14 0 0 1 20 0" }), E("path", { d: "M5.5 14a9 9 0 0 1 13 0" }), E("path", { d: "M9 16.4a4.5 4.5 0 0 1 6 0" }), E("circle", { cx: 12, cy: 18.6, r: 0.7 }));
+  }
+  touch() { this.setState({ saved: false }); if (this._saveT) clearTimeout(this._saveT); this._saveT = setTimeout(() => this.markSaved(), 900); }
+  markSaved() { this.setState({ saved: true, openMenu: null }); }
+  newRecipe() {
+    const cat = this.state.activeCol > 0 ? this.cats[this.state.activeCol - 1] : null;
+    this.recipes.push({ title: "", cat: cat, ing: "", steps: "" });
+    this.setState({ sel: this.recipes.length - 1, openMenu: null });
+    this.touch();
+  }
+  deleteRecipe() {
+    if (this.state.sel < 0) return;
+    this.recipes.splice(this.state.sel, 1);
+    this.setState({ sel: -1, openMenu: null });
+    this.touch();
+  }
+  selectCol(i) { this.setState({ activeCol: i, openMenu: null, sel: -1 }); }
+  openCatDlg(mode, idx) { this.setState({ catDlg: { mode: mode, idx: idx }, catDlgVal: mode === "rename" ? this.cats[idx] : "", openMenu: null }); }
+  catOk() {
+    const S = this.state, v = (S.catDlgVal || "").trim();
+    if (!v) { this.setState({ catDlg: null }); return; }
+    if (S.catDlg.mode === "new") { if (this.cats.indexOf(v) === -1) this.cats.push(v); this.setState({ catDlg: null, activeCol: this.cats.indexOf(v) + 1, sel: -1 }); }
+    else { const old = this.cats[S.catDlg.idx]; this.cats[S.catDlg.idx] = v; this.recipes.forEach((r) => { if (r.cat === old) r.cat = v; }); this.setState({ catDlg: null }); }
+    this.touch();
+  }
+  deleteCategory(idx) {
+    const name = this.cats[idx];
+    this.cats.splice(idx, 1);
+    this.recipes.forEach((r) => { if (r.cat === name) r.cat = null; });
+    this.setState({ activeCol: 0, openMenu: null, sel: -1 });
+    this.touch();
+  }
+  // ===== Notebook OS system chrome =====
+  appFile = "Cookbook.dc.html";
+  appName = "Cookbook";
+  appMenuNames() { return ["File", "Edit", "Categories", "Recipe"]; }
+  appMenuItems(name) {
+    const S = this.state;
+    const hasSel = S.sel >= 0 && !!this.recipes[S.sel];
+    if (name === "File") return [
+      this.mi("New Recipe", () => this.newRecipe(), { hint: "⌘N" }),
+      this.mi("Save", () => this.markSaved(), { hint: "⌘S" }),
+      this.msep(),
+      this.mi("Back to Finder", () => { this.setState({ openMenu: null }); this.goHome(); }, { hint: "Esc" }),
+    ];
+    if (name === "Edit") return [
+      this.mi("Undo", () => { document.execCommand("undo"); this.setState({ openMenu: null }); }, { hint: "⌘Z" }),
+      this.mi("Redo", () => { document.execCommand("redo"); this.setState({ openMenu: null }); }),
+      this.msep(),
+      this.off("Cut", "⌘X"), this.off("Copy", "⌘C"), this.off("Paste", "⌘V"),
+    ];
+    if (name === "Categories") {
+      const items = [
+        this.mi("New Category…", () => this.openCatDlg("new")),
+        S.activeCol > 0 ? this.mi("Rename Category…", () => this.openCatDlg("rename", S.activeCol - 1)) : this.off("Rename Category…"),
+        S.activeCol > 0 ? this.mi("Delete Category", () => this.deleteCategory(S.activeCol - 1)) : this.off("Delete Category"),
+        this.msep(),
+        this.mi("All", () => this.selectCol(0), { check: S.activeCol === 0 ? "✓" : "" }),
+      ];
+      this.cats.forEach((c, i) => items.push(this.mi(c, () => this.selectCol(i + 1), { check: S.activeCol === i + 1 ? "✓" : "" })));
+      return items;
+    }
+    if (name === "Recipe") {
+      if (!hasSel) return [this.off("Move to Category"), this.off("Delete Recipe")];
+      const r = this.recipes[S.sel];
+      const items = this.cats.map((c) => this.mi("Move to “" + c + "”", () => { r.cat = c; this.setState({ openMenu: null }); this.touch(); }, { check: r.cat === c ? "✓" : "" }));
+      items.push(this.mi("No Category", () => { r.cat = null; this.setState({ openMenu: null }); this.touch(); }, { check: r.cat === null ? "✓" : "" }));
+      items.push(this.msep());
+      items.push(this.mi("Delete Recipe", () => this.deleteRecipe()));
+      return items;
+    }
+    return [];
+  }
+  goHome() { if (window.parent !== window) window.parent.postMessage({ type: "nbos-home" }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  power(mode) { this.setState({ openMenu: null }); if (window.parent !== window) window.parent.postMessage({ type: "nbos-power", mode: mode }, "*"); else window.location.href = "OS Desktop Home.dc.html"; }
+  launchApp(file) { this.setState({ openMenu: null }); if (file === this.appFile) return; if (window.parent !== window) window.parent.postMessage({ type: "nbos-launch", file: file }, "*"); else window.location.href = file; }
+  canvasScale(el) { const root = el.closest("[data-nbos-root]"); const r = root.getBoundingClientRect(); return { left: r.left, scale: r.width / 1920 }; }
+  openMenuAt(name, e) { const t = e.currentTarget.getBoundingClientRect(); const c = this.canvasScale(e.currentTarget); this.setState({ openMenu: name, subMenu: null, menuLeft: Math.round((t.left - c.left) / c.scale) }); }
+  toggleMenu(name, e) { this.state.openMenu === name ? this.setState({ openMenu: null }) : this.openMenuAt(name, e); }
+  enterMenu(name, e) { if (this.state.openMenu && this.state.openMenu !== name && this.state.openMenu !== "__lora" && this.state.openMenu !== "__logo" && this.state.openMenu !== "__app") this.openMenuAt(name, e); }
+  mi(label, fn, opts) { return Object.assign({ label: label, on: true, offRow: false, sep: false, check: "", hint: "", onEnter: () => { if (this.state.subMenu) this.setState({ subMenu: null }); }, onClick: () => { fn && fn(); } }, opts || {}); }
+  off(label, hint) { return { label: label, hint: hint || "", on: false, offRow: true, sep: false, check: "" }; }
+  msep() { return { sep: true, on: false, offRow: false }; }
+  sub(label, subItems) { const open = this.state.subMenu === label; return { label: label, on: false, offRow: false, sep: false, subRow: true, check: "", hint: "", subOpen: open, subItems: subItems, rowStyle: "position:relative;display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;cursor:default;" + (open ? "background:#1A1916;color:#F4F2EC;" : "color:#1A1916;"), onEnter: () => { if (this.state.subMenu !== label) this.setState({ subMenu: label }); } }; }
+  appCats() { return [["COMMUNICATION", [["Contacts","Contacts.dc.html"],["Messages","Messages.dc.html"]]], ["GAMES", [["2048","2048.dc.html"],["Tetris","Tetris.dc.html"]]], ["LIBRARY", [["Cookbook","Cookbook.dc.html"],["E-book Reader","E-book Reader.dc.html"],["Media Viewer","Media Viewer.dc.html"],["Music","Music.dc.html"]]], ["PRODUCTIVITY", [["Accounting","Accounting.dc.html"],["Calculator","Scientific Calculator.dc.html"],["Calendar","Calendar.dc.html"],["Tasks","Tasks.dc.html"]]], ["STUDIO", [["Illustrator","Illustrator.dc.html"],["Sequencer","Sequencer.dc.html"],["Video Editor","Video Editor.dc.html"]]], ["SYSTEM", [["Packages","Packages.dc.html"]]], ["WRITING", [["Academic Notes","Academic Notes.dc.html"],["Journal","Journal.dc.html"],["Novel","Novel.dc.html"],["Screenplay","Screenplay.dc.html"],["Writer","Writer.dc.html"]]]]; }
+  menuItemsFor(name) {
+    if (name === "__logo") return [
+      this.mi("About Notebook OS…", () => this.setState({ aboutOpen: true, openMenu: null })),
+      this.msep(),
+      this.mi("Sleep", () => this.power("sleep")),
+      this.mi("Restart…", () => this.power("restart")),
+      this.mi("Shut Down…", () => this.power("off")),
+    ];
+    if (name === "__app") {
+      const items = [this.mi("Finder", () => { this.setState({ openMenu: null }); this.goHome(); }), this.msep()];
+      this.appCats().forEach((cat) => items.push(this.sub(cat[0].charAt(0) + cat[0].slice(1).toLowerCase(), cat[1].map((a) => this.mi(a[0], () => this.launchApp(a[1]), { check: a[1] === this.appFile ? "✓" : "" })))));
+      return items;
+    }
+    if (name === "__lora") return [this.off("NODE-01", "ch 1 · strong"), this.off("NODE-22", "ch 4 · good"), this.off("NODE-7F", "ch 4 · strong"), this.off("NODE-88", "ch 6 · fair"), this.msep(), this.off("This machine: NODE-3C", "915 MHz")];
+    return this.appMenuItems(name);
+  }
+  sysMenuVals() {
+    const S = this.state;
+    const menus = this.appMenuNames().map((n) => ({ label: n, onClick: (e) => this.toggleMenu(n, e), onEnter: (e) => this.enterMenu(n, e), style: "font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" + (S.openMenu === n ? "background:#1A1916;color:#F4F2EC;" : "") }));
+    return {
+      menus: menus, menuOpen: !!S.openMenu, menuItems: S.openMenu ? this.menuItemsFor(S.openMenu) : [],
+      menuPanelStyle: S.openMenu === "__lora"
+        ? "position:absolute;top:42px;right:180px;z-index:60;min-width:270px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;"
+        : "position:absolute;top:42px;left:" + S.menuLeft + "px;z-index:60;min-width:230px;background:#FCFBF8;border:1px solid #1A1916;box-shadow:3px 3px 0 rgba(26,25,22,0.14);padding:6px 0;",
+      onCloseMenu: () => this.setState({ openMenu: null }),
+      onLogoMenu: (e) => this.toggleMenu("__logo", e),
+      logoBtnStyle: "display:flex;align-items:center;padding:5px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__logo" ? "background:#E6DFCE;" : ""),
+      onAppMenu: (e) => this.toggleMenu("__app", e),
+      appNameStyle: "font-weight:700;font-size:15px;letter-spacing:0.01em;padding:3px 8px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__app" ? "background:#1A1916;color:#F4F2EC;" : ""),
+      onLoraMenu: (e) => this.toggleMenu("__lora", e),
+      loraBtnStyle: "display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:2px;cursor:pointer;" + (S.openMenu === "__lora" ? "background:#E6DFCE;" : ""),
+      aboutOpen: !!S.aboutOpen, onCloseAbout: () => this.setState({ aboutOpen: false }),
+      stopClick: (e) => e.stopPropagation(),
+    };
+  }
+  renderVals() {
+    const S = this.state;
+    const chip = (on) => "height:30px;padding:0 13px;display:flex;align-items:center;border-radius:2px;cursor:pointer;font-size:13px;font-weight:500;border:1px solid " + (on ? "#1A1916;background:#1A1916;color:#FCFBF8;" : "#DCD7C9;background:#FCFBF8;color:#3A362E;");
+    const collections = [{ label: "All", tip: "Show all recipes", onClick: () => this.selectCol(0), onRename: () => {}, style: chip(S.activeCol === 0) }]
+      .concat(this.cats.map((c, i) => ({ label: c, tip: "Double-click to rename", onClick: () => this.selectCol(i + 1), onRename: () => this.openCatDlg("rename", i), style: chip(S.activeCol === i + 1) })));
+    const filter = S.activeCol > 0 ? this.cats[S.activeCol - 1] : null;
+    const visible = this.recipes.map((r, i) => ({ r: r, i: i })).filter((o) => !filter || o.r.cat === filter);
+    const rows = visible.map((o) => ({
+      title: o.r.title || "Untitled recipe",
+      meta: (o.r.cat || "No category") + " · " + (o.r.ing ? o.r.ing.split("\n").filter((x) => x.trim()).length + " ingredients" : "empty"),
+      onClick: () => this.setState({ sel: o.i }),
+      rowStyle: "padding:11px 12px;border-radius:2px;cursor:pointer;margin-bottom:3px;" + (o.i === S.sel ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+    const r = S.sel >= 0 ? this.recipes[S.sel] : null;
+    const dlg = S.catDlg;
+    return Object.assign(this.sysMenuVals(), {
+      clock: this.clockStr(), dateLong: this.dateLong(), signalGlyph: this.signalIcon(),
+      collections: collections, recipes: rows, noRecipes: visible.length === 0,
+      onNewCat: () => this.openCatDlg("new"),
+      onNewRecipe: () => this.newRecipe(),
+      hasSel: !!r, noSel: !r,
+      emptyTitle: this.recipes.length === 0 ? "No recipes yet" : "No recipe selected",
+      emptyHint: this.recipes.length === 0 ? "Click + New Recipe to begin" : "Choose a recipe from the list",
+      activeCat: r ? (r.cat || "No category") : "",
+      activeTitle: r ? r.title : "",
+      activeIng: r ? r.ing : "",
+      activeSteps: r ? r.steps : "",
+      onTitle: (e) => { if (r) { r.title = e.target.value; this.touch(); } },
+      onIng: (e) => { if (r) { r.ing = e.target.value; this.touch(); } },
+      onSteps: (e) => { if (r) { r.steps = e.target.value; this.touch(); } },
+      saveText: S.saved ? "Saved" : "Editing…",
+      catDlgOpen: !!dlg,
+      catDlgTitle: dlg && dlg.mode === "rename" ? "Rename Category" : "New Category",
+      catDlgOk: dlg && dlg.mode === "rename" ? "Rename" : "Add",
+      catDlgVal: S.catDlgVal,
+      onCatVal: (e) => this.setState({ catDlgVal: e.target.value }),
+      onCatKey: (e) => { if (e.key === "Enter") this.catOk(); },
+      onCatOk: () => this.catOk(),
+      onCatCancel: () => this.setState({ catDlg: null }),
+    });
+  }
+}
+</script>
+</body>
+</html>

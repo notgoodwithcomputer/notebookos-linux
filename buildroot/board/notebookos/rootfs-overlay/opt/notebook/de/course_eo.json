@@ -1,0 +1,815 @@
+{
+ "code": "eo",
+ "name": "Esperanto",
+ "from": "English",
+ "units": [
+  {
+   "title": "BASICS",
+   "skills": [
+    {
+     "name": "Greetings",
+     "words": [
+      {
+       "t": "saluton",
+       "e": "hello",
+       "ipa": "sa.ˈlu.ton"
+      },
+      {
+       "t": "ĝis",
+       "e": "bye",
+       "ipa": "ˈd͡ʒis"
+      },
+      {
+       "t": "dankon",
+       "e": "thank you",
+       "ipa": "ˈdan.kon"
+      },
+      {
+       "t": "bonvolu",
+       "e": "please",
+       "ipa": "bon.ˈvo.lu"
+      },
+      {
+       "t": "jes",
+       "e": "yes",
+       "ipa": "ˈjes"
+      },
+      {
+       "t": "ne",
+       "e": "no",
+       "ipa": "ˈne"
+      },
+      {
+       "t": "pardonu",
+       "e": "sorry",
+       "ipa": "par.ˈdo.nu"
+      },
+      {
+       "t": "bonan matenon",
+       "e": "good morning",
+       "ipa": "ˈbo.nan ma.ˈte.non"
+      },
+      {
+       "t": "bonan nokton",
+       "e": "good night",
+       "ipa": "ˈbo.nan ˈnok.ton"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Kiel vi fartas?",
+       "e": "How are you?",
+       "ipa": "ˈki.el vi ˈfar.tas"
+      },
+      {
+       "t": "Mi fartas bone",
+       "e": "I am fine",
+       "ipa": "mi ˈfar.tas ˈbo.ne"
+      },
+      {
+       "t": "Mi nomiĝas Ana",
+       "e": "My name is Ana",
+       "ipa": "mi no.ˈmi.d͡ʒas ˈa.na"
+      }
+     ]
+    },
+    {
+     "name": "People",
+     "words": [
+      {
+       "t": "mi",
+       "e": "I",
+       "ipa": "mi"
+      },
+      {
+       "t": "vi",
+       "e": "you",
+       "ipa": "vi"
+      },
+      {
+       "t": "li",
+       "e": "he",
+       "ipa": "li"
+      },
+      {
+       "t": "ŝi",
+       "e": "she",
+       "ipa": "ʃi"
+      },
+      {
+       "t": "ni",
+       "e": "we",
+       "ipa": "ni"
+      },
+      {
+       "t": "ili",
+       "e": "they",
+       "ipa": "ˈi.li"
+      },
+      {
+       "t": "viro",
+       "e": "man",
+       "ipa": "ˈvi.ro"
+      },
+      {
+       "t": "virino",
+       "e": "woman",
+       "ipa": "vi.ˈri.no"
+      },
+      {
+       "t": "knabo",
+       "e": "boy",
+       "ipa": "ˈkna.bo"
+      },
+      {
+       "t": "knabino",
+       "e": "girl",
+       "ipa": "kna.ˈbi.no"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Li estas viro",
+       "e": "He is a man",
+       "ipa": "li ˈes.tas ˈvi.ro"
+      },
+      {
+       "t": "Ŝi estas virino",
+       "e": "She is a woman",
+       "ipa": "ʃi ˈes.tas vi.ˈri.no"
+      }
+     ]
+    },
+    {
+     "name": "Numbers",
+     "words": [
+      {
+       "t": "unu",
+       "e": "one",
+       "ipa": "ˈu.nu"
+      },
+      {
+       "t": "du",
+       "e": "two",
+       "ipa": "du"
+      },
+      {
+       "t": "tri",
+       "e": "three",
+       "ipa": "tri"
+      },
+      {
+       "t": "kvar",
+       "e": "four",
+       "ipa": "kvar"
+      },
+      {
+       "t": "kvin",
+       "e": "five",
+       "ipa": "kvin"
+      },
+      {
+       "t": "ses",
+       "e": "six",
+       "ipa": "ses"
+      },
+      {
+       "t": "sep",
+       "e": "seven",
+       "ipa": "sep"
+      },
+      {
+       "t": "ok",
+       "e": "eight",
+       "ipa": "ok"
+      },
+      {
+       "t": "naŭ",
+       "e": "nine",
+       "ipa": "naw"
+      },
+      {
+       "t": "dek",
+       "e": "ten",
+       "ipa": "dek"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi havas du fratojn",
+       "e": "I have two brothers",
+       "ipa": "mi ˈha.vas du ˈfra.tojn"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "PEOPLE",
+   "skills": [
+    {
+     "name": "Family",
+     "words": [
+      {
+       "t": "patro",
+       "e": "father",
+       "ipa": "ˈpa.tro"
+      },
+      {
+       "t": "patrino",
+       "e": "mother",
+       "ipa": "pa.ˈtri.no"
+      },
+      {
+       "t": "filo",
+       "e": "son",
+       "ipa": "ˈfi.lo"
+      },
+      {
+       "t": "filino",
+       "e": "daughter",
+       "ipa": "fi.ˈli.no"
+      },
+      {
+       "t": "frato",
+       "e": "brother",
+       "ipa": "ˈfra.to"
+      },
+      {
+       "t": "fratino",
+       "e": "sister",
+       "ipa": "fra.ˈti.no"
+      },
+      {
+       "t": "familio",
+       "e": "family",
+       "ipa": "fa.mi.ˈli.o"
+      },
+      {
+       "t": "amiko",
+       "e": "friend",
+       "ipa": "a.ˈmi.ko"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mia patro estas alta",
+       "e": "My father is tall",
+       "ipa": "ˈmi.a ˈpa.tro ˈes.tas ˈal.ta"
+      },
+      {
+       "t": "Ŝi estas mia amiko",
+       "e": "She is my friend",
+       "ipa": "ʃi ˈes.tas ˈmi.a a.ˈmi.ko"
+      }
+     ]
+    },
+    {
+     "name": "Colors",
+     "words": [
+      {
+       "t": "ruĝa",
+       "e": "red",
+       "ipa": "ˈru.d͡ʒa"
+      },
+      {
+       "t": "blua",
+       "e": "blue",
+       "ipa": "ˈblu.a"
+      },
+      {
+       "t": "verda",
+       "e": "green",
+       "ipa": "ˈver.da"
+      },
+      {
+       "t": "flava",
+       "e": "yellow",
+       "ipa": "ˈfla.va"
+      },
+      {
+       "t": "nigra",
+       "e": "black",
+       "ipa": "ˈni.ɡra"
+      },
+      {
+       "t": "blanka",
+       "e": "white",
+       "ipa": "ˈblan.ka"
+      },
+      {
+       "t": "koloro",
+       "e": "color",
+       "ipa": "ko.ˈlo.ro"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La pomo estas ruĝa",
+       "e": "The apple is red",
+       "ipa": "la ˈpo.mo ˈes.tas ˈru.d͡ʒa"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "EVERYDAY",
+   "skills": [
+    {
+     "name": "Food",
+     "words": [
+      {
+       "t": "akvo",
+       "e": "water",
+       "ipa": "ˈak.vo"
+      },
+      {
+       "t": "pano",
+       "e": "bread",
+       "ipa": "ˈpa.no"
+      },
+      {
+       "t": "lakto",
+       "e": "milk",
+       "ipa": "ˈlak.to"
+      },
+      {
+       "t": "pomo",
+       "e": "apple",
+       "ipa": "ˈpo.mo"
+      },
+      {
+       "t": "viando",
+       "e": "meat",
+       "ipa": "vi.ˈan.do"
+      },
+      {
+       "t": "kafo",
+       "e": "coffee",
+       "ipa": "ˈka.fo"
+      },
+      {
+       "t": "teo",
+       "e": "tea",
+       "ipa": "ˈte.o"
+      },
+      {
+       "t": "fromaĝo",
+       "e": "cheese",
+       "ipa": "fro.ˈma.d͡ʒo"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi manĝas panon",
+       "e": "I eat bread",
+       "ipa": "mi ˈman.d͡ʒas ˈpa.non"
+      },
+      {
+       "t": "Mi trinkas akvon",
+       "e": "I drink water",
+       "ipa": "mi ˈtrin.kas ˈak.von"
+      }
+     ]
+    },
+    {
+     "name": "Verbs",
+     "words": [
+      {
+       "t": "esti",
+       "e": "to be",
+       "ipa": "ˈes.ti"
+      },
+      {
+       "t": "havi",
+       "e": "to have",
+       "ipa": "ˈha.vi"
+      },
+      {
+       "t": "iri",
+       "e": "to go",
+       "ipa": "ˈi.ri"
+      },
+      {
+       "t": "vidi",
+       "e": "to see",
+       "ipa": "ˈvi.di"
+      },
+      {
+       "t": "paroli",
+       "e": "to speak",
+       "ipa": "pa.ˈro.li"
+      },
+      {
+       "t": "lerni",
+       "e": "to learn",
+       "ipa": "ˈler.ni"
+      },
+      {
+       "t": "legi",
+       "e": "to read",
+       "ipa": "ˈle.ɡi"
+      },
+      {
+       "t": "skribi",
+       "e": "to write",
+       "ipa": "ˈskri.bi"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi lernas Esperanton",
+       "e": "I learn Esperanto",
+       "ipa": "mi ˈler.nas es.pe.ˈran.ton"
+      },
+      {
+       "t": "Ĉu vi parolas Esperante?",
+       "e": "Do you speak Esperanto?",
+       "ipa": "t͡ʃu vi pa.ˈro.las es.pe.ˈran.te"
+      }
+     ]
+    },
+    {
+     "name": "Describing",
+     "words": [
+      {
+       "t": "granda",
+       "e": "big",
+       "ipa": "ˈɡran.da"
+      },
+      {
+       "t": "malgranda",
+       "e": "small",
+       "ipa": "mal.ˈɡran.da"
+      },
+      {
+       "t": "bona",
+       "e": "good",
+       "ipa": "ˈbo.na"
+      },
+      {
+       "t": "bela",
+       "e": "beautiful",
+       "ipa": "ˈbe.la"
+      },
+      {
+       "t": "nova",
+       "e": "new",
+       "ipa": "ˈno.va"
+      },
+      {
+       "t": "alta",
+       "e": "tall",
+       "ipa": "ˈal.ta"
+      },
+      {
+       "t": "varma",
+       "e": "warm",
+       "ipa": "ˈvar.ma"
+      },
+      {
+       "t": "malvarma",
+       "e": "cold",
+       "ipa": "mal.ˈvar.ma"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Granda bela domo",
+       "e": "A big beautiful house",
+       "ipa": "ˈɡran.da ˈbe.la ˈdo.mo"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "GETTING AROUND",
+   "skills": [
+    {
+     "name": "Places",
+     "words": [
+      {
+       "t": "domo",
+       "e": "house",
+       "ipa": "ˈdo.mo"
+      },
+      {
+       "t": "lernejo",
+       "e": "school",
+       "ipa": "ler.ˈne.jo"
+      },
+      {
+       "t": "vendejo",
+       "e": "store",
+       "ipa": "ven.ˈde.jo"
+      },
+      {
+       "t": "urbo",
+       "e": "city",
+       "ipa": "ˈur.bo"
+      },
+      {
+       "t": "strato",
+       "e": "street",
+       "ipa": "ˈstra.to"
+      },
+      {
+       "t": "bazaro",
+       "e": "market",
+       "ipa": "ba.ˈza.ro"
+      },
+      {
+       "t": "pordo",
+       "e": "door",
+       "ipa": "ˈpor.do"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La lernejo estas granda",
+       "e": "The school is big",
+       "ipa": "la ler.ˈne.jo ˈes.tas ˈɡran.da"
+      },
+      {
+       "t": "Mi iras al la lernejo",
+       "e": "I go to the school",
+       "ipa": "mi ˈi.ras al la ler.ˈne.jo"
+      }
+     ]
+    },
+    {
+     "name": "Time",
+     "words": [
+      {
+       "t": "hodiaŭ",
+       "e": "today",
+       "ipa": "ho.ˈdi.aw"
+      },
+      {
+       "t": "morgaŭ",
+       "e": "tomorrow",
+       "ipa": "ˈmor.ɡaw"
+      },
+      {
+       "t": "nun",
+       "e": "now",
+       "ipa": "nun"
+      },
+      {
+       "t": "tago",
+       "e": "day",
+       "ipa": "ˈta.ɡo"
+      },
+      {
+       "t": "nokto",
+       "e": "night",
+       "ipa": "ˈnok.to"
+      },
+      {
+       "t": "semajno",
+       "e": "week",
+       "ipa": "se.ˈmaj.no"
+      },
+      {
+       "t": "horo",
+       "e": "hour",
+       "ipa": "ˈho.ro"
+      },
+      {
+       "t": "jaro",
+       "e": "year",
+       "ipa": "ˈja.ro"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La semajno havas sep tagojn",
+       "e": "The week has seven days",
+       "ipa": "la se.ˈmaj.no ˈha.vas sep ˈta.ɡojn"
+      },
+      {
+       "t": "Hodiaŭ mi lernas",
+       "e": "Today I learn",
+       "ipa": "ho.ˈdi.aw mi ˈler.nas"
+      }
+     ]
+    },
+    {
+     "name": "Travel",
+     "words": [
+      {
+       "t": "aŭto",
+       "e": "car",
+       "ipa": "ˈaw.to"
+      },
+      {
+       "t": "trajno",
+       "e": "train",
+       "ipa": "ˈtraj.no"
+      },
+      {
+       "t": "aviadilo",
+       "e": "airplane",
+       "ipa": "a.vi.a.ˈdi.lo"
+      },
+      {
+       "t": "ĉi tie",
+       "e": "here",
+       "ipa": "t͡ʃi ˈti.e"
+      },
+      {
+       "t": "tie",
+       "e": "there",
+       "ipa": "ˈti.e"
+      },
+      {
+       "t": "proksima",
+       "e": "near",
+       "ipa": "prok.ˈsi.ma"
+      },
+      {
+       "t": "malproksima",
+       "e": "far",
+       "ipa": "mal.prok.ˈsi.ma"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La aŭto estas nova",
+       "e": "The car is new",
+       "ipa": "la ˈaw.to ˈes.tas ˈno.va"
+      },
+      {
+       "t": "La aviadilo estas granda",
+       "e": "The airplane is big",
+       "ipa": "la a.vi.a.ˈdi.lo ˈes.tas ˈɡran.da"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "THE WORLD",
+   "skills": [
+    {
+     "name": "Animals",
+     "words": [
+      {
+       "t": "hundo",
+       "e": "dog",
+       "ipa": "ˈhun.do"
+      },
+      {
+       "t": "kato",
+       "e": "cat",
+       "ipa": "ˈka.to"
+      },
+      {
+       "t": "birdo",
+       "e": "bird",
+       "ipa": "ˈbir.do"
+      },
+      {
+       "t": "ĉevalo",
+       "e": "horse",
+       "ipa": "t͡ʃe.ˈva.lo"
+      },
+      {
+       "t": "fiŝo",
+       "e": "fish",
+       "ipa": "ˈfi.ʃo"
+      },
+      {
+       "t": "bovino",
+       "e": "cow",
+       "ipa": "bo.ˈvi.no"
+      },
+      {
+       "t": "kokino",
+       "e": "chicken",
+       "ipa": "ko.ˈki.no"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi havas hundon",
+       "e": "I have a dog",
+       "ipa": "mi ˈha.vas ˈhun.don"
+      },
+      {
+       "t": "La kato estas nigra",
+       "e": "The cat is black",
+       "ipa": "la ˈka.to ˈes.tas ˈni.ɡra"
+      }
+     ]
+    },
+    {
+     "name": "Nature",
+     "words": [
+      {
+       "t": "suno",
+       "e": "sun",
+       "ipa": "ˈsu.no"
+      },
+      {
+       "t": "luno",
+       "e": "moon",
+       "ipa": "ˈlu.no"
+      },
+      {
+       "t": "arbo",
+       "e": "tree",
+       "ipa": "ˈar.bo"
+      },
+      {
+       "t": "floro",
+       "e": "flower",
+       "ipa": "ˈflo.ro"
+      },
+      {
+       "t": "pluvo",
+       "e": "rain",
+       "ipa": "ˈplu.vo"
+      },
+      {
+       "t": "maro",
+       "e": "sea",
+       "ipa": "ˈma.ro"
+      },
+      {
+       "t": "ĉielo",
+       "e": "sky",
+       "ipa": "t͡ʃi.ˈe.lo"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La ĉielo estas blua",
+       "e": "The sky is blue",
+       "ipa": "la t͡ʃi.ˈe.lo ˈes.tas ˈblu.a"
+      },
+      {
+       "t": "Mi vidas la sunon",
+       "e": "I see the sun",
+       "ipa": "mi ˈvi.das la ˈsu.non"
+      }
+     ]
+    },
+    {
+     "name": "More Verbs",
+     "words": [
+      {
+       "t": "fari",
+       "e": "to do",
+       "ipa": "ˈfa.ri"
+      },
+      {
+       "t": "voli",
+       "e": "to want",
+       "ipa": "ˈvo.li"
+      },
+      {
+       "t": "povi",
+       "e": "to be able",
+       "ipa": "ˈpo.vi"
+      },
+      {
+       "t": "diri",
+       "e": "to say",
+       "ipa": "ˈdi.ri"
+      },
+      {
+       "t": "veni",
+       "e": "to come",
+       "ipa": "ˈve.ni"
+      },
+      {
+       "t": "aĉeti",
+       "e": "to buy",
+       "ipa": "a.ˈt͡ʃe.ti"
+      },
+      {
+       "t": "loĝi",
+       "e": "to live",
+       "ipa": "ˈlo.d͡ʒi"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi volas lerni Esperanton",
+       "e": "I want to learn Esperanto",
+       "ipa": "mi ˈvo.las ˈler.ni es.pe.ˈran.ton"
+      },
+      {
+       "t": "Mi volas aĉeti panon",
+       "e": "I want to buy bread",
+       "ipa": "mi ˈvo.las a.ˈt͡ʃe.ti ˈpa.non"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

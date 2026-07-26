@@ -1,0 +1,17 @@
+config BR2_PACKAGE_SPLIX
+	bool "splix"
+	depends on BR2_INSTALL_LIBSTDCPP
+	depends on BR2_PACKAGE_CUPS
+	select BR2_PACKAGE_JBIGKIT
+	select BR2_PACKAGE_ZLIB
+	help
+	  SpliX is a CUPS driver for the host-based Samsung SPL2 / QPDL
+	  laser printers (ML, SCX, CLP, CLX series) and their Xerox Phaser
+	  and Dell rebrands. These are GDI printers that receive a job and
+	  print nothing with a generic driver; SpliX ships the rastertoqpdl
+	  filter and ~250 PPDs that Notebook OS's printer setup then offers.
+
+	  http://splix.ap2c.org/
+
+comment "splix needs CUPS and a C++ toolchain"
+	depends on !BR2_PACKAGE_CUPS || !BR2_INSTALL_LIBSTDCPP

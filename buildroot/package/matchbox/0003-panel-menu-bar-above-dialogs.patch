@@ -1,0 +1,64 @@
+From: Notebook OS <benwhiting810@gmail.com>
+Date: Sat, 19 Jul 2026 00:00:00 +0000
+Subject: [PATCH] wm: keep the DOCK panel (menu bar) above dialogs on screen
+
+Matchbox stacks _NET_WM_WINDOW_TYPE_DOCK panels *below* dialog windows
+(see wm_activate_client() and dockbar_client_show()). Notebook OS uses a
+single full-screen, shaped DOCK window as its system menu bar and draws
+its dropdown menus inside that same window; the Finder and the desktop
+widget column are floating DIALOGs. Because dialogs outrank the panel,
+a dropdown opening over the Finder rendered *behind* it.
+
+stack_sync_to_display() -> stack_get_window_list() is the single choke
+point that projects matchbox's internal stack onto the X server via
+XRestackWindows(). Emit panel frames first (topmost) there so the bar and
+its in-window dropdowns always stack above dialogs, without disturbing the
+internal stack/focus bookkeeping. A mapped fullscreen app (MBCLIENT_TYPE_APP
+with _NET_WM_STATE_FULLSCREEN) still covers the panel, preserving the
+"fullscreen app owns the screen" behaviour.
+
+Signed-off-by: Notebook OS <benwhiting810@gmail.com>
+---
+ src/stack.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/src/stack.c b/src/stack.c
+--- a/src/stack.c
++++ b/src/stack.c
+@@ -185,6 +185,7 @@
+   Window *win_list;
+   Client *c;
+   int     i = 0;
++  Bool    fullscreen_app = False;
+ 
+   if (!w->stack_n_items) return NULL;
+ 
+@@ -192,8 +193,28 @@
+ 
+   dbg("%s() called, list is ", __func__);
+ 
++  /* Notebook OS: the panel (a DOCK) is the system menu bar and draws its
++   * dropdown menus inside its own full-screen shaped window. Matchbox stacks
++   * panels *below* dialogs, so a dropdown opening over the Finder (a floating
++   * dialog) is hidden behind it. Emit panel frames first (topmost) so the bar
++   * and its menus always stack above dialogs -- unless a fullscreen app owns
++   * the screen, in which case the panel keeps matchbox's default order so the
++   * app can cover it. */
++  stack_enumerate(w, c)
++    if (c->type == MBCLIENT_TYPE_APP && c->mapped
++	&& (c->flags & CLIENT_FULLSCREEN_FLAG))
++      fullscreen_app = True;
++
++  if (!fullscreen_app)
++    stack_enumerate_reverse(w, c)
++      if (c->type == MBCLIENT_TYPE_PANEL)
++	win_list[i++] = c->frame;
++
+   stack_enumerate_reverse(w, c)
+   {
++    if (!fullscreen_app && c->type == MBCLIENT_TYPE_PANEL)
++      continue;
++
+     dbg("%i:%li, ", i, c->frame);
+ 
+     win_list[i++] = c->frame;

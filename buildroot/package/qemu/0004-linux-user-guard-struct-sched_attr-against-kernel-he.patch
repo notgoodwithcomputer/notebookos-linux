@@ -1,0 +1,43 @@
+From: Notebook OS build <benwhiting810@gmail.com>
+Date: Wed, 15 Jul 2026 15:47:00 -0400
+Subject: [PATCH] linux-user: guard struct sched_attr against kernel headers
+
+Kernel headers since 5.15 (linux/sched/types.h pulled in via sched.h on
+newer glibc/header combos) define struct sched_attr themselves, along
+with the SCHED_ATTR_SIZE_VER0 size macro. qemu 8.1.1's linux-user
+redefines the struct unconditionally, which breaks the host-qemu build
+on hosts with those headers:
+
+  linux-user/syscall.c:362:8: error: redefinition of 'struct sched_attr'
+
+Guard qemu's fallback definition on SCHED_ATTR_SIZE_VER0 so it is only
+used when the headers don't provide the struct.
+
+Newer qemu releases restructured this code upstream; this is the
+minimal fix for 8.1.1.
+
+Signed-off-by: Notebook OS build <benwhiting810@gmail.com>
+---
+ linux-user/syscall.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -358,7 +358,8 @@
+ #define __NR_sys_sched_setaffinity __NR_sched_setaffinity
+ _syscall3(int, sys_sched_setaffinity, pid_t, pid, unsigned int, len,
+           unsigned long *, user_mask_ptr);
+-/* sched_attr is not defined in glibc */
++/* sched_attr is not defined in glibc; newer kernel headers DO define it */
++#ifndef SCHED_ATTR_SIZE_VER0
+ struct sched_attr {
+     uint32_t size;
+     uint32_t sched_policy;
+@@ -371,6 +372,7 @@
+     uint32_t sched_util_min;
+     uint32_t sched_util_max;
+ };
++#endif
+ #define __NR_sys_sched_getattr __NR_sched_getattr
+ _syscall4(int, sys_sched_getattr, pid_t, pid, struct sched_attr *, attr,
+           unsigned int, size, unsigned int, flags);

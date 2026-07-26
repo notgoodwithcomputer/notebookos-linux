@@ -1,0 +1,10 @@
+{
+  "id": "academic",
+  "name": "Academic Notes",
+  "kind": "Notebook",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "academic",
+  "order": 30
+}

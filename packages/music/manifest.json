@@ -1,0 +1,10 @@
+{
+  "id": "music",
+  "name": "Music",
+  "kind": "Media",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "music",
+  "order": 180
+}

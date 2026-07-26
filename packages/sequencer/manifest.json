@@ -1,0 +1,10 @@
+{
+  "id": "sequencer",
+  "name": "Sequencer",
+  "kind": "Audio",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "sequencer",
+  "order": 150
+}

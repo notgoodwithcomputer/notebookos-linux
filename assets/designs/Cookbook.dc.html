@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+  .ck-scroll::-webkit-scrollbar { width: 12px; }
+  .ck-scroll::-webkit-scrollbar-thumb { background: #D8D2C4; border: 3px solid #FCFBF8; border-radius: 8px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#FCFBF8;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Cookbook</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="4">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== BODY ===================== -->
+    <div style="flex:1;display:flex;min-height:0;">
+
+      <!-- ============ SIDEBAR ============ -->
+      <div style="width:344px;flex:none;background:#F1EEE6;border-right:1px solid #D7D2C5;display:flex;flex-direction:column;min-height:0;">
+        <div style="flex:none;padding:22px 22px 16px;border-bottom:1px solid #D7D2C5;">
+          <div style="display:flex;flex-wrap:wrap;gap:7px;">
+            <sc-for list="{{ collections }}" as="col" hint-placeholder-count="5">
+              <div onClick="{{ col.onClick }}" style="{{ col.style }}" style-hover="background:#E3DCCB;">{{ col.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+        <div class="ck-scroll" style="flex:1;overflow-y:auto;padding:14px;min-height:0;">
+          <sc-for list="{{ recipes }}" as="r" hint-placeholder-count="6">
+            <div onClick="{{ r.onClick }}" style="{{ r.rowStyle }}" style-hover="background:#E6DFCE;">
+              <div style="{{ r.thumb }}"></div>
+              <div style="min-width:0;flex:1;">
+                <div style="font-family:Newsreader,serif;font-size:17px;color:#1A1916;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.title }}</div>
+                <div style="font-size:12.5px;color:#9A958A;margin-top:4px;">{{ r.meta }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- ============ RECIPE DETAIL ============ -->
+      <div class="ck-scroll" style="flex:1;overflow-y:auto;min-height:0;background:#FCFBF8;">
+        <!-- banner -->
+        <div style="height:300px;background-color:#E7DFCE;background-image:repeating-linear-gradient(135deg,#E2D9C5 0 14px,#E8E0CF 14px 28px);display:flex;align-items:center;justify-content:center;border-bottom:1px solid #D9D3C5;">
+          <div style="font-family:'Courier New',monospace;font-size:13px;letter-spacing:0.08em;color:#A2997F;background:#FCFBF8;padding:6px 14px;border:1px solid #D9D3C5;">{{ photoLabel }}</div>
+        </div>
+        <div style="max-width:920px;margin:0 auto;padding:44px 56px 90px;">
+          <div style="font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:14px;">{{ activeCollection }}</div>
+          <div style="font-family:Newsreader,serif;font-size:46px;line-height:1.1;color:#1A1916;letter-spacing:-0.01em;margin-bottom:14px;">{{ activeTitle }}</div>
+          <div style="font-family:Newsreader,serif;font-style:italic;font-size:21px;line-height:1.5;color:#79736A;max-width:680px;margin-bottom:32px;">{{ activeDesc }}</div>
+          <!-- meta -->
+          <div style="display:flex;gap:0;border:1px solid #E6E1D4;border-radius:2px;margin-bottom:44px;width:max-content;">
+            <sc-for list="{{ metaStats }}" as="s" hint-placeholder-count="3">
+              <div style="{{ s.style }}">
+                <div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:600;margin-bottom:6px;">{{ s.label }}</div>
+                <div style="font-size:17px;font-weight:600;color:#1A1916;">{{ s.value }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <!-- ingredients + method -->
+          <div style="display:flex;gap:56px;align-items:flex-start;">
+            <div style="width:320px;flex:none;">
+              <div style="font-size:13px;letter-spacing:0.12em;text-transform:uppercase;color:#1A1916;font-weight:700;padding-bottom:12px;border-bottom:2px solid #1A1916;margin-bottom:6px;">Ingredients</div>
+              <sc-for list="{{ ingredients }}" as="ing" hint-placeholder-count="5">
+                <div style="display:flex;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid #ECE7DA;">
+                  <span style="font-family:Newsreader,serif;font-size:18px;color:#26241F;">{{ ing.name }}</span>
+                  <span style="font-size:14px;color:#8A857A;font-variant-numeric:tabular-nums;white-space:nowrap;">{{ ing.qty }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;letter-spacing:0.12em;text-transform:uppercase;color:#1A1916;font-weight:700;padding-bottom:12px;border-bottom:2px solid #1A1916;margin-bottom:22px;">Method</div>
+              <sc-for list="{{ steps }}" as="st" hint-placeholder-count="5">
+                <div style="display:flex;gap:20px;margin-bottom:24px;">
+                  <div style="width:34px;height:34px;flex:none;border:1px solid #1A1916;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#1A1916;font-variant-numeric:tabular-nums;">{{ st.n }}</div>
+                  <div style="font-family:Newsreader,serif;font-size:19px;line-height:1.6;color:#26241F;text-wrap:pretty;padding-top:3px;">{{ st.text }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(2026, 5, 20, 9, 41, 0), activeCol: 0, activeRecipe: 0 };
+
+  collectionNames = ["All", "Breads", "Mains", "Sweets", "Preserves"];
+
+  recipeData = [
+    { col: "Breads", title: "Sourdough Country Loaf", meta: "24 hr \u00b7 1 loaf", photo: "dish photo \u2014 country loaf, scored",
+      desc: "A patient, naturally-leavened loaf with a blistered crust and an open, custardy crumb. Mostly waiting; very little doing.",
+      stats: [{ label: "Time", value: "24 hours" }, { label: "Makes", value: "1 loaf" }, { label: "Effort", value: "Patient" }],
+      ingredients: [
+        { name: "Bread flour", qty: "500 g" }, { name: "Whole-wheat flour", qty: "100 g" },
+        { name: "Water, 28\u00b0C", qty: "390 g" }, { name: "Active starter", qty: "100 g" }, { name: "Fine sea salt", qty: "12 g" },
+      ],
+      steps: [
+        { n: "1", text: "Mix the flours with 360 g of the water. Rest 45 minutes \u2014 this is the autolyse, and it does the kneading for you." },
+        { n: "2", text: "Add the starter and salt with the remaining water. Pinch and fold until smooth." },
+        { n: "3", text: "Bulk ferment 4\u20135 hours at room temperature, folding the dough over itself every 45 minutes for the first three turns." },
+        { n: "4", text: "Shape into a taut round, settle seam-up into a floured banneton, and refrigerate overnight." },
+        { n: "5", text: "Bake at 250\u00b0C in a covered pot for 20 minutes, then uncovered for 20 more, until deeply burnished. Cool fully before cutting \u2014 the hardest step." },
+      ] },
+    { col: "Breads", title: "Olive Oil Focaccia", meta: "5 hr \u00b7 1 tray", photo: "dish photo \u2014 dimpled focaccia",
+      desc: "Dimpled, golden, and shamelessly oily. Rosemary optional; flaky salt is not.",
+      stats: [{ label: "Time", value: "5 hours" }, { label: "Makes", value: "1 tray" }, { label: "Effort", value: "Easy" }],
+      ingredients: [{ name: "Bread flour", qty: "500 g" }, { name: "Water", qty: "400 g" }, { name: "Olive oil", qty: "60 g" }, { name: "Instant yeast", qty: "4 g" }, { name: "Salt", qty: "10 g" }],
+      steps: [{ n: "1", text: "Mix everything to a shaggy dough; no kneading needed." }, { n: "2", text: "Rise until doubled, then stretch into an oiled tray." }, { n: "3", text: "Dimple with wet fingers, scatter salt, and bake hot until golden." }] },
+    { col: "Mains", title: "Saffron Braised Chicken", meta: "1.5 hr \u00b7 Serves 4", photo: "dish photo \u2014 braise in a pot",
+      desc: "A weeknight braise that tastes like a Sunday. The saffron does the heavy lifting.",
+      stats: [{ label: "Time", value: "90 min" }, { label: "Serves", value: "4" }, { label: "Effort", value: "Medium" }],
+      ingredients: [{ name: "Chicken thighs", qty: "8" }, { name: "Onions, sliced", qty: "2" }, { name: "Saffron", qty: "1 pinch" }, { name: "Stock", qty: "500 ml" }, { name: "Lemon", qty: "1" }],
+      steps: [{ n: "1", text: "Brown the thighs well; set aside." }, { n: "2", text: "Soften onions, bloom saffron in warm stock, return chicken." }, { n: "3", text: "Braise gently 45 minutes; finish with lemon." }] },
+    { col: "Sweets", title: "Olive Oil Cake", meta: "1 hr \u00b7 Serves 8", photo: "dish photo \u2014 cake, dusted",
+      desc: "Tender, faintly savoury, and better on the second day \u2014 if it lasts.",
+      stats: [{ label: "Time", value: "60 min" }, { label: "Serves", value: "8" }, { label: "Effort", value: "Easy" }],
+      ingredients: [{ name: "Flour", qty: "220 g" }, { name: "Olive oil", qty: "180 g" }, { name: "Sugar", qty: "200 g" }, { name: "Eggs", qty: "3" }, { name: "Orange zest", qty: "1" }],
+      steps: [{ n: "1", text: "Whisk eggs and sugar to a ribbon." }, { n: "2", text: "Stream in oil, fold in dry, add zest." }, { n: "3", text: "Bake until a skewer comes out clean." }] },
+    { col: "Preserves", title: "Meyer Lemon Marmalade", meta: "2 days \u00b7 4 jars", photo: "dish photo \u2014 jars on a sill",
+      desc: "Bright, bitter-sweet, and the colour of late afternoon. Worth the two-day wait.",
+      stats: [{ label: "Time", value: "2 days" }, { label: "Makes", value: "4 jars" }, { label: "Effort", value: "Patient" }],
+      ingredients: [{ name: "Meyer lemons", qty: "1 kg" }, { name: "Sugar", qty: "1 kg" }, { name: "Water", qty: "1 L" }],
+      steps: [{ n: "1", text: "Slice lemons thin; soak overnight with water." }, { n: "2", text: "Simmer until soft, add sugar, boil to set point." }, { n: "3", text: "Jar hot and seal." }] },
+  ];
+
+  componentDidMount() { this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+
+  icon(k) {
+    const E = React.createElement;
+    const P = (d) => E("path", { d });
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    if (k === "signal") return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+    return S(R(5, 5, 14, 14, 1));
+  }
+
+  renderVals() {
+    const ac = this.state.activeCol;
+    const collections = this.collectionNames.map((label, i) => ({
+      label,
+      onClick: () => { this.setState({ activeCol: i }); this.ensureRecipe(i); },
+      style: "padding:7px 13px;border-radius:2px;cursor:pointer;font-size:13.5px;font-weight:500;border:1px solid "
+        + (i === ac ? "#1A1916;background:#1A1916;color:#FCFBF8;" : "#DCD7C9;background:#FCFBF8;color:#3A362E;"),
+    }));
+
+    const filterName = this.collectionNames[ac];
+    const visible = this.recipeData.map((r, i) => ({ r, i })).filter((o) => ac === 0 || o.r.col === filterName);
+    const recipes = visible.map(({ r, i }) => ({
+      title: r.title, meta: r.col + " \u00b7 " + r.meta,
+      onClick: () => this.setState({ activeRecipe: i }),
+      thumb: "width:54px;height:54px;flex:none;border:1px solid #D9D3C5;background-color:#E7DFCE;background-image:repeating-linear-gradient(135deg,#E2D9C5 0 6px,#E8E0CF 6px 12px);",
+      rowStyle: "display:flex;align-items:center;gap:14px;padding:11px 10px;border-radius:2px;cursor:pointer;margin-bottom:3px;"
+        + (i === this.state.activeRecipe ? "background:#EAE3D2;box-shadow:inset 3px 0 0 #C8341E;" : ""),
+    }));
+
+    const r = this.recipeData[this.state.activeRecipe];
+    const metaStats = r.stats.map((s, idx) => ({
+      label: s.label, value: s.value,
+      style: "padding:16px 28px;" + (idx < r.stats.length - 1 ? "border-right:1px solid #E6E1D4;" : ""),
+    }));
+
+    return {
+      menus: ["File", "Edit", "View", "Cook"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"),
+      collections, recipes,
+      photoLabel: r.photo, activeCollection: r.col, activeTitle: r.title, activeDesc: r.desc,
+      metaStats, ingredients: r.ingredients, steps: r.steps,
+    };
+  }
+
+  ensureRecipe(colIdx) {
+    if (colIdx === 0) return;
+    const name = this.collectionNames[colIdx];
+    if (this.recipeData[this.state.activeRecipe].col !== name) {
+      const first = this.recipeData.findIndex((r) => r.col === name);
+      if (first !== -1) this.setState({ activeRecipe: first });
+    }
+  }
+}
+</script>
+</body>
+</html>

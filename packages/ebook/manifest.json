@@ -1,0 +1,10 @@
+{
+  "id": "ebook",
+  "name": "E-book Reader",
+  "kind": "Reader",
+  "category": "app",
+  "version": "1.0",
+  "entry": "index.dc.html",
+  "icon": "ebook",
+  "order": 90
+}

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; background: #cdcabf; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;background:#cdcabf;">
+  <div style="width:1920px;height:1080px;flex:none;background:#DED4C2;overflow:hidden;display:flex;flex-direction:column;position:relative;">
+
+    <!-- ===================== TOP TOOLBAR ===================== -->
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:#F4F2EC;border-bottom:1px solid #C9C4B6;color:#1A1916;z-index:5;">
+      <div style="display:flex;align-items:center;gap:26px;">
+        <div style="width:15px;height:15px;border-radius:50%;background:#C8341E;cursor:pointer;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:0.01em;">Tetris</div>
+        <sc-for list="{{ menus }}" as="m" hint-placeholder-count="3">
+          <div style="font-size:15px;font-weight:500;cursor:default;padding:3px 7px;border-radius:2px;" style-hover="background:#1A1916;color:#F4F2EC;">{{ m }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;font-size:14px;">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:17px;height:17px;color:#1A1916;display:flex;">{{ signalGlyph }}</div><span style="font-weight:600;letter-spacing:0.04em;">LoRa</span><span style="color:#9A958A;">· {{ loraNodes }}</span></div>
+        <div style="width:1px;height:16px;background:#C9C4B6;"></div>
+        <div style="font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;">{{ clock }}</div>
+        <div style="color:#6E695E;">{{ dateLong }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== GAME ===================== -->
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:48px;min-height:0;padding:32px;">
+      <!-- board -->
+      <div style="position:relative;height:864px;width:432px;flex:none;background:#D8CEB8;padding:4px;border:1px solid #1A1916;">
+        <div style="display:grid;grid-template-columns:repeat(10,1fr);grid-template-rows:repeat(20,1fr);gap:3px;width:100%;height:100%;background:#C9BD9F;">
+          <sc-for list="{{ cells }}" as="c" hint-placeholder-count="200">
+            <div style="{{ c.style }}"></div>
+          </sc-for>
+        </div>
+        <sc-if value="{{ overlay }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:rgba(216,206,184,0.9);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;">
+            <div style="font-size:38px;font-weight:700;color:#1A1916;letter-spacing:-0.02em;">{{ overlayText }}</div>
+            <div onClick="{{ onNew }}" style="height:46px;padding:0 26px;display:flex;align-items:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:16px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">New Game</div>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- panel -->
+      <div style="width:300px;flex:none;display:flex;flex-direction:column;gap:22px;">
+        <div style="font-size:54px;font-weight:700;color:#1A1916;letter-spacing:-0.03em;line-height:0.9;">Tetris</div>
+        <!-- stats -->
+        <div style="display:flex;gap:12px;">
+          <div style="flex:1;background:#F8F7F2;border:1px solid #1A1916;padding:12px 16px;"><div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:700;">Score</div><div style="font-size:26px;font-weight:700;color:#1A1916;font-variant-numeric:tabular-nums;">{{ score }}</div></div>
+        </div>
+        <div style="display:flex;gap:12px;">
+          <div style="flex:1;background:#F8F7F2;border:1px solid #1A1916;padding:12px 16px;"><div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:700;">Lines</div><div style="font-size:22px;font-weight:700;color:#1A1916;font-variant-numeric:tabular-nums;">{{ lines }}</div></div>
+          <div style="flex:1;background:#F8F7F2;border:1px solid #1A1916;padding:12px 16px;"><div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:700;">Level</div><div style="font-size:22px;font-weight:700;color:#1A1916;font-variant-numeric:tabular-nums;">{{ level }}</div></div>
+        </div>
+        <!-- next -->
+        <div style="background:#F8F7F2;border:1px solid #1A1916;padding:16px;">
+          <div style="font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:#A39D8F;font-weight:700;margin-bottom:12px;">Next</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;width:128px;margin:0 auto;">
+            <sc-for list="{{ nextCells }}" as="n" hint-placeholder-count="16">
+              <div style="{{ n.style }}"></div>
+            </sc-for>
+          </div>
+        </div>
+        <!-- controls -->
+        <div style="font-size:13px;color:#6E695E;line-height:2;">
+          <div style="display:flex;justify-content:space-between;"><span>Move</span><b style="color:#1A1916;">← →</b></div>
+          <div style="display:flex;justify-content:space-between;"><span>Rotate</span><b style="color:#1A1916;">↑ / X</b></div>
+          <div style="display:flex;justify-content:space-between;"><span>Soft drop</span><b style="color:#1A1916;">↓</b></div>
+          <div style="display:flex;justify-content:space-between;"><span>Hard drop</span><b style="color:#1A1916;">Space</b></div>
+          <div style="display:flex;justify-content:space-between;"><span>Pause</span><b style="color:#1A1916;">P</b></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <div onClick="{{ onPause }}" style="flex:1;height:42px;display:flex;align-items:center;justify-content:center;border:1px solid #C4BFB1;background:#FCFBF8;color:#1A1916;border-radius:2px;font-size:14.5px;font-weight:600;cursor:pointer;" style-hover="background:#ECE8DD;">{{ pauseLabel }}</div>
+          <div onClick="{{ onNew }}" style="flex:1;height:42px;display:flex;align-items:center;justify-content:center;background:#1A1916;color:#FCFBF8;border-radius:2px;font-size:14.5px;font-weight:600;cursor:pointer;" style-hover="background:#33302A;">New Game</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}">
+class Component extends DCLogic {
+  state = { now: new Date(2026, 5, 20, 9, 41, 0), grid: [], cur: null, next: null, score: 0, lines: 0, level: 1, status: "play" };
+
+  COLORS = { I: "#4A6E80", O: "#A8895A", T: "#6E7B57", S: "#7E8A66", Z: "#9A6F52", J: "#566E86", L: "#A07A48" };
+  SHAPES = {
+    I: [[[0,1],[1,1],[2,1],[3,1]],[[2,0],[2,1],[2,2],[2,3]],[[0,2],[1,2],[2,2],[3,2]],[[1,0],[1,1],[1,2],[1,3]]],
+    O: [[[1,0],[2,0],[1,1],[2,1]],[[1,0],[2,0],[1,1],[2,1]],[[1,0],[2,0],[1,1],[2,1]],[[1,0],[2,0],[1,1],[2,1]]],
+    T: [[[1,0],[0,1],[1,1],[2,1]],[[1,0],[1,1],[2,1],[1,2]],[[0,1],[1,1],[2,1],[1,2]],[[1,0],[0,1],[1,1],[1,2]]],
+    S: [[[1,0],[2,0],[0,1],[1,1]],[[1,0],[1,1],[2,1],[2,2]],[[1,1],[2,1],[0,2],[1,2]],[[0,0],[0,1],[1,1],[1,2]]],
+    Z: [[[0,0],[1,0],[1,1],[2,1]],[[2,0],[1,1],[2,1],[1,2]],[[0,1],[1,1],[1,2],[2,2]],[[1,0],[0,1],[1,1],[0,2]]],
+    J: [[[0,0],[0,1],[1,1],[2,1]],[[1,0],[2,0],[1,1],[1,2]],[[0,1],[1,1],[2,1],[2,2]],[[1,0],[1,1],[0,2],[1,2]]],
+    L: [[[2,0],[0,1],[1,1],[2,1]],[[1,0],[1,1],[1,2],[2,2]],[[0,1],[1,1],[2,1],[0,2]],[[0,0],[1,0],[1,1],[1,2]]],
+  };
+
+  componentDidMount() {
+    this.bag = [];
+    this.newGame();
+    this.keyHandler = (e) => this.onKey(e);
+    window.addEventListener("keydown", this.keyHandler);
+    this.timer = setInterval(() => this.setState((s) => ({ now: new Date(s.now.getTime() + 60000) })), 1000);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this.keyHandler); clearInterval(this.timer); if (this.drop) clearInterval(this.drop); }
+
+  pad(n) { return n < 10 ? "0" + n : "" + n; }
+  clockStr() { const n = this.state.now; return this.pad(n.getHours()) + ":" + this.pad(n.getMinutes()); }
+  dateLong() { const d = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; const n = this.state.now; return d[n.getDay()] + " " + n.getDate() + " June"; }
+
+  emptyGrid() { return Array.from({ length: 20 }, () => Array(10).fill(0)); }
+  drawBag() { if (!this.bag.length) { this.bag = ["I", "O", "T", "S", "Z", "J", "L"]; for (let i = this.bag.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]]; } } return this.bag.pop(); }
+  newPiece(t) { return { t, rot: 0, px: 3, py: 0 }; }
+  cellsOf(p) { return this.SHAPES[p.t][p.rot].map(([x, y]) => [p.px + x, p.py + y]); }
+  collides(p, grid) { return this.cellsOf(p).some(([x, y]) => x < 0 || x >= 10 || y >= 20 || (y >= 0 && grid[y][x])); }
+
+  startDrop() {
+    if (this.drop) clearInterval(this.drop);
+    const speed = Math.max(90, 620 - (this.state.level - 1) * 55);
+    this.drop = setInterval(() => { if (this.state.status === "play") this.step(); }, speed);
+  }
+  newGame() {
+    const grid = this.emptyGrid();
+    this.bag = [];
+    const cur = this.newPiece(this.drawBag());
+    const next = this.drawBag();
+    this.setState({ grid, cur, next, score: 0, lines: 0, level: 1, status: "play" }, () => this.startDrop());
+  }
+
+  step() {
+    const p = this.state.cur; if (!p) return;
+    const moved = { ...p, py: p.py + 1 };
+    if (!this.collides(moved, this.state.grid)) { this.setState({ cur: moved }); }
+    else { this.lock(); }
+  }
+  lock() {
+    const grid = this.state.grid.map((r) => r.slice());
+    const p = this.state.cur; const col = this.COLORS[p.t];
+    this.cellsOf(p).forEach(([x, y]) => { if (y >= 0 && y < 20 && x >= 0 && x < 10) grid[y][x] = col; });
+    // clear lines
+    let cleared = 0;
+    for (let y = 19; y >= 0; y--) { if (grid[y].every((v) => v)) { grid.splice(y, 1); grid.unshift(Array(10).fill(0)); cleared++; y++; } }
+    const pts = [0, 100, 300, 500, 800][cleared] || 0;
+    const lines = this.state.lines + cleared;
+    const level = Math.floor(lines / 10) + 1;
+    const score = this.state.score + pts * this.state.level;
+    const cur = this.newPiece(this.state.next);
+    const next = this.drawBag();
+    if (this.collides(cur, grid)) {
+      this.setState({ grid, cur: null, score, lines, level, status: "over" });
+      if (this.drop) clearInterval(this.drop);
+      return;
+    }
+    const levelUp = level !== this.state.level;
+    this.setState({ grid, cur, next, score, lines, level }, () => { if (levelUp) this.startDrop(); });
+  }
+  tryMove(dx, dy) {
+    const p = this.state.cur; if (!p || this.state.status !== "play") return false;
+    const moved = { ...p, px: p.px + dx, py: p.py + dy };
+    if (!this.collides(moved, this.state.grid)) { this.setState({ cur: moved }); return true; }
+    if (dy > 0) this.lock();
+    return false;
+  }
+  rotate() {
+    const p = this.state.cur; if (!p || this.state.status !== "play") return;
+    const nr = (p.rot + 1) % 4;
+    for (const k of [0, -1, 1, -2, 2]) {
+      const moved = { ...p, rot: nr, px: p.px + k };
+      if (!this.collides(moved, this.state.grid)) { this.setState({ cur: moved }); return; }
+    }
+  }
+  hardDrop() {
+    let p = this.state.cur; if (!p || this.state.status !== "play") return;
+    let drops = 0;
+    while (!this.collides({ ...p, py: p.py + 1 }, this.state.grid)) { p = { ...p, py: p.py + 1 }; drops++; }
+    this.setState({ cur: p, score: this.state.score + drops * 2 }, () => this.lock());
+  }
+  ghostY() {
+    const p = this.state.cur; if (!p) return null;
+    let gy = p.py;
+    while (!this.collides({ ...p, py: gy + 1 }, this.state.grid)) gy++;
+    return { ...p, py: gy };
+  }
+  togglePause() {
+    if (this.state.status === "over") return;
+    this.setState((s) => ({ status: s.status === "pause" ? "play" : "pause" }));
+  }
+
+  onKey(e) {
+    if (e.key === "p" || e.key === "P") { e.preventDefault(); this.togglePause(); return; }
+    if (this.state.status !== "play") return;
+    switch (e.key) {
+      case "ArrowLeft": case "a": e.preventDefault(); this.tryMove(-1, 0); break;
+      case "ArrowRight": case "d": e.preventDefault(); this.tryMove(1, 0); break;
+      case "ArrowDown": case "s": e.preventDefault(); if (this.tryMove(0, 1)) this.setState((st) => ({ score: st.score + 1 })); break;
+      case "ArrowUp": case "x": case "X": e.preventDefault(); this.rotate(); break;
+      case " ": e.preventDefault(); this.hardDrop(); break;
+    }
+  }
+
+  icon(k) {
+    const E = React.createElement;
+    const C = (cx, cy, r) => E("circle", { cx, cy, r });
+    const P = (d) => E("path", { d });
+    const R = (x, y, w, h, r) => E("rect", { x, y, width: w, height: h, rx: r || 0 });
+    const S = (...c) => E("svg", { viewBox: "0 0 24 24", width: "100%", height: "100%", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" }, ...c);
+    if (k === "signal") return S(P("M2 11.5a14 14 0 0 1 20 0"), P("M5.5 14a9 9 0 0 1 13 0"), P("M9 16.4a4.5 4.5 0 0 1 6 0"), C(12, 18.6, 0.7));
+    return S(R(5, 5, 14, 14, 1));
+  }
+
+  renderVals() {
+    const grid = this.state.grid.length ? this.state.grid : this.emptyGrid();
+    const disp = grid.map((row) => row.map((v) => ({ fill: v || null, ghost: false })));
+    if (this.state.cur) {
+      const g = this.ghostY();
+      if (g) this.cellsOf(g).forEach(([x, y]) => { if (y >= 0 && y < 20 && x >= 0 && x < 10 && !disp[y][x].fill) disp[y][x].ghost = this.COLORS[this.state.cur.t]; });
+      this.cellsOf(this.state.cur).forEach(([x, y]) => { if (y >= 0 && y < 20 && x >= 0 && x < 10) disp[y][x] = { fill: this.COLORS[this.state.cur.t], ghost: false }; });
+    }
+    const cells = [];
+    for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
+      const d = disp[y][x];
+      if (d.fill) cells.push({ style: "background:" + d.fill + ";box-shadow:inset 0 0 0 1px rgba(255,255,255,0.10), inset -2px -2px 0 rgba(0,0,0,0.12);" });
+      else if (d.ghost) cells.push({ style: "background:#EFEADB;box-shadow:inset 0 0 0 2px " + d.ghost + "44;" });
+      else cells.push({ style: "background:#EFEADB;" });
+    }
+
+    // next preview
+    const nextCells = [];
+    const ncolor = this.state.next ? this.COLORS[this.state.next] : null;
+    const nset = this.state.next ? this.SHAPES[this.state.next][0].map(([x, y]) => x + "," + y) : [];
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
+      const on = nset.indexOf(x + "," + y) !== -1;
+      nextCells.push({ style: "aspect-ratio:1;border-radius:2px;background:" + (on ? ncolor : "#EDE8DB") + ";" + (on ? "box-shadow:inset -2px -2px 0 rgba(0,0,0,0.12);" : "") });
+    }
+
+    return {
+      menus: ["File", "Game", "View"],
+      clock: this.clockStr(), dateLong: this.dateLong(), loraNodes: "4 nodes",
+      signalGlyph: this.icon("signal"),
+      cells, nextCells,
+      score: this.state.score.toLocaleString(), lines: this.state.lines, level: this.state.level,
+      overlay: this.state.status === "over" || this.state.status === "pause",
+      overlayText: this.state.status === "over" ? "Game Over" : "Paused",
+      pauseLabel: this.state.status === "pause" ? "Resume" : "Pause",
+      onPause: () => this.togglePause(),
+      onNew: () => this.newGame(),
+    };
+  }
+}
+</script>
+</body>
+</html>
