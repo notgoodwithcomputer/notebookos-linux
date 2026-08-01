@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the GBA IDE runtime's built-in 8x8 text font as 4bpp GBA tile data.
+"""Generate the GBA SDK runtime's built-in 8x8 text font as 4bpp GBA tile data.
 
 Rasterises ASCII 32..126 from DejaVu Sans Mono into 8x8 1-bit cells, packs each
 as a 4bpp GBA tile (pixel index 1 = ink, 0 = transparent), and prints a C array
@@ -14,12 +14,102 @@ from PIL import Image, ImageFont, ImageDraw
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FIRST, LAST = 32, 126
 
+# Rasterising into an 8x8 cell is destructive, and two characters that come out
+# as the same 64 pixels are a real bug in a game that shows a score or a line of
+# dialogue. The baseline sits one row higher than the obvious choice so that p,
+# y, g, q, j and the comma have a row left for their descender — without it
+# `o` and `p`, `v` and `y`, `,` and `.`, and `:` and `;` were byte-identical.
+BASELINE_DY = -2
+THRESHOLD = 90
+
+# The characters the rasteriser still cannot separate at this size, drawn by
+# hand. `0` and `8` matter most: a digit that reads as D or B ruins every score
+# read-out. Rows are top to bottom, '#' = ink; row 7 is below the baseline.
+OVERRIDES = {
+    "0": ("....",           # a slashed zero, so it can never read as D or O
+          ".###.",
+          "#...#",
+          "#..##",
+          "#.#.#",
+          "##..#",
+          "#...#",
+          ".###."),
+    "8": (".###.",          # two bowls, every corner round: not a B
+          "#...#",
+          "#...#",
+          ".###.",
+          "#...#",
+          "#...#",
+          ".###."),
+    "B": ("####.",          # one straight stem, both bowls to its right
+          ".#..#",
+          ".#..#",
+          ".###.",
+          ".#..#",
+          ".#..#",
+          "####."),
+    "Q": (".###.",          # an O with a tail that leaves the ring
+          "##..#",
+          "##..#",
+          "##..#",
+          "##..#",
+          "##.##",
+          ".###.",
+          "...###"),
+    "_": ("", "", "", "", "", "", "", "######"),
+    ".": ("", "", "", "", "", ".##", ".##"),
+    ",": ("", "", "", "", "", ".##", ".##", "##"),
+    ":": ("", ".##", ".##", "", "", ".##", ".##"),
+    ";": ("", ".##", ".##", "", "", ".##", ".##", "##"),
+    "'": (".##", ".##"),
+    "`": ("##", ".#"),
+    # curved brackets against square ones, and the lowercase l against both
+    "(": ("..#.", ".#..", "#...", "#...", "#...", ".#..", "..#."),
+    ")": (".#..", "..#.", "...#", "...#", "...#", "..#.", ".#.."),
+    "[": (".##.", ".#..", ".#..", ".#..", ".#..", ".#..", ".##."),
+    "]": ("..##", "...#", "...#", "...#", "...#", "...#", "..##"),
+    "l": (".##.", "..#.", "..#.", "..#.", "..#.", "..#.", "..##"),
+    # g curls its descender left, q drops a straight stem: the only thing that
+    # separates them at this size
+    "g": ("", "", ".####", "#...#", "#...#", ".####", "....#", "####."),
+    "q": ("", "", ".####", "#...#", "#...#", ".####", "....#", "....#"),
+}
+
+
+def _pack(art):
+    """Hand-drawn rows ('#' = ink) -> the 8 row bitmasks of an 8x8 cell."""
+    rows = []
+    for y in range(8):
+        line = art[y] if y < len(art) else ""
+        rows.append(sum(1 << x for x, c in enumerate(line[:8]) if c == "#"))
+    return rows
+
 
 def glyph_rows(font, ch):
+    if ch in OVERRIDES:
+        return _pack(OVERRIDES[ch])
     img = Image.new("L", (8, 8), 0)
-    ImageDraw.Draw(img).text((0, -1), ch, fill=255, font=font)
+    ImageDraw.Draw(img).text((0, BASELINE_DY), ch, fill=255, font=font)
     px = img.load()
-    return [sum((1 << x) for x in range(8) if px[x, y] > 110) for y in range(8)]
+    return [sum((1 << x) for x in range(8) if px[x, y] > THRESHOLD)
+            for y in range(8)]
+
+
+def audit(rows_by_ch):
+    """Every pair of visible characters that renders within one pixel of
+    another, plus anything that renders as nothing. Both are bugs, so the
+    generator refuses to emit a font that has any."""
+    import itertools
+    vis = {c: r for c, r in rows_by_ch.items()
+           if c != ord(" ") and any(r)}
+    problems = ["%r draws nothing" % chr(c) for c, r in rows_by_ch.items()
+                if c != ord(" ") and not any(r)]
+    for a, b in itertools.combinations(sorted(vis), 2):
+        d = sum(bin(x ^ y).count("1") for x, y in zip(vis[a], vis[b]))
+        if d <= 1:
+            problems.append("%r and %r differ by only %d pixel(s)"
+                            % (chr(a), chr(b), d))
+    return problems
 
 
 def main():
@@ -36,6 +126,11 @@ def main():
                     if rows[y] & (1 << (half * 4 + k)):
                         v |= 1 << (k * 4)      # pixel index 1 = ink
                 tiles.append(v)
+    problems = audit(rows_by_ch)
+    if problems:
+        sys.stderr.write("this font is not legible; fix OVERRIDES:\n  %s\n"
+                         % "\n  ".join(problems))
+        return 1
     # C array
     print("/* built-in 8x8 text font (ASCII %d..%d), 4bpp; char c -> tile c-%d.\n"
           "   Generated by tools/gen_gba_font.py. */" % (FIRST, LAST, FIRST))
@@ -63,7 +158,8 @@ def main():
                             pp[(ci * 8 + x) * sc + sx, y * sc + sy] = (240, 240, 210)
     im.save(out)
     sys.stderr.write("preview -> %s\n" % out)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -54,7 +54,7 @@ list of trivia.
 Host baseline, warm caches, `tools/perf_baseline.py`:
 
 * Import is **9-30 ms** per app; construct is **40-110 ms**; memory **11-21 MB**.
-* There is **no outlier** left. (gbaide once measured 191 ms — that was bytecode
+* There is **no outlier** left. (gbasdk once measured 191 ms — that was bytecode
   compilation right after an edit, not real cost. Warm it is 14 ms.)
 * The shipped image **already carries valid Python 3.11 bytecode** for all 47
   modules, so there is no first-launch compile cost to win back. Verified.

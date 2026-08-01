@@ -9,6 +9,12 @@
 @define-color accent  #C8341E;
 @define-color muted   #6E695E;
 @define-color select  #EAE3D2;
+/* The rail: sidebars, side panels and status bars — one step darker than the
+   panel, which is what separates a window's furniture from its content. */
+@define-color rail    #F1EEE6;
+/* The lighter hairline used INSIDE a panel, where @hair would read as a
+   border between two windows rather than a seam within one. */
+@define-color hairlt  #D7D2C5;
 
 * {
   color: @ink;
@@ -78,11 +84,21 @@ button:active, button:checked {
 }
 button:checked:hover, button:active:hover { background: #E0D8C4; }
 /* Selection anywhere else (list rows, tree views, text) uses the same tone
-   rather than the theme default blue/black. */
+   rather than the theme default blue/black.
+
+   `background-image: none` is LOAD-BEARING, not tidiness. The selected state is
+   painted as a background IMAGE, not a colour, so a rule that sets only
+   background-color loses every time: the image is drawn straight over it and
+   the row stays Adwaita blue. This rule looked correct for a long time and did
+   nothing — every selected GtkListBox row in the OS (the GBA SDK's resource
+   picker among them) came up blue, in a design language that contains no blue.
+   The `button:active` rule above already carries the same guard for the same
+   reason; verified here by rendering a selected row with and without it. */
 :selected, :selected:focus,
 list row:selected, listbox row:selected, treeview:selected,
 textview text selection, entry selection, label selection {
   background-color: @select;
+  background-image: none;
   color: @ink;
 }
 
@@ -115,7 +131,7 @@ scale slider { background: @paper; border: 1px solid @hair; border-radius: 100%;
                min-width: 16px; min-height: 16px; }
 
 /* SpinButton field — give the numeric box the same paper the entries use so a
-   stray spin (GBA IDE room size / sprite anim, sequencer tempo) doesn't sit on
+   stray spin (GBA SDK room size / sprite anim, sequencer tempo) doesn't sit on
    bare white. An app that styles its own spins wins at APPLICATION priority. */
 spinbutton { background-color: #FBFAF6; border: 1px solid @hair;
              border-radius: 2px; color: #2A2620; }
@@ -132,6 +148,70 @@ spinbutton button { color: @ink; background: #F4F2EC; border: none;
 spinbutton button:hover { background: #ECE8DE; color: @ink; }
 spinbutton button:active { background: #E0D8C4; color: @ink; }
 
+/* ---- Dialog actions: primary, destructive, and the default button ----------
+   GTK's built-in stylesheet paints a dialog's DEFAULT button, and the standard
+   .suggested-action / .destructive-action classes, in its own blue — a colour
+   this design does not contain. Every dialog in the OS showed it: whichever
+   button GTK made default (usually Cancel, since most confirms set no default)
+   came up ringed in blue.
+
+   Two apps had already discovered this and fixed it privately — calendar with
+   .dlgcancel + its own .suggested-action, the Finder with .finderinfodanger —
+   so the treatments below are theirs, promoted to the theme. Naming them once
+   here fixes every dialog at the same time and gives apps ONE vocabulary for
+   "this is the action" / "this one destroys something" instead of each
+   inventing a private class. An app that styles its own still wins at
+   APPLICATION priority, so nothing already-styled changes.
+
+   The default button is deliberately kept NEUTRAL rather than emphasised — GTK hands the
+   default to the first button when a dialog nominates none, so emphasising it
+   would spotlight Cancel. Emphasis is opt-in via the two classes below. */
+button.default {
+  background: #F8F7F2;
+  border: 1px solid @hair;
+  color: @ink;
+  box-shadow: none;
+  outline: none;
+}
+button.default:hover { background: #F1EEE6; }
+
+/* The primary action — an ink slab (calendar's treatment). */
+button.suggested-action, button.suggested-action.default {
+  background: @ink;
+  border: 1px solid @ink;
+  color: #FCFBF8;
+  box-shadow: none;
+  font-weight: 600;
+}
+button.suggested-action label,
+button.suggested-action:hover label { color: #FCFBF8; }
+button.suggested-action:hover, button.suggested-action.default:hover {
+  background: #2E2A24;
+  border-color: #2E2A24;
+}
+
+/* The destructive action — the one signage red, as the Finder already paints
+   Delete Forever and Empty Trash. */
+button.destructive-action, button.destructive-action.default {
+  background: @accent;
+  border: 1px solid #A82B18;
+  color: #F8F7F2;
+  box-shadow: none;
+  font-weight: 600;
+}
+button.destructive-action label,
+button.destructive-action:hover label { color: #F8F7F2; }
+button.destructive-action:hover, button.destructive-action.default:hover {
+  background: #B32E1A;
+  border-color: #A82B18;
+}
+
+/* A dialog's own heading. Most confirmations in the OS state their question
+   inside the dialog rather than trusting the window manager's title bar to
+   carry it; this is the Finder's .finderinfoname treatment, shared so the
+   apps that were relying on the title bar alone can join in. */
+.dlghead { font-size: 17px; font-weight: 700; color: @ink; }
+
 selection { background-color: @select; color: @ink; }
 
 separator { background-color: @hair; min-width: 1px; min-height: 1px; }
@@ -146,8 +226,16 @@ scrollbar { background: @paper; border: none; }
 scrollbar trough { background: #F1EEE6; border: none;
                    border-radius: 8px; margin: 2px; }
 scrollbar slider { background: #C9C4B6; border-radius: 8px;
-                   min-width: 9px; min-height: 30px;
                    border: 2px solid #F1EEE6; }
+/* The slider's two minimums are THICKNESS and LENGTH, and which axis each one
+   lands on depends on the bar's orientation — so they cannot be set once for
+   both. A single `min-width: 9px; min-height: 30px` reads correctly on a
+   vertical bar (9px thin, 30px of grab) and backwards on a horizontal one,
+   where min-height made the slider 30px THICK: Illustrator's canvas and the
+   Sequencer's transport row each carried a 30px solid slab across the window
+   that read as a broken widget rather than a scrollbar. Per-orientation. */
+scrollbar.vertical slider   { min-width: 9px;  min-height: 30px; }
+scrollbar.horizontal slider { min-height: 9px; min-width: 30px; }
 scrollbar slider:hover { background: #9A9484; }
 scrollbar slider:active { background: #8A857A; }
 /* No stepper arrow buttons at the ends of the bar. GTK always inserts these
@@ -172,3 +260,17 @@ scrollbar.vertical button {
    default translucent black, which reads as a smudge on paper. */
 scrollbar.overlay-indicator:not(.dragging):not(.hovering) slider {
                    background: #C9C4B6; border: none; }
+
+
+/* ---------------------------------------------------------------- statusbar
+   The strip along the bottom of a window that says what is going on: a word
+   count, a save state, how many items are in view.
+
+   Defined ONCE, here, because it was defined four times in four apps with
+   three different hairline colours, two backgrounds, two text sizes and two
+   inks (illustrator/sequencer/writer/finder). Nothing about a status bar is
+   app-specific, and a user moving between two windows should not be able to
+   see that two different people built them. */
+.statusbar { background: @rail; border-top: 1px solid @hairlt;
+             min-height: 32px; padding: 0 18px; }
+.statusbar label { font-size: 12px; color: @muted; }

@@ -152,6 +152,22 @@ MAN="$OUTDIR/BUILD_MANIFEST.txt"
     ( cd "$OUTDIR" && for f in notebookos-${VER}.iso notebookos-${VER}.img; do
         [ -f "$f" ] && sha256sum "$f"
     done )
+    echo ""
+    echo "starting on a machine with Secure Boot switched on:"
+    if [ -n "${SB_PAYLOAD:-}" ] && [ -d "${SB_PAYLOAD:-/nonexistent}" ]; then
+        echo "  The USB starts and reaches the boot menu. The kernel is signed"
+        echo "  with the Notebook OS key, which the machine does not trust yet,"
+        echo "  so the first start stops with:"
+        echo "      error: you need to load the kernel first."
+        echo "  Choose \"Enroll Secure Boot key\" in the boot menu, accept the key"
+        echo "  in the blue MokManager screen, and restart. This is needed once."
+        echo "  Switching Secure Boot off in the firmware also works."
+    else
+        echo "  NOT SUPPORTED in this build -- the Secure Boot payload was not"
+        echo "  present, so the boot files are unsigned and the firmware refuses"
+        echo "  the USB with \"Access Denied\" / \"No bootable device\"."
+        echo "  Switch Secure Boot off in the firmware to start from this medium."
+    fi
 } | tee "$MAN"
 
 # ---- 6b. companion map packs -------------------------------------------

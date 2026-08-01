@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """gba_render_check — a host-side simulator of the GBA mode-0 OBJ compositor.
 
-No emulator is available on the build host, so this verifies that the GBA IDE's
+No emulator is available on the build host, so this verifies that the GBA SDK's
 mode-0 renderer would show the right thing: it takes a project model + a list of
 placed instances, reproduces the OBJ tile/palette data the compiler emits and the
 OAM the runtime builds, then composites one frame exactly as the GBA PPU does

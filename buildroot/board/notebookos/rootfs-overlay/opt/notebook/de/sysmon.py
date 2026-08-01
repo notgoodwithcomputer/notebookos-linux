@@ -2,15 +2,19 @@
 """
 System Monitor — the Notebook OS activity monitor (native GTK).
 
-Live CPU and memory gauges plus a sortable process table, all read straight
-from /proc (no external tools). Select a process and End Process to send it a
-signal. Cinnamon/gnome-system-monitor lineage, papertone-styled.
+Live processor and memory gauges plus a sortable table of the programs that
+are running, all read straight from /proc (no external tools). Select one and
+End Program to send it a signal. The window says "program" throughout, never
+"process": the row IS a running program, and the P-word is one a person cannot
+look up on a machine with no internet. Cinnamon/gnome-system-monitor lineage,
+papertone-styled.
 """
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, GObject  # noqa: E402
 
+import errno
 import os
 import signal
 import time
@@ -85,7 +89,7 @@ def human_kb(kb):
 class SystemMonitor(nbapp.AppWindow):
     app_name = "System Monitor"
     menus = ("View",)
-    # End Process icon colours: ink when a row is selected (actionable), muted
+    # End Program icon colours: ink when a row is selected (actionable), muted
     # when the button is disabled. A pixbuf can't be recoloured by CSS, so the
     # icon is swapped to match the button's sensitivity (see _on_selection_changed).
     _END_ICON_ON = "#1A1916"
@@ -139,34 +143,43 @@ class SystemMonitor(nbapp.AppWindow):
         self.mem_lbl = self._gauge_value(mem_card)
         self.disk_lbl = self._gauge_value(disk_card)
 
-        # process table
-        # cols 4/5 are hidden NUMERIC sort keys (rss_kb, cpu_pct) so MEMORY/CPU
-        # sort by value, not by their formatted text ("100%" mis-sorts vs "9%").
+        # the table of running programs
+        # cols 4/5 are hidden NUMERIC sort keys (rss_kb, cpu_pct) so MEMORY and
+        # PROCESSOR sort by value, not by their formatted text ("100%"
+        # mis-sorts vs "9%").
         self.store = Gtk.ListStore(str, int, str, str,
                                    GObject.TYPE_INT64, GObject.TYPE_DOUBLE)
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.get_style_context().add_class("smtree")
-        # Click-sortable headers. Each visible column maps to the MODEL column it
-        # sorts on: PROCESS->0 (name), PID->1, MEMORY->4 (rss_kb), CPU->5 (cpu_pct)
-        # -- the last two so value, not formatted text, orders the rows.
+        # Click-sortable headers. Each visible column maps to the MODEL column
+        # it sorts on: NAME->0, ID->1, MEMORY->4 (rss_kb), PROCESSOR->5
+        # (cpu_pct) -- the last two so value, not formatted text, orders rows.
         # We drive sorting ourselves (set_clickable + "clicked") rather than via
         # column.set_sort_column_id so the FIRST click on a resource column lands
         # on the useful order -- busiest first, like any activity monitor -- rather
-        # than GTK's fixed ascending, which buries the busy processes under idle 0%
+        # than GTK's fixed ascending, which buries the busy programs under idle 0%
         # ones. Clicking the already-active column flips the direction.
         self._sort_widgets = {}         # model col -> TreeViewColumn (for indicator)
-        self._desc_first = {4, 5}       # MEMORY, CPU: first click -> DESCENDING
+        self._desc_first = {4, 5}       # MEMORY, PROCESSOR: 1st click -> DESC
         self._sort_col = 4              # current model sort column
         self._sort_order = Gtk.SortType.DESCENDING
-        sort_cols = {2: 4, 3: 5}  # MEMORY->rss_kb(4), CPU->cpu_pct(5) numeric keys
+        sort_cols = {2: 4, 3: 5}  # MEMORY->rss_kb(4), PROCESSOR->cpu_pct(5) keys
         # "ID", not "PID": the number is only ever used to tell two identically
         # named rows apart, and the P is a word from another world.
-        for i, title in enumerate(["PROCESS", "ID", "MEMORY", "CPU"]):
+        # "NAME", not "PROCESS": the section heading directly above this table
+        # already says what the rows are, so the column repeated the word rather
+        # than saying what is in it — and the View menu's own entry for this
+        # column has always been "Sort by Name".
+        # "PROCESSOR", not "CPU": the gauge measuring the very same thing, a few
+        # centimetres above, has said Processor since it was built; two names
+        # for one number on one page is one name too many, and the acronym is
+        # the one a person cannot look up on a machine with no internet.
+        for i, title in enumerate(["NAME", "ID", "MEMORY", "PROCESSOR"]):
             r = Gtk.CellRendererText()
             r.set_property("ypad", 4)
             if i in (1, 2, 3):
                 r.set_property("xalign", 1.0)
-                # tabular figures: mono aligns the PID / MEMORY / CPU digits
+                # tabular figures: mono aligns the ID / MEMORY / % digits
                 r.set_property("family", "Liberation Mono")
                 r.set_property("family-set", True)
             c = Gtk.TreeViewColumn(title, r, text=i)
@@ -176,12 +189,12 @@ class SystemMonitor(nbapp.AppWindow):
             c.connect("clicked", self._on_header_clicked, model_col)
             self._sort_widgets[model_col] = c
             self.tree.append_column(c)
-        # PROCESS sorts case-insensitively so names group naturally instead of
+        # NAME sorts case-insensitively so names group naturally instead of
         # segregating every capitalised command ahead of the lowercase ones.
         self.store.set_sort_func(0, self._cmp_name)
         self._apply_sort(4, Gtk.SortType.DESCENDING)  # launch: memory, busiest top
 
-        proc_lbl = Gtk.Label(label=_t("PROCESSES"), xalign=0)
+        proc_lbl = Gtk.Label(label=_t("RUNNING PROGRAMS"), xalign=0)
         proc_lbl.get_style_context().add_class("smsection")
         proc_lbl.set_margin_top(28); proc_lbl.set_margin_bottom(12)
         stage.pack_start(proc_lbl, False, False, 0)
@@ -208,18 +221,18 @@ class SystemMonitor(nbapp.AppWindow):
         self._end_icon = Gtk.Image.new_from_pixbuf(
             nbicons.pixbuf("stopsq", 16, self._END_ICON_OFF))
         ebox.pack_start(self._end_icon, False, False, 0)
-        ebox.pack_start(Gtk.Label(label=_t("End Process")), False, False, 0)
+        ebox.pack_start(Gtk.Label(label=_t("End Program")), False, False, 0)
         self.endbtn.add(ebox)
         self.endbtn.connect("clicked", self._end_process)
         self.endbtn.set_sensitive(False)   # enabled only when a row is selected
         foot.pack_end(self.endbtn, False, False, 0)
         stage.pack_start(foot, False, False, 0)
 
-        # End Process is destructive — gate it on an actual selection so a stray
+        # End Program is destructive — gate it on an actual selection so a stray
         # click can't no-op silently (the View-menu entry greys out to match).
         self.tree.get_selection().connect("changed", self._on_selection_changed)
-        # Right-click a row -> context menu (End Process / Copy PID); Delete key
-        # ends the selected process. Both route through the same confirmed path.
+        # Right-click a row -> context menu (End Program / Copy ID); Delete key
+        # ends the selected program. Both route through the same confirmed path.
         self.tree.connect("button-press-event", self._on_tree_button)
         self.connect("key-press-event", self._on_key_del)
 
@@ -285,14 +298,14 @@ class SystemMonitor(nbapp.AppWindow):
         self.mem_lbl.set_text("%s used of %s"
                               % (human_kb(used), human_kb(total)))
         self._refresh_disk()
-        # processes — list/memory always rebuild; CPU% honours `recompute`
+        # programs — list/memory always rebuild; processor % honours `recompute`
         self._refresh_procs(dtot, recompute)
         return self._alive
 
     def _script_name(self, pid, started, fallback):
         # An interpreter's row is useless as "python3": show the app it is
         # running. This matters twice over — the table becomes readable, and
-        # End Process stops being a coin toss between the user's document and
+        # End Program stops being a coin toss between the user's document and
         # the desktop itself. Read once per process (see _name_cache).
         key = (pid, started)
         hit = self._name_cache.get(key)
@@ -418,37 +431,54 @@ class SystemMonitor(nbapp.AppWindow):
         # restore the pre-rebuild scroll offset (clamped by GTK to valid range)
         if vadj is not None:
             vadj.set_value(scroll_y)
-        # a transient footer message (e.g. an End Process result) holds for a few
-        # seconds; otherwise show the live process count.
+        # a transient footer message (e.g. an End Program result) holds for a few
+        # seconds; otherwise show the live count of running programs.
         if self._status_text is not None and time.monotonic() < self._status_until:
             self.stat.set_text(self._status_text)
         else:
             self._status_text = None
             n = len(rows)
-            self.stat.set_text("%d process%s" % (n, "" if n == 1 else "es"))
+            self.stat.set_text("%d program%s" % (n, "" if n == 1 else "s"))
 
     def _end_process(self, _b=None):
-        # End Process signals a process to terminate — destructive, so confirm
+        # End Program signals the program to stop — destructive, so confirm
         # first (with the exact target named) before anything is sent.
         model, it = self.tree.get_selection().get_selected()
         if it is None:
-            self._flash("No process selected.")
+            self._flash(_t("Select a program first"))
             return
         pid = model.get_value(it, 1)
         name = model.get_value(it, 0)
+        # One verb throughout: the button says End Program, so the card asks to
+        # END it and the result says it is ending. The card used to ask "Ask
+        # 'Writer' to close?" — a different verb from the button that had just
+        # been pressed, which reads as a different action.
         self._confirm(
-            "End Process",
-            "Ask '%s' to close? Anything it has not saved will be lost."
-            % name,
-            "End Process", lambda: self._do_end(pid, name))
+            _t("End Program"),
+            _t("End “%s”? Anything it has not saved will be lost.") % name,
+            _t("End Program"), lambda: self._do_end(pid, name))
 
     def _do_end(self, pid, name):
         try:
             os.kill(pid, signal.SIGTERM)
-            self._flash("Asked %s to close." % name)
+            self._flash(_t("Ending %s") % name)
         except OSError as e:
-            self._flash("Could not close %s: %s"
-                        % (name, e.strerror or "it is no longer running"))
+            self._flash(self._end_problem(name, e))
+
+    @staticmethod
+    def _end_problem(name, exc):
+        """A plain sentence for a program that would not end.
+
+        The footer used to print the kernel's own wording straight through
+        (`Could not close Writer: Operation not permitted`), which reads as an
+        accusation and tells the user nothing about what to do. Nothing is lost
+        in any of these cases — the program is simply still there."""
+        err = getattr(exc, "errno", None)
+        if err == errno.ESRCH:
+            return _t("%s had already finished") % name
+        if err in (errno.EPERM, errno.EACCES):
+            return _t("%s belongs to the system and cannot be ended here") % name
+        return _t("%s could not be ended, and is still running") % name
 
     def _confirm(self, title, message, ok_label, on_yes):
         # House-style modal confirmation for a destructive action: a papertone
@@ -491,7 +521,7 @@ class SystemMonitor(nbapp.AppWindow):
         return False
 
     def _on_selection_changed(self, sel):
-        # End Process is enabled only while a row is actually selected.
+        # End Program is enabled only while a row is actually selected.
         has = sel.get_selected()[1] is not None
         self.endbtn.set_sensitive(has)
         # Dim the icon in step with the button (CSS can't recolour a pixbuf).
@@ -500,7 +530,7 @@ class SystemMonitor(nbapp.AppWindow):
 
     def _on_tree_button(self, tree, event):
         # Right-click selects the row under the pointer and opens a context menu
-        # with the actions a process row implies (End Process / Copy PID).
+        # with the actions a program row implies (End Program / Copy ID).
         if event.button != 3 or event.type != Gdk.EventType.BUTTON_PRESS:
             return False
         hit = tree.get_path_at_pos(int(event.x), int(event.y))
@@ -510,7 +540,7 @@ class SystemMonitor(nbapp.AppWindow):
         tree.get_selection().select_path(hit[0])
         menu = Gtk.Menu()
         menu.get_style_context().add_class("smmenu")
-        for label, cb in (("End Process", self._end_process),
+        for label, cb in (("End Program", self._end_process),
                           (None, None),
                           ("Copy ID", self._copy_pid)):
             if label is None:
@@ -527,20 +557,23 @@ class SystemMonitor(nbapp.AppWindow):
         return True
 
     def _copy_pid(self):
-        # Copy the selected PID to the clipboard — handy for pasting into the
+        # Copy the selected ID to the clipboard — handy for pasting into the
         # Terminal. Best-effort: a missing clipboard must never crash the app.
         model, it = self.tree.get_selection().get_selected()
         if it is None:
             return
         pid = model.get_value(it, 1)
+        name = model.get_value(it, 0)
         try:
             Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(str(pid), -1)
-            self._flash("Copied ID %d to the clipboard." % pid, secs=3)
+            # Name what was copied, not just the number: with a dozen rows on
+            # screen, "Copied ID 1274" does not say which row it came from.
+            self._flash(_t("Copied the ID for %s") % name, secs=3)
         except Exception:
             pass
 
     def _on_key_del(self, _w, ev):
-        # Delete ends the selected process (same confirmed path as the button).
+        # Delete ends the selected program (same confirmed path as the button).
         # Ignored while a dropdown or the About card owns the screen.
         if ev.keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
             if self._menu_open is not None or getattr(self, "_about_layer", None):
@@ -551,7 +584,7 @@ class SystemMonitor(nbapp.AppWindow):
 
     def _flash(self, msg, secs=6):
         # Show a status message in the footer that survives the next few refresh
-        # ticks before reverting to the process count.
+        # ticks before reverting to the count of running programs.
         self._status_text = msg
         self._status_until = time.monotonic() + secs
         self.stat.set_text(msg)
@@ -596,31 +629,40 @@ class SystemMonitor(nbapp.AppWindow):
 
     def _manual_refresh(self):
         # Re-sample immediately and acknowledge it, so the action never feels
-        # like it did nothing (the flash reverts to the process count shortly).
+        # like it did nothing (the flash reverts to the count shortly).
         self.refresh(manual=True)
-        self._flash("Refreshed.", secs=2)
+        # No full stop: the footer's resting text is "12 programs", so a
+        # sentence-punctuated flash sat oddly beside it.
+        self._flash(_t("Refreshed"), secs=2)
 
     def menu_items(self, name):
         if name == "View":
             # match the button: greyed-out (callback=None) unless a row is picked
             has_sel = self.tree.get_selection().get_selected()[1] is not None
             end_cb = (lambda: self._end_process(None)) if has_sel else None
-            # advertise the Delete shortcut only while it's actionable
-            end_lbl = "End Process    Del" if has_sel else "End Process"
-            return [
+            # advertise the Delete shortcut only while it's actionable. Both
+            # labels are written out as LITERALS rather than picked by an
+            # inline conditional: tools/i18n_check's chrome scan only sees a
+            # constant in the label slot, so a computed label drops out of the
+            # translation audit entirely.
+            items = [
                 ("Refresh Now", self._manual_refresh),
                 nbapp.SEP,
                 ("Sort by Memory",
                  lambda: self._sort(4, Gtk.SortType.DESCENDING)),
-                ("Sort by CPU",  # sort by numeric cpu_pct (5), not formatted text (3)
+                ("Sort by Processor",  # numeric cpu_pct (5), not the formatted text (3)
                  lambda: self._sort(5, Gtk.SortType.DESCENDING)),
                 ("Sort by Name",
                  lambda: self._sort(0, Gtk.SortType.ASCENDING)),
                 ("Sort by ID",
                  lambda: self._sort(1, Gtk.SortType.ASCENDING)),
                 nbapp.SEP,
-                (end_lbl, end_cb),
             ]
+            if has_sel:
+                items.append(("End Program    Del", end_cb))
+            else:
+                items.append(("End Program", end_cb))
+            return items
         return super().menu_items(name)
 
     def _install_css(self):
@@ -685,7 +727,7 @@ class SystemMonitor(nbapp.AppWindow):
         .smdlgbox { padding: 22px 24px 18px; }
         .smdlgtitle { font-size: 17px; font-weight: 700; color: #1A1916; }
         .smdlgmsg { font-size: 13px; color: #2A2620; }
-        .smdlgcancel { padding: 6px 18px; background: #FBFAF6; color: #2A2620;
+        .smdlgcancel { padding: 6px 18px; background: #FCFBF8; color: #2A2620;
                  border: 1px solid #C4BFB1; border-radius: 2px;
                  box-shadow: none; font-size: 13px; }
         .smdlgcancel:hover { background: #ECE8DD; }

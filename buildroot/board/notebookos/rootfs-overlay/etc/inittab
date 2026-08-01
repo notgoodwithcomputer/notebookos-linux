@@ -18,11 +18,22 @@ null::sysinit:/bin/ln -sf /proc/self/fd/2 /dev/stderr
 ::sysinit:/etc/init.d/rcS
 
 # Put a getty on the serial port
-tty1::respawn:/sbin/getty -n -l /bin/sh 38400 tty1
+# NO GETTY ON tty1. X owns tty1, and the getty that was here read
+#     tty1::respawn:/sbin/getty -n -l /bin/sh 38400 tty1
+# where -n means NO LOGIN PROMPT and -l /bin/sh means the login program
+# IS a shell. Ctrl+Alt+F1, or X crashing, dropped straight to an
+# UNAUTHENTICATED ROOT SHELL. That defeated the sign-in screen entirely,
+# and with USB HID enabled it was not even a physical-access attack: a
+# device that looks like a memory stick can send Ctrl+Alt+F1 and type as
+# root in seconds. S99notebookos starts the desktop via xinit; no getty
+# is needed here at all.
 
 # Debug shell on the second serial port (qemu -serial unix:...ttyS1.sock).
 # Root, no login — this is a development image on an offline machine.
-ttyS1::respawn:/sbin/getty -n -l /bin/sh 115200 ttyS1
+# Serial debug shell, ONLY when the kernel command line contains
+# "nbdebug". A development image asks for it; a shipped one never does,
+# so an attached serial cable is not a free root shell.
+ttyS1::respawn:/opt/notebook/debugshell.sh
 
 # Stuff to do for the 3-finger salute
 #::ctrlaltdel:/sbin/reboot

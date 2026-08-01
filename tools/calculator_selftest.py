@@ -36,13 +36,15 @@ FAILS = []
 
 
 class _Calc(object):
-    """The evaluator without the widgets — evaluate() only reads self.expr and
-    self.deg."""
+    """The evaluator without the widgets — evaluate() reads self.expr and
+    self.deg, and records WHY a failure failed through _fail()."""
     evaluate = C.evaluate
+    _fail = C._fail
 
     def __init__(self, deg=True):
         self.deg = deg
         self.expr = ""
+        self._err_why = None
 
 
 def ev(expr, deg=True):
@@ -197,12 +199,31 @@ app._remember("59+1")
 check("a repeat is not stored twice", len(app.tape) == app._TAPE_MAX,
       len(app.tape))
 
+# Every failure names its own cause. "Error" told a person nothing about which
+# mistake they had made; these four sentences are the only things the display
+# can ever say when "=" cannot be answered, so each cause is pinned to one.
+for _expr, _why, _label in (
+        ("1÷0", calculator._WHY_ZERO, "divide by zero"),
+        ("9^9^9", calculator._WHY_TOOBIG, "too big"),
+        ("√(0−1)", calculator._WHY_NOANSWER, "no answer"),
+        ("2+×", calculator._WHY_UNREADABLE, "not a calculation")):
+    _c = _Calc(True)
+    _c.expr = _expr
+    _got = _c.evaluate()
+    check("%-18s -> %s" % (_expr, _label),
+          _got == "Error" and _c._err_why == _why, (_got, _c._err_why))
+
 # a failed calculation is still worth getting back to fix
 app2 = C()
 app2.expr = "1÷0"
 app2.press(("=", "eq", None, "eq"))
-check("a failed calculation shows Error", app2.disp_lbl.get_text() == "Error",
+# The display says WHAT went wrong, not the word "Error" — that is the whole
+# point of the change, so pin it here: a divide by zero must name itself.
+check("a failed calculation says what went wrong",
+      app2.disp_lbl.get_text() == calculator._WHY_ZERO,
       app2.disp_lbl.get_text())
+check("...and the display is in the alert style",
+      app2.disp_lbl.get_style_context().has_class("err"))
 check("...and can still be recalled to fix",
       app2.recall(-1) and app2.expr == "1÷0", app2.expr)
 

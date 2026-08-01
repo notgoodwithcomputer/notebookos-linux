@@ -22,6 +22,7 @@ there. cairo is imported lazily inside the render helpers so discovery works eve
 where cairo is absent.
 """
 
+import errno
 import os
 import shutil
 import subprocess
@@ -39,6 +40,45 @@ HALF_H_PT = int(round(8.5 * PT_PER_IN))   # 612  — half-letter page height
 # (11" x 8.5"); folding it down the middle yields the 5.5x8.5 booklet.
 SHEET_W_PT = HALF_W_PT * 2                 # 792
 SHEET_H_PT = HALF_H_PT                      # 612
+
+# ---- page sizes -------------------------------------------------------------
+# CUPS media names for the page sizes the apps render at. A job is spooled with
+# the size its PDF was DRAWN at; anything else and CUPS scales the page to fit,
+# which quietly moves every margin the writer chose.
+DEFAULT_MEDIA = "Letter"
+MEDIA_NAMES = ("Letter", "Legal", "A4", "A5", "Executive", "Statement")
+
+
+def _clean_media(media):
+    """A CUPS media name we are sure of, or Letter. Never passes an app's raw
+    string through to `lp` — an unknown -o media= is a job CUPS rejects."""
+    for name in MEDIA_NAMES:
+        if isinstance(media, str) and media.strip().lower() == name.lower():
+            return name
+    return DEFAULT_MEDIA
+
+
+# ---- failure messages ------------------------------------------------------
+# This is the Print dialog EVERY app in the OS opens, so a raw exception shown
+# here leaks out of all of them at once. It used to read
+#     Could not prepare the document: [Errno 28] No space left on device
+# — an errno and a Python repr, for a person who only wants to know whether
+# anything was printed and whether their document is all right. Nothing here is
+# ever destructive: making the print file is a one-way copy into a temporary
+# file, so the answer is always "your document is fine", and these sentences say
+# so plainly.
+def _prepare_problem(exc):
+    """One calm sentence for a document that could not be turned into a print
+    file. Never contains an errno, a path, or an exception repr."""
+    err = getattr(exc, "errno", None)
+    if err == errno.ENOSPC:
+        return ("There was not enough room to prepare this for printing. "
+                "Free up some space and try again. Nothing was printed.")
+    if err in (errno.EACCES, errno.EPERM, errno.EROFS):
+        return ("This document could not be prepared for printing on this "
+                "machine. Nothing was printed.")
+    return ("This document could not be prepared for printing. Nothing was "
+            "printed.")
 
 
 # ---- discovery + submit ----------------------------------------------------
@@ -165,8 +205,11 @@ def submit_pdf(pdf_path, printer=None, copies=1, options=None,
     cmd.append(pdf_path)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-    except Exception as e:
-        return False, "Could not reach the printer: %s" % e
+    except Exception:
+        # Same rule as _prepare_problem: the spooler's own exception text is
+        # never something to put in front of the person holding the paper.
+        return False, ("The printer could not be reached. Check that it is "
+                       "switched on and plugged in, then try again.")
     if r.returncode != 0:
         msg = (r.stderr or r.stdout or "print command failed").strip()
         return False, msg
@@ -242,6 +285,183 @@ def booklet_pdf(out_path, page_count, draw_page):
     return sides
 
 
+# ---- report text: PangoCairo, never the cairo toy font API -------------------
+# Journal, Academics, Cookbook and Screenplay each carried their own little
+# wrap()/emit() pair built on cairo's TOY font API — cr.select_font_face() plus
+# cr.show_text(). That API binds ONE FreeType face and does no font fallback
+# whatsoever: every character the chosen face does not have is drawn as an empty
+# box. On the guest that face is DejaVu, which has no CJK and no Devanagari, so
+# a journal written in Chinese, Japanese, Korean or Hindi printed as rows of
+# tofu — while pdftotext still pulled the words straight back out, which is why
+# text-only checks kept passing over blank paper.
+#
+# Pango does per-character fallback across every installed font, which is the
+# only reason Writer's body and the whole of Novel print those scripts properly
+# on the very same machine. PdfText is that same engine, in the shape the four
+# report renderers already used, so each of them is a drop-in swap.
+LETTER_W_PT = 612.0
+LETTER_H_PT = 792.0
+
+# The report body face. A generic family, resolved through fontconfig exactly
+# as the old toy "Serif" was — the difference is that Pango then falls back per
+# character instead of giving up on the first missing glyph.
+REPORT_FAMILY = "serif"
+
+
+def _rgb_of(hexc):
+    """(r, g, b) floats from '#RRGGBB'. Black on anything unparseable — a
+    colour is never worth failing a print for."""
+    try:
+        h = str(hexc).lstrip("#")
+        return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0,
+                int(h[4:6], 16) / 255.0)
+    except Exception:
+        return (0.0, 0.0, 0.0)
+
+
+# Inline runs PdfText.emit understands, as (start_char, end_char, kind) tuples.
+SPAN_KINDS = ("bold", "italic", "highlight")
+_HIGHLIGHT = (0xFBFB, 0xE7E7, 0xA0A0)     # #FBE7A0, the on-screen highlighter
+
+
+def _span_attrs(text, spans):
+    """A Pango.AttrList for inline (start, end, kind) character spans."""
+    from gi.repository import Pango
+    al = Pango.AttrList()
+    # char index -> byte index, since Pango attributes are indexed in bytes
+    off = [0]
+    for ch in text:
+        off.append(off[-1] + len(ch.encode("utf-8")))
+    n = len(text)
+    for span in spans or ():
+        try:
+            s, e, kind = int(span[0]), int(span[1]), span[2]
+        except (TypeError, ValueError, IndexError):
+            continue
+        s = max(0, min(s, n))
+        e = max(0, min(e, n))
+        if e <= s:
+            continue
+        if kind == "bold":
+            attr = Pango.attr_weight_new(Pango.Weight.BOLD)
+        elif kind == "italic":
+            attr = Pango.attr_style_new(Pango.Style.ITALIC)
+        elif kind == "highlight":
+            attr = Pango.attr_background_new(*_HIGHLIGHT)
+        else:
+            continue
+        attr.start_index = off[s]
+        attr.end_index = off[e]
+        al.insert(attr)
+    return al
+
+
+class PdfText:
+    """A paginating text cursor over a cairo PDF surface, laid out with Pango.
+
+    Replaces the per-app wrap()/emit() toy-font helpers. `y` is the live cursor
+    (points from the top of the sheet); emit() wraps to `width`, breaks between
+    LINES exactly where the old helpers did, and starts a new page when the next
+    line would fall past `bottom`."""
+
+    def __init__(self, surf, cr, left, top, bottom, width,
+                 family=REPORT_FAMILY):
+        self.surf = surf
+        self.cr = cr
+        self.left = left
+        self.top = top
+        self.bottom = bottom
+        self.width = width
+        self.family = family
+        self.y = top
+
+    def new_page(self):
+        self.surf.show_page()
+        self.y = self.top
+
+    def _layout(self, text, size, bold, italic, spans, indent):
+        gi.require_version("PangoCairo", "1.0")
+        from gi.repository import Pango, PangoCairo
+        lay = PangoCairo.create_layout(self.cr)
+        # PDF user units ARE points, so pin Pango's resolution to 72dpi and a
+        # Pango size of N points is N units tall — the same thing the old
+        # cr.set_font_size(N) meant. At the default 96dpi every report would
+        # have come out a third larger than it used to be.
+        PangoCairo.context_set_resolution(lay.get_context(), 72.0)
+        lay.set_width(int(max(1.0, self.width - indent) * Pango.SCALE))
+        lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+        fd = Pango.FontDescription()
+        fd.set_family(self.family)
+        fd.set_size(int(size * Pango.SCALE))
+        if bold:
+            fd.set_weight(Pango.Weight.BOLD)
+        if italic:
+            fd.set_style(Pango.Style.ITALIC)
+        lay.set_font_description(fd)
+        lay.set_text(text, -1)
+        if spans:
+            lay.set_attributes(_span_attrs(text, spans))
+        return lay
+
+    def emit(self, text, size, bold=False, color="#1A1916", italic=False,
+             gap_before=0.0, gap_after=0.0, spans=None, indent=0.0):
+        """Lay `text` out at the cursor and advance past it, paginating as
+        needed. `spans` are inline (start_char, end_char, kind) runs."""
+        gi.require_version("PangoCairo", "1.0")
+        from gi.repository import Pango, PangoCairo
+        self.y += gap_before
+        lead = size * 1.4
+        if not text:
+            if self.y + lead > self.bottom:
+                self.new_page()
+            self.y += lead + gap_after
+            return
+        lay = self._layout(text, size, bold, italic, spans, indent)
+        r, g, b = _rgb_of(color)
+        for i in range(lay.get_line_count()):
+            line = lay.get_line_readonly(i)
+            _ink, log = line.get_extents()
+            lh = max(lead, log.height / float(Pango.SCALE))
+            ascent = -log.y / float(Pango.SCALE)
+            if self.y + lh > self.bottom:
+                self.new_page()
+            self.cr.save()
+            self.cr.set_source_rgb(r, g, b)
+            self.cr.move_to(self.left + indent, self.y + ascent)
+            PangoCairo.show_layout_line(self.cr, line)
+            self.cr.restore()
+            self.y += lh
+        self.y += gap_after
+
+    def rule(self, color="#ECE7DA", right=None, gap_after=18.0):
+        """A hairline across the text column, then a gap."""
+        if right is None:
+            right = self.left + self.width
+        if self.y + 1 <= self.bottom:
+            r, g, b = _rgb_of(color)
+            self.cr.save()
+            self.cr.set_source_rgb(r, g, b)
+            self.cr.set_line_width(1.0)
+            self.cr.move_to(self.left, self.y)
+            self.cr.line_to(right, self.y)
+            self.cr.stroke()
+            self.cr.restore()
+        self.y += gap_after
+
+
+def report_page(path, width=LETTER_W_PT, height=LETTER_H_PT,
+                margins=(72.0, 64.0, 64.0, 64.0), family=REPORT_FAMILY):
+    """Open a US Letter report PDF and return (surface, context, PdfText).
+    margins are (top, right, bottom, left) in points."""
+    import cairo
+    mt, mr, mb, ml = margins
+    surf = cairo.PDFSurface(path, width, height)
+    cr = cairo.Context(surf)
+    text = PdfText(surf, cr, ml, mt, height - mb, width - ml - mr,
+                   family=family)
+    return surf, cr, text
+
+
 # ---- themed Print dialog ---------------------------------------------------
 _CSS = b"""
 .nbprint { background: #FCFBF8; }
@@ -306,8 +526,7 @@ def _no_printer_dialog(parent, extra_note):
     h = Gtk.Label(label="No printer found", xalign=0)
     h.get_style_context().add_class("nbprint-h")
     box.pack_start(h, False, False, 0)
-    msg = ("Connect a USB printer and switch it on, then try again — Notebook OS "
-           "detects most printers automatically.")
+    msg = "Connect a USB printer and switch it on, then try again."
     s = Gtk.Label(label=msg, xalign=0); s.set_line_wrap(True)
     s.set_max_width_chars(42)
     s.get_style_context().add_class("nbprint-sub")
@@ -328,14 +547,15 @@ def _no_printer_dialog(parent, extra_note):
     return win
 
 
-def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note):
+def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
+                  media=DEFAULT_MEDIA):
     """Core dialog. make_pdf(path) writes the document PDF to path.
     When booklet is True the copies row is joined by a two-sided toggle and the
-    supplied booklet_note is shown."""
+    supplied booklet_note is shown. `media` is the CUPS page size the document
+    was rendered at (see print_document)."""
     printers, default = list_printers()
     if not printers:
-        note = ("Your work is safe — use File ▸ Export to PDF to save it as "
-                "a file you can print anywhere.")
+        note = "File ▸ Export to PDF saves this document as a file instead."
         return _no_printer_dialog(parent, note)
 
     win, box = _dialog(parent, "Print")
@@ -408,11 +628,16 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note):
             os.close(fd)
             make_pdf(path)
         except Exception as e:
-            status.set_text("Could not prepare the document: %s" % e)
+            status.set_text(_prepare_problem(e))
             go.set_sensitive(True)
             return
-        opts = {"media": "Letter"}
+        # The page size the DOCUMENT was rendered at, not a hard-coded Letter.
+        # Spooling an A4 PDF as Letter makes CUPS scale the whole page down to
+        # fit, so every margin the writer set in Page Setup came out wrong.
+        opts = {"media": _clean_media(media)}
         if booklet:
+            # A booklet is always imposed 2-up on a letter sheet by
+            # booklet_pdf(), whatever the document's own page size.
             opts["media"] = "Letter"
             opts["landscape"] = None
             if two_sided is not None and two_sided.get_active():
@@ -435,18 +660,23 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note):
     return win
 
 
-def print_document(parent, make_pdf, job_name="Document"):
+def print_document(parent, make_pdf, job_name="Document",
+                   media=DEFAULT_MEDIA):
     """Show a Print dialog for a normal document. make_pdf(path) must write a
-    PDF of the document to path. Handles the no-printer case gracefully."""
+    PDF of the document to path. Handles the no-printer case gracefully.
+
+    `media` is the CUPS page size the PDF is actually drawn at — "Letter",
+    "Legal", "A4", "Statement" (5.5x8.5). Apps that let the user choose a page
+    size MUST pass it, or CUPS scales their pages to fit letter paper."""
     return _print_dialog(parent, job_name, make_pdf, booklet=False,
-                         booklet_note=None)
+                         booklet_note=None, media=media)
 
 
 def print_booklet(parent, make_pdf, job_name="Booklet"):
     """Show a Print dialog for a zine/booklet. make_pdf(path) must write the
     already-imposed booklet PDF (see booklet_pdf) to path."""
-    note = ("Sheets print two-up on letter paper; stack them, fold down the "
-            "middle and staple the spine.")
+    note = ("Sheets print two-up on letter paper. Stack, fold down the middle, "
+            "staple the spine.")
     return _print_dialog(parent, job_name, make_pdf, booklet=True,
                          booklet_note=note)
 

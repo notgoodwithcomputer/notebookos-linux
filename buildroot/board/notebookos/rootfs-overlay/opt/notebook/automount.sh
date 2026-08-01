@@ -14,8 +14,24 @@ mnt="/media/$dev"
 # stick as "PHOTOS" in the Finder sidebar, the window title and the file picker
 # rather than as "sda1". Doing it here (rather than prettifying the name in the
 # Finder) means every path the user is ever shown reads properly.
-#   * only / and \ are actually unsafe in a path component; the rest of a label
-#     is left alone so "My Backup" stays "My Backup"
+#   * / and \ are replaced, so a label can never build a path of its own
+#   * "." and ".." are NOT names, they are this directory and its PARENT, and
+#     the label on a stick somebody handed you is attacker-controlled by
+#     definition (e2label and mkfs.vfat both write either one happily).
+#     Measured, with the old rule that replaced only / and \:
+#        label "."  -> "/media/." IS /media, and the dedup loop below skips an
+#                      EMPTY /media, so the stick was mounted ON TOP OF /media
+#                      and every other volume under it vanished. This is the
+#                      shipped configuration: /media exists and starts empty.
+#        label ".." -> "/media/.." IS "/". Today the dedup loop deflects it
+#                      (because / is never empty) into a junk directory called
+#                      ".. (2)" -- but only while /media itself exists. With no
+#                      /media the mount lands on the RUNNING ROOT FILESYSTEM.
+#     Neither outcome is one line of shell away from the other, so any all-dots
+#     label falls back to the device name.
+#   * control characters are stripped: they cannot be typed, cannot be read
+#     back, and a newline would split the value this script reasons about
+#   * everything else is left alone, so "My Backup" stays "My Backup"
 #   * capped at 40 chars, and a label that sanitises to nothing falls back
 #   * a second stick with the same label gets "LABEL (2)" rather than colliding
 # On REMOVE the device is already gone, so blkid can tell us nothing — look the
@@ -29,7 +45,15 @@ if [ "$action" = "remove" ]; then
 	[ -n "$m" ] && mnt="$m"
 else
 	name=$(blkid -s LABEL -o value "/dev/$dev" 2>/dev/null \
+		| tr -d '\000-\037' \
 		| sed 's#[/\\]#_#g; s/^[[:space:]]*//; s/[[:space:]]*$//' | cut -c1-40)
+	# Reject a label made of nothing but dots — see the note above: "/media/.."
+	# is "/", and mounting a stranger's stick there takes the machine down.
+	case "$name" in
+		"")     ;;      # already empty
+		*[!.]*) ;;      # has a real character in it: keep
+		*)      name="" ;;
+	esac
 	if [ -n "$name" ]; then
 		cand="$name"; i=2
 		while [ -d "/media/$cand" ] && [ "$(ls -A "/media/$cand" 2>/dev/null)" ]; do
@@ -47,13 +71,18 @@ case "$action" in
 		grep -q "^/dev/$dev " /proc/mounts && exit 0
 		mkdir -p "$mnt"
 		# let the kernel autodetect the fs; try rw, fall back to ro.
+		# noexec: nothing on a stick somebody handed you may be RUN. The
+		# machine already auto-mounts any partition that appears, with no
+		# prompt, so the contents are attacker-controlled by definition.
+		# nosuid,nodev were already set; noexec closes the third of the trio.
+		#
 		# rw uses -o sync (write-through): a USB stick has NO safe-eject step in
 		# every flow, so a user who copies a file and then just pulls the stick
 		# must not lose it to the page cache. Synchronous writes land on the
 		# device as the copy happens (Windows' "quick removal" default). Slower
 		# for huge files, but correct — losing the file is the worse outcome.
-		mount -o rw,sync,noatime,nosuid,nodev "/dev/$dev" "$mnt" 2>/dev/null \
-			|| mount -o ro,nosuid,nodev "/dev/$dev" "$mnt" 2>/dev/null \
+		mount -o rw,sync,noatime,nosuid,nodev,noexec "/dev/$dev" "$mnt" 2>/dev/null \
+			|| mount -o ro,nosuid,nodev,noexec "/dev/$dev" "$mnt" 2>/dev/null \
 			|| { rmdir "$mnt" 2>/dev/null; exit 0; }
 		;;
 	remove)

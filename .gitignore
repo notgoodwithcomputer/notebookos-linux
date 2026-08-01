@@ -86,3 +86,10 @@ __pycache__/
 /i18n_font_test.png
 /sr_font_test.png
 /scratchpad_marker_unused.txt
+
+# The phonetic orthography design doc is kept local; the shipped
+# implementation of it is tools/phonetic_en.py.
+/phonetic orthography.odt
+
+# LibreOffice writes a lock file next to any document it has open.
+.~lock.*#

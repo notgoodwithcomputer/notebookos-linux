@@ -133,6 +133,29 @@ for so in ld-linux-x86-64.so.2 libc.so.6 libm.so.6 libresolv.so.2 libcrypt.so.1 
     copy_lib "$so"
 done
 
+# Bluetooth firmware, in the INITRAMFS.
+#
+# btusb is built into the kernel, so it probes while USB enumerates — during
+# early boot, long before this initramfs has found the medium, mounted the
+# squashfs and switch_root'ed. request_firmware() therefore reads a /lib/firmware
+# that does not exist yet and fails with -2, and an Intel controller that never
+# got its firmware keeps the null address 00:00:00:00:00:00: bluetoothd starts
+# fine but publishes no adapter, so Bluetooth is simply missing. Recovering
+# afterwards means putting the CONTROLLER back into bootloader mode (see
+# etc/init.d/S39btfirmware), which is fiddly and chip-dependent.
+#
+# The initramfs is unpacked by populate_rootfs() (a rootfs_initcall) BEFORE the
+# device_initcalls that bring up USB, so firmware placed here is on the root
+# filesystem in time for the very first probe — no recovery, no reset, nothing
+# chip-specific. Costs ~20MB in initrd.img, which is the right trade for
+# Bluetooth working at all.
+say "adding Bluetooth firmware to the initramfs (early btusb probe)"
+for d in intel rtl_bt qca mediatek; do
+    [ -d "$TARGET/lib/firmware/$d" ] || continue
+    mkdir -p "$IRD/lib/firmware/$d"
+    cp -a "$TARGET/lib/firmware/$d/." "$IRD/lib/firmware/$d/" 2>/dev/null || true
+done
+
 install -m 0755 "$INIT_SRC" "$IRD/init"
 ( cd "$IRD" && find . -print0 | cpio --null -o -H newc --quiet | gzip -9 ) > "$GRAFT/live/initrd.img"
 
@@ -191,6 +214,91 @@ EOF
 say "running grub-mkrescue -> $ISO"
 grub-mkrescue --compress=xz -o "$ISO" "$GRAFT" -- -volid "$LABEL" >/dev/null 2>"$WORK/grub.log" \
     || { cat "$WORK/grub.log" >&2; die "grub-mkrescue failed"; }
+
+# ---- 5b. make the LIVE medium Secure Boot bootable -----------------------
+# grub-mkrescue writes its own UNSIGNED EFI image (/efi.img in the ISO), and a
+# Secure Boot machine refuses it outright -- the firmware never even reaches
+# GRUB, it just says "Access Denied" and falls through to "No bootable device".
+# Verified against OVMF_CODE_4M.secboot.fd with the Microsoft keys enrolled.
+#
+# So when a Secure Boot payload exists, swap two things inside the finished ISO:
+#   * /efi.img       -> a FAT16 ESP holding shim (MS-signed) + Debian-signed
+#                       GRUB (it carries the shim_lock verifier) + MokManager
+#   * /live/bzImage  -> the MOK-signed kernel
+# and add /EFI/debian/grub.cfg, which is where Debian's signed GRUB looks.
+#
+# TRAPS, both of which cost a full test cycle:
+#   * The ESP must be FAT16. An 8 MB volume formatted FAT32 (mformat -F) is not
+#     a valid FAT32 filesystem, and the firmware reports "Not Found" -- which
+#     reads like a missing file, not a broken filesystem.
+#   * xorriso -extract restores files READ-ONLY. Without chmod -R u+w the
+#     replacement copies fail and you re-master the ORIGINAL image, which then
+#     "proves" the fix does not work.
+#
+# The kernel is signed with our own MOK, which no machine trusts yet, so the
+# first Secure Boot start stops at GRUB with "you need to load the kernel
+# first". That is expected: the user runs "Enroll Secure Boot key" once, which
+# chainloads MokManager, and the OS boots from then on. Every third-party
+# distribution requires this same one-time enrolment.
+if [ -n "${SB_PAYLOAD:-}" ] && [ -d "$SB_PAYLOAD" ] && command -v mformat >/dev/null 2>&1; then
+    say "5b/6 making the live ISO Secure Boot bootable (shim + signed grub)"
+  # The whole step is an enhancement on top of an ISO that already boots.
+  # Run it in a subshell so no failure inside can abort the release.
+  if ! (
+    SBW="$WORK/sb"; rm -rf "$SBW"; mkdir -p "$SBW"
+
+    # Do NOT hand-copy the menu here. The Secure Boot path must run the SAME
+    # entries as the normal one, and a duplicated copy silently drifted once:
+    # it omitted nb.live=1, so GRUB said "Booting Notebook OS (live)" and the
+    # kernel then stalled with no display. Source the real menu instead, and
+    # only ADD the enrolment entry.
+    cat > "$SBW/grub.cfg" <<SBCFG
+search --no-floppy --set=root --label ${LABEL}
+source /boot/grub/grub.cfg
+menuentry "Enroll Secure Boot key" {
+    search --no-floppy --set=root --file /EFI/BOOT/mmx64.efi
+    chainloader /EFI/BOOT/mmx64.efi
+}
+SBCFG
+
+    dd if=/dev/zero of="$SBW/efi.img" bs=1M count=16 status=none
+    mformat -i "$SBW/efi.img" -v NBOSEFI ::
+    mmd -i "$SBW/efi.img" ::/EFI ::/EFI/BOOT ::/EFI/debian
+    mcopy -i "$SBW/efi.img" "$SB_PAYLOAD/shimx64.efi" ::/EFI/BOOT/BOOTX64.EFI
+    mcopy -i "$SBW/efi.img" "$SB_PAYLOAD/grubx64.efi" ::/EFI/BOOT/grubx64.efi
+    mcopy -i "$SBW/efi.img" "$SB_PAYLOAD/mmx64.efi"   ::/EFI/BOOT/mmx64.efi
+    mcopy -i "$SBW/efi.img" "$SB_PAYLOAD/MOK.cer"     ::/EFI/BOOT/MOK.cer
+    mcopy -i "$SBW/efi.img" "$SBW/grub.cfg"           ::/EFI/debian/grub.cfg
+    mcopy -i "$SBW/efi.img" "$SBW/grub.cfg"           ::/EFI/BOOT/grub.cfg
+
+    xorriso -osirrox on -indev "$ISO" -extract / "$SBW/graft" >/dev/null 2>&1
+    # -extract restores READ-ONLY files; without this the copies below fail
+    # silently and the ISO is re-mastered unchanged.
+    chmod -R u+w "$SBW/graft"
+    cp "$SBW/efi.img" "$SBW/graft/efi.img"
+    # `[ -f x ] && cp` would return non-zero when absent and, under
+    # `set -e`, abort the whole release build. Keep it an if.
+    if [ -f "$SB_PAYLOAD/bzImage" ]; then
+        cp "$SB_PAYLOAD/bzImage" "$SBW/graft/live/bzImage"
+    else
+        say "     WARNING: no signed kernel in the payload; Secure Boot will stop at GRUB"
+    fi
+    mkdir -p "$SBW/graft/EFI/debian"
+    cp "$SBW/grub.cfg" "$SBW/graft/EFI/debian/grub.cfg"
+
+    xorriso -as mkisofs -o "$SBW/sb.iso" -V "$LABEL" -J -r \
+        -b boot/grub/i386-pc/eltorito.img -no-emul-boot \
+        -boot-load-size 4 -boot-info-table --grub2-boot-info \
+        -eltorito-alt-boot -e efi.img -no-emul-boot -isohybrid-gpt-basdat \
+        "$SBW/graft" >/dev/null 2>"$WORK/sbiso.log" \
+        && mv -f "$SBW/sb.iso" "$ISO" \
+        && say "     Secure Boot chain in place (enrol the key once on first start)" \
+        || { cat "$WORK/sbiso.log" >&2; say "     WARNING: Secure Boot re-master failed, keeping the unsigned ISO"; }
+    rm -rf "$SBW/graft"
+  ); then
+      say "     WARNING: Secure Boot step failed; the ISO is unchanged and still boots"
+  fi
+fi
 
 SZ="$(du -h "$ISO" | cut -f1)"
 say "done: $ISO ($SZ)"

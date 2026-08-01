@@ -24,20 +24,54 @@ def _hex(c):
 # op forms: ("M",x,y) move, ("L",x,y) line, ("C",cx,cy,r) circle,
 #           ("R",x,y,w,h) rect, ("P", "svg-ish path") — we keep it to M/L/C/R/A
 ICONS = {
-    "writer":     [("R", 5, 3, 14, 18), ("M", 8, 8), ("L", 16, 8), ("M", 8, 12), ("L", 16, 12), ("M", 8, 16), ("L", 13, 16)],
+    # A sheet of paper with a dog-eared corner and three text lines. The plain
+    # framed page it used to be was a near-copy of "ebook" (same rectangle, same
+    # three rules) — the two apps were indistinguishable in the Applications
+    # folder. The folded corner is the universal "document you write" mark and
+    # is what now separates the word processor from the reader.
+    "writer":     [("M", 5.5, 3), ("L", 14, 3), ("L", 18.5, 7.5), ("L", 18.5, 21), ("L", 5.5, 21), ("L", 5.5, 3),
+                   ("M", 14, 3), ("L", 14, 7.5), ("L", 18.5, 7.5),
+                   ("M", 8.5, 11.5), ("L", 15.5, 11.5), ("M", 8.5, 15), ("L", 15.5, 15), ("M", 8.5, 18.5), ("L", 12.5, 18.5)],
     "novel":      [("M", 12, 6), ("L", 12, 19), ("R", 4, 5, 8, 14), ("R", 12, 5, 8, 14)],
-    "academic":   [("M", 2.5, 9), ("L", 12, 5), ("L", 21.5, 9), ("L", 12, 13), ("L", 2.5, 9), ("M", 6.5, 11), ("L", 6.5, 15.3), ("M", 17.5, 11), ("L", 17.5, 15.3)],
+    # A mortarboard. Authored on 2.5-21.5 it was the widest glyph in the set and
+    # rendered ~20% larger and heavier than everything beside it in the
+    # Applications grid; the same shape now sits in the 4-20 optical box the
+    # other app icons share.
+    "academic":   [("M", 4, 9.6), ("L", 12, 5.5), ("L", 20, 9.6), ("L", 12, 13.7), ("L", 4, 9.6), ("M", 7.4, 11.3), ("L", 7.4, 16.4), ("M", 16.6, 11.3), ("L", 16.6, 16.4)],
     "journal":    [("R", 5, 3.5, 14, 17), ("M", 9, 3.5), ("L", 9, 20.5)],
     "screenplay": [("R", 3.5, 8.5, 17, 11.5), ("M", 8, 8.5), ("L", 9.2, 5.3), ("M", 13, 8.5), ("L", 14.2, 5.8)],
     "tasks":      [("R", 4, 4, 16, 16), ("M", 8, 12.2), ("L", 10.8, 15), ("L", 16, 9)],
     "calendar":   [("R", 4, 5, 16, 15), ("M", 4, 9.2), ("L", 20, 9.2), ("M", 8, 3.5), ("L", 8, 6.5), ("M", 16, 3.5), ("L", 16, 6.5)],
+    # A dumbbell: the bar runs the full width and the four plates sit across
+    # it, so the shape still reads at 16px in the Finder list where the plates
+    # are only a couple of pixels apart.
+    "workout":    [("M", 5, 12), ("L", 19, 12),
+                   ("M", 8, 8.4), ("L", 8, 15.6),
+                   ("M", 16, 8.4), ("L", 16, 15.6),
+                   ("M", 5, 10.2), ("L", 5, 13.8),
+                   ("M", 19, 10.2), ("L", 19, 13.8)],
     # A lidded cooking pot: knob, lid band, and the POT BODY below it. The body
     # was missing entirely — the icon was a lid and a handle bar floating over
     # nothing, which read as a stray rectangle rather than a pot.
     "cookbook":   [("M", 10.6, 7.4), ("L", 13.4, 7.4),
                    ("M", 5, 10.5), ("L", 19, 10.5), ("L", 19, 13), ("L", 5, 13), ("L", 5, 10.5),
                    ("M", 6.9, 13), ("L", 7.9, 19.4), ("L", 16.1, 19.4), ("L", 17.1, 13)],
-    "ebook":      [("R", 5, 3, 14, 18), ("M", 8, 7), ("L", 16, 7), ("M", 8, 10.5), ("L", 16, 10.5), ("M", 8, 14), ("L", 13, 14)],
+    # A reading DEVICE: page of text above a bezel rule with a round home
+    # button. An e-reader is a thing you hold, and drawing it as one is what
+    # keeps it apart from "writer" (a sheet of paper) and "novel" (a book).
+    # A place setting — plate between a fork and a knife — laid on a ruled card.
+    # The Meal Planner sits beside the Cookbook in the Applications folder, so
+    # it deliberately borrows none of the pot: this is the week's MENU BOARD,
+    # planning (the card and its header rule) plus eating (the setting). The
+    # card is left unhangered so it does not become a second Calendar either.
+    "mealplanner":[("R", 3.5, 5, 17, 15), ("M", 3.5, 9.5), ("L", 20.5, 9.5),
+                   ("C", 12, 15.2, 3.0),
+                   ("M", 7, 12.2), ("L", 7, 18.2), ("M", 17, 12.2), ("L", 17, 18.2)],
+    # (A bezel rule under the text was tried and dropped: at the 22px list size
+    # it collided with the home button and the bottom of the icon went muddy.)
+    "ebook":      [("R", 4.5, 3, 15, 18),
+                   ("M", 8, 7), ("L", 16, 7), ("M", 8, 10.5), ("L", 16, 10.5), ("M", 8, 14), ("L", 12.5, 14),
+                   ("C", 12, 18.2, 1.0)],
     "calculator": [("R", 5, 3, 14, 18), ("R", 8, 6, 8, 3), ("C", 9, 13, 0.6), ("C", 12, 13, 0.6), ("C", 15, 13, 0.6), ("C", 9, 16, 0.6), ("C", 12, 16, 0.6), ("C", 15, 16, 0.6)],
     "accounting": [("R", 3, 7, 18, 10), ("C", 12, 12, 2.4), ("C", 6, 12, 0.6), ("C", 18, 12, 0.6)],
     "contacts":   [("C", 12, 8.5, 3.2), ("M", 5.5, 19), ("L", 5.5, 17), ("L", 18.5, 17), ("L", 18.5, 19)],
@@ -52,7 +86,7 @@ ICONS = {
     # A globe: sphere with an equator and two meridian arcs. Used by Language.
     "globe":      [("C", 12, 12, 9), ("M", 3, 12), ("L", 21, 12), ("M", 12, 3), ("L", 12, 21), ("M", 12, 3), ("Q", 4.5, 12, 12, 21), ("M", 12, 3), ("Q", 19.5, 12, 12, 21)],
     # A game cartridge: body, top label band, and the two notch cuts at the
-    # bottom edge. Used by the GBA IDE.
+    # bottom edge. Used by the GBA SDK.
     "cartridge":  [("M", 6, 3.5), ("L", 18, 3.5), ("L", 18, 20.5), ("L", 6, 20.5), ("L", 6, 3.5), ("R", 8.5, 6, 7, 5), ("M", 9, 20.5), ("L", 9, 17.5), ("M", 15, 20.5), ("L", 15, 17.5)],
     "illustrator":[("M", 5, 19), ("L", 12, 4), ("L", 19, 19), ("M", 8.2, 13), ("L", 15.8, 13)],
     "sequencer":  [("M", 4, 12), ("L", 4, 16), ("M", 8, 8), ("L", 8, 18), ("M", 12, 5), ("L", 12, 19), ("M", 16, 9), ("L", 16, 17), ("M", 20, 11), ("L", 20, 15)],
@@ -142,7 +176,58 @@ ICONS = {
     "update":     [("M", 19.5, 12), ("L", 17.6, 16.6), ("L", 12.7, 17.6), ("L", 8.6, 14.7), ("L", 8.1, 9.7), ("L", 11.6, 6.2), ("L", 16.5, 6.5), ("M", 16.5, 6.5), ("L", 15, 4.8), ("M", 16.5, 6.5), ("L", 14.4, 8), ("M", 12, 9.5), ("L", 12, 12.5), ("L", 14.2, 13.6)],
     "sources":    [("R", 3, 4.5, 18, 6), ("R", 3, 13.5, 18, 6), ("A", 6.3, 7.5, 0.75), ("A", 6.3, 16.5, 0.75)],
     "sys":        [("C", 12, 12, 3), ("M", 12, 4.4), ("L", 12, 6.7), ("M", 12, 17.3), ("L", 12, 19.6), ("M", 4.4, 12), ("L", 6.7, 12), ("M", 17.3, 12), ("L", 19.6, 12), ("M", 6.6, 6.6), ("L", 8.3, 8.3), ("M", 15.7, 15.7), ("L", 17.4, 17.4), ("M", 17.4, 6.6), ("L", 15.7, 8.3), ("M", 8.3, 15.7), ("L", 6.6, 17.4)],
+    # ---- one glyph per app -------------------------------------------------
+    # Four apps used to borrow somebody else's mark: Settings and System
+    # Monitor were the SAME gear, Terminal wore "toc" (which is also the glyph
+    # for a file the OS cannot open, so Terminal.app looked like junk on the
+    # disk), the installer wore the Devices disk and the GBA SDK wore the .gba
+    # ROM cartridge. Each now has its own.
+    #
+    # Terminal: a screen with a prompt caret and the cursor rule beneath it —
+    # the shape every command line has had since VT100s. No title band, so it
+    # cannot be mistaken for the IDE's window at 16px.
+    "terminal":   [("R", 3.5, 5, 17, 14),
+                   ("M", 7, 9.7), ("L", 10, 12.2), ("L", 7, 14.7),
+                   ("M", 12, 14.7), ("L", 17, 14.7)],
+    # System Monitor: an activity graph — axes and a trace. A gauge dial turned
+    # to mush at 16px and the bar-chart reading was already taken by
+    # "sequencer", so the line trace is what stays legible and stays distinct.
+    "sysmon":     [("M", 4, 4.5), ("L", 4, 19.5), ("L", 20, 19.5),
+                   ("M", 6.5, 15.5), ("L", 10, 10.5), ("L", 13.5, 13.5), ("L", 19, 6.5)],
+    # Installer: an arrow coming DOWN into a drive. The drive deliberately
+    # echoes the "disk" glyph (same 18-wide body, same activity dot) because
+    # that is exactly what the app does — puts the system onto that disk — but
+    # the arrow means it can never be read as the Devices rail.
+    "installer":  [("R", 3, 13.5, 18, 7), ("C", 17.5, 17, 0.9),
+                   ("M", 12, 2.5), ("L", 12, 10.5),
+                   ("M", 8, 6.8), ("L", 12, 10.8), ("L", 16, 6.8)],
+    # GBA SDK: angle brackets around a slash, the universal source-code mark.
+    # Drawn frameless (like illustrator/music/packages) rather than as a window
+    # with brackets inside, because a second bordered rectangle would have read
+    # as the Terminal's twin in the 16px list.
+    "gbasdk":     [("M", 8.5, 7.5), ("L", 4, 12), ("L", 8.5, 16.5),
+                   ("M", 15.5, 7.5), ("L", 20, 12), ("L", 15.5, 16.5),
+                   ("M", 13.2, 6), ("L", 10.8, 18)],
 }
+
+# Five apps' glyphs are not named after their module, because the glyph names a
+# THING ("gamepad") and the module names the app ("gbaemu"), or because the app
+# was renamed after its glyph was drawn ("academics" -> "academic"). Anything
+# that turns a module name into a glyph has to go through here, or those five
+# silently fall back to a generic mark: Packages did exactly that, and listed
+# Academics, GBA Emulator, Language and Maps with the same "sys" starburst that
+# Settings wears, four apparent duplicates in a list where Finder showed the
+# right icons. finder.ICON_ALIAS is this same dict.
+ALIAS = {"settings": "sys", "language": "globe", "maps": "mappin",
+         "gbaemu": "gamepad", "academics": "academic"}
+
+
+def glyph_for(module, fallback="sys"):
+    """The glyph a DE module wears: its own name, its alias, else `fallback`."""
+    if module in ICONS:
+        return module
+    name = ALIAS.get(module)
+    return name if name in ICONS else fallback
 
 
 # Glyphs that MEAN a direction rather than just happening to point somewhere.
@@ -166,6 +251,11 @@ def draw(ctx, name, size, color="#1A1916", width=1.6, mirror=None):
     if not ops:
         ops = [("R", 5, 5, 14, 14)]
     s = size / 24.0
+    # Start from a clean path. A caller that has drawn anything of its own into
+    # this context leaves a current point behind, and the first circle/arc op
+    # here would then be joined to it by a stray line straight across the icon
+    # (cairo's arc() lines to the arc's start when a current point exists).
+    ctx.new_path()
     ctx.save()
     ctx.scale(s, s)
     if mirror is None:
@@ -248,3 +338,33 @@ def pixbuf(name, size, color="#1A1916", width=1.6):
     pb.fill(0x00000000)
     _PIXBUF_CACHE[key] = pb
     return pb
+
+
+def style_search_entry(entry, size=15, color="#9A9484"):
+    """Give a Gtk.SearchEntry OUR magnifier instead of the icon theme's.
+
+    Gtk.SearchEntry is the one widget in this OS that reaches outside itself for
+    an image: it asks the icon theme for "edit-find-symbolic". This OS ships no
+    icon theme that has it — /usr/share/icons holds hicolor (four unrelated app
+    icons: cups, htop, compton) and the notebook CURSOR theme, nothing else — so
+    that lookup can only ever land on GTK's internal fallback. On a developer
+    machine with a full theme installed it comes back as a blue, shaded 3-D
+    pixmap: the only blue and the only non-flat icon anywhere in a flat warm-paper
+    OS, sitting in the Finder's toolbar. With no theme at all it resolves to
+    image-missing, and a bare SearchEntry then fails to paint.
+
+    Music, Packages and Contacts never had the problem because they build their
+    own search fields out of an nbicons glyph. The seven that use SearchEntry
+    (finder, journal, academics, novel, screenplay, writer, nbpicker) now draw
+    the same glyph through here, so every search field in the OS matches and none
+    of them depends on anything outside the image.
+
+    Overriding the PRIMARY icon is sufficient and verified: the entry keeps
+    working, including once text is typed into it. Cosmetic, so never fatal.
+    """
+    try:
+        entry.set_icon_from_pixbuf(Gtk.EntryIconPosition.PRIMARY,
+                                   pixbuf("search", size, color))
+        entry.set_icon_activatable(Gtk.EntryIconPosition.PRIMARY, False)
+    except Exception:                                            # noqa: BLE001
+        pass

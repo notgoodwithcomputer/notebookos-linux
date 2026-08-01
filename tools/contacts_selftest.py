@@ -28,6 +28,17 @@ Run as:
 import inspect
 import os
 import sys
+import tempfile
+
+# PIN NB_HOME BEFORE IMPORTING THE APP. Two things went wrong without it, both
+# silent. (1) This suite really saves and reloads contacts.json, so run without
+# NB_HOME it overwrote the CALLER'S OWN ~/.config/notebook/contacts.json --
+# on the machine (NB_HOME=/root) that is the user's real address book.
+# (2) An unset NB_HOME also puts the single-instance guard on the unscoped
+# /tmp/nb-apps shared with any running app: nbapp.claim_single_instance() then
+# os._exit(0)s this process with NO output and EXIT STATUS 0, which reads as a
+# pass while nothing was tested.
+os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="contacts-selftest-"))
 
 import gi
 gi.require_version("Gtk", "3.0")

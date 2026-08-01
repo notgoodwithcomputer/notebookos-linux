@@ -3,6 +3,19 @@
 and the show-hidden-files toggle."""
 import os
 import shutil
+import tempfile
+
+# This suite CREATES AND DELETES files under finder.HOME, which is read at
+# IMPORT time and defaults to the CALLER'S REAL HOME -- so it used to build and
+# rmtree ~/_sorttest in the developer's own home. Pin a throwaway one first
+# (the same rule finder_fileops_selftest already follows). It also keeps the
+# single-instance guard off the unscoped /tmp/nb-apps, where a real app's
+# marker would make claim_single_instance() os._exit(0) mid-suite: no output,
+# exit 0, a silent false pass.
+os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="nbfinder-sort-"))
+for _d in ("Documents", "Applications", "Pictures", "Music", "Videos"):
+    os.makedirs(os.path.join(os.environ["NB_HOME"], _d), exist_ok=True)
+
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")

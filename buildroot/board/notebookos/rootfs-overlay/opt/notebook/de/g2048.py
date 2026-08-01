@@ -156,7 +156,7 @@ class Game2048(nbapp.AppWindow):
         # "Keep Going" resumes play past 2048, so reaching the target does not
         # force the player to throw away a winning board. It is shown only on
         # the win banner (hidden on no-moves, where nothing can continue).
-        self.keep_btn = Gtk.Button(label=_t("Keep Going"))
+        self.keep_btn = Gtk.Button(label=_t("Continue"))
         self.keep_btn.set_relief(Gtk.ReliefStyle.NONE)
         self.keep_btn.get_style_context().add_class("dark-btn")
         self.keep_btn.set_no_show_all(True)
@@ -529,7 +529,7 @@ class Game2048(nbapp.AppWindow):
         elif self.status == "win":
             # the player's moment, phrased as one: "Target 2048 reached" read
             # like a status readout, and mirrors the goal line in the header
-            self.ov_text.set_text(_t("You reached 2048!"))
+            self.ov_text.set_text(_t("2048 reached"))
             self.keep_btn.show()   # offer to keep playing past 2048
             self.ov_box.show()
         else:

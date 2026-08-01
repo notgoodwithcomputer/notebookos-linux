@@ -116,6 +116,7 @@ def main():
                     bad += 1
                     break
 
+    # ANCHOR: see check_chrome below for the code-vs-catalog half of this tool.
     # An absent key is NOT a defect: nbi18n falls back to the English source
     # per key, so a partly-translated catalog is safe and usable — and with 17
     # languages, partly-translated is the normal steady state. Counting each
@@ -133,9 +134,99 @@ def main():
             bar = "#" * int(pct / 5)
             print("   %-3s %5d / %5d  %5.1f%%  %s" % (code, n, len(every), pct, bar))
 
+    bad += check_chrome(cats)
+
     counts = "  ".join("%s=%d" % (c, len(cats[c])) for c in CODES if c in cats)
     print("%s: %s" % ("clean" if not bad else "%d PROBLEM(S)" % bad, counts))
     return 1 if bad else 0
+
+
+# Chrome that is deliberately the same in every language: names that are not
+# words. Add to this list only for strings a translator would leave alone.
+CHROME_ALLOW = {"2048"}
+
+
+def _chrome_strings(path):
+    """App chrome an nbapp window declares: its name, its menu titles, and the
+    literal labels of its menu entries."""
+    import ast
+    out = set()
+    try:
+        tree = ast.parse(open(path, encoding="utf-8").read())
+    except (SyntaxError, OSError, UnicodeDecodeError):
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for st in node.body:
+            if isinstance(st, ast.Assign) and len(st.targets) == 1 \
+                    and isinstance(st.targets[0], ast.Name):
+                tgt = st.targets[0].id
+                val = st.value
+                if tgt == "app_name" and isinstance(val, ast.Constant) \
+                        and isinstance(val.value, str):
+                    out.add(val.value)
+                elif tgt == "menus" and isinstance(val, (ast.Tuple, ast.List)):
+                    for e in val.elts:
+                        if isinstance(e, ast.Constant) \
+                                and isinstance(e.value, str):
+                            out.add(e.value)
+            elif isinstance(st, ast.FunctionDef) and st.name == "menu_items":
+                for sub in ast.walk(st):
+                    # A menu entry is (label, action): the label is a literal
+                    # string and the action is a callable or None. Requiring
+                    # that second half is what keeps ordinary (key, text) data
+                    # pairs inside the same method out of the results.
+                    if not isinstance(sub, ast.Tuple) or len(sub.elts) != 2:
+                        continue
+                    label, action = sub.elts
+                    if not (isinstance(label, ast.Constant)
+                            and isinstance(label.value, str)):
+                        continue
+                    # ast.IfExp covers the enable/disable idiom every app in
+                    # this OS uses — `("Undo", self._undo if can else None)`.
+                    # Without it the scan silently skipped most menu entries.
+                    if isinstance(action, (ast.Lambda, ast.Call, ast.Name,
+                                           ast.Attribute, ast.IfExp)) or \
+                            (isinstance(action, ast.Constant)
+                             and action.value is None):
+                        out.add(label.value)
+    return out
+
+
+def check_chrome(cats):
+    """Is every app's chrome actually IN the catalogs?
+
+    The rest of this tool compares the catalogs with each other, so it reports
+    100% whenever they agree — even if they all agree in omitting an entire
+    app. That is exactly what happened: Messages shipped after the translation
+    rollout and its name, its Chat menu and all four of its menu items were in
+    none of the 17 catalogs, so it was the one app with a half-English menu bar
+    in every language, and this tool said "clean". A stray menu item (System
+    Monitor's "Sort by ID", sitting beside three translated siblings) hid the
+    same way.
+
+    Only chrome is checked. App BODY text is a much larger surface that is
+    knowingly still English in most languages, and failing on it would drown
+    the signal — the same reasoning as the coverage note above.
+    """
+    import glob
+    english = set()
+    for cat in cats.values():
+        english |= set(cat)
+    if not english:
+        return 0
+    problems = 0
+    for path in sorted(glob.glob(os.path.join(DE, "*.py"))):
+        missing = sorted(s for s in _chrome_strings(path)
+                         if s and s not in english
+                         and s not in CHROME_ALLOW and s.strip() != "-")
+        if missing:
+            print("UNTRANSLATED CHROME  %s  %s"
+                  % (os.path.basename(path), ", ".join(repr(m)
+                                                       for m in missing)))
+            problems += len(missing)
+    return problems
 
 
 if __name__ == "__main__":

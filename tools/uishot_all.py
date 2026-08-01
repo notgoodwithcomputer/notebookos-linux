@@ -22,11 +22,11 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 import uishot  # noqa: E402
 
-DEFAULT = ["writer", "novel", "journal", "academic", "screenplay", "ebook",
+DEFAULT = ["writer", "novel", "journal", "academics", "screenplay", "ebook",
            "cookbook", "contacts", "accounting", "calendar", "music",
            "illustrator", "sequencer", "video", "media", "g2048", "packages",
            "settings", "sysmon", "calculator", "tasks", "language", "maps",
-           "finder", "gbaide"]
+           "finder", "gbasdk"]
 
 W, H = 1000, 680
 
@@ -37,6 +37,16 @@ def main():
     os.makedirs(outdir, exist_ok=True)
     os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="uisweep-home-"))
     uishot.load_theme()
+    # Apps that size themselves from the panel (video's preview stage, music's
+    # columns, illustrator's zoom-to-fit) must believe they are on the panel we
+    # are RENDERING at. Without this they lay out for the developer's monitor
+    # and are then squeezed into W x H, which invents defects that do not exist
+    # on hardware: the Video Editor's preview came out with its placeholder
+    # glyph and "Nothing to preview" line scrolled almost entirely out of a
+    # clipped 640px stage, and it renders perfectly at 1024 once asked. Same
+    # patch, same reason, as minsize_sweep.measure_one.
+    import nbapp
+    nbapp.screen_size = lambda: (W, H)
     for name in apps:
         try:
             if name in sys.modules:

@@ -201,6 +201,8 @@ class Tasks(nbapp.AppWindow):
             # list (a number, a string, an object); coerce anything non-list to
             # empty so a corrupt file opens to a clean empty state, never a crash.
             raw_projects = meta.get("projects")
+            if isinstance(raw_projects, dict):
+                raw_projects = list(raw_projects.values())
             if not isinstance(raw_projects, list):
                 raw_projects = []
             for item in raw_projects:
@@ -217,13 +219,24 @@ class Tasks(nbapp.AppWindow):
         self.events = self._load_events()
 
     def _read_meta(self):
-        """This app's private sidecar ({tasks, events, projects}) or None."""
+        """This app's private sidecar ({tasks, events, projects}) or None.
+
+        A sidecar that lost its wrapper and is a bare LIST is read as the task
+        list it plainly is. The flat file would still carry the titles, so this
+        never looked like data loss — but the due dates, priorities and lists
+        the user set only exist here, and _save_tasks rewrites this file on
+        close, so shrugging the whole thing off quietly flattened every task
+        back to an undated Today."""
         try:
             with open(META_FILE) as fh:
                 data = json.load(fh)
-            return data if isinstance(data, dict) else None
         except Exception:
             return None
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list):
+            return {"tasks": data}
+        return None
 
     def _read_flat(self):
         """The shared flat file ([{text,done}, ...]) or None. This is what the
@@ -231,10 +244,12 @@ class Tasks(nbapp.AppWindow):
         try:
             with open(TASKS_FILE) as fh:
                 data = json.load(fh)
-            if isinstance(data, list):
-                return [t for t in data if isinstance(t, dict)]
         except Exception:
-            pass
+            return None
+        if isinstance(data, dict):
+            data = list(data.values())   # keyed object -> its records, in order
+        if isinstance(data, list):
+            return [t for t in data if isinstance(t, dict)]
         return None
 
     def _load_tasks(self, meta):
@@ -246,6 +261,11 @@ class Tasks(nbapp.AppWindow):
         3. nothing on disk — ship empty."""
         flat = self._read_flat()
         rich = meta.get("tasks") if isinstance(meta, dict) else None
+        # Tasks stored as an object keyed by id: the values are still the rich
+        # tasks, and falling through to the flat file instead would silently
+        # strip every due date, priority and list assignment on the next save.
+        if isinstance(rich, dict):
+            rich = list(rich.values())
         if isinstance(rich, list) and rich:
             tasks = [self._norm_task(t) for t in rich if isinstance(t, dict)]
             if isinstance(flat, list):
@@ -393,10 +413,26 @@ class Tasks(nbapp.AppWindow):
         try:
             with open(CAL_FILE) as fh:
                 data = json.load(fh)
-            if isinstance(data, list):
-                return [e for e in data if isinstance(e, dict)]
         except Exception:
-            pass
+            return None
+        if isinstance(data, dict):
+            # A wrapped store ({"events": [...]}, or an object keyed by id):
+            # take the first list of records inside it. This matters far more
+            # than the rail it feeds — _append_calendar_event writes this file
+            # back, so a store it could not read used to be REPLACED by the one
+            # event being added, wiping the user's calendar from another app.
+            inner = data.get("events")
+            if not isinstance(inner, list):
+                vals = list(data.values())
+                inner = vals if all(isinstance(v, dict) for v in vals) else None
+                for v in data.values():
+                    if isinstance(v, list) and any(isinstance(x, dict)
+                                                   for x in v):
+                        inner = v
+                        break
+            data = inner
+        if isinstance(data, list):
+            return [e for e in data if isinstance(e, dict)]
         return None
 
     def _event_from_cal(self, item, colors=None):
@@ -483,8 +519,18 @@ class Tasks(nbapp.AppWindow):
                      if n not in DEFAULT_PROJECT_NAMES]
             meta = {"tasks": self.tasks, "projects": extra}
             nbapp.atomic_write_json(META_FILE, meta)
-        except Exception:
-            pass
+            self._save_warned = False
+        except Exception as exc:
+            # See academics._save_to_disk. The sidecar holds everything the flat
+            # file cannot express — due dates, notes, which list a task is on —
+            # so a silently failed write loses the part of a task that took the
+            # longest to enter. Warn once per run of failures.
+            if not getattr(self, "_save_warned", False):
+                self._save_warned = True
+                try:
+                    self._flash(nbapp.save_failure_reason(exc, META_FILE))
+                except Exception:
+                    pass
 
     def _on_destroy(self, *_):
         self._save_tasks()
@@ -649,14 +695,16 @@ class Tasks(nbapp.AppWindow):
     # -------------------------------------------------------------- menu bar
     def menu_items(self, name):
         if name == "File":
+            # tasks.json and its sidecar are the sole source of truth and are
+            # rewritten on every edit, so there is no document to Save and
+            # nothing a Save As would rescue. The old Open… was worse than
+            # redundant: it REPLACED the whole store — the same store the
+            # desktop widget reads — from a file picked out of the shared
+            # Documents folder. File now offers only what the app can actually
+            # make (docs/MENU-CONVENTIONS.md, the single-store File menu).
             return [
                 ("New Task", self._file_new_task),
                 ("New List", lambda: self._on_new_list(None)),
-                nbapp.SEP,
-                ("Open…", self._file_open),
-                nbapp.SEP,
-                ("Save", self._file_save),
-                ("Save As…", self._file_save_as),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]
@@ -664,26 +712,32 @@ class Tasks(nbapp.AppWindow):
             def mk(vid, label):
                 mark = "•  " if self.view == vid else "    "
                 return (mark + label, lambda v=vid: self._on_select(None, v))
+            # "Look for New Events" names what the action is FOR — pulling in
+            # anything added in Calendar since this window opened — instead of
+            # the machine's word for how it does it ("Refresh").
             items = [mk("view:today", "Today"),
                      mk("view:upcoming", "Upcoming"),
                      mk("view:inbox", "Inbox"), nbapp.SEP,
-                     ("Refresh", self._do_refresh)]
-            # Clear Completed only appears when there is something to clear, so
-            # the menu never offers a dead action that would remove nothing.
-            if any(t.get("done") for t in self.tasks):
-                items.append(nbapp.SEP)
-                items.append(("Clear Completed", self._open_clearcard))
+                     ("Look for New Events", self._do_refresh)]
+            # Clear Completed stays VISIBLE with nothing to clear and greys out,
+            # so the menu does not shift under the hand of someone reaching for
+            # the item below it.
+            items.append(nbapp.SEP)
+            items.append(("Clear Completed", self._open_clearcard
+                          if any(t.get("done") for t in self.tasks) else None))
             return items
         if name == "Lists":
             items = [("New List", lambda: self._on_new_list(None))]
-            # Remove List targets the currently selected list. It only appears
-            # while a list view is active (no permanently-greyed stub): pick a
-            # list, then Lists ▸ Remove List. It confirms first, then reassigns
-            # that list's tasks to Inbox — never a silent delete.
-            if self.view.startswith("proj:") and self.view[5:] in PROJ_COLOR:
-                nm = self.view[5:]
-                items.append(
-                    ("Remove List", lambda n=nm: self._open_removelist(n)))
+            # Remove List targets the currently selected list, so it greys out
+            # (never disappears) while a built-in view is showing. It confirms
+            # first — hence the ellipsis — then reassigns that list's tasks to
+            # Inbox; never a silent delete.
+            on_list = (self.view.startswith("proj:")
+                       and self.view[5:] in PROJ_COLOR)
+            nm = self.view[5:] if on_list else ""
+            items.append(
+                ("Remove List…",
+                 (lambda n=nm: self._open_removelist(n)) if on_list else None))
             if PROJECTS:
                 items.append(nbapp.SEP)
                 for pname, _color in PROJECTS:
@@ -1123,9 +1177,8 @@ class Tasks(nbapp.AppWindow):
         self.draft.get_style_context().add_class("draftentry")
         self.draft.set_placeholder_text(_t("Add task"))
         self.draft.set_tooltip_text(
-            "Type a task and press Enter. You can also add a time (14:30), "
-            "a list (#Home), a day (>tomorrow or >friday) or a flag "
-            "(! or !! for high).")
+            _t("Task name, then Enter. Optional: a time (14:30), a list "
+               "(#Home), a day (>tomorrow, >friday), a priority (! or !!)."))
         self.draft.connect("activate", self._on_add)
         add.pack_start(self.draft, True, True, 0)
         col.pack_start(add, False, False, 0)
@@ -1579,7 +1632,11 @@ class Tasks(nbapp.AppWindow):
         title.get_style_context().add_class("nltitle")
         card.pack_start(title, False, False, 0)
 
-        msg = ("Remove %d completed task%s. This cannot be undone."
+        # ASK, don't announce. Every other confirm in this app opens with a
+        # question ("Remove the list “%s”? …"), and a card that states what is
+        # about to happen reads as a notification of something already decided
+        # — next to a Cancel button that says otherwise.
+        msg = ("Remove %d completed task%s? This cannot be undone."
                % (n, "" if n == 1 else "s"))
         body = Gtk.Label(label=msg, xalign=0)
         body.get_style_context().add_class("nlbody")
@@ -1694,9 +1751,23 @@ class Tasks(nbapp.AppWindow):
         todays = [e for e in self.events if e.get("ymd") in (None, today)]
         todays.sort(key=self._event_sortkey)
         if not todays:
-            empty = Gtk.Label(label=_t("No events"), xalign=0)
-            empty.get_style_context().add_class("emptytext")
+            # A bare "No events" leaves the reader with nowhere to go. The
+            # inline add row sits directly beneath this label, so point at it —
+            # in its own words ("Add event" is its placeholder) — and say what
+            # the field expects, which is not obvious from an empty box.
+            empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
             empty.set_margin_top(12)
+            head = Gtk.Label(label=_t("No events"), xalign=0)
+            head.get_style_context().add_class("emptytext")
+            hint = Gtk.Label(
+                label=_t("Add one in the box below."),
+                xalign=0)
+            hint.get_style_context().add_class("emptyhint")
+            hint.set_line_wrap(True)
+            hint.set_max_width_chars(26)
+            hint.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            empty.pack_start(head, False, False, 0)
+            empty.pack_start(hint, False, False, 0)
             self._evbox.pack_start(empty, False, False, 0)
         else:
             for ev in todays:
@@ -1757,7 +1828,11 @@ class Tasks(nbapp.AppWindow):
             "date": "%04d-%02d-%02d" % (now.tm_year, now.tm_mon, now.tm_mday),
             "start": start, "end": start + 1.0,
             "title": title, "cal": "Personal"}
-        self._append_calendar_event(record)
+        if not self._append_calendar_event(record):
+            # The calendar store could not be read, so it was left untouched
+            # (see _append_calendar_event). Keep what was typed in the field —
+            # clearing it would lose the user's words as well as the event.
+            return
         entry.set_text("")
         # Re-read the shared store so the new event (and any other Calendar
         # change) is reflected, then repaint the rail + mini-calendar dots.
@@ -1769,15 +1844,31 @@ class Tasks(nbapp.AppWindow):
     def _append_calendar_event(self, record):
         """Read-modify-write one event into the Calendar app's store
         (calendar.json). Creates the file/dir if Calendar has never run. Never
-        raises — a schedule add must never crash Tasks."""
+        raises — a schedule add must never crash Tasks. Returns True when the
+        event was actually written.
+
+        REFUSES to write over a store it could not read. This is a wholesale
+        rewrite of ANOTHER app's file: when the read came back empty because the
+        store was shaped in a way this app did not recognise, appending to [] and
+        writing replaced the user's entire calendar with the one event just
+        typed. Tasks owns tasks, not the calendar, and must never be the thing
+        that destroys it. Missing, empty, or not-JSON-at-all is not this case —
+        the first two start a fresh store, and the third is quarantined by
+        nbapp.atomic_write_json before anything replaces it."""
         data = self._read_calendar()
         if data is None:
-            data = []
+            try:
+                with open(CAL_FILE) as fh:
+                    json.load(fh)
+                return False       # parses, but is not a store we understand
+            except (OSError, ValueError):
+                data = []          # missing / unreadable -> safe to start one
         data.append(record)
         try:
             nbapp.atomic_write_json(CAL_FILE, data)
+            return True
         except Exception:
-            pass
+            return False
 
     def _refresh_calendar(self):
         """Swap the mini month calendar for a freshly built one (new event dots,
@@ -1848,12 +1939,25 @@ class Tasks(nbapp.AppWindow):
         et = Gtk.Label(label=ev.get("title", ""), xalign=0)
         et.get_style_context().add_class("eventtitle")
         et.set_line_wrap(True); et.set_max_width_chars(26)
+        # max_width_chars caps where the text WRAPS, not how narrow the label
+        # can get: a wrapping label's minimum width is its widest WORD, and
+        # WORD mode refuses to break inside one. A single 34-character token —
+        # ordinary in German, Dutch or Finnish, and in any filename-style title
+        # — reported 1030px of minimum on its own and pushed the whole app off a
+        # 1024px panel. WORD_CHAR keeps normal titles breaking at spaces but
+        # lets a monster word break mid-word, so the minimum is one character.
+        et.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
         content.pack_start(et, False, False, 0)
         where = (ev.get("where") or "").strip()
         if where:
             es = Gtk.Label(label=where, xalign=0)
             es.get_style_context().add_class("eventsub")
             es.set_margin_top(3)
+            # Same mechanism, less protection: this one had no wrap at ALL, so
+            # its whole string was the minimum width. A place name is free text
+            # from the Calendar app and can be any length.
+            es.set_line_wrap(True); es.set_max_width_chars(26)
+            es.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
             content.pack_start(es, False, False, 0)
         card.pack_start(content, True, True, 0)
         row.pack_start(card, True, True, 0)
@@ -1872,7 +1976,7 @@ class Tasks(nbapp.AppWindow):
             ctx.line_to(cx, h)
             ctx.stroke()
             ctx.arc(cx, cy, rad, 0, 6.2832)
-            ctx.set_source_rgb(*nbicons._hex("#FBFAF6"))
+            ctx.set_source_rgb(*nbicons._hex("#FCFBF8"))
             ctx.fill()
             ctx.arc(cx, cy, rad, 0, 6.2832)
             ctx.set_source_rgb(*nbicons._hex(color))
@@ -2053,7 +2157,14 @@ class Tasks(nbapp.AppWindow):
             # way cookbook distinguishes a filtered category.
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             box.set_margin_top(60); box.set_margin_bottom(60)
-            head = "No tasks" if not self.tasks else "No tasks in this view"
+            # Branch on a plain `if` so BOTH labels go through _t(): written
+            # `_t(a if x else b)` the catalog lookup happens on whichever
+            # branch ran, and written without _t() at all — as this was — the
+            # app's primary empty state stays English in all 17 languages.
+            if not self.tasks:
+                head = _t("No tasks")
+            else:
+                head = _t("No tasks in this view")
             lbl = Gtk.Label(label=head)
             lbl.get_style_context().add_class("emptytext")
             box.pack_start(lbl, False, False, 0)
@@ -2095,7 +2206,7 @@ class Tasks(nbapp.AppWindow):
         btn.connect("clicked", self._toggle, idx)
         btn.connect("button-press-event", self._on_task_press, idx)
         btn.set_tooltip_text(
-            "Click to complete · right-click to move it to another day")
+            _t("Complete task · right-click to move it to another day"))
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
 
         chk = Gtk.DrawingArea(); chk.set_size_request(22, 22)
@@ -2271,10 +2382,11 @@ class Tasks(nbapp.AppWindow):
         .groupline { background: #ECE7DA; min-height: 1px; }
         .groupcount { font-size: 12px; color: #8A857A; }
 
-        .rail { background: #FBFAF6; }
+        .rail { background: #FCFBF8; }
         .railhead { border-bottom: 1px solid #E6E1D4; }
         .railtitle { font-size: 22px; font-weight: 700; color: #1A1916; }
         .emptytext { font-size: 14px; color: #8A857A; }
+        .emptyhint { font-size: 12px; color: #A39D8F; }
         .emptysub { font-size: 13px; color: #8A857A; }
         .eventtime { font-size: 13px; color: #1A1916; font-weight: 600; }
         .eventdur { font-size: 11px; color: #8A857A; }

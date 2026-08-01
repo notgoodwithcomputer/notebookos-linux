@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gbabuild — turn a Notebook OS GBA IDE game model into a real .gba ROM.
+gbabuild — turn a Notebook OS GBA SDK game model into a real .gba ROM.
 
 The model (the IDE's project JSON) describes sprites, objects (with Game-Maker
 style events made of drag-and-drop actions), and rooms. generate_c() emits a
@@ -479,6 +479,7 @@ class _Gen:
         self.problems = []
         self._where = ""    # "object · event" being emitted, for problem text
         self._obj_id = ""
+        self._fns = {}      # id(object dict) -> (cid, has_create, has_step, has_destroy)
         self.global_ix = self._collect_globals()   # global.* name -> slot
 
     def w(self, line=""):
@@ -523,6 +524,16 @@ class _Gen:
                     c = _int(p, TRANSPARENT) & 0x7FFF
                     if c != (TRANSPARENT & 0x7FFF) and c not in cols:
                         cols.append(c)
+            # The hardware limit, said out loud. A sprite gets fifteen colours
+            # plus transparent; the sixteenth onwards used to be quietly mapped
+            # to index 0, which is TRANSPARENT -- so the extra colours came out
+            # of the compiler as holes in the picture and nothing said so.
+            if len(cols) > 15:
+                self.problems.append(
+                    "%s - it is painted in %d colours, and a Game Boy Advance "
+                    "sprite can hold 15. The %d after the first 15 will come "
+                    "out as holes." % (s.get("id") or "?", len(cols),
+                                       len(cols) - 15))
             cols = cols[:15]
             chosen = None
             for bi, bank in enumerate(banks):
@@ -540,6 +551,10 @@ class _Gen:
                 chosen = len(banks) - 1
             if chosen is None:
                 chosen = 0          # 16 banks exhausted: fold onto bank 0
+                self.problems.append(
+                    "%s - the game has run out of sprite colour sets (there are "
+                    "16), so this sprite will be drawn in another sprite's "
+                    "colours." % (s.get("id") or "?"))
             self._spr_bank[si] = chosen
             cmap = {TRANSPARENT & 0x7FFF: 0}
             for c in cols:
@@ -617,28 +632,71 @@ class _Gen:
         cmap = {TRANSPARENT & 0x7FFF: 0}
         pal = [0] * 16
         nxt = 1
+        over = set()                        # colours that did not fit the 15
         tiles = [0] * 16                    # tile 0 = blank
         for ts in self.tilesets:
+            # A tile set is authored at 8, 16 or 32 px. The hardware only has
+            # 8x8 BG tiles, so a bigger tile becomes (size/8)^2 of them in
+            # BLOCK ROW-MAJOR order -- the same order gbasdk.split_tile uses
+            # and the order a room tilemap was painted in. Get this order wrong
+            # and every large tile shows scrambled on the console while looking
+            # perfect in the editor.
+            tsz = _int(ts.get("size", 8), 8)
+            if tsz not in (8, 16, 32):
+                tsz = 8
+            blocks = max(1, tsz // 8)
             for tile in ts.get("tiles") or []:
-                px = (list(tile) + [TRANSPARENT] * 64)[:64]
-                idx = []
-                for p in px:
-                    c = _int(p, TRANSPARENT) & 0x7FFF
-                    if c not in cmap:
-                        if nxt < 16:
-                            cmap[c] = nxt
-                            pal[nxt] = c
-                            nxt += 1
-                        else:
-                            cmap[c] = 1
-                    idx.append(cmap[c])
-                for row in range(8):
-                    for half in range(2):
-                        v = 0
-                        for k in range(4):
-                            v |= (idx[row * 8 + half * 4 + k] & 0xF) << (k * 4)
-                        tiles.append(v)
+                whole = list(tile or [])
+                need = tsz * tsz
+                whole = (whole + [TRANSPARENT] * need)[:need]
+                cells = []
+                for by in range(blocks):
+                    for bx in range(blocks):
+                        cell = []
+                        for j in range(8):
+                            row = (by * 8 + j) * tsz + bx * 8
+                            cell.extend(whole[row:row + 8])
+                        cells.append(cell)
+                for px in cells:
+                    idx = []
+                    for p in px:
+                        c = _int(p, TRANSPARENT) & 0x7FFF
+                        if c not in cmap:
+                            if nxt < 16:
+                                cmap[c] = nxt
+                                pal[nxt] = c
+                                nxt += 1
+                            else:
+                                # All the tile sets share ONE 15-colour background
+                                # palette. Over that, a colour was silently swapped
+                                # for whatever happens to be in slot 1.
+                                cmap[c] = 1
+                                over.add(c)
+                        idx.append(cmap[c])
+                    for row in range(8):
+                        for half in range(2):
+                            v = 0
+                            for k in range(4):
+                                v |= (idx[row * 8 + half * 4 + k] & 0xF) << (k * 4)
+                            tiles.append(v)
         self._bg_cmap = cmap
+        # A 4bpp charblock holds 512 8x8 tiles, and index 0 is the blank one.
+        # At 8x8 nobody reaches that; at 32x32 each tile costs SIXTEEN slots, so
+        # 32 tiles fill the block. Say which, because "too many tiles" is
+        # baffling when the set only has 32 pictures in it.
+        used = len(tiles) // 16                 # 16 u16 words per 8x8 tile
+        if used > 512:
+            self.problems.append(
+                "The tile sets need %d background tiles and the Game Boy "
+                "Advance holds 512. A 16 x 16 tile counts as 4 and a 32 x 32 "
+                "tile counts as 16. Use fewer tiles, or a smaller tile size."
+                % used)
+        if over:
+            self.problems.append(
+                "The tiles use %d colours between them, and all the tile sets "
+                "in a game share one set of 15. The %d that did not fit will be "
+                "drawn in the wrong colour."
+                % (len(cmap) - 1 + len(over), len(over)))
         self.w("const u16 nb_bg_palette[16] = { %s };"
                % ", ".join("0x%04X" % (c & 0x7FFF) for c in pal))
         self.w("const u16 nb_bg_tiles[] = { %s };"
@@ -744,6 +802,17 @@ class _Gen:
             return GML_GLOBALS[s]
         return str(_int(s, 0))
 
+    def _missing(self, action_label, kind_word, name):
+        """Report an action that points at a resource which is not in the
+        project. Every one of these used to be dropped in silence: the ROM built,
+        that row of the sheet did nothing, and nobody was told -- which is what
+        happens to every reference to a resource the author deletes."""
+        where = self._where or (self._obj_id or "?")
+        self.problems.append(
+            "%s - %s names a %s called \u201c%s\u201d, and there is no such %s "
+            "any more, so that line will do nothing."
+            % (where, action_label, kind_word, name if name else "?", kind_word))
+
     def _emit_action(self, a, vars_map, ind):
         pad = "    " * ind
         L = []
@@ -778,6 +847,8 @@ class _Gen:
                 L.append("%srt_create(%d, %s, %s);" %
                          (pad, oi, self._val(a.get("x"), vars_map),
                           self._val(a.get("y"), vars_map)))
+            else:
+                self._missing("Create Instance", "object", a.get("object") or a.get("_was"))
         elif k == "set_var":
             idx = vars_map.get(str(a.get("var", "")).strip())
             if idx is not None:
@@ -792,10 +863,14 @@ class _Gen:
             ri = self.room_ix.get(a.get("room"))
             if ri is not None:
                 L.append("%srt_room_goto(%d);" % (pad, ri))
+            else:
+                self._missing("Go To Room", "room", a.get("room") or a.get("_was"))
         elif k == "play_sound":
             si = self.snd_ix.get(a.get("sound"))
             if si is not None:
                 L.append("%srt_play_sound(%d);" % (pad, si))
+            else:
+                self._missing("Play Sound", "sound", a.get("sound") or a.get("_was"))
         elif k == "stop_sound":
             L.append("%srt_play_sound(-1);" % pad)
         elif k in ("if_key", "if_pressed"):
@@ -808,6 +883,8 @@ class _Gen:
                 L.append("%s}" % pad)
         elif k == "if_collision":
             oi = self.obj_ix.get(a.get("object"))
+            if oi is None:
+                self._missing("If Collision", "object", a.get("object") or a.get("_was"))
             if oi is not None:
                 L.append("%sif (rt_meeting(self, %d)) {" % (pad, oi))
                 for c in a.get("children") or []:
@@ -853,6 +930,8 @@ class _Gen:
             si = self.spr_ix.get(a.get("sprite"))
             if si is not None:
                 L.append("%sself->sprite = %d; self->image_index = 0;" % (pad, si))
+            else:
+                self._missing("Change Sprite", "sprite", a.get("sprite") or a.get("_was"))
         elif k == "set_image_speed":
             L.append("%sself->image_speed = %s;" %
                      (pad, self._val(a.get("value"), vars_map)))
@@ -860,6 +939,8 @@ class _Gen:
             oi = self.obj_ix.get(a.get("object"))
             if oi is not None:
                 L.append("%srt_destroy_object(%d);" % (pad, oi))
+            else:
+                self._missing("Destroy Object", "object", a.get("object") or a.get("_was"))
         elif k in ("set_score", "set_lives", "set_health"):
             g = {"set_score": "nb_score", "set_lives": "nb_lives",
                  "set_health": "nb_health"}[k]
@@ -991,27 +1072,44 @@ class _Gen:
                 for e in colls:
                     oi = self.obj_ix.get(e.get("object"))
                     if oi is None:
+                        # The whole body of the event is dropped here, which is
+                        # the most expensive silent loss in the compiler.
+                        self.problems.append(
+                            "%s \u00b7 %s - the object it collided with "
+                            "(\u201c%s\u201d) is not in the project any more, "
+                            "so nothing in this event will happen."
+                            % (self._obj_id or "?", self._event_name(e),
+                               e.get("object") or e.get("_was") or "?"))
                         continue
                     self.w("    if (rt_meeting(self, %d)) {" % oi)
                     for ln in self._emit_event_body(e, vars_map):
                         self.w("    " + ln)
                     self.w("    }")
                 self.w("}")
-            o["_cid"] = cid
-            o["_has_create"] = bool(create)
-            o["_has_step"] = has_step
-            o["_has_destroy"] = bool(destroys)
+            # Keep what the object table needs to know in OUR OWN map. These
+            # four used to be written back into the caller's object dicts --
+            # which the SDK autosaves, so every .gbaproj on disk grew _cid,
+            # _has_create, _has_step and _has_destroy the first time it was
+            # exported. A generator must not write to the document it reads.
+            self._fns[id(o)] = (cid, bool(create), has_step, bool(destroys))
         self.w("")
         # object table: { sprite, visible, solid, create, step, draw, destroy }
         self.w("const nb_Object nb_objects[] = {")
         for o in self.objects:
-            cid = o["_cid"]
+            cid, has_create, has_step, has_destroy = self._fns.get(
+                id(o), (_cid(o.get("id"), "obj"), False, False, False))
             spr = self.spr_ix.get(o.get("sprite"), -1)
+            worn = o.get("sprite") or o.get("_was")
+            if spr < 0 and worn:
+                self.problems.append(
+                    "%s - the sprite \u201c%s\u201d it wears is not in the "
+                    "project any more, so it will be invisible."
+                    % (o.get("id") or "?", worn))
             vis = 0 if o.get("visible") is False else 1
             solid = 1 if o.get("solid") else 0
-            cfn = "%s_create" % cid if o["_has_create"] else "0"
-            sfn = "%s_step" % cid if o["_has_step"] else "0"
-            dfn = "%s_destroy" % cid if o["_has_destroy"] else "0"
+            cfn = "%s_create" % cid if has_create else "0"
+            sfn = "%s_step" % cid if has_step else "0"
+            dfn = "%s_destroy" % cid if has_destroy else "0"
             self.w("    { %d, %d, %d, %s, %s, 0, %s }," %
                    (spr, vis, solid, cfn, sfn, dfn))
         if not self.objects:
@@ -1028,6 +1126,12 @@ class _Gen:
             self.w("static const nb_InstanceDef room_%d_insts[] = {" % i)
             for it in insts:
                 oi = self.obj_ix.get(it.get("object"))
+                if oi is None:
+                    self.problems.append(
+                        "%s - it places an object called \u201c%s\u201d, and "
+                        "there is no such object any more, so nothing will be "
+                        "there." % (r.get("id") or "?",
+                                    it.get("object") or it.get("_was") or "?"))
                 if oi is None:
                     continue
                 self.w("    { %d, %d, %d }," %
@@ -1092,7 +1196,7 @@ class _Gen:
         self.w("")
 
     def generate(self):
-        self.w("/* auto-generated by the Notebook OS GBA IDE — do not edit */")
+        self.w("/* auto-generated by the Notebook OS GBA SDK — do not edit */")
         self.w('#include "runtime.h"')
         self.w("")
         self.gen_sprites()
@@ -1141,11 +1245,19 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
     tdir = os.path.dirname(gcc)
     objcopy = os.path.join(tdir, "arm-none-eabi-objcopy")
     problems = []
+    # Three different failures, three different reasons. They used to share one
+    # message, so a crash INSIDE the generator was reported to the user as "the
+    # working files could not be written" — a disk problem they would go and
+    # look for and never find.
     try:
-        os.makedirs(outdir, exist_ok=True)
         gen = _Gen(model)
         source = gen.generate()
         problems = list(gen.problems)
+    except Exception as e:
+        return False, None, ("Could not turn this project into code: %s: %s"
+                             % (type(e).__name__, e))
+    try:
+        os.makedirs(outdir, exist_ok=True)
         with open(os.path.join(outdir, "game_data.c"), "w") as fh:
             fh.write(source)
     except Exception as e:
@@ -1185,7 +1297,7 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
         log += r.stdout + r.stderr
         if r.returncode != 0:
             return False, None, log
-        _gbafix(gba)
+        _gbafix(gba, model.get("name") or "")
     except Exception as e:
         return False, None, log + "\nlink/fix failed: %s" % e
     return True, gba, log + "\nBuilt %s (%d bytes)\n" % (gba, os.path.getsize(gba))
@@ -1213,18 +1325,45 @@ NINTENDO_LOGO = bytes.fromhex(
 assert len(NINTENDO_LOGO) == 156
 
 
-def _gbafix(path):
-    """Write the GBA cartridge header's boot logo and complement checksum.
+def _rom_title(name):
+    """A project name as the 12 bytes the cartridge header carries at 0xA0.
 
-    The logo goes at 0x04..0x9F and the checksum at 0xBD (over 0xA0..0xBC).
-    Both are required for the ROM to start on a real Game Boy Advance or a
-    flashcart; an emulator's HLE BIOS skips straight to the cartridge and would
-    run without either."""
+    The field is fixed-width uppercase ASCII, zero padded. Anything a title can
+    contain and the field cannot — accents, CJK, punctuation — is dropped
+    rather than truncated at the first one, so "Café Racer 2" still reads as
+    CAFE RACER 2 instead of stopping at CAF."""
+    try:
+        import unicodedata
+        name = unicodedata.normalize("NFKD", name)
+    except Exception:
+        pass
+    out = []
+    for ch in name.upper():
+        if ch.isalnum() and ord(ch) < 128:
+            out.append(ch)
+        elif ch in " -_" and out and out[-1] != " ":
+            out.append(" ")
+    return "".join(out).strip()[:12].encode("ascii", "ignore")
+
+
+def _gbafix(path, name=""):
+    """Write the GBA cartridge header's boot logo, game title and checksum.
+
+    The logo goes at 0x04..0x9F, the title at 0xA0..0xAB and the complement
+    checksum at 0xBD (over 0xA0..0xBC). The logo and the checksum are required
+    for the ROM to start on a real Game Boy Advance or a flashcart; an
+    emulator's HLE BIOS skips straight to the cartridge and would run without
+    either. The TITLE is what a flashcart menu lists the game under — left
+    unwritten it stayed all zeros, so every game a person exported appeared in
+    that menu as a blank row, indistinguishable from every other one they had
+    made. It must be written BEFORE the checksum, which covers it."""
     with open(path, "rb") as fh:
         d = bytearray(fh.read())
     if len(d) < 0xC0:
         d += bytes(0xC0 - len(d))
     d[0x04:0xA0] = NINTENDO_LOGO
+    title = _rom_title(name)
+    d[0xA0:0xAC] = title + bytes(12 - len(title))
     s = 0
     for i in range(0xA0, 0xBD):
         s = (s + d[i]) & 0xFF

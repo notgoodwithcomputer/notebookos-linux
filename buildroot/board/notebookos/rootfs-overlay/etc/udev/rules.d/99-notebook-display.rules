@@ -1,0 +1,11 @@
+# A display plugged in or pulled out while the desktop is running.
+#
+# The kernel emits a `change` uevent on the drm subsystem when a connector's
+# state alters -- which is exactly what plugging an HDMI cable into a
+# television does. Without this rule nothing reacted: the session configured
+# the outputs once at start-up and never looked again, so a TV connected after
+# boot stayed dark no matter what.
+#
+# The helper needs an X display and the session's authority to talk to the
+# server, so it is run through a small wrapper that finds them.
+ACTION=="change", SUBSYSTEM=="drm", RUN+="/opt/notebook/display-hotplug.sh"

@@ -66,15 +66,15 @@ COL_NAME_MIN = 120
 # Finder (names match the Finder exactly); the system entries are the parts of
 # the system a person can actually name.
 _APP_NAMES = {
-    "writer": "Writer", "novel": "Novel", "academic": "Academic Notes",
+    "writer": "Writer", "novel": "Novel", "academics": "Academics",
     "journal": "Journal", "screenplay": "Screenplay", "tasks": "Tasks",
     "calendar": "Calendar", "cookbook": "Cookbook", "ebook": "E-book Reader",
     "calculator": "Calculator", "accounting": "Accounting",
     "contacts": "Contacts", "illustrator": "Illustrator",
     "sequencer": "Sequencer", "video": "Video Editor", "media": "Media Viewer",
     "music": "Music", "packages": "Packages", "g2048": "2048",
-    "gbaemu": "GBA Emulator", "gbaide": "GBA IDE", "language": "Language",
-    "maps": "Maps",
+    "gbaemu": "GBA Emulator", "gbasdk": "GBA SDK", "language": "Language",
+    "maps": "Maps", "workout": "Workout",
     "terminal": "Terminal", "settings": "Settings",
     "sysmon": "System Monitor",
 }
@@ -98,15 +98,15 @@ _DESCRIPTIONS = {
     "g2048": "The sliding-tile number puzzle.",
     "ebook": "The Notebook OS e-book reader.",
     "gbaemu": "Plays Game Boy Advance games.",
-    "gbaide": "Makes your own Game Boy Advance games.",
+    "gbasdk": "Builds Game Boy Advance games.",
     "illustrator": "The Notebook OS paint and drawing app.",
-    "language": "An offline course for learning a new language.",
-    "maps": "Offline maps of streets and places.",
+    "language": "A course for learning a new language.",
+    "maps": "Maps of streets and places.",
     "packages": "Lists everything installed on this computer.",
     "sequencer": "The Notebook OS multi-track music maker.",
     "video": "Makes movies from clips, photos and music.",
     "nbdiacritics": "Hold a letter key to type an accented version of it.",
-    "nbi18n": "The translations that let the system speak other languages.",
+    "nbi18n": "The interface translations.",
     "nbicons": "The line drawings used for the icons throughout the system.",
     "nbmediakeys": "The volume and brightness keys, with the level they show.",
     "nbpicker": "The Open and Save window shared by every app.",
@@ -223,7 +223,10 @@ def _scan_installed():
             # under its raw filename ("xnudge", "nbgame") only puts something in
             # front of a person that they cannot understand or act on.
             continue
-        glyph = mod if mod in nbicons.ICONS else "sys"
+        # Via nbicons.ALIAS: five apps' glyphs are not named after their module,
+        # and looking only for a same-named glyph gave four of them ("academics",
+        # "gbaemu", "language", "maps") the generic starburst Settings wears.
+        glyph = nbicons.glyph_for(mod)
         # DESC is filled lazily from _module_doc(path) when the package is
         # selected, so the launch-time scan stays a cheap listdir + stat.
         out.append((name, glyph, kind, _fmt_size(st.st_size), st.st_size,
@@ -363,8 +366,7 @@ class Packages(nbapp.AppWindow):
             self._nav_count[vid] = cnt
 
         note = Gtk.Label(
-            label="This system is offline. New packages install from a "
-                  "USB stick.")
+            label=_t("New packages install from a USB stick."))
         note.get_style_context().add_class("sidenote")
         _wrap_to_panel(note)
         note.set_xalign(0)
@@ -658,8 +660,8 @@ class Packages(nbapp.AppWindow):
         matched = self._sorted(matched)
         if not matched:
             # Honest empty state: tell the truth about which kind of empty it is.
-            msg = ("No packages match the search." if q
-                   else "No packages installed.")
+            msg = (_t("No packages match the search.") if q
+                   else _t("No packages installed."))
             empty = Gtk.Label(label=msg)
             empty.get_style_context().add_class("list-empty")
             self.listbox.pack_start(empty, False, False, 0)
@@ -756,11 +758,23 @@ class Packages(nbapp.AppWindow):
             p = PACKAGES[self.sel]
         except (IndexError, TypeError):
             # Nothing selected (a search that matched nothing clears it). Say so
-            # rather than leaving a blank panel that reads as a broken pane.
-            none = Gtk.Label(label=_t("No package selected"))
+            # rather than leaving a blank panel that reads as a broken pane —
+            # and follow it with the one thing to do next, which depends on
+            # WHICH kind of empty this is: a search with no matches is fixed by
+            # clearing the search, an empty list by nothing at all.
+            none = Gtk.Label(label=_t("No package selected"), xalign=0)
             none.get_style_context().add_class("insp-none")
             none.set_valign(Gtk.Align.START)
             self.detail.pack_start(none, False, False, 0)
+            hint = Gtk.Label(
+                label=(_t("Clear the search box to list every package.")
+                       if self.query.strip()
+                       else _t("Choose a package from the list.")),
+                xalign=0)
+            _wrap_to_panel(hint)
+            hint.set_valign(Gtk.Align.START)
+            hint.get_style_context().add_class("insp-note")
+            self.detail.pack_start(hint, False, False, 0)
             self.detail.show_all()
             return
 
@@ -796,14 +810,19 @@ class Packages(nbapp.AppWindow):
             ("File", os.path.basename(p[PATH])),
             ("Size", p[SIZE]),
             ("Modified", p[MODIFIED]),
-            ("Source", "Local Disk"),
+            # Same name the Sources page gives it: one place cannot call the
+            # machine "Local Disk" while the other calls it "This computer".
+            ("Source", _t("This computer")),
         ]
         for i, (k, v) in enumerate(rows):
             r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
             r.get_style_context().add_class("insp-row")
             if i == len(rows) - 1:
                 r.get_style_context().add_class("last")
-            kl = Gtk.Label(label=k.upper(), xalign=0)
+            # _t() on the up-cased form: nbi18n looks the sentence-case key up
+            # and up-cases the TRANSLATION the way that language does (Greek
+            # drops the tonos, Turkish keeps its dotted I).
+            kl = Gtk.Label(label=_t(k.upper()), xalign=0)
             kl.get_style_context().add_class("insp-k")
             kl.set_hexpand(True)
             r.pack_start(kl, True, True, 0)
@@ -841,8 +860,8 @@ class Packages(nbapp.AppWindow):
         self.detail.pack_start(btns, False, False, 0)
 
         note = Gtk.Label(
-            label="This package is part of the system itself. It can be "
-                  "verified, but not removed.")
+            label=_t("Packages in this image can be verified. They cannot be "
+                     "removed."))
         _wrap_to_panel(note)
         note.set_xalign(0)
         note.get_style_context().add_class("insp-note")
@@ -859,8 +878,16 @@ class Packages(nbapp.AppWindow):
                 dot.get_style_context().add_class("err")
             flash.pack_start(dot, False, False, 0)
             ft = Gtk.Label(label=self._flash_text, xalign=0)
+            # Same cap as every other label in this fixed-width panel: without
+            # it a one-line result ("Opening Illustrator", a checked/not-checked
+            # sentence) asks for its whole length as a natural width and widens
+            # the inspector, squeezing the table beside it.
+            _wrap_to_panel(ft)
             ft.get_style_context().add_class("flashtext")
-            flash.pack_start(ft, False, False, 0)
+            # expand=True: a wrap-to-panel label asks for ONE character of
+            # natural width, so a non-expanding child is handed exactly that
+            # and the sentence comes out one letter per line.
+            flash.pack_start(ft, True, True, 0)
             self.detail.pack_start(flash, True, True, 0)
 
         self.detail.show_all()
@@ -895,8 +922,12 @@ class Packages(nbapp.AppWindow):
         ok = self._verify_module(p[PATH])
         self._flash_src = self.sel
         self._flash_err = not ok
-        self._flash_text = ("Verified · file intact" if ok
-                            else "Verify failed · file unreadable")
+        # Say what was found, not what the machine did. "Verify failed" reads as
+        # though the person's own action went wrong, when what actually
+        # happened is that the package could not be read.
+        self._flash_text = (_t("Checked: this package is complete") if ok
+                            else _t("This package could not be read, so it "
+                                    "could not be checked"))
         self._rebuild_detail()
         GLib.timeout_add_seconds(4, self._clear_flash, self.sel)
 
@@ -930,26 +961,36 @@ class Packages(nbapp.AppWindow):
         page.pack_start(
             Gtk.Image.new_from_pixbuf(nbicons.pixbuf("update", 44, FAINT)),
             False, False, 0)
-        h = Gtk.Label(label=_t("Everything is up to date"))
+        h = Gtk.Label(label=_t("No updates"))
         h.get_style_context().add_class("empty-h")
         page.pack_start(h, False, False, 0)
-        s = Gtk.Label(
-            label="This system is offline. Package updates install from a USB "
-                  "stick.")
+        s = Gtk.Label(label=_t("Package updates install from a USB stick."))
         s.set_line_wrap(True)
         s.set_justify(Gtk.Justification.CENTER)
         s.set_max_width_chars(46)
         s.get_style_context().add_class("empty-s")
         page.pack_start(s, False, False, 0)
-        # No "last checked" line: this offline system never polls for updates,
-        # so a launch-time timestamp would be a false promise. State the truth.
-        lc = Gtk.Label(label=_t("This system does not check for updates on its own."))
-        lc.get_style_context().add_class("empty-meta")
-        lc.set_margin_top(6)
-        page.pack_start(lc, False, False, 0)
         return page
 
     # ------------------------------------------------------------------ sources
+    @staticmethod
+    def _unmount_esc(s):
+        """Undo the octal escaping /proc/mounts applies to space, tab and
+        backslash — the same unescape finder.py and settings.py do.
+
+        automount.sh names a mount point after the volume's OWN label, and a
+        label with a space in it is the ordinary case ("My Backup", "Family
+        Photos"). /proc/mounts writes that as /media/My\\040Backup, so the
+        Sources page read "Plugged in: My\\040Backup" — machine escaping shown
+        to a person, in the one place this app has to name the thing they are
+        holding — and the path could not be used to reach the stick either."""
+        if "\\" not in s:
+            return s
+        for esc, ch in (("\\040", " "), ("\\011", "\t"), ("\\012", "\n"),
+                        ("\\134", "\\")):
+            s = s.replace(esc, ch)
+        return s
+
     def _removable_media(self):
         # Real USB media, read live from /proc/mounts. automount.sh mounts
         # removable partitions under /media/<dev>, so restrict to that prefix to
@@ -964,6 +1005,7 @@ class Packages(nbapp.AppWindow):
                     if len(p) < 3:
                         continue
                     dev, mnt, fstype = p[0], p[1], p[2]
+                    mnt = self._unmount_esc(mnt)
                     if mnt == "/" or fstype not in real_fs:
                         continue
                     if not mnt.startswith("/media/"):
@@ -989,8 +1031,7 @@ class Packages(nbapp.AppWindow):
         page.pack_start(self._sources_list, False, False, 0)
 
         note = Gtk.Label(
-            label="New packages install from a USB stick. For now the "
-                  "installed set is fixed.")
+            label=_t("New packages install from a USB stick."))
         note.set_line_wrap(True)
         # A readable measure, not one long line across a 1920px page. halign
         # must be pinned too: max_width_chars only caps the NATURAL width, and a
@@ -1013,14 +1054,19 @@ class Packages(nbapp.AppWindow):
         for c in box.get_children():
             box.remove(c)
 
-        # USB media is the install path; show whatever is actually mounted now.
+        # USB sticks are the install path; show whatever is actually plugged in
+        # now. The stick's OWN name is what a person recognises — automount.sh
+        # names the mount point after the volume label precisely so that name
+        # can be shown here instead of "/media/sda1", which tells a reader
+        # nothing and looks like a fault.
         media = self._removable_media()
         if media:
-            usb_detail = "Mounted: " + ", ".join(m[1] for m in media)
-            usb_status, usb_active = "Mounted", True
+            usb_detail = _t("Plugged in: %s") % ", ".join(m[0] for m in media)
+            usb_status, usb_active = _t("IN USE"), True
         else:
-            usb_detail = "No USB media detected"
-            usb_status, usb_active = "None", False
+            # The empty state carries the next step rather than only the news.
+            usb_detail = _t("Plug one in to install new packages")
+            usb_status, usb_active = _t("NOT PRESENT"), False
 
         # Keep the sidebar badge honest with what is actually connected now
         # (Local Disk + any mounted sticks), so plugging a stick in and
@@ -1032,10 +1078,14 @@ class Packages(nbapp.AppWindow):
             except Exception:
                 pass
 
+        # Row names a person recognises: not "Local Disk" / "USB Media", which
+        # are the names the machine keeps for its own parts.
+        n = len(PACKAGES)
         for glyph, label, detail, status, active in (
-            ("disk", "Local Disk", "%d packages installed" % len(PACKAGES),
-             "Active", True),
-            ("sources", "USB Media", usb_detail, usb_status, usb_active),
+            ("disk", _t("This computer"),
+             _t("%d package%s installed") % (n, "" if n == 1 else "s"),
+             _t("IN USE"), True),
+            ("sources", _t("USB stick"), usb_detail, usb_status, usb_active),
         ):
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
             row.get_style_context().add_class("source-row")
@@ -1048,10 +1098,18 @@ class Packages(nbapp.AppWindow):
             lab.get_style_context().add_class("source-label")
             txt.pack_start(lab, False, False, 0)
             det = Gtk.Label(label=detail, xalign=0)
+            # A stick's own label can be 40 characters, and two sticks put two
+            # of them on this line — cap the natural width so the page never
+            # grows a horizontal scroll on a 1024 panel.
+            det.set_ellipsize(Pango.EllipsizeMode.END)
+            det.set_max_width_chars(46)
             det.get_style_context().add_class("source-detail")
             txt.pack_start(det, False, False, 0)
             row.pack_start(txt, True, True, 0)
-            chip = Gtk.Label(label=status.upper())
+            # The chip text is already up-cased IN THE CATALOG, so each language
+            # capitalises the way it actually does. str.upper() here would get
+            # Turkish and Greek wrong (i -> I, and a retained tonos).
+            chip = Gtk.Label(label=status)
             chip.set_valign(Gtk.Align.CENTER)
             chip.get_style_context().add_class(
                 "chip-on" if active else "chip-off")
@@ -1132,7 +1190,7 @@ class Packages(nbapp.AppWindow):
         /* Verify is a benign action, so the button is a warm-paper card with a
            darker-beige border. Signage red stays reserved for alerts and the
            active/selected chrome, never a decorative fill. */
-        .btn-primary { background: #FBFAF6; color: #1A1916; border-radius: 2px;
+        .btn-primary { background: #FCFBF8; color: #1A1916; border-radius: 2px;
                        font-size: 14px; font-weight: 600; min-height: 42px;
                        border: 1px solid #C4BFB1; box-shadow: none; }
         .btn-primary:hover { background: #ECE8DD; }

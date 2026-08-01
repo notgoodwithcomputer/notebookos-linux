@@ -19,7 +19,7 @@ import os
 import json
 import time
 
-import cairo
+import cairo  # noqa: F401  (PDF surfaces come from nbprint.report_page)
 
 import nbapp
 import nbicons
@@ -42,6 +42,17 @@ DOCS_DIR = os.path.join(HOME, "Documents")
 # every entry dict carries exactly these keys; the UI reads them unconditionally
 ENTRY_KEYS = ("day", "wd", "month_label", "date", "meta",
               "title", "preview", "text")
+
+# The meta line's fixed half. Stored ENGLISH in the entry, like every other
+# derived field here, because the interface language can be changed under a
+# journal that is already written — so the translation has to happen at DISPLAY
+# time, not at creation time. It cannot happen through the composed string
+# either: nbi18n's auto-translate layer looks the whole label up, and
+# "Written at 09:00" is not a catalog key (the catalogs carry the fragment
+# "Written at " precisely because it is joined to a live value). Result before
+# this: every other line of the entry page was in Spanish and this one line was
+# not. See _meta_display.
+META_PREFIX = "Written at "
 
 # Writing-column geometry: the measure the design wants, the narrowest one it
 # will fall back to on a small panel, and the .page CSS padding either side.
@@ -120,31 +131,79 @@ class Journal(nbapp.AppWindow):
     # ---------------- persistence ----------------
     def _load_entries(self):
         """Load saved entries + active index from disk. Returns
-        (entries, active). Validates shape defensively; anything malformed or
-        foreign falls back to the first-run default of ([], -1)."""
+        (entries, active).
+
+        FORGIVING BY DESIGN. This used to be all-or-nothing: one surprise in the
+        file's shape returned ([], -1), the journal opened blank, and the
+        close-time flush (_on_destroy -> _persist) wrote that blankness straight
+        over the diary. Opening the app and pressing Esc was enough to lose
+        every entry the user had ever written, and a journal is the one file
+        here that cannot be re-derived from anything. So a malformed record now
+        costs ITSELF and nothing else, and anything that still plausibly holds
+        entries is read as entries."""
         try:
             with open(JOURNAL_FILE) as fh:
                 data = json.load(fh)
-            raw = data.get("entries") if isinstance(data, dict) else None
-            if isinstance(raw, list):
-                entries = []
-                for en in raw:
-                    if not isinstance(en, dict):
-                        continue
-                    e = {k: str(en.get(k, "")) for k in ENTRY_KEYS}
-                    # formatting spans persist alongside the plain text; older
-                    # files lack this key and load as unformatted (empty list)
-                    tags = en.get("tags")
-                    e["tags"] = tags if isinstance(tags, list) else []
-                    entries.append(e)
-                active = data.get("active", -1)
-                if not isinstance(active, int) or not (0 <= active < len(entries)):
-                    active = 0 if entries else -1
-                return entries, active
         except Exception:
-            # missing / unreadable / malformed file -> empty journal
-            pass
-        return [], -1
+            return [], -1        # missing / unreadable file -> empty journal
+        entries, active = self._parse_entries(data)
+        # Nothing came back, and the file was not our own empty journal: the
+        # diary is in there in a shape this loader does not read. Move the
+        # original aside BEFORE the close-time flush replaces it. nbapp's one
+        # .bak cannot cover this — an empty journal writes {"entries": [],
+        # "active": -1}, which _payload_weight scores the SAME as a store holding
+        # one long entry under an unexpected key, and equal is not "shrinking",
+        # so the second open overwrites the only remaining copy. See
+        # nbapp.quarantine_unrecognized.
+        if not entries and not (isinstance(data, dict)
+                                and data.get("entries") == []):
+            nbapp.quarantine_unrecognized(JOURNAL_FILE)
+        return entries, active
+
+    def _parse_entries(self, data):
+        """The forgiving read itself, split out so _load_entries can tell
+        "nothing was in there" from "nothing came back"."""
+        active = data.get("active", -1) if isinstance(data, dict) else -1
+        if isinstance(data, dict):
+            raw = data.get("entries")
+            if raw is None:
+                # The wrapper key is gone or was written under another name.
+                # The entries are still in there; take the first list of
+                # records rather than opening blank and saving that over them.
+                for v in data.values():
+                    if isinstance(v, list) and any(isinstance(x, dict)
+                                                   for x in v):
+                        raw = v
+                        break
+        else:
+            # A bare list IS the entry list (an older / hand-repaired file, or
+            # one written by a tool that dropped the wrapper). Rejecting it
+            # threw the whole journal away over a missing pair of braces.
+            raw = data
+        # Entries stored as an object keyed by date or id: the values are still
+        # the user's writing, taken in file order.
+        if isinstance(raw, dict):
+            raw = list(raw.values())
+        if not isinstance(raw, list):
+            return [], -1
+        entries = []
+        for en in raw:
+            if not isinstance(en, dict):
+                continue
+            # A null field is empty text, not the four characters "None".
+            e = {}
+            for k in ENTRY_KEYS:
+                v = en.get(k, "")
+                e[k] = "" if v is None else str(v)
+            # formatting spans persist alongside the plain text; older
+            # files lack this key and load as unformatted (empty list)
+            tags = en.get("tags")
+            e["tags"] = tags if isinstance(tags, list) else []
+            entries.append(e)
+        if not isinstance(active, int) or isinstance(active, bool) \
+                or not (0 <= active < len(entries)):
+            active = 0 if entries else -1
+        return entries, active
 
     def _persist(self):
         """Write the full entries model + active index to disk. Swallows I/O
@@ -155,8 +214,17 @@ class Journal(nbapp.AppWindow):
             _atomic_write_json(
                 JOURNAL_FILE,
                 {"entries": self.entries, "active": self.active})
+            self._save_warned = False
             return True
-        except Exception:
+        except Exception as exc:
+            # See academics._save_to_disk: a silent failed write is
+            # indistinguishable from the app eating the diary.
+            if not getattr(self, "_save_warned", False):
+                self._save_warned = True
+                try:
+                    self._flash(nbapp.save_failure_reason(exc, JOURNAL_FILE))
+                except Exception:
+                    pass
             return False
 
     # ---------------- undo / redo ----------------
@@ -243,6 +311,7 @@ class Journal(nbapp.AppWindow):
         # list by title AND body text, so the words you remember writing find the
         # day you wrote them. Hidden until there is something to search.
         self.search = Gtk.SearchEntry()
+        nbicons.style_search_entry(self.search)
         self.search.set_placeholder_text(_t("Search entries"))
         self.search.get_style_context().add_class("jsearch")
         self.search.set_no_show_all(True)      # driven by hand (see _refresh_list)
@@ -274,19 +343,48 @@ class Journal(nbapp.AppWindow):
         self.search.set_visible(bool(self.entries))
 
         if not self.entries:
-            empty = Gtk.Label(label=_t("No entries"))
+            # A bare "No entries" states the obvious and leaves the reader
+            # stuck. Name the next move, in the words of the button that does
+            # it (the canvas beside this list is showing "Start today's entry"),
+            # and say where the result will turn up.
+            empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             empty.get_style_context().add_class("sideempty")
+            head = Gtk.Label(label=_t("No entries"), xalign=0)
+            head.get_style_context().add_class("sideemptyhead")
+            hint = Gtk.Label(
+                label=_t("Entries are listed here by date."),
+                xalign=0)
+            hint.set_line_wrap(True)
+            hint.set_max_width_chars(24)
+            empty.pack_start(head, False, False, 0)
+            empty.pack_start(hint, False, False, 0)
             self.list_box.pack_start(empty, False, False, 0)
             self.list_box.show_all()
             return
 
         rows = self._matches()
         if not rows:
-            empty = Gtk.Label(label=_t("No entry matches “%s”") % self._query)
+            # A search that matches nothing hides every entry the writer has,
+            # which reads like the journal emptied itself. Name the state, then
+            # give her the one press that brings them all back — the same
+            # wording the View menu uses for the same action, so learning one
+            # teaches the other.
+            # The padding + type style move to the BOX so both children sit
+            # inside one inset; the label inherits colour and size from it.
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            box.get_style_context().add_class("sideempty")
+            empty = Gtk.Label(label=_t("No entry matches “%s”") % self._query,
+                              xalign=0)
             empty.set_line_wrap(True)
             empty.set_max_width_chars(24)
-            empty.get_style_context().add_class("sideempty")
-            self.list_box.pack_start(empty, False, False, 0)
+            box.pack_start(empty, False, False, 0)
+            back = Gtk.Button(label=_t("Show All Entries"))
+            back.set_relief(Gtk.ReliefStyle.NONE)
+            back.set_halign(Gtk.Align.START)
+            back.get_style_context().add_class("sideemptybtn")
+            back.connect("clicked", lambda *_: self._clear_search())
+            box.pack_start(back, False, False, 0)
+            self.list_box.pack_start(box, False, False, 0)
             self.list_box.show_all()
             return
 
@@ -301,7 +399,7 @@ class Journal(nbapp.AppWindow):
         for i, en in rows:
             if en["month_label"] != last_label:
                 last_label = en["month_label"]
-                gl = Gtk.Label(label=en["month_label"].upper(), xalign=0)
+                gl = Gtk.Label(label=_t(en["month_label"]).upper(), xalign=0)
                 gl.get_style_context().add_class("monthlabel")
                 self.list_box.pack_start(gl, False, False, 0)
             self.list_box.pack_start(self._entry_row(i, en), False, False, 0)
@@ -491,6 +589,16 @@ class Journal(nbapp.AppWindow):
         page.pack_start(self.date_lbl, False, False, 0)
         self.meta_lbl = Gtk.Label(xalign=0)
         self.meta_lbl.get_style_context().add_class("metaline")
+        # `meta` is app-generated and short in normal use, but the loader
+        # deliberately survives a hand-edited or foreign journal.json — and it
+        # validates TYPES, not LENGTHS. An unbounded single-line label makes its
+        # whole string the page's minimum width, so a ~500-character meta drove
+        # the window's minimum to 3208px: the sidebar and two thirds of the page
+        # ended up permanently off a 1024px panel. Ellipsize + a capped measure
+        # means the line can never widen the app (the full value still round-
+        # trips through the model and the file — only the DISPLAY is clipped).
+        self.meta_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self.meta_lbl.set_max_width_chars(60)
         page.pack_start(self.meta_lbl, False, False, 0)
         # Both carry big type and big margins even when empty, which pushed the
         # "No entry open" panel a third of the way down an otherwise blank
@@ -503,12 +611,8 @@ class Journal(nbapp.AppWindow):
 
         self.empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.empty_box.get_style_context().add_class("emptybox")
-        e1 = Gtk.Label(label=_t("Your journal is empty"), xalign=0)
+        e1 = Gtk.Label(label=_t("No entries"), xalign=0)
         e1.get_style_context().add_class("emptyhead")
-        e2 = Gtk.Label(
-            label=_t("Write a line about today. Everything is saved as you go."),
-            xalign=0)
-        e2.get_style_context().add_class("emptysub")
         # The one action that matters, on the screen the writer is looking at —
         # the + that used to be the only way in sits in the far corner of the
         # other pane, so the blank canvas offered nothing to press.
@@ -518,7 +622,6 @@ class Journal(nbapp.AppWindow):
         e3.get_style_context().add_class("emptybtn")
         e3.connect("clicked", lambda *_: self.new_entry())
         self.empty_box.pack_start(e1, False, False, 0)
-        self.empty_box.pack_start(e2, False, False, 0)
         self.empty_box.pack_start(e3, False, False, 0)
         page.pack_start(self.empty_box, False, False, 0)
         # Mark the labels visible ONCE, then take the box out of show_all()'s
@@ -528,7 +631,6 @@ class Journal(nbapp.AppWindow):
         # construction, and nbapp.run()'s later show_all() dutifully un-hid it
         # again. self.body already had this guard; empty_box was missed.
         e1.show()
-        e2.show()
         e3.show()
         self.empty_box.set_no_show_all(True)
         self.empty_box.hide()
@@ -601,7 +703,7 @@ class Journal(nbapp.AppWindow):
             "month_label": "%s %d" % (MONTHS[n.tm_mon - 1], n.tm_year),
             "date": "%s, %d %s" % (WD_LONG[(n.tm_wday + 1) % 7], n.tm_mday,
                                    MONTHS[n.tm_mon - 1]),
-            "meta": "Written at " + time.strftime("%H:%M"),
+            "meta": META_PREFIX + time.strftime("%H:%M"),
             "title": title, "preview": preview, "text": text,
             "tags": [],
         }
@@ -636,7 +738,7 @@ class Journal(nbapp.AppWindow):
         if have:
             en = self.entries[self.active]
             self.date_lbl.set_text(en["date"])
-            self.meta_lbl.set_text(en["meta"])
+            self.meta_lbl.set_text(self._meta_display(en["meta"]))
             self.date_lbl.show()
             self.meta_lbl.show()
             self.empty_box.hide()
@@ -694,6 +796,15 @@ class Journal(nbapp.AppWindow):
             # alone would silently drop every bold/italic/quote span
             en["tags"] = self._serialize_tags(buf)
             en["title"], en["preview"] = self._derive(txt)
+
+    @staticmethod
+    def _meta_display(meta):
+        """A stored meta line as the reader should see it (see META_PREFIX).
+        Anything that is not the app's own generated form — a hand-edited or
+        foreign journal.json — is shown exactly as it is stored."""
+        if isinstance(meta, str) and meta.startswith(META_PREFIX):
+            return _t(META_PREFIX) + meta[len(META_PREFIX):]
+        return meta or ""
 
     def _derive(self, txt):
         """Derive (title, preview) from an entry's plain text. The title is the
@@ -968,86 +1079,84 @@ class Journal(nbapp.AppWindow):
         except Exception:
             pass
 
+    @staticmethod
+    def _line_spans(tags, base, lo, length):
+        """Inline runs for one body line, in nbprint.PdfText's
+        (start, end, kind) shape.
+
+        `tags` are the entry's saved {start,end,tag} spans, indexed into the
+        WHOLE entry text; `base` is where the body begins in it and `lo` is the
+        line's offset within the body. Returns (spans, whole_line_quote) — a
+        line entirely inside a quote is drawn indented and italic, the way it
+        looks on screen."""
+        spans = []
+        quoted = False
+        abs_s = base + lo
+        abs_e = abs_s + length
+        for sp in tags or ():
+            try:
+                s = int(sp.get("start"))
+                e = int(sp.get("end"))
+                kind = sp.get("tag")
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if e <= abs_s or s >= abs_e:
+                continue
+            ls = max(0, s - abs_s)
+            le = min(length, e - abs_s)
+            if le <= ls:
+                continue
+            if kind == "quote":
+                # A quote is an italic, indented block on screen. Whole-line is
+                # the only case that means anything on paper.
+                if ls == 0 and le == length:
+                    quoted = True
+                else:
+                    spans.append((ls, le, "italic"))
+            elif kind in ("bold", "italic"):
+                spans.append((ls, le, kind))
+        return spans, quoted
+
     def _render_pdf(self, path):
         """Draw every journal entry onto a cairo PDF at `path`, paginating when
         the cursor overflows the page. Each entry emits its long date, title and
-        body text; a hairline rule separates one entry from the next."""
-        PW, PH = 612.0, 792.0            # US Letter, points
-        ML, MR, MT, MB = 64.0, 64.0, 72.0, 64.0
-        text_w = PW - ML - MR
-        surf = cairo.PDFSurface(path, PW, PH)
-        cr = cairo.Context(surf)
-        y = [MT]                         # cursor top, boxed so helpers can bump it
+        body text — with the bold, italic and quote formatting it was written
+        with — and a hairline rule separates one entry from the next.
 
-        def ink(hexc):
-            r, g, b = nbicons._hex(hexc)
-            cr.set_source_rgb(r, g, b)
-
-        def face(bold):
-            cr.select_font_face(
-                "Serif", cairo.FONT_SLANT_NORMAL,
-                cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL)
-
-        def wrap(text, size, bold):
-            face(bold)
-            cr.set_font_size(size)
-            lines, cur = [], ""
-            for w in text.split(" "):
-                trial = w if not cur else cur + " " + w
-                if not cur or cr.text_extents(trial)[2] <= text_w:
-                    cur = trial
-                else:
-                    lines.append(cur)
-                    cur = w
-            lines.append(cur)
-            return lines
-
-        def emit(text, size, bold, color, gap_before=0.0, gap_after=0.0):
-            lh = size * 1.4
-            y[0] += gap_before
-            for ln in (wrap(text, size, bold) if text else [""]):
-                if y[0] + lh > PH - MB:
-                    surf.show_page()
-                    y[0] = MT
-                face(bold)
-                cr.set_font_size(size)
-                ink(color)
-                cr.move_to(ML, y[0] + size)
-                cr.show_text(ln)
-                y[0] += lh
-            y[0] += gap_after
-
-        def rule():
-            if y[0] + 1 <= PH - MB:
-                ink("#ECE7DA")
-                cr.set_line_width(1.0)
-                cr.move_to(ML, y[0])
-                cr.line_to(PW - MR, y[0])
-                cr.stroke()
-            y[0] += 18
+        Laid out with nbprint.PdfText (PangoCairo). The old cairo toy-font
+        helpers printed empty boxes for every Chinese, Japanese, Korean and
+        Devanagari character, and dropped all formatting: the tags were saved
+        and restored on screen, then read past entirely on the way to paper."""
+        surf, cr, page = nbprint.report_page(path)
 
         # Cover header, then each entry: date eyebrow, title, meta, body lines.
-        emit("JOURNAL", 9.5, False, "#6E695E", gap_after=6)
-        emit(time.strftime("%Y"), 26, True, "#1A1916", gap_after=3)
-        rule()
+        page.emit(_t("JOURNAL"), 9.5, False, "#6E695E", gap_after=6)
+        page.emit(time.strftime("%Y"), 26, True, "#1A1916", gap_after=3)
+        page.rule()
         for idx, en in enumerate(self.entries):
             if idx:
-                y[0] += 8
-                rule()
-            emit(en.get("date", "").upper(), 9.5, False, "#6E695E",
-                 gap_before=6, gap_after=4)
-            emit(en.get("title", "") or "Untitled entry", 22, True,
-                 "#1A1916", gap_after=2)
-            meta = en.get("meta", "")
+                page.y += 8
+                page.rule()
+            page.emit(_t(en.get("date", "")).upper(), 9.5, False, "#6E695E",
+                      gap_before=6, gap_after=4)
+            page.emit(en.get("title", "") or _t("Untitled entry"), 22, True,
+                      "#1A1916", gap_after=2)
+            meta = self._meta_display(en.get("meta", ""))
             if meta:
-                emit(meta, 10, False, "#9A958A", gap_after=6)
+                page.emit(meta, 10, False, "#9A958A", gap_after=6)
             body = en.get("text", "")
             # first line is the entry title (see _derive); render the remainder
             # as the body so the title is not repeated. Empty body -> nothing.
             parts = body.split("\n", 1)
             rest = parts[1] if len(parts) > 1 else ""
+            base = len(parts[0]) + 1 if len(parts) > 1 else 0
+            tags = en.get("tags") or []
+            lo = 0
             for raw in rest.split("\n"):
-                emit(raw, 11, False, "#26241F")
+                spans, quoted = self._line_spans(tags, base, lo, len(raw))
+                page.emit(raw, 11, False, "#26241F", italic=quoted,
+                          indent=24.0 if quoted else 0.0, spans=spans)
+                lo += len(raw) + 1
 
         surf.finish()
 
@@ -1099,15 +1208,17 @@ class Journal(nbapp.AppWindow):
     # ---------------- delete (confirmed) ----------------
     def _delete_active(self):
         """Ask before removing the current entry. Only reachable when an entry
-        is open (the menu item disables otherwise). It is undoable now, and the
-        confirm says so — the old wording ("This cannot be undone") would send
-        a writer looking for a backup that does not exist."""
+        is open (the menu item disables otherwise). It is undoable now
+        (_remove_active takes a checkpoint), so the confirm no longer claims
+        otherwise — the old wording ("This cannot be undone") would send a
+        writer looking for a backup that does not exist."""
         if not (0 <= self.active < len(self.entries)):
             return
-        title = self.entries[self.active].get("title") or "Untitled entry"
+        title = (self.entries[self.active].get("title")
+                 or _t("Untitled entry"))
         self._confirm(
             "Delete Entry",
-            _t("Delete “%s”? You can bring it back with Undo (Ctrl+Z).")
+            _t("Delete “%s”?")
             % self._short_title(title),
             "Delete", self._remove_active)
 
@@ -1318,6 +1429,14 @@ class Journal(nbapp.AppWindow):
                        font-weight: 700; padding: 0 10px; margin: 4px 0 8px; }
         .listbox { padding: 16px 14px; }
         .sideempty { padding: 30px 12px; font-size: 13px; color: #A39D8F; }
+        .sideemptyhead { font-size: 13px; color: #6B655B; font-weight: 700; }
+        /* the way out of a search that matched nothing: quiet, but a real
+           control, so the pane is never a dead end */
+        .sideemptybtn { min-height: 30px; padding: 0 10px; font-size: 13px;
+                        color: #6B655B; background: #EFEBE0;
+                        border: 1px solid #D7D2C5; border-radius: 2px;
+                        box-shadow: none; }
+        .sideemptybtn:hover { background: #E6E1D3; }
         .monthlabel { font-size: 11px; letter-spacing: 0.14em; color: #A39D8F;
                       font-weight: 700; padding: 0 10px; margin: 14px 0 9px; }
         .entryrow { padding: 12px 10px; border-radius: 2px; margin-bottom: 2px;
@@ -1334,7 +1453,7 @@ class Journal(nbapp.AppWindow):
                       font-size: 16px; color: #1A1916; }
         .entrypreview { font-size: 12px; color: #9A958A; margin-top: 3px; }
 
-        .formatbar { background: #FBFAF6; border-bottom: 1px solid #E6E1D4;
+        .formatbar { background: #FCFBF8; border-bottom: 1px solid #E6E1D4;
                      padding: 10px 36px; min-height: 54px; }
         .formatbar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .fmtbtn { min-width: 34px; min-height: 34px; padding: 0;

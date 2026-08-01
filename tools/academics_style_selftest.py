@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Headless selftest for academic.py's Style-cycle paragraph control.
+Headless selftest for academics.py's Style-cycle paragraph control.
 
 Run as:
   DISPLAY=:0 \
@@ -13,12 +13,22 @@ the heading & subheading TextTags and updating the button label.
 Self-contained and idempotent: creates no files.
 """
 import inspect
+import os
+import tempfile
+
+# PIN NB_HOME BEFORE IMPORTING THE APP: unset, the app reads and writes the
+# caller's own ~/.config/notebook, and the single-instance guard lands on the
+# unscoped /tmp/nb-apps shared with any running app -- where
+# nbapp.claim_single_instance() os._exit(0)s this process with no output and
+# exit status 0, which reads as a pass while nothing was tested.
+os.environ.setdefault("NB_HOME",
+                      tempfile.mkdtemp(prefix="acadstyle-selftest-"))
 
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-import academic as mod
+import academics as mod
 
 results = []
 
@@ -37,7 +47,7 @@ def line_has(buf, name):
     return it.has_tag(tag)
 
 
-# ---- locate the AppWindow subclass defined in academic.py ----
+# ---- locate the AppWindow subclass defined in academics.py ----
 win_cls = None
 for _n, _obj in inspect.getmembers(mod, inspect.isclass):
     if _obj.__module__ == mod.__name__ and issubclass(_obj, Gtk.Window):

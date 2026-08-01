@@ -20,7 +20,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
+from gi.repository import Gtk, Gdk, Pango, GLib, GdkPixbuf  # noqa: E402
 
 import os
 import sys
@@ -65,6 +65,60 @@ CFG_DIR = os.path.join(HOME, ".config", "notebook")
 CFG_FILE = os.path.join(CFG_DIR, "music.json")
 MUSIC_DIR = os.path.join(HOME, "Music")
 AUDIO_EXTS = (".mp3", ".flac", ".ogg", ".wav", ".m4a")
+
+
+def _info_tags(info):
+    """(title, artist, album) from a DiscovererInfo, or ('', '', '').
+
+    The library used to be named from FILE PATHS alone -- "01 Some Song.mp3"
+    became the title and the artist read "Unknown Artist" even when the file
+    carried perfectly good tags. The Discoverer that already runs over every
+    file for its duration returns the tags too, so this costs nothing extra.
+
+    Every step is guarded: a file with no tags, a GStreamer without the tag
+    plugins, or a deprecated accessor must all degrade to the old filename
+    behaviour rather than raise on a background callback."""
+    try:
+        tags = info.get_tags()
+    except Exception:                                          # noqa: BLE001
+        tags = None
+    if tags is None:
+        return "", "", ""
+    out = []
+    for key in ("title", "artist", "album"):
+        val = ""
+        try:
+            ok, got = tags.get_string(key)
+            if ok and got:
+                val = got.strip()
+        except Exception:                                      # noqa: BLE001
+            val = ""
+        out.append(val)
+    return out[0], out[1], out[2]
+
+
+def _info_image(info):
+    """The bytes of an embedded cover image, or None.
+
+    ID3 art arrives as a sample under the "image" tag; a file can carry several
+    (front cover, back, artist), and the first is the one to show."""
+    try:
+        tags = info.get_tags()
+        if tags is None or tags.get_tag_size("image") < 1:
+            return None
+        ok, sample = tags.get_sample_index("image", 0)
+        if not ok or sample is None:
+            return None
+        buf = sample.get_buffer()
+        ok2, mi = buf.map(Gst.MapFlags.READ)
+        if not ok2:
+            return None
+        try:
+            return bytes(mi.data)
+        finally:
+            buf.unmap(mi)
+    except Exception:                                          # noqa: BLE001
+        return None
 
 
 class Music(nbapp.AppWindow):
@@ -132,8 +186,13 @@ class Music(nbapp.AppWindow):
         # track lengths: {path: [stat-key, seconds]}, read once by the background
         # scan below and cached on disk so a relaunch is instant.
         self._lengths = {}
+        self._tags = {}       # path -> [key, title, artist, album] from the file
+        self._art_img = None  # the playbar's artwork image, set once built
+        self._art_cache = {}  # path -> Pixbuf | False (False = looked, none)
         self._by_path = {}    # path -> track dict, for the scan's callbacks
         self._time_labels = {}   # path -> the Time labels currently on screen
+        self._tag_labels = {}    # path -> [(label, field)] so real tags can
+                                 # replace filename guesses without a re-render
         self._disc = None     # the running GstPbutils.Discoverer, if any
         self._disc_dirty = False
         self._match_count = 0    # tracks passing the current search
@@ -243,7 +302,16 @@ class Music(nbapp.AppWindow):
         self._pl_box = pl_box
         sb.pack_start(plscroll, False, False, 0)
 
-        none = Gtk.Label(label=_t("No playlists"), xalign=0)
+        # A bare "No playlists" told the reader only what she could already see.
+        # Say what a playlist is for and point at the button right beneath this
+        # note. One label, so the existing show/hide of self._none still works;
+        # the width is capped for the same reason the footer below it is.
+        none = Gtk.Label(
+            label=_t("No playlists") + "\n"
+                  + _t("Add one below."),
+            xalign=0)
+        none.set_line_wrap(True)
+        none.set_max_width_chars(24)
         none.get_style_context().add_class("empty-mini")
         pl_box.pack_start(none, False, False, 0)
         self._none = none
@@ -260,8 +328,10 @@ class Music(nbapp.AppWindow):
         sb.pack_start(newpl, False, False, 0)
         self._newpl = newpl
 
-        foot = Gtk.Label(label=("Library sourced from Home / Music. Each track "
-                                "is named from its file and folder."))
+        # _t, not a bare literal: the catalogs have carried this sentence all
+        # along and nothing applied it, so the one line explaining where the
+        # library comes from stayed English in all 16 other languages.
+        foot = Gtk.Label(label=_t("Tracks are read from Home / Music."))
         foot.get_style_context().add_class("sidefoot")
         foot.set_line_wrap(True)
         # A wrapped label still REQUESTS its full one-line width as its natural
@@ -531,10 +601,13 @@ class Music(nbapp.AppWindow):
         t = Gtk.Label(label=_t("Library empty"))
         t.get_style_context().add_class("empty-title")
         empty.pack_start(t, False, False, 0)
+        # _t: the whole point of an empty state is that it tells the reader what
+        # to do next, and this sentence — already translated in all 17 catalogs
+        # — was handed to the label raw, so it said it in English under a
+        # heading that WAS translated.
         d = Gtk.Label(
-            label="No audio files found in Home / Music. Add .mp3, .flac, "
-                  ".ogg, .wav, or .m4a files there; each track is named from "
-                  "its file name and containing folder.")
+            label=_t("No audio files in Home / Music. Supported formats: "
+                     ".mp3, .flac, .ogg, .wav, .m4a."))
         d.get_style_context().add_class("empty-desc")
         d.set_line_wrap(True)
         d.set_justify(Gtk.Justification.CENTER)
@@ -626,6 +699,9 @@ class Music(nbapp.AppWindow):
         img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("music", 22, "#C9C4B6"))
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
+        # kept so _show_cover can swap in the cued track's embedded artwork;
+        # this used to be a placeholder that nothing ever replaced
+        self._art_img = img
         art.pack_start(img, True, True, 0)
         # GTK3 PROPAGATES hexpand up from children, and that beats the
         # pack_start(expand=False) used here: the artwork's inner image asked to
@@ -706,8 +782,8 @@ class Music(nbapp.AppWindow):
         # shuffle / repeat
         toggles = Gtk.Box(spacing=8)
         toggles.set_valign(Gtk.Align.CENTER)
-        self.shuffle = self._toggle("shuffle")
-        self.repeat = self._toggle("repeat")
+        self.shuffle = self._toggle("shuffle", "Shuffle")
+        self.repeat = self._toggle("repeat", "Repeat")
         toggles.pack_start(self.shuffle, False, False, 0)
         toggles.pack_start(self.repeat, False, False, 0)
         bar.pack_start(toggles, False, False, 0)
@@ -823,6 +899,7 @@ class Music(nbapp.AppWindow):
         """Cue `track` in the transport and start real playback. A track with
         no engine or no readable file is cued visually only (no audio)."""
         self._current = track
+        self._show_cover(track)
         self._duration_ns = 0
         if self.lbl_elapsed is not None:
             self.lbl_elapsed.set_text("0:00")
@@ -1079,10 +1156,14 @@ class Music(nbapp.AppWindow):
             secs = 0
         return "%d:%02d" % (secs // 60, secs % 60)
 
-    def _toggle(self, glyph):
+    def _toggle(self, glyph, tip=None):
         btn = Gtk.ToggleButton()
         btn.set_relief(Gtk.ReliefStyle.NONE)
         btn.get_style_context().add_class("togglebtn")
+        # Shuffle and repeat are pure symbols; without a name they are two
+        # controls a person can only identify by pressing them.
+        if tip:
+            btn.set_tooltip_text(tip)
         btn._glyph = glyph
         btn._img = Gtk.Image.new_from_pixbuf(
             nbicons.pixbuf(glyph, 16, "#1A1916"))
@@ -1233,6 +1314,17 @@ class Music(nbapp.AppWindow):
                     secs = int(ent[1] or 0)
                     s["secs"] = secs
                     s["time"] = self._fmt_secs(secs) if secs > 0 else ""
+                # real tags from a previous run, so the list opens with the
+                # file's own names rather than the filename guess
+                tag = self._tags.get(path)
+                if (isinstance(tag, list) and len(tag) == 4
+                        and tag[0] == self._length_key(path)):
+                    if tag[1]:
+                        s["title"] = tag[1]
+                    if tag[2]:
+                        s["artist"] = tag[2]
+                    if tag[3]:
+                        s["album"] = tag[3]
         except Exception:
             pass
 
@@ -1283,7 +1375,27 @@ class Music(nbapp.AppWindow):
         self._disc_dirty = True
         text = self._fmt_secs(secs) if secs > 0 else ""
         song = self._by_path.get(path)
+        # The file's OWN tags beat anything guessed from its name. Only a
+        # non-empty tag overrides, so a file with half its tags filled in keeps
+        # the filename-derived value for the rest instead of blanking it.
+        title = artist = album = ""
+        try:
+            if info.get_result() == GstPbutils.DiscovererResult.OK:
+                title, artist, album = _info_tags(info)
+                self._save_cover(path, info)
+        except Exception:                                      # noqa: BLE001
+            pass
+        if title or artist or album:
+            self._tags[path] = [self._length_key(path), title, artist, album]
         if song is not None:
+            if title:
+                song["title"] = title
+            if artist:
+                song["artist"] = artist
+            if album:
+                song["album"] = album
+            if title or artist or album:
+                self._retitle_row(path, song)
             song["secs"] = secs
             song["time"] = text
             # the cued track's total is now known even before it plays
@@ -1295,6 +1407,126 @@ class Music(nbapp.AppWindow):
                 lbl.set_text(text)
             except Exception:
                 pass
+
+    # ---------------- cover art ----------------
+    COVER_DIR = os.path.join(HOME, ".cache", "notebook", "covers")
+
+    @staticmethod
+    def _cover_file(path):
+        """Where a track's extracted cover lives. Keyed by a hash of the path so
+        two files with the same basename cannot collide."""
+        import hashlib
+        h = hashlib.md5(path.encode("utf-8", "replace")).hexdigest()
+        return os.path.join(Music.COVER_DIR, h)
+
+    # Covers are cached at this size, not at the size they were embedded. A
+    # track can carry several MB of front-cover JPEG and a library can hold
+    # thousands of tracks, while the cache lives under $HOME/.cache — which on
+    # the live image is a RAM overlay. Storing the original would let a big
+    # library on a USB stick fill memory with artwork that is only ever drawn
+    # at 52px. 256 leaves room to show it larger later.
+    COVER_MAX = 256
+
+    def _save_cover(self, path, info):
+        """Write this track's embedded cover to the cache, once.
+
+        Extracted during the discovery pass that already reads every file, so
+        playing a track never has to decode it again. Silent on any failure --
+        a missing cover is a placeholder icon, never an error."""
+        try:
+            dest = self._cover_file(path)
+            if os.path.exists(dest):
+                return
+            data = _info_image(info)
+            if not data:
+                return
+            os.makedirs(self.COVER_DIR, exist_ok=True)
+            tmp = dest + ".new"
+            if not self._write_scaled(tmp, data):
+                return
+            os.replace(tmp, dest)
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    def _write_scaled(self, tmp, data):
+        """Write cover bytes to tmp, shrunk to COVER_MAX on its longest side.
+
+        Returns whether anything was written. An image that cannot be decoded
+        is not stored at all: it could not have been displayed either, and
+        keeping it would only cost space and be retried as a decode failure on
+        every launch."""
+        ldr = GdkPixbuf.PixbufLoader()
+        ldr.write(data)
+        ldr.close()
+        pb = ldr.get_pixbuf()
+        if pb is None:
+            return False
+        w, h = pb.get_width(), pb.get_height()
+        big = max(w, h)
+        if big > self.COVER_MAX:
+            scale = float(self.COVER_MAX) / big
+            pb = pb.scale_simple(max(1, int(w * scale)), max(1, int(h * scale)),
+                                 GdkPixbuf.InterpType.BILINEAR)
+            if pb is None:
+                return False
+        pb.savev(tmp, "png", [], [])
+        return True
+
+    def _cover_pixbuf(self, path, size=52):
+        """The track's cover as a Pixbuf, or None. Cached in memory per path."""
+        if path in self._art_cache:
+            got = self._art_cache[path]
+            return got or None
+        pb = None
+        try:
+            f = self._cover_file(path)
+            if os.path.isfile(f):
+                ldr = GdkPixbuf.PixbufLoader()
+                with open(f, "rb") as fh:
+                    ldr.write(fh.read())
+                ldr.close()
+                raw = ldr.get_pixbuf()
+                if raw is not None:
+                    pb = raw.scale_simple(size, size,
+                                          GdkPixbuf.InterpType.BILINEAR)
+        except Exception:                                      # noqa: BLE001
+            pb = None
+        self._art_cache[path] = pb or False
+        return pb
+
+    def _show_cover(self, track):
+        """Put the cued track's cover in the playbar, or the placeholder."""
+        img = getattr(self, "_art_img", None)
+        if img is None:
+            return
+        pb = None
+        try:
+            path = (track or {}).get("path")
+            if path:
+                pb = self._cover_pixbuf(path)
+        except Exception:                                      # noqa: BLE001
+            pb = None
+        try:
+            if pb is not None:
+                img.set_from_pixbuf(pb)
+            else:
+                img.set_from_pixbuf(nbicons.pixbuf("music", 22, "#C9C4B6"))
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    def _retitle_row(self, path, song):
+        """Refresh the visible title/artist cells for one row after its real
+        tags arrived, without re-rendering the whole list."""
+        try:
+            for lbl, field in self._tag_labels.get(path, ()):
+                lbl.set_text(song.get(field) or "")
+        except Exception:                                      # noqa: BLE001
+            pass
+        try:
+            if song is getattr(self, "_current", None):
+                self._refresh_transport()
+        except Exception:                                      # noqa: BLE001
+            pass
 
     def _on_discover_finished(self, _disc):
         """Every queued track has been read — persist the answers once (not
@@ -1343,6 +1575,7 @@ class Music(nbapp.AppWindow):
             for c in self.songrows.get_children():
                 self.songrows.remove(c)
             self._time_labels = {}
+            self._tag_labels = {}
 
             if self.view == "albums":
                 rows = self._album_rows()
@@ -1413,13 +1646,23 @@ class Music(nbapp.AppWindow):
             pass
 
     def _empty_note(self, q):
+        # translated here, not at the call site: this note is only ever applied
+        # with a bare set_text() as the search/view changes, so returning raw
+        # English left the empty state in English on a localised install
+        # Every branch names the way out as well as the state. A note that only
+        # reports the absence leaves the reader looking at a blank pane with
+        # nothing to press — and in all three of these cases there IS something
+        # to press, it just isn't obvious which.
         if q:
-            return "No tracks match the search."
+            return (_t("No tracks match the search.") + "\n"
+                    + _t("Clear the search to see all tracks."))
         if self.view is None:
-            return "Playlist empty. Add tracks from the library with the + control."
+            return _t("Playlist empty. Add tracks from the library with +.")
         if self.view == "scope" and self._scope:
-            return "No tracks in %s." % self._scope_label
-        return "No tracks to display."
+            return (_t("No tracks in %s.") % self._scope_label
+                    + "\n" + _t("Choose another view in the sidebar."))
+        return (_t("No tracks to display.") + "\n"
+                + _t("Choose another view in the sidebar."))
 
     def _show_empty(self, show):
         """Toggle between the hero empty state and the populated list."""
@@ -1498,6 +1741,13 @@ class Music(nbapp.AppWindow):
         # keep the Time cell so the background length scan can fill it in when
         # the real duration comes back, without rebuilding the row
         self._time_labels.setdefault(s.get("path", ""), []).append(dur)
+        # same idea for the name cells: the library is first named from the
+        # file path, and the discovery pass replaces that with the file's own
+        # tags a moment later
+        _p = s.get("path", "")
+        if _p:
+            self._tag_labels.setdefault(_p, []).extend(
+                ((title, "title"), (artist, "artist"), (album, "album")))
 
         # trailing per-row control. In the library views it files the track
         # into a playlist (+); inside an open playlist it removes the track from
@@ -1753,14 +2003,19 @@ class Music(nbapp.AppWindow):
         # cued track or the bare state. "Media engine" is developer language —
         # say plainly that sound is unavailable (only reachable on a damaged
         # install; the audio engine ships with the system).
+        # every string here is translated at the point it is BUILT: the playback
+        # bar re-reads this on each track change with a bare set_text(), so an
+        # untranslated return value silently snapped the bar back to English on
+        # a localised install the moment anything was played.
         if not self._engine_ok():
-            return "Sound isn’t available on this system"
+            return _t("Sound isn’t available on this system")
         cur = getattr(self, "_current", None)
         playing = getattr(self, "_playing", False)
+        idle = _t("Playing") if playing else _t("Nothing playing")
         if not cur:
-            return "Playing" if playing else "Nothing playing"
+            return idle
         label = "%s — %s" % (cur.get("title", ""), cur.get("artist", ""))
-        return label.strip(" —") or ("Playing" if playing else "Nothing playing")
+        return label.strip(" —") or idle
 
     def _nowtotal(self):
         # the total-duration timecode: the live pipeline duration while a track
@@ -1926,6 +2181,15 @@ class Music(nbapp.AppWindow):
                             self._lengths[str(path)] = [ent[0], int(ent[1])]
                         except (TypeError, ValueError):
                             pass
+            # cached tags: {path: [stat-key, title, artist, album]}. Same
+            # shape-or-drop rule, so an older music.json with no "tags" key
+            # simply re-reads them on the next discovery pass.
+            tg = data.get("tags")
+            if isinstance(tg, dict):
+                for path, ent in tg.items():
+                    if (isinstance(ent, list) and len(ent) == 4
+                            and all(isinstance(x, str) for x in ent)):
+                        self._tags[str(path)] = list(ent)
         except Exception:
             # no file yet / unreadable — start with no saved playlists
             self._loaded_playlists = []
@@ -1945,6 +2209,10 @@ class Music(nbapp.AppWindow):
                            for n in self._playlists},
                 "lengths": {p: v for p, v in self._lengths.items()
                             if p in live},
+                # the file's own tags, cached exactly like the lengths so the
+                # next launch shows real names immediately instead of the
+                # filename guess until the discovery pass catches up
+                "tags": {p: v for p, v in self._tags.items() if p in live},
             }
             nbapp.atomic_write_json(CFG_FILE, data)
         except Exception:
@@ -1970,17 +2238,32 @@ class Music(nbapp.AppWindow):
     # ---------------- menus ----------------
     def menu_items(self, name):
         if name == "File":
-            # the library lives in Home / Music; opening it creates it first
-            return [("Open Music Folder", self._open_music_folder),
+            # A single-store app (the library is Home / Music, playlists are
+            # autosaved): no New/Open/Save/Save As of documents, but the create
+            # and delete actions for the one thing the user DOES make here — a
+            # playlist — belong in File, as they do in every other single-store
+            # app in the OS. They used to be reachable only from an unlabelled
+            # pair of icons in the playlist header, and New Playlist sat under
+            # View, which is for choosing what the pane shows.
+            # Rename/Delete both raise a card before anything happens, so both
+            # take an ellipsis; New Playlist makes one immediately, so it does
+            # not. Both grey out when no playlist is open.
+            have_pl = bool(getattr(self, "_current_playlist", None))
+            return [("New Playlist", self._new_playlist),
+                    ("Rename Playlist…",
+                     self._rename_current_playlist if have_pl else None),
+                    ("Delete Playlist…",
+                     self._delete_current_playlist if have_pl else None),
+                    nbapp.SEP,
+                    # the library lives in Home / Music; opening it creates it
+                    ("Open Music Folder", self._open_music_folder),
                     nbapp.SEP,
                     ("Close    Esc", self.close)]
         if name == "View":
-            # switch the library view, plus the New Playlist sidebar action
+            # what the main pane shows — nothing else
             return [("Songs", lambda: self._select("songs")),
                     ("Albums", lambda: self._select("albums")),
-                    ("Artists", lambda: self._select("artists")),
-                    nbapp.SEP,
-                    ("New Playlist", self._new_playlist)]
+                    ("Artists", lambda: self._select("artists"))]
         if name == "Controls":
             # drive the real playback-bar widgets (toggles + volume slider).
             # With no audio engine those same controls are inert and greyed out,
@@ -2210,7 +2493,9 @@ class Music(nbapp.AppWindow):
         cancel.connect("clicked", lambda *_: self._close_dialog())
         ok = Gtk.Button(label=ok_label)
         ok.get_style_context().add_class("mdlg-btn")
-        ok.get_style_context().add_class("mdlg-primary")
+        # naming a playlist destroys nothing -> the ink primary, not the
+        # signage red reserved for the destructive confirm below
+        ok.get_style_context().add_class("mdlg-ink")
 
         def _do(*_a):
             val = entry.get_text()
@@ -2324,6 +2609,12 @@ class Music(nbapp.AppWindow):
                    color: #1A1916; font-weight: 500; margin-bottom: 2px;
                    background: transparent; border: none; box-shadow: none; }
         .viewrow:hover { background: #E9E4D7; }
+        /* THE ONE SIGNAGE RED on this window means SELECTED: the view or
+           playlist whose tracks the main pane is showing. It is the same 3px
+           accent edge Tasks/Academics/Journal/Cookbook/Contacts/Packages use
+           for a selected row, so a person who has learned it once reads it
+           here. Nothing else on this screen may borrow it: now-playing and an
+           engaged shuffle/repeat are INK (see below). */
         .viewrow.active { background: #ECE7DB;
                           box-shadow: inset 3px 0 0 #C8341E; }
         .viewcount { font-size: 13px; color: #9A9484; }
@@ -2363,12 +2654,19 @@ class Music(nbapp.AppWindow):
         .songscroll, .songscroll viewport { background: #FCFBF8; }
         .songlist { background: transparent; }
         .songlist row { padding: 0; background: transparent; border: none; }
-        .songlist row:hover { background: #F4F1E9; }
+        .songlist row:hover { background: #F4F2EC; }
+        /* NOW PLAYING is INK, never the accent: the accent already means
+           "selected" in the sidebar of this same window, and an identical red
+           edge in two panes made one colour say two things. Ink reads as
+           emphasis (the track the transport is driving) and cannot be confused
+           with the selection it sits beside. */
         .songlist row.playing { background: #ECE7DB;
-                                box-shadow: inset 3px 0 0 #C8341E; }
+                                box-shadow: inset 3px 0 0 #1A1916; }
         .songrow { padding: 11px 36px; border-bottom: 1px solid #EFEBE0; }
         .s-title { font-size: 14px; color: #1A1916; }
-        .songlist row.playing .s-title { color: #C8341E; font-weight: 600; }
+        .songlist row.playing .s-title { color: #1A1916; font-weight: 700; }
+        .songlist row.playing .s-cell,
+        .songlist row.playing .s-time { color: #3A362E; }
         .s-cell { font-size: 13px; color: #6E695E; }
         .s-time { font-size: 13px; color: #9A9484; }
         /* per-row add-to-playlist button - quiet until hovered */
@@ -2383,11 +2681,10 @@ class Music(nbapp.AppWindow):
         .songlist row.metarow:hover { background: #ECE7DB; }
         .listempty { padding: 40px 12px; font-size: 13px; color: #9A9484; }
         /* Empty-state CTA -> the OS paper-outline create/CTA treatment (matching
-           GBA IDE's "Open the example game", Calendar's New Event, Novel's New
+           GBA SDK's "Open the example game", Calendar's New Event, Novel's New
            Chapter, Cookbook's New Recipe). Opening the Music folder is a mild
            setup action, not an alert, so it stays on paper; the one signage red
-           is reserved for the now-playing row + engaged shuffle/repeat toggles,
-           which is where the eye should go once music is playing. */
+           on this window is reserved for the SELECTED sidebar view/playlist. */
         .openfolder { background: #F8F7F2; border: 1px solid #C4BFB1;
                       border-radius: 2px; color: #2A2620; font-size: 14px;
                       font-weight: 600; padding: 9px 20px; box-shadow: none; }
@@ -2425,10 +2722,12 @@ class Music(nbapp.AppWindow):
                      border-radius: 2px; min-width: 34px; min-height: 34px;
                      padding: 0; box-shadow: none; }
         .togglebtn:hover { background: #ECE7DB; }
-        /* an engaged shuffle/repeat is an active state -> the one signage red,
-           matching every other app's selected toggle (never a black chip) */
-        .togglebtn:checked { background: #C8341E; border-color: #C8341E; }
-        .togglebtn:checked:hover { background: #B12C18; border-color: #B12C18; }
+        /* an engaged shuffle/repeat is an ENGAGED CONTROL, not a selection and
+           not an alert -> an ink chip. Two solid red chips on the playbar were
+           the loudest thing on the window while meaning the least, and made a
+           third thing out of the one signage red. */
+        .togglebtn:checked { background: #1A1916; border-color: #1A1916; }
+        .togglebtn:checked:hover { background: #33302A; border-color: #33302A; }
         .volslider trough { background: #D7D2C5; min-height: 4px;
                             border-radius: 3px; border: none; }
         .volslider highlight { background: #1A1916; border-radius: 3px; }
@@ -2457,10 +2756,19 @@ class Music(nbapp.AppWindow):
                     border: 1px solid #C9C4B6; background: #FCFBF8;
                     color: #1A1916; font-size: 14px; box-shadow: none; }
         .mdlg-btn:hover { background: #ECE7DB; }
-        /* the confirming action is the one signage red (an alert) */
+        /* a DESTRUCTIVE confirm (Delete playlist) is the one signage red, as
+           Papertone legislates for button.destructive-action */
         .mdlg-primary { background: #C8341E; border-color: #C8341E;
                         color: #FCFBF8; font-weight: 600; }
         .mdlg-primary:hover { background: #B12C18; border-color: #B12C18; }
+        /* a NON-destructive primary (Create / Rename a playlist) is dark ink,
+           exactly as Papertone paints button.suggested-action and as Academics
+           and Cookbook paint theirs. Red on a "name your playlist" prompt read
+           as a warning about nothing. */
+        .mdlg-ink { background: #1A1916; border-color: #1A1916;
+                    color: #FCFBF8; font-weight: 600; }
+        .mdlg-ink label { color: #FCFBF8; }
+        .mdlg-ink:hover { background: #33302A; border-color: #33302A; }
         """
         prov = Gtk.CssProvider()
         try:

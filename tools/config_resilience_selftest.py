@@ -51,11 +51,18 @@ from gi.repository import Gtk  # noqa: E402
 # Every app ships as <name>.py exposing exactly one Gtk.Window subclass and
 # (when it persists) reads $NB_HOME/.config/notebook/<name>.json.
 APPS = [
-    "writer", "novel", "journal", "academic", "screenplay", "ebook",
+    "writer", "novel", "journal", "academics", "screenplay", "ebook",
     "cookbook", "contacts", "accounting", "calendar", "music",
     "illustrator", "sequencer", "video", "media", "g2048",
     "packages", "settings", "sysmon", "calculator", "terminal", "tasks",
     "language", "maps", "finder",
+    "gbasdk", "gbaemu", "workout",
+    # Not in the Applications folder (it opens from the desktop's right-click
+    # menu), but it reads a store like any app and must survive a bad one.
+    "widgetsettings",
+    # Cookbook's sister app: reads cookbook.json read-only and writes
+    # its own plan, so BOTH stores can be damaged independently.
+    "mealplanner",
 ]
 
 # Shared modules an app pulls in; drop them too so a re-import re-reads NB_HOME.
@@ -85,6 +92,9 @@ _WRONG_TYPES = {
     "balance": "NaN",
     "version": [1, 2, 3],
     "settings": "flat-string",
+    # Workout's per-day goal snapshot: a map of date -> int, so the damage
+    # worth testing is both a non-map and a map full of the wrong things.
+    "goals": ["2026-01-01", None],
 }
 
 

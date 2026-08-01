@@ -286,7 +286,7 @@ class GameSession:
                 cwd=os.path.dirname(self.rom) or os.path.expanduser("~"))
         except Exception as e:
             self._log("launch failed: %r" % e)
-            self._set_banner("Couldn’t start the emulator — press Ctrl+Esc")
+            self._set_banner("Could not start the emulator. Press Ctrl+Esc to exit.")
             self._finish()
             return False
         self._log("vbam pid=%d" % self.proc.pid)
@@ -357,7 +357,7 @@ class GameSession:
                 self._log("game window not found after %d tries — the ROM may "
                           "have failed to open (see errors above)"
                           % self._embed_tries)
-                self._set_banner("The game didn’t open — press Ctrl+Esc to exit")
+                self._set_banner("The game did not open. Press Ctrl+Esc to exit.")
                 return False
             return True
         try:

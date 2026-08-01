@@ -5,8 +5,8 @@ Settings — the Notebook OS control centre (native GTK).
 A two-pane control centre in the GNOME / System-Settings lineage: a scrollable
 sidebar of sections and a content pane that drives the machine for real —
 System info + hostname, displays (xrandr), sound (amixer), network (ip / sysfs),
-power + battery, appearance/backdrop
-(xsetroot), keyboard (setxkbmap + xset), mouse (xinput), date & time, region,
+power + battery,
+keyboard (setxkbmap + xset), mouse (xinput), date & time, region,
 users (/etc/passwd), storage (statvfs / df), accessibility and default
 applications. Every control either applies live, persists to
 $NB_HOME/.config/notebook/settings.json, or both; persisted preferences are
@@ -30,6 +30,7 @@ import nbapp
 import nbicons
 import nbprint
 import nbi18n
+import nbaudio
 from nbi18n import _t
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -52,19 +53,6 @@ TIMEZONES = [
     ("India (Kolkata)", "Asia/Kolkata", "IST-5:30"),
     ("Japan (Tokyo)", "Asia/Tokyo", "JST-9"),
     ("Sydney", "Australia/Sydney", "AEST-10AEDT,M10.1.0,M4.1.0/3"),
-]
-
-# Papertone backdrop swatches (label, hex). #DED4C2 is the session default set by
-# session.sh; the rest are tones from the same warm neutral family plus a dark
-# option. Selecting one runs `xsetroot -solid <hex>`, which repaints the X root
-# window — the real desktop background — immediately.
-BACKDROPS = [
-    ("Papertone", "#DED4C2"),
-    ("Warm sand", "#E7DCC8"),
-    ("Oat", "#D8CBB4"),
-    ("Sage clay", "#CBC9B4"),
-    ("Slate", "#8C8577"),
-    ("Ink", "#2B2A26"),
 ]
 
 # Default-application categories. Each maps a human category to a list of file
@@ -126,37 +114,34 @@ def human_kb(kb):
 # Region & Language help text. Kept as module constants because the "you just
 # switched" line has to be looked up in the language the user picked, not the
 # one this window is running in, so both strings are needed as catalog keys.
-REGION_NOTE = ("Apps you open from now on use the language you pick here. Apps "
+REGION_NOTE = ("Apps opened from now on use the language chosen here. Apps "
                "that are already open, and the desktop itself, keep the "
-               "language they started in — restart the computer to change "
-               "everything at once. The keyboard and the time zone change "
-               "straight away. Chinese is typed with the Pinyin input method: "
-               "press Ctrl+Space in any text box to turn it on or off.")
-REGION_SET = ("%s is set. Open an app to see it, or restart the computer to "
-              "put the whole desktop in this language.")
+               "language they started in; restart the computer to change all "
+               "of them. The keyboard and the time zone change immediately. "
+               "Chinese is typed with the Pinyin input method: press "
+               "Ctrl+Space in any text box to turn it on or off.")
+REGION_SET = ("%s is set. Restart the computer to change the desktop as well.")
 # Shown only while a DUAL layout is chosen (Russian and Hindi are "ru,us" and
 # "in,us" — a Cyrillic-only or Devanagari-only keyboard cannot type a file name
 # or a password, so both ship with English alongside). Without this sentence
 # the English half is there but unreachable as far as the user knows, which is
 # indistinguishable from a broken keyboard.
-KBD_DUAL_NOTE = ("This layout has two halves: the one you picked and English. "
-                 "Press Alt+Shift to swap between them, so you can still type "
-                 "a file name or a password.")
-KBD_NOTE = ("Every change here happens straight away and is remembered next "
-            "time you start up.")
+KBD_DUAL_NOTE = ("This layout has two halves, the chosen one and English. "
+                 "Press Alt+Shift to switch between them.")
+# No standing note on the Keyboard page: the label beside each control already
+# says what it does. The page's note label exists only to carry KBD_DUAL_NOTE
+# when a dual layout is in use, and stays hidden otherwise (_sync_dual_note).
+KBD_NOTE = ""
 
 # (label, icon) — icons reuse the nbicons set; an unknown name falls back to a
 # neutral glyph, so the row is always drawn.
 SECTIONS = [
     ("System", "sys"),
     ("Displays", "desktop"),
-    ("Appearance", "brush"),
     ("Sound", "vol"),
-    ("Network", "signal"),
     ("Printers", "inbox"),
     ("Power", "update"),
     ("Keyboard", "toc"),
-    ("Mouse", "picker"),
     ("Date & Time", "calendar"),
     ("Region & Language", "library"),
     ("Users", "contacts"),
@@ -283,13 +268,10 @@ class Settings(nbapp.AppWindow):
         self._page_builders = {
             "System": self._page_system,
             "Displays": self._page_display,
-            "Appearance": self._page_appearance,
             "Sound": self._page_sound,
-            "Network": self._page_network,
             "Printers": self._page_printers,
             "Power": self._page_power,
             "Keyboard": self._page_keyboard,
-            "Mouse": self._page_mouse,
             "Date & Time": self._page_datetime,
             "Region & Language": self._page_region,
             "Users": self._page_users,
@@ -356,6 +338,23 @@ class Settings(nbapp.AppWindow):
         if content is not None:
             holder.pack_start(content, True, True, 0)
             holder.show_all()
+
+    def _reopen_page(self, name):
+        """Throw a page's widgets away and build it again.
+
+        For a setting that changes which OTHER controls make sense — choosing
+        HDMI takes the volume slider away, because the television owns the level
+        — so that the page cannot be left showing a control that no longer does
+        anything. Pages are built lazily into a holder, so this is just emptying
+        the holder and clearing the built flag."""
+        holder = self._page_holders.get(name)
+        if holder is None:
+            return
+        for child in holder.get_children():
+            holder.remove(child)
+            child.destroy()
+        self._built.discard(name)
+        self._ensure_built(name)
 
     # ---- menu bar ----
     def menu_items(self, name):
@@ -647,10 +646,11 @@ class Settings(nbapp.AppWindow):
         return True
 
     def _apply_saved_prefs(self):
-        # Backdrop
-        bg = self._settings.get("background")
-        if isinstance(bg, str) and bg:
-            run(["xsetroot", "-solid", bg])
+        # No backdrop colour is applied. The alternate desktop colours were
+        # removed (they mis-rendered behind the widget board), so a "background"
+        # left in settings.json by an older build is deliberately IGNORED rather
+        # than honoured -- there is no longer any screen that could change it
+        # back. session.sh paints the one papertone field at start-up.
         # Time zone — re-point /etc/localtime and export TZ so the saved zone
         # actually takes effect this session. _apply_tz degrades gracefully
         # when tzdata/localtime is absent (falls back to the POSIX TZ string).
@@ -708,16 +708,13 @@ class Settings(nbapp.AppWindow):
         hostbox.pack_start(self._host_entry, False, False, 0)
         hostbox.pack_start(hostbtn, False, False, 0)
         hostbox.pack_start(self._host_status, False, False, 0)
-        self._row_widget(card, "Device name", hostbox, first=True,
-                         sub="What this computer calls itself")
+        self._row_widget(card, "Device name", hostbox, first=True)
 
         card2 = self._card(col, top=16)
         rows = self._system_rows()
         for i, (k, v) in enumerate(rows):
             self._value_row(card2, k, v, first=(i == 0))
 
-        self._note(col, "The new name takes effect straight away and is "
-                        "remembered after you restart.")
         return outer
 
     def _hostname(self):
@@ -757,7 +754,10 @@ class Settings(nbapp.AppWindow):
         rc, kern = run(["uname", "-sr"])
         if rc != 0 or not kern.strip():
             kern = self._first_line("/proc/sys/kernel/osrelease")
-        rows.append(("Kernel", kern.strip() or "—"))
+        # "System core", not "Kernel": the row still carries the exact version
+        # string, but the label names what the number is the version OF. Every
+        # other row on this page is already a plain noun.
+        rows.append(("System core", kern.strip() or "—"))
         rc, arch = run(["uname", "-m"])
         # "x86_64" on its own means nothing to most people; lead with the plain
         # fact (Windows says "64-bit operating system") and keep the exact name
@@ -848,6 +848,8 @@ class Settings(nbapp.AppWindow):
         modes = self._x_modes(out, xr)
         cur = self._x_current(out, xr)
         combo = Gtk.ComboBoxText()
+        # Kept so _on_res can read the pick back by INDEX; see the note there.
+        self._res_modes = list(modes)
         for m in modes:
             combo.append_text(m)
         if cur in modes:
@@ -874,14 +876,10 @@ class Settings(nbapp.AppWindow):
                           if saved_scale in self._scale_vals else 0)
         scombo.connect("changed", self._on_scale, out)
         ctl.add_widget(scombo)
-        self._row_widget(card, "Size of everything", scombo,
-                         sub="Smaller settings fit more on screen and draw "
-                             "text more finely")
+        self._row_widget(card, "Size of everything", scombo)
 
-        note = ("These settings apply to the screen connected as %s." % out
-                if out else
-                "The screen on this computer cannot be adjusted from here.")
-        self._note(col, note)
+        if not out:
+            self._note(col, "This screen cannot be adjusted from here.")
         return outer
 
     def _xrandr(self):
@@ -889,12 +887,29 @@ class Settings(nbapp.AppWindow):
         return o
 
     def _x_output(self, o=None):
+        """The screen these controls act on: the one the user is sitting at.
+
+        THE INTERNAL PANEL FIRST, and that is not a preference — it is the same
+        rule opt/notebook/display.sh applies when it decides which output owns
+        the origin and which ones mirror onto it. This took the FIRST line
+        carrying " connected", and xrandr lists outputs in the server's order,
+        not the user's: with a television plugged in on a machine that
+        enumerates HDMI-1 ahead of eDP-1, both controls on this page silently
+        drove the television. "Resolution" offered the TV's 3840x2160 and
+        re-moded the TV; "Size of everything" supersampled the TV, so somebody
+        sitting in front of a laptop changed it and watched nothing happen to
+        the screen in front of them.
+
+        Falls back to the first connected output, which is what a desktop with
+        no built-in panel has and what this always returned."""
         if o is None:
             _rc, o = run(["xrandr"])
-        for line in o.splitlines():
-            if " connected" in line:
-                return line.split()[0]
-        return ""
+        connected = [line.split()[0] for line in o.splitlines()
+                     if " connected" in line and line[:1].strip()]
+        for name in connected:
+            if name.startswith(("eDP", "LVDS", "DSI")):
+                return name
+        return connected[0] if connected else ""
 
     def _x_modes(self, out, o=None):
         if o is None:
@@ -936,7 +951,13 @@ class Settings(nbapp.AppWindow):
         return ""
 
     def _on_res(self, combo, out):
-        mode = combo.get_active_text()
+        # By INDEX into the probed mode list, never combo.get_active_text():
+        # nbi18n translates what a ComboBoxText shows, so the visible text is
+        # not guaranteed to be the xrandr mode name it was built from. Same
+        # defect class as the Calendar calendar-picker and Writer's style combo.
+        i = combo.get_active()
+        modes = getattr(self, "_res_modes", [])
+        mode = modes[i] if 0 <= i < len(modes) else None
         if mode and out:
             run(["xrandr", "--output", out, "--mode", mode])
 
@@ -949,81 +970,61 @@ class Settings(nbapp.AppWindow):
         self._settings["display_scale"] = f
         self._save_settings()
 
-    # ---- Appearance ----
-    def _page_appearance(self):
-        outer, col = self._page("Appearance", "Desktop backdrop and highlight colour")
-        self._grouplabel(col, "Desktop backdrop")
-        card = self._card(col)
-        cur = self._settings.get("background")
-        if not isinstance(cur, str):
-            cur = "#DED4C2"
-        self._bg_swatches = []
-        grid = Gtk.FlowBox()
-        grid.set_selection_mode(Gtk.SelectionMode.NONE)
-        grid.set_max_children_per_line(6)
-        grid.set_column_spacing(10)
-        grid.set_row_spacing(10)
-        grid.set_margin_top(14); grid.set_margin_bottom(14)
-        grid.set_margin_start(4); grid.set_margin_end(4)
-        for label, hexcol in BACKDROPS:
-            btn = Gtk.Button()
-            btn.get_style_context().add_class("swatch")
-            if hexcol.lower() == cur.lower():
-                btn.get_style_context().add_class("selected")
-            # Sized so all six swatches sit on ONE line inside the page's
-            # narrowest pane (a 1024px panel), instead of wrapping five-plus-one
-            # and leaving an orphan on a second row.
-            btn.set_size_request(96, 62)
-            btn.set_tooltip_text(label)
-            self._swatch_style(btn, hexcol)
-            btn.connect("clicked", self._on_backdrop, hexcol)
-            self._bg_swatches.append((hexcol, btn))
-            grid.add(btn)
-        card.pack_start(grid, False, False, 0)
-
-        self._grouplabel(col, "Accent")
-        card2 = self._card(col)
-        self._value_row(card2, "Highlight colour", "Signal red", first=True)
-
-        self._note(col, "The backdrop changes as soon as you pick one, and "
-                        "comes back the same way every time you start up. The "
-                        "highlight colour — used for today's date, alerts and "
-                        "the main button on a screen — is part of the Notebook "
-                        "look and stays the same.")
-        return outer
-
-    def _swatch_style(self, btn, hexcol):
-        prov = Gtk.CssProvider()
-        prov.load_from_data(
-            (".swcolor-%s { background: %s; }"
-             % (hexcol.lstrip("#"), hexcol)).encode())
-        btn.get_style_context().add_provider(
-            prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 2)
-        btn.get_style_context().add_class("swcolor-" + hexcol.lstrip("#"))
-
-    def _on_backdrop(self, _btn, hexcol):
-        run(["xsetroot", "-solid", hexcol])
-        self._settings["background"] = hexcol
-        self._save_settings()
-        for hc, b in self._bg_swatches:
-            ctx = b.get_style_context()
-            if hc == hexcol:
-                ctx.add_class("selected")
-            else:
-                ctx.remove_class("selected")
-
     # ---- Sound ----
     def _page_sound(self):
-        outer, col = self._page("Sound", "Volume for speakers and the microphone")
-        # Without a Master mixer control there is nothing to drive — show an
-        # honest empty state rather than a slider and switch that do nothing.
-        if not self._has_ctl("Master"):
+        outer, col = self._page("Sound",
+                                "Where sound comes out, and how loud it is")
+        # WHICH SPEAKERS. A television on HDMI has its own sound device, and
+        # nothing used to point at it, so a film played on the TV came out of the
+        # laptop's own speakers -- or out of nothing at all. This row is the one
+        # place that can be said and changed. See de/nbaudio.py.
+        outs = nbaudio.outputs()
+        if not outs and not self._has_ctl("Master"):
             card = self._card(col)
             self._value_row(card, "Sound", "No speakers or sound card found",
                             first=True)
-            self._note(col, "Nothing on this computer can play sound at the "
-                            "moment. Plug in speakers or headphones, or switch "
-                            "on the sound device, then open Sound again.")
+            self._note(col, "Plug in speakers or headphones, or switch on the "
+                            "sound device, then open Sound again.")
+            return outer
+        cur = nbaudio.current()
+        if len(outs) > 1:
+            self._grouplabel(col, "Where sound comes out")
+            ocard = self._card(col)
+            combo = Gtk.ComboBoxText()
+            combo.append("", "Follow the screen")
+            for o in outs:
+                label = o["label"]
+                if o["kind"] == "hdmi" and o["live"] is False:
+                    label += " — nothing plugged in"
+                combo.append(o["key"], label)
+            combo.set_active_id(nbaudio.saved_choice() or "")
+            combo.connect("changed", self._on_audio_out)
+            self._row_widget(ocard, "Play sound through", combo, first=True)
+            now = next((o for o in outs if o["key"] == cur), None)
+            self._value_row(ocard, "Playing through",
+                            now["label"] if now else "Not known")
+            self._note(col, "Follow the screen sends sound to a television "
+                            "while one is plugged into HDMI, and back to the "
+                            "built-in speakers when it is unplugged.")
+        # HDMI carries no volume of its own: the television's own remote is the
+        # volume control. A slider here would move a number and change nothing.
+        if not nbaudio.has_volume(cur):
+            self._grouplabel(col, "Volume")
+            hcard = self._card(col)
+            self._value_row(hcard, "Volume", "Set on the television", first=True)
+            self._note(col, "Sound is going out over HDMI, so the television "
+                            "sets how loud it is — use its own volume control "
+                            "or its remote.")
+            return outer
+        if not self._has_ctl("Master"):
+            # An output exists but the card exposes no level control to move --
+            # some HDMI-only and USB devices have none. Say so, because a page
+            # that stops here would be a heading over nothing at all.
+            self._grouplabel(col, "Volume")
+            ncard = self._card(col)
+            self._value_row(ncard, "Volume", "Not adjustable here", first=True)
+            self._note(col, "This sound device has no volume control of its "
+                            "own. Use the volume control on the speakers.")
             return outer
         self._grouplabel(col, "Speakers and headphones")
         card = self._card(col)
@@ -1037,15 +1038,17 @@ class Settings(nbapp.AppWindow):
         self._row_widget(card, "Silence all sound", mute)
 
         # Input (capture) level, only if the device exposes a Capture control.
-        if self._has_ctl("Capture"):
+        # Named with -c: ctl.!default is pinned to the card that PLAYS, and the
+        # microphone is very often a different card (a USB one enumerates as its
+        # own). Without this the slider moved the speaker card's input.
+        if self._has_ctl("Capture", card=nbaudio.capture_card()):
             self._grouplabel(col, "Microphone")
             card2 = self._card(col)
-            cvol = self._get_volume("Capture")
+            cvol = self._get_volume("Capture", card=nbaudio.capture_card())
             cadj = Gtk.Adjustment(value=cvol, lower=0, upper=100,
                                   step_increment=5)
             cscale = self._percent_scale(cadj, self._on_capvol)
             self._row_widget(card2, "Recording level", cscale, first=True)
-        self._note(col, "Changes take effect as you move the slider.")
         return outer
 
     def _percent_scale(self, adj, on_change):
@@ -1061,12 +1064,18 @@ class Settings(nbapp.AppWindow):
         scale.connect("value-changed", on_change)
         return scale
 
-    def _has_ctl(self, ctl):
-        rc, _ = run(["amixer", "sget", ctl])
+    def _amixer(self, card=None):
+        # No -c means ctl.!default, which nbaudio pins to the card that plays.
+        # A card is named explicitly only for the microphone, which need not be
+        # on that card.
+        return ["amixer"] + (["-c", str(card)] if card is not None else [])
+
+    def _has_ctl(self, ctl, card=None):
+        rc, _ = run(self._amixer(card) + ["sget", ctl])
         return rc == 0
 
-    def _get_volume(self, ctl):
-        rc, o = run(["amixer", "sget", ctl])
+    def _get_volume(self, ctl, card=None):
+        rc, o = run(self._amixer(card) + ["sget", ctl])
         if rc != 0:
             return 50
         m = re.search(r"\[(\d+)%\]", o)
@@ -1083,64 +1092,39 @@ class Settings(nbapp.AppWindow):
         run(["amixer", "sset", "Master", "%d%%" % int(scale.get_value())])
 
     def _on_capvol(self, scale):
-        run(["amixer", "sset", "Capture", "%d%%" % int(scale.get_value())])
+        run(self._amixer(nbaudio.capture_card())
+            + ["sset", "Capture", "%d%%" % int(scale.get_value())])
 
     def _on_mute(self, _sw, state):
         run(["amixer", "sset", "Master", "mute" if state else "unmute"])
         return False
 
-    # ---- Network ----
-    def _page_network(self):
-        outer, col = self._page("Network", "Connections in and out of this computer")
-        ifaces = self._net_interfaces()
-        card = self._card(col)
-        if ifaces:
-            for i, (name, state, ip) in enumerate(ifaces):
-                val = "%s  ·  %s" % (state, ip) if ip else state
-                self._value_row(card, name, val, first=(i == 0))
-        else:
-            self._value_row(card, "Connections", "None found", first=True)
+    def _on_audio_out(self, combo):
+        """Send sound somewhere else, and redraw the page around the choice.
 
-        self._note(col, "This computer has no Wi-Fi and no way to reach the "
-                        "internet — that is deliberate. Anything listed above "
-                        "only carries traffic inside the machine itself or "
-                        "along a cable you plug in.")
-        return outer
+        Redrawing matters: moving to HDMI takes the volume slider away (the
+        television owns the level) and moving back brings it in, so leaving the
+        old controls on screen would leave a slider there that does nothing.
 
-    def _net_interfaces(self):
-        # Names + operstate from sysfs (always present); IPv4 from `ip` if
-        # available. Skip nothing — loopback is shown honestly.
-        result = []
-        ips = {}
-        rc, o = run(["ip", "-o", "-4", "addr", "show"])
-        if rc == 0:
-            for ln in o.splitlines():
-                parts = ln.split()
-                if len(parts) >= 4 and parts[2] == "inet":
-                    ips[parts[1]] = parts[3].split("/")[0]
-        try:
-            names = sorted(os.listdir("/sys/class/net"))
-        except OSError:
-            names = []
-        # operstate is a kernel word ("up" / "down" / "unknown"); shouting it in
-        # capitals told the user nothing. Say plainly whether it is carrying
-        # traffic, and name the loopback device for what it is.
-        plain = {"up": "Connected", "down": "Not connected",
-                 "dormant": "Idle", "lowerlayerdown": "No cable",
-                 "unknown": "Ready"}
-        for n in names:
-            state = self._first_line("/sys/class/net/%s/operstate" % n, "unknown")
-            # Say what each one IS. "eth0"/"enp3s0" is the kernel's name for the
-            # socket a network cable plugs into, and nothing to a normal reader.
-            if n == "lo":
-                label = "%s (inside this computer)" % n
-            elif n.startswith(("eth", "en")):
-                label = "%s (network cable)" % n
-            else:
-                label = n
-            result.append((label, plain.get(state.lower(), state),
-                           ips.get(n, "")))
-        return result
+        Both halves are deferred to an idle callback rather than run here.
+        Rebuilding the page DESTROYS this very combo box, and destroying a widget
+        from inside its own signal emission is how you get GTK warnings and a
+        use-after-free; and nbaudio.choose spawns a dozen amixer processes, which
+        has no business happening inside a "changed" handler on the UI thread.
+        """
+        key = combo.get_active_id() or None
+        GLib.idle_add(self._apply_audio_out, key)
+
+    def _apply_audio_out(self, key):
+        nbaudio.choose(key)
+        self._reopen_page("Sound")
+        return False
+
+    # No Network section. This kernel carries no IP stack, so the page could
+    # only ever list the loopback device and the words for its state -- and the
+    # About page has always deliberately omitted its Network row for the same
+    # reason. Removing the section removes the last place in Settings that had
+    # to talk about connectivity at all.
 
     def _page_printers(self):
         outer, col = self._page("Printers", "Add and manage USB printers")
@@ -1151,14 +1135,13 @@ class Settings(nbapp.AppWindow):
             card = self._card(col)
             self._value_row(card, "Printing", "Not available on this computer",
                             first=True)
-            self._note(col, "This copy of Notebook OS was built without "
-                            "printing, so a printer cannot be set up here. You "
-                            "can still save any document as a PDF from its File "
-                            "menu and print it from another computer.")
+            self._note(col, "Printing is not installed, so a printer cannot be "
+                            "set up here. A document can still be saved as a "
+                            "PDF from its File menu.")
             return outer
 
         # ---- configured printers ----
-        self._grouplabel(col, "Your printers")
+        self._grouplabel(col, "Printers")
         self._pr_list_card = self._card(col)
         self._pr_status = None
         self._printers_refresh()
@@ -1172,10 +1155,8 @@ class Settings(nbapp.AppWindow):
         self._pr_add_status = None
         self._printers_build_add()
 
-        self._note(col, "Connect a printer by USB and switch it on, then use "
-                        "Find printers. Notebook OS matches a driver "
-                        "automatically; if in doubt, keep the recommended one. "
-                        "A test page confirms everything works.")
+        self._note(col, "Connect a printer by USB and switch it on, then press "
+                        "Find printers.")
         return outer
 
     # ---- listing ----
@@ -1188,7 +1169,7 @@ class Settings(nbapp.AppWindow):
         printers, default = nbprint.list_printers()
         if not printers:
             self._value_row(card, "Printers",
-                            "No printers yet — add one below", first=True)
+                            "None set up", first=True)
             card.show_all()
             return
         for i, p in enumerate(printers):
@@ -1255,8 +1236,7 @@ class Settings(nbapp.AppWindow):
         devbox = Gtk.Box(spacing=8)
         devbox.pack_start(self._pr_dev_combo, False, False, 0)
         devbox.pack_start(find, False, False, 0)
-        self._row_widget(card, "USB printer", devbox, first=True,
-                         sub="Connect the printer and switch it on")
+        self._row_widget(card, "USB printer", devbox, first=True)
 
         if not have("lpinfo"):
             # lpadmin is present but device discovery is not — say so plainly
@@ -1288,8 +1268,7 @@ class Settings(nbapp.AppWindow):
         drvbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         drvbox.pack_start(self._pr_drv_combo, False, False, 0)
         drvbox.pack_start(self._pr_drv_note, False, False, 0)
-        self._row_widget(card, "Driver", drvbox,
-                         sub="Recommended driver is pre-selected")
+        self._row_widget(card, "Driver", drvbox)
 
         addbtn = Gtk.Button(label=_t("Add printer"))
         addbtn.get_style_context().add_class("setprimary")
@@ -1303,8 +1282,8 @@ class Settings(nbapp.AppWindow):
 
     def _note_in_card(self, card):
         lbl = Gtk.Label(
-            label="This computer cannot search for printers by itself. Any "
-                  "printer that has already been set up still appears above.",
+            label="Printer discovery is not installed. Printers already set up "
+                  "are still listed above.",
             xalign=0)
         lbl.get_style_context().add_class("setsublabel")
         lbl.set_line_wrap(True)
@@ -1447,9 +1426,9 @@ class Settings(nbapp.AppWindow):
             if confident:
                 note.set_text("")
             else:
-                note.set_text("Could not identify this printer exactly — a "
-                              "generic driver is selected. Print a test page "
-                              "to check it.")
+                note.set_text("This printer was not identified. A generic "
+                              "driver is selected; print a test page to check "
+                              "it.")
 
     def _printers_match_drivers(self, label, uri=None):
         # Return (list of (ppd, description), confident). Ordering is:
@@ -1639,7 +1618,7 @@ class Settings(nbapp.AppWindow):
     def _on_printer_remove(self, _btn, name):
         self._confirm(
             "Remove printer",
-            "Remove \"%s\"? You can add it again at any time." % name,
+            "Remove \"%s\"?" % name,
             "Remove", lambda: self._do_printer_remove(name))
 
     def _do_printer_remove(self, name):
@@ -1706,9 +1685,9 @@ class Settings(nbapp.AppWindow):
         cr.set_font_size(12)
         import time
         lines = [
-            "If you can read this, your printer is working.",
+            "Printer test page.",
             "Printed: " + time.strftime("%Y-%m-%d %H:%M"),
-            "Alignment marks and a tonal bar are shown below.",
+            "A greyscale bar is printed below.",
         ]
         y = 200
         for ln in lines:
@@ -1761,25 +1740,22 @@ class Settings(nbapp.AppWindow):
         blank.connect("changed", self._on_blank)
         self._row_widget(card2, "Blank screen after", blank, first=True)
 
-        self._grouplabel(col, "Finish up")
+        self._grouplabel(col, "Sleep and shut down")
         card3 = self._card(col)
         # Each row says what the button will DO — the label used to be the same
         # word as the button beside it, which told the user nothing twice.
         for i, (label, sub, action) in enumerate([
-                ("Sleep", "Turn the screen off. Press any key to come back.",
+                ("Sleep", "Turns the screen off. Press any key to wake it.",
                  "sleep"),
-                ("Restart", "Close everything down and start the computer "
-                            "again.", "reboot"),
-                ("Shut Down", "Close everything down and switch the computer "
-                              "off.", "poweroff")]):
+                ("Restart", "Closes all apps and starts the computer again.",
+                 "reboot"),
+                ("Shut Down", "Closes all apps and switches the computer off.",
+                 "poweroff")]):
             btn = Gtk.Button(label=label)
             btn.get_style_context().add_class("setbtn")
             btn.connect("clicked", self._on_power, action)
             self._row_widget(card3, label, btn, first=(i == 0), sub=sub)
 
-        self._note(col, "The screen normally stays on, so the computer is ready "
-                        "the moment you walk up to it. Nothing is lost when the "
-                        "screen goes dark — press any key to carry on.")
         return outer
 
     def _battery(self):
@@ -1787,7 +1763,10 @@ class Settings(nbapp.AppWindow):
         try:
             entries = os.listdir(base)
         except OSError:
-            return [("Power source", "AC power")]
+            # "Mains power", not "AC power": the no-battery row further down
+            # already says "Runs from the mains", and AC is an abbreviation
+            # nobody should have to know to read a Power page.
+            return [("Power source", "Mains power")]
         batteries, ac_online = [], None
         for e in sorted(entries):
             p = os.path.join(base, e)
@@ -1821,7 +1800,7 @@ class Settings(nbapp.AppWindow):
             rows.append(("Power lead", "Plugged in" if ac_online
                          else "Not plugged in"))
         if not rows:
-            rows.append(("Power", "Runs from the mains — no battery fitted"))
+            rows.append(("Power source", "Mains only, no battery fitted"))
         return rows
 
     def _on_blank(self, combo):
@@ -1895,8 +1874,7 @@ class Settings(nbapp.AppWindow):
         if not apps:
             return _t("Nothing else is open.")
         if len(apps) == 1:
-            return _t("%s is open. Anything you have not saved in it will be "
-                      "lost.") % apps[0]
+            return _t("%s is open. Unsaved changes in it will be lost.") % apps[0]
         # Joined through whole-phrase keys, never a bare " and " fragment: a
         # key with edge spaces bakes the English spacing into the catalog and
         # stops matching the moment the spacing changes.
@@ -1904,8 +1882,7 @@ class Settings(nbapp.AppWindow):
             listed = _t("%s and %d more") % (", ".join(apps[:4]), len(apps) - 4)
         else:
             listed = _t("%s and %s") % (", ".join(apps[:-1]), apps[-1])
-        return _t("%s are open. Anything you have not saved in them will be "
-                  "lost.") % listed
+        return _t("%s are open. Unsaved changes in them will be lost.") % listed
 
     def _on_power(self, _b, action):
         if action == "sleep":
@@ -1955,15 +1932,15 @@ class Settings(nbapp.AppWindow):
         self._kdelay.connect("value-changed", self._on_repeat)
         self._row_widget(card2, "Wait before repeating", self._kdelay,
                          first=True,
-                         sub="Thousandths of a second — a bigger number waits "
-                             "longer")
+                         sub="In thousandths of a second")
         self._krate = Gtk.SpinButton.new_with_range(5, 60, 1)
         self._krate.set_value(self._cfg_int("kbd_rate", 25))
         self._krate.connect("value-changed", self._on_repeat)
         self._row_widget(card2, "How fast it repeats", self._krate,
-                         sub="Letters per second once it starts")
+                         sub="Letters per second")
 
-        self._kbd_note = self._note(col, _t(KBD_NOTE))
+        self._kbd_note = self._note(col, "")
+        self._kbd_note.set_no_show_all(True)
         self._sync_dual_note()
         return outer
 
@@ -2009,94 +1986,18 @@ class Settings(nbapp.AppWindow):
             return
         run(["xset", "r", "rate", str(delay), str(rate)])
 
-    # ---- Mouse ----
-    def _page_mouse(self):
-        outer, col = self._page("Mouse & Touchpad", "Pointer speed and scrolling")
-        card = self._card(col)
-        adj = Gtk.Adjustment(
-            value=self._cfg_float("pointer_speed", 0.0),
-            lower=-1.0, upper=1.0, step_increment=0.1)
-        scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
-        scale.set_size_request(280, -1)
-        scale.set_draw_value(True)
-        scale.set_value_pos(Gtk.PositionType.RIGHT)
-        # The raw number this slider carries runs -1 … +1, which reads as a
-        # meaningless "0.0" beside the track. Show the setting in words instead.
-        scale.connect("format-value", lambda _s, v: self._speed_word(v))
-        scale.connect("value-changed", self._on_pointer_speed)
-        self._row_widget(card, "Pointer speed", scale, first=True,
-                         sub="How far the pointer travels when you move the "
-                             "mouse")
-        nat = Gtk.Switch()
-        nat.set_active(bool(self._settings.get("natural_scroll", False)))
-        nat.connect("state-set", self._on_natural_scroll)
-        self._row_widget(card, "Reverse scrolling", nat,
-                         sub="Turn this on to make the page move the opposite "
-                             "way to the wheel")
-
-        if not have("xinput"):
-            self._note(col, "This computer cannot adjust the pointer directly, "
-                            "but your choice is saved and will be used as soon "
-                            "as it can.")
-        else:
-            self._note(col, "Applies to every mouse and touchpad you connect, "
-                            "and is remembered next time you start up.")
-        return outer
-
-    def _speed_word(self, v):
-        # Every word must be no longer than the two END words: a Gtk.Scale
-        # reserves its value column from the formatted MINIMUM and MAXIMUM only,
-        # so a longer word in the middle ("Standard") is drawn clipped.
-        if v <= -0.6:
-            return "Slowest"
-        if v < -0.15:
-            return "Slower"
-        if v <= 0.15:
-            return "Normal"
-        if v < 0.6:
-            return "Faster"
-        return "Fastest"
-
-    def _xinput_pointer_ids(self):
-        rc, o = run(["xinput", "list"])
-        if rc != 0:
-            return []
-        ids = []
-        for ln in o.splitlines():
-            if "pointer" not in ln.lower():
-                continue
-            if "master" in ln.lower():
-                continue
-            m = re.search(r"id=(\d+)", ln)
-            if m:
-                ids.append(m.group(1))
-        return ids
-
-    def _on_pointer_speed(self, scale):
-        v = round(scale.get_value(), 2)
-        self._apply_pointer_speed(v)
-        self._settings["pointer_speed"] = v
-        self._save_settings()
-
-    def _apply_pointer_speed(self, v):
-        for i in self._xinput_pointer_ids():
-            run(["xinput", "set-prop", i, "libinput Accel Speed", str(v)])
-
-    def _on_natural_scroll(self, _sw, state):
-        self._apply_natural_scroll(bool(state))
-        self._settings["natural_scroll"] = bool(state)
-        self._save_settings()
-        return False
-
-    def _apply_natural_scroll(self, on):
-        for i in self._xinput_pointer_ids():
-            run(["xinput", "set-prop", i,
-                 "libinput Natural Scrolling Enabled", "1" if on else "0"])
+    # No Mouse & Touchpad page. Its two controls drove `xinput`, which is not
+    # built into this image (BR2_PACKAGE_XAPP_XINPUT is off and there is no
+    # xinput binary on the target), so _xinput_pointer_ids() always came back
+    # empty: the slider moved, the label said "Faster", the value was saved —
+    # and the pointer never changed. A page that reports success while doing
+    # nothing is worse than no page at all, so it is gone rather than lying.
+    # Bring it back with xinput, not before.
 
     # ---- Date & Time ----
     def _page_datetime(self):
         import time
-        outer, col = self._page("Date & Time", "The clock and your time zone")
+        outer, col = self._page("Date & Time", "Clock and time zone")
 
         card = self._card(col)
         self._dt_lbl = Gtk.Label(xalign=1)
@@ -2141,9 +2042,8 @@ class Settings(nbapp.AppWindow):
             timebox.pack_start(w, False, False, 0)
         self._row_widget(setcard, "Time", timebox)
 
-        self._note(col, "This computer has no internet, so it cannot set its "
-                        "own clock. Set the date and time here and it will keep "
-                        "them — the time at the top confirms the change.")
+        self._note(col, "Set the date and time here, then press Set Clock. "
+                        "Current time confirms the change.")
 
         _lbl, iana, posix = TIMEZONES[idx]
         self._apply_tz(iana, posix)
@@ -2286,6 +2186,7 @@ class Settings(nbapp.AppWindow):
         self._row_widget(card, _t("Time zone"), self._region_tz)
 
         self._region_note = self._note(col, _t(REGION_NOTE))
+        self._region_note.set_no_show_all(True)
         self._sync_dual_note()
         return outer
 
@@ -2302,10 +2203,15 @@ class Settings(nbapp.AppWindow):
             lbl = getattr(self, attr, None)
             if lbl is None:
                 continue
-            text = _t(base)
+            parts = [_t(base)] if base else []
             if dual:
-                text += "  " + _t(KBD_DUAL_NOTE)
+                parts.append(_t(KBD_DUAL_NOTE))
+            text = "  ".join(parts)
             lbl.set_text(text)
+            # An empty note would still claim a line's height, so hide it. Both
+            # labels are no-show-all, which is why show_all() cannot re-reveal
+            # one that has nothing to say.
+            lbl.set_visible(bool(text))
 
     def _apply_keyboard(self, code):
         # Through nbi18n, never a bare `setxkbmap <code>`: Russian ("ru,us")
@@ -2433,7 +2339,7 @@ class Settings(nbapp.AppWindow):
         else:
             self._value_row(card, "Full name", fullname or "—")
 
-        self._grouplabel(col, "Everyone who can sign in")
+        self._grouplabel(col, "All accounts")
         card2 = self._card(col)
         users = self._passwd_users()
         if users:
@@ -2444,15 +2350,15 @@ class Settings(nbapp.AppWindow):
                 if name == "root":
                     bits.append("Administrator")
                 if name == cur:
-                    bits.append("This is you")
+                    bits.append("Current user")
                 self._value_row(card2, name, "  ·  ".join(bits) or "—",
                                 first=(i == 0))
         else:
             self._value_row(card2, "Accounts", "None", first=True)
 
-        self._note(col, "Everyone listed here can sign in to this computer. "
-                        "The administrator account can change anything on it, "
-                        "so keep its password to yourself.")
+        self._note(col, "Every account listed here can sign in. The "
+                        "administrator account can change anything on this "
+                        "computer.")
         return outer
 
     def _current_user(self):
@@ -2509,7 +2415,7 @@ class Settings(nbapp.AppWindow):
 
     # ---- Storage ----
     def _page_storage(self):
-        outer, col = self._page("Storage", "How much space is left on this computer")
+        outer, col = self._page("Storage", "Disk space in use")
 
         self._grouplabel(col, "This computer's disk")
         card = self._card(col)
@@ -2541,19 +2447,22 @@ class Settings(nbapp.AppWindow):
         if mounts:
             self._grouplabel(col, "Other drives and memory sticks")
             card2 = self._card(col)
+            # This app already knows a stick by the name printed on it — the
+            # Backup page uses _usb_media() for exactly that. Showing
+            # "/media/sda1" here instead made the same drive unrecognisable on
+            # two pages of one app.
+            names = {mnt: label for label, mnt, _ro in self._usb_media()}
             for i, (mp, used_kb, total_kb) in enumerate(mounts):
                 # Same sentence and same units as the disk bar above it: df's
                 # own "9.0M (1%) of 975M" put two different number styles on
                 # one page.
                 pct = int(used_kb * 100 / total_kb) if total_kb else 0
-                self._value_row(card2, mp,
+                self._value_row(card2, names.get(mp) or os.path.basename(mp)
+                                or mp,
                                 "%s used of %s  ·  %d%%"
                                 % (human_kb(used_kb), human_kb(total_kb), pct),
                                 first=(i == 0))
 
-        self._note(col, "These figures are read fresh every time you open this "
-                        "page. A memory stick or external drive appears here "
-                        "while it is plugged in.")
         return outer
 
     def _mounts(self):
@@ -2600,12 +2509,12 @@ class Settings(nbapp.AppWindow):
     # so putting something back is a drag in the Finder, not a restore tool.
     def _page_backup(self):
         outer, col = self._page("Backup",
-                                "Copy your files to a USB stick")
+                                "Copy files to a USB stick")
 
         self._grouplabel(col, "What gets copied")
         card = self._card(col)
         self._bk_what = self._value_row(
-            card, "Your folders and app data", _t("Working out the size…"),
+            card, "Folders and app data", _t("Working out the size…"),
             first=True)
         self._bk_what_lbl = self._bk_what.get_children()[-1]
         self._bk_total = 0
@@ -2619,7 +2528,7 @@ class Settings(nbapp.AppWindow):
 
         act = Gtk.Box(spacing=12)
         act.set_margin_top(20)
-        self._bk_btn = Gtk.Button(label=_t("Copy my files"))
+        self._bk_btn = Gtk.Button(label=_t("Copy files"))
         self._bk_btn.get_style_context().add_class("setprimary")
         self._bk_btn.connect("clicked", self._on_backup_start)
         act.pack_start(self._bk_btn, False, False, 0)
@@ -2639,11 +2548,9 @@ class Settings(nbapp.AppWindow):
         self._bk_status.set_margin_top(16)
         col.pack_start(self._bk_status, False, False, 0)
 
-        self._note(col, "Every copy goes into its own dated folder, so an "
-                        "older backup is never written over. Nothing already "
-                        "on the stick is changed or removed. To put something "
-                        "back later, open the stick in Finder and drag it "
-                        "across.")
+        self._note(col, "Each copy is written to its own dated folder on the "
+                        "stick. To put files back, open the stick in Finder "
+                        "and drag them across.")
         self._refresh_backup_dests()
         return outer
 
@@ -2704,7 +2611,7 @@ class Settings(nbapp.AppWindow):
                 rb.connect("toggled", self._on_backup_dest, mnt, readonly)
                 if readonly:
                     rb.set_sensitive(False)
-                    free = _t("Write-protected — nothing can be copied to it")
+                    free = _t("Write-protected")
                 else:
                     # _t() explicitly: the automatic pass needs about five
                     # letters of fixed text to be sure it has recognised a
@@ -2785,10 +2692,12 @@ class Settings(nbapp.AppWindow):
         self._bk_files, self._bk_total = files, total
         if files:
             self._bk_what_lbl.set_text(
-                _t("%d files  ·  %s") % (files, human_kb(total // 1024)))
+                _t("%d file%s  ·  %s")
+                % (files, "" if files == 1 else "s",
+                   human_kb(total // 1024)))
         else:
             self._bk_what_lbl.set_text(
-                _t("Nothing to copy yet — no files saved on this computer"))
+                _t("No files saved on this computer"))
         self._update_backup_button()
         return False
 
@@ -2802,8 +2711,7 @@ class Settings(nbapp.AppWindow):
         # because it looks finished.
         if self._bk_total and free and free < self._bk_total * 1.02:
             self._show_backup_result(
-                _t("There is not enough room on that stick. Your files need "
-                   "%s and it has %s free.")
+                _t("Not enough room on that stick: %s needed, %s free.")
                 % (human_kb(self._bk_total // 1024), human_kb(free // 1024)),
                 warn=True)
             return
@@ -2839,8 +2747,12 @@ class Settings(nbapp.AppWindow):
             dest = self._backup_dest_dir(mnt)
             os.makedirs(dest)
         except OSError as e:
-            GLib.idle_add(self._backup_failed,
-                          _t("Could not start: %s") % (e.strerror or e), 0)
+            # The very first thing the copy does is make its dated folder on
+            # the stick. If that fails nothing has been written at all — say
+            # which step failed and on what, and never print the raw exception:
+            # "Could not start: [Errno 30] Read-only file system" tells the one
+            # person who cannot act on it exactly nothing.
+            GLib.idle_add(self._backup_failed, self._start_error(e), 0)
             return
         for src in self._backup_sources():
             top = os.path.join(dest, os.path.basename(src)
@@ -2887,14 +2799,21 @@ class Settings(nbapp.AppWindow):
         GLib.idle_add(self._backup_verify, dest, copied, done_bytes,
                       len(failed))
 
+    def _start_error(self, e):
+        """Why the backup never got started, in words that name the step."""
+        if e.errno == 28:
+            return _t("No room on that stick. Nothing was copied.")
+        if e.errno == 30:
+            return _t("That stick is write-protected. Nothing was copied.")
+        return _t("A folder for the backup could not be created on that stick. "
+                  "Take the stick out, put it back in, and try again.")
+
     def _copy_error(self, e):
         if e.errno == 28:
             return _t("The stick ran out of room part-way through.")
         if e.errno == 30:
-            return _t("That stick is write-protected, so nothing can be "
-                      "copied onto it.")
-        return _t("The stick stopped responding — it may have been pulled "
-                  "out.")
+            return _t("That stick is write-protected. Nothing was copied.")
+        return _t("The stick stopped responding. It may have been pulled out.")
 
     def _backup_progress(self, frac, name):
         if not getattr(self, "_alive", True) or self._bk_bar is None:
@@ -2909,9 +2828,14 @@ class Settings(nbapp.AppWindow):
             return False
         self._bk_working = False
         self._update_backup_button()
-        self._show_backup_result(
-            "%s %s" % (why, _t("%d files were copied before it stopped.")
-                       % copied), warn=True)
+        # Only report a count when there IS one: a failure before the first
+        # file said "0 files were copied before it stopped", which reads as a
+        # second, separate piece of bad news rather than the same one.
+        if copied:
+            why = "%s %s" % (why, _t("It had copied %d file%s before it "
+                                     "stopped.")
+                             % (copied, "" if copied == 1 else "s"))
+        self._show_backup_result(why, warn=True)
         return False
 
     def _backup_verify(self, dest, copied, done_bytes, failed):
@@ -2934,16 +2858,21 @@ class Settings(nbapp.AppWindow):
                     continue
         where = os.path.basename(dest)
         if there == copied and there_bytes == done_bytes and not failed:
+            # "the stick now holds", not "N files are on the stick": the verb
+            # then agrees with the stick rather than with the count, so one
+            # file reads as correctly as nine hundred.
             self._show_backup_result(
-                _t("Copied and checked: %d files (%s) are on the stick, in a "
-                   "folder called \"%s\". You can take it out now.")
-                % (there, human_kb(there_bytes // 1024), where))
+                _t("Copied and checked: the stick now holds %d file%s (%s), "
+                   "in a folder called \"%s\". Safe to remove the stick.")
+                % (there, "" if there == 1 else "s",
+                   human_kb(there_bytes // 1024), where))
         else:
+            total = copied + failed
             self._show_backup_result(
-                _t("%d of %d files were copied. Some could not be read or did "
-                   "not arrive, so this is not a complete backup — try again, "
-                   "or copy the missing folders by hand in Finder.")
-                % (there, copied + failed), warn=True)
+                _t("%d of %d file%s reached the stick. This backup is "
+                   "incomplete. Try again, or copy the missing folders by hand "
+                   "in Finder.")
+                % (there, total, "" if total == 1 else "s"), warn=True)
         return False
 
     def _show_backup_result(self, text, warn=False):
@@ -2966,17 +2895,17 @@ class Settings(nbapp.AppWindow):
     # ---- Accessibility ----
     def _page_accessibility(self):
         outer, col = self._page("Accessibility",
-                                "Text size and contrast, in every app")
+                                "Text size and contrast")
         card = self._card(col)
         self._pref_switch(card, "Large text", "large_text", False, first=True,
-                          sub="Make the smallest text bigger, in every app",
+                          sub="Makes the smallest text bigger",
                           on_change=lambda _v: self._apply_accessibility())
         self._pref_switch(card, "High contrast", "high_contrast", False,
-                          sub="Deepen faint text and strengthen lines",
+                          sub="Deepens faint text and strengthens lines",
                           on_change=lambda _v: self._apply_accessibility())
-        self._note(col, "Both settings apply to every app, not only this "
-                        "window. An app that is already open keeps the look it "
-                        "started with until you close it and open it again.")
+        self._note(col, "Both settings apply to every app. An app that is "
+                        "already open keeps the look it started with until it "
+                        "is closed and opened again.")
         return outer
 
     def _apply_accessibility(self):
@@ -3014,8 +2943,6 @@ class Settings(nbapp.AppWindow):
             combo.connect("changed", self._on_defaultapp, exts)
             self._row_widget(card, label, combo, first=(i == 0))
             self._da_combos.append((exts, combo))
-        self._note(col, "Double-click a file in Finder and it opens in the app "
-                        "you choose here.")
         return outer
 
     def _on_defaultapp(self, combo, exts):
@@ -3080,7 +3007,7 @@ class Settings(nbapp.AppWindow):
         # and it was the one thing missing. "Device name" matches what the
         # System page calls the very same setting (it said "Hostname" here).
         rows = [("Version", nbapp.nb_version()),
-                ("Kernel", kernel or "—"), ("Device name", host),
+                ("System core", kernel or "—"), ("Device name", host),
                 ("Memory", human_kb(total) if total else "—"),
                 ("Storage", disk or "—"), ("Switched on for", self._uptime())]
         built = nbapp.os_release_field("BUILD_ID")
@@ -3192,12 +3119,6 @@ class Settings(nbapp.AppWindow):
            full-strength action (the Backup button before a stick is chosen) */
         .setprimary:disabled { background: #E0B8B0; border-color: #E0B8B0;
                     color: #FCFBF8; }
-
-        /* ---- backdrop swatches ---- */
-        .swatch { border: 1px solid #C9C4B6; border-radius: 2px;
-                  box-shadow: none; padding: 0; }
-        .swatch:hover { border-color: #9A9484; }
-        .swatch.selected { border: 2px solid #C8341E; }
 
         /* ---- native controls ---- */
         .setpage combobox button.combo { background: #FCFBF8; color: #1A1916;

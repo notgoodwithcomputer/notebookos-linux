@@ -9,7 +9,16 @@ echo "== notebook session starting =="
 export DISPLAY=:0
 export GTK_THEME=Papertone
 export XDG_DATA_DIRS=/usr/share
+# HOME was never exported here, so the session inherited whatever init left --
+# "/" in practice. Everything that caches under $HOME then wrote to the
+# filesystem root or failed: GStreamer keeps its PLUGIN REGISTRY in
+# $XDG_CACHE_HOME (else $HOME/.cache), and without a registry it cannot create
+# `playbin`, which is exactly the state where Music lists a track, highlights
+# it, and never plays a sound.
+export HOME=/root
 export XDG_CONFIG_HOME=/root/.config
+export XDG_CACHE_HOME=/root/.cache
+mkdir -p /root/.cache 2>/dev/null || true
 export XCURSOR_THEME=notebook
 export XCURSOR_SIZE=32
 export NB_HOME=/root
@@ -32,19 +41,11 @@ export NO_AT_BRIDGE=1
 # One xrandr invocation, not three: this runs before anything is on screen, and
 # on a CPU-rendered machine booting off a compressed read-only root every extra
 # process is a cold binary read. Ask once, parse the answer twice.
-XR=$(xrandr 2>/dev/null || true)
-OUT=$(printf '%s\n' "$XR" | awk '/ connected/{print $1; exit}')
-if [ -n "$OUT" ]; then
-	# On a mode-settable GPU (QEMU virtio-gpu), prefer 1920x1080 if the panel
-	# actually offers it; otherwise fall back to the native preferred mode.
-	if printf '%s\n' "$XR" | grep -qE "^\s+1920x1080"; then
-		xrandr --output "$OUT" --mode 1920x1080 2>/dev/null || \
-			xrandr --output "$OUT" --auto 2>/dev/null
-	else
-		xrandr --output "$OUT" --auto 2>/dev/null
-	fi
-fi
-unset XR
+# Every connected display, not just the first: see opt/notebook/display.sh.
+# A television on HDMI is a SECOND output, and taking only the first is why it
+# stayed dark. The same script runs again from a udev rule when a cable is
+# plugged in after boot.
+/opt/notebook/display.sh
 
 # never blank the screen — this is a single-seat appliance, and blanking
 # gets in the way of a walk-up demo / hardware bring-up. One xset, not three.
@@ -71,17 +72,11 @@ xset s off s noblank -dpms 2>/dev/null
 # right colour — a visible flash of the wrong colour plus a wasted CPython
 # start, a ps|grep|awk pipeline and a kill, every boot.
 #
-# Fully guarded: a missing/garbage settings.json or absent python just leaves
-# the default field, and the session proceeds. Pulled out with sed rather than a
-# whole python3 interpreter — starting CPython to read one hex string cost more
-# than everything else here combined. The `case` is what makes this safe:
-# anything that is not a literal #RRGGBB is ignored and the default stands.
-NB_BG=$(sed -n 's/.*"background"[[:space:]]*:[[:space:]]*"\(#[0-9A-Fa-f]\{3,8\}\)".*/\1/p' \
-	"${NB_HOME:-/root}/.config/notebook/settings.json" 2>/dev/null | head -1)
-case "$NB_BG" in
-	'#'*) ;;
-	*) NB_BG="#DED4C2" ;;      # papertone desktop field
-esac
+# One fixed colour. The alternate desktop colours were removed before release
+# (they mis-rendered behind the widget board), so this no longer reads
+# settings.json — a "background" left there by an older build must NOT come
+# back, because there is no longer a screen that could change it again.
+NB_BG="#DED4C2"                    # papertone desktop field, the only one
 
 # The field itself: one X round-trip, on screen immediately.
 xsetroot -solid "$NB_BG" 2>/dev/null
@@ -96,8 +91,37 @@ matchbox-window-manager -use_titlebar no -use_cursor yes \
 
 # A session dbus, so the GTK processes below all share one bus instead of each
 # autolaunching its own.
+#
+# BOUNDED, and it is the only step before the first pixel that is not. This runs
+# BEFORE the loading screen goes up, synchronously, and dbus-launch waits for the
+# daemon it forks to report its address back down a pipe. If that ever fails to
+# arrive -- a full /tmp, an exhausted fd table, a machine whose hostname will not
+# resolve -- the read blocks with nothing whatever on screen, and the user is
+# holding a laptop showing black. Ten seconds of a shared bus is worth waiting
+# for; forever is not. On timeout the session simply continues: every GTK app
+# below then autolaunches its own bus, which is what happened before there was a
+# session bus here at all, so the desktop still comes up.
+# NOTE: busybox in this image is built with CONFIG_TIMEOUT off, so timeout(1)
+# does NOT exist on the target and the bound below is currently inert -- writing
+# `timeout 10 dbus-launch` unconditionally would have made the command not-found,
+# left _dbus_env empty and quietly taken the session bus away from every app. To
+# arm it, add a board busybox fragment enabling CONFIG_TIMEOUT and point
+# BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES at it (buildroot's own
+# package/busybox/busybox.config is upstream's file and must not be edited).
 if command -v dbus-launch >/dev/null 2>&1; then
-	eval "$(dbus-launch --sh-syntax --exit-with-session)"
+	if command -v timeout >/dev/null 2>&1; then
+		_dbus_env=$(timeout 10 dbus-launch --sh-syntax --exit-with-session 2>/dev/null)
+	else
+		_dbus_env=$(dbus-launch --sh-syntax --exit-with-session 2>/dev/null)
+	fi
+	if [ -n "$_dbus_env" ]; then
+		eval "$_dbus_env"
+	else
+		# Not fatal: each GTK app then autolaunches its own bus, which is what
+		# happened before there was a session bus here at all.
+		echo "session: no session dbus; apps will use their own bus" >&2
+	fi
+	unset _dbus_env
 fi
 
 # Boot loading screen: the snail logo + "Notebook OS" + a filling progress bar,
@@ -106,6 +130,7 @@ fi
 # flag before it goes up. See splash.py.
 rm -f /tmp/nb-ready
 python3 /opt/notebook/de/splash.py &
+NB_SPLASH_PID=$!
 # ---------------------------------------------------------------------------
 
 # Keyboard layout from Region & Language (locale.json). Defaults to the UI
@@ -122,17 +147,29 @@ python3 /opt/notebook/de/splash.py &
 	NB_KBCMD="$(python3 -c 'import nbi18n; print(" ".join(nbi18n.xkb_args(nbi18n.keyboard())))' 2>/dev/null)"
 	${NB_KBCMD:-setxkbmap us} 2>/dev/null || setxkbmap us 2>/dev/null
 ) &
+# Remembered because the FIRST thing typed on this machine is the password, and
+# it has to be typed on the user's own layout. See the sign-in block below.
+NB_KB_PID=$!
 
 # Audio comes up MUTED on a fresh ALSA state, which reads as "sound doesn't
-# work" even with the right codec driver loaded. Un-mute and raise the common
-# output controls to a sensible default (best-effort across card naming). The
-# Settings ▸ Sound page drives volume from here on via amixer.
-# Ten process spawns (amixer x9 + alsactl) that nothing on screen depends on, so
-# they run in the BACKGROUND: audio just needs to be unmuted before the user
-# reaches for the volume, not before the first pixel is drawn. Keeping them on
-# the critical path delayed the splash by their whole runtime on every boot.
+# work" even with the right codec driver loaded. Un-mute the output controls,
+# raise them to a sensible default, and point ALSA's "default" device at the
+# speakers that are actually there — a television on HDMI if one is plugged in,
+# otherwise the built-in ones. See de/nbaudio.py for why all three are needed;
+# in short, HDMI is a different PCM device, its mute is IEC958 rather than
+# Master, and "default" otherwise follows card 0, which is a USB microphone the
+# moment one is plugged in.
+#
+# Backgrounded: nothing on screen depends on it, and audio only has to be ready
+# before the user reaches for the volume, not before the first pixel. Keeping
+# these process spawns on the critical path delayed the splash by their whole
+# runtime on every boot.
 if command -v amixer >/dev/null 2>&1; then
 	(
+		# The route first, because it pins ctl.!default to the card that is
+		# playing — without that, every amixer call below can land on the wrong
+		# card and silently do nothing.
+		python3 /opt/notebook/de/nbaudio.py apply >/dev/null 2>&1
 		for ctl in Master Speaker Headphone PCM Front "Front Speaker" Line-Out; do
 			amixer -q -M sset "$ctl" unmute 2>/dev/null
 		done
@@ -243,7 +280,17 @@ elif [ "$NB_ACCEL" = 1 ] || grep -qw nb.compositor=1 /proc/cmdline 2>/dev/null; 
 		# xrender is the right backend regardless: this desktop composites
 		# plain opaque rectangles and uses no shadow, fade or blur, so there
 		# is nothing for glx to accelerate.
-		picom --config /etc/picom.conf >/dev/null 2>&1 &
+		# --vsync ONLY on genuinely accelerated hardware. Presenting on the
+		# vertical blank is what makes window movement and scrolling look
+		# solid instead of torn; waiting for a blank that does not exist (a
+		# compositor forced on with nb.compositor=1 over software rendering)
+		# would stall the desktop instead, so the flag follows NB_ACCEL and
+		# not the config file.
+		if [ "$NB_ACCEL" = 1 ]; then
+			picom --config /etc/picom.conf --vsync >/dev/null 2>&1 &
+		else
+			picom --config /etc/picom.conf >/dev/null 2>&1 &
+		fi
 	elif command -v xcompmgr >/dev/null 2>&1; then
 		xcompmgr -n >/dev/null 2>&1 &   # last resort; see the note above
 	fi
@@ -267,6 +314,83 @@ fi
 # so it works regardless of which window has focus. Harmless where there is no
 # backlight (brightness keys just no-op).
 python3 /opt/notebook/de/nbmediakeys.py >/dev/null 2>&1 &
+
+# ---- sign in -------------------------------------------------------------
+# BEFORE anything of the desktop is drawn, and NOT backgrounded: the desktop
+# must not exist behind it.
+#
+# `login.py --needed` answers "would a sign-in screen appear?" from two small
+# file reads and one crypt call, without importing Gtk. Asking first buys three
+# things that cannot be had by simply running login.py:
+#
+#  1. THE LOADING SCREEN GETS OUT OF THE WAY. The splash and the sign-in screen
+#     are both full-screen, keep-above windows. Two of those on a WM that
+#     stacks by focus is a race, and the losing outcome is a person staring at
+#     "STARTING UP" while the prompt they need sits underneath it. So the
+#     splash is retired first (it dismisses on /tmp/nb-ready), and a fresh one
+#     goes up afterwards for the rest of the start-up — which the old order
+#     could not do either, because the splash's own 30s failsafe fires while
+#     somebody is still typing.
+#  2. THE KEYBOARD IS THE USER'S OWN. The layout job above is backgrounded, and
+#     the password is the first thing typed on this machine. On a French,
+#     Russian or Greek install, typing it on the US layout it starts out with
+#     produces a password that is simply wrong, with nothing on screen to say
+#     why. Bounded, so a wedged setxkbmap costs five seconds and not the boot.
+#  3. On a machine with no password — every live boot — nothing here loads Gtk
+#     at all, where before it loaded Gtk, nbapp and nbicons just to return 0.
+# ---- first-run setup, then sign in ---------------------------------------
+# BEFORE anything of the desktop is drawn, and NOT backgrounded: the desktop
+# must not exist behind either screen.
+#
+# Both gates ask first ("--needed") from a couple of small file reads, without
+# importing Gtk. That buys three things:
+#
+#  1. THE LOADING SCREEN GETS OUT OF THE WAY, ONCE. The splash and these
+#     screens are all full-screen keep-above windows, and on a WM that stacks
+#     by focus two of them is a race whose losing outcome is somebody staring
+#     at "STARTING UP" while the prompt they need sits underneath. So the
+#     splash is retired ONCE here and put back ONCE afterwards -- not per
+#     screen, which is how a machine with both ended up launching three.
+#  2. THE KEYBOARD IS THE USER'S OWN. The layout job above is backgrounded and
+#     the password is the first thing typed on this machine; on a French or
+#     Russian install, typing it on the US layout it starts out with produces a
+#     password that is simply wrong with nothing on screen to say why. Bounded,
+#     so a wedged setxkbmap costs five seconds and not the boot.
+#  3. On a machine with neither -- every live boot -- nothing here loads Gtk.
+NB_WANT_FIRSTRUN=0
+NB_WANT_LOGIN=0
+python3 /opt/notebook/de/firstrun.py --needed && NB_WANT_FIRSTRUN=1
+python3 /opt/notebook/de/login.py --needed && NB_WANT_LOGIN=1
+
+if [ "$NB_WANT_FIRSTRUN" = 1 ] || [ "$NB_WANT_LOGIN" = 1 ]; then
+	touch /tmp/nb-ready
+	_i=0
+	while [ "$_i" -lt 5 ] && kill -0 "$NB_KB_PID" 2>/dev/null; do
+		sleep 1
+		_i=$((_i + 1))
+	done
+	unset _i
+	# First-run comes first: on a machine set up for somebody else there is no
+	# password yet, and this screen is where one gets chosen.
+	if [ "$NB_WANT_FIRSTRUN" = 1 ]; then
+		python3 /opt/notebook/de/firstrun.py
+		# It may have just set a password, so ask again rather than trusting
+		# the answer from before it ran.
+		NB_WANT_LOGIN=0
+		python3 /opt/notebook/de/login.py --needed && NB_WANT_LOGIN=1
+	fi
+	if [ "$NB_WANT_LOGIN" = 1 ]; then
+		python3 /opt/notebook/de/login.py
+	fi
+	# Put a loading screen back for the rest of the start-up: the first one has
+	# retired by now (the touch above), and its 30s failsafe would otherwise
+	# expire while somebody is still typing.
+	rm -f /tmp/nb-ready
+	if ! kill -0 "$NB_SPLASH_PID" 2>/dev/null; then
+		python3 /opt/notebook/de/splash.py &
+		NB_SPLASH_PID=$!
+	fi
+fi
 
 python3 /opt/notebook/de/finder.py &
 

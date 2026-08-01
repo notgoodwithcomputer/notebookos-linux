@@ -2,6 +2,17 @@
 """Headless test for the Finder's whole-filesystem (absolute-path) navigation
 and the real-devices sidebar."""
 import os
+import tempfile
+
+# finder.HOME is read at IMPORT time and defaults to the CALLER'S REAL HOME.
+# Pin a throwaway one first: without it this walks (and the sibling suites
+# write into) the developer's own Documents/.Trash, and the single-instance
+# guard shares the unscoped /tmp/nb-apps with any real app, which would make
+# claim_single_instance() os._exit(0) mid-suite -- a silent, green "pass".
+os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="nbfinder-fs-"))
+for _d in ("Documents", "Applications", "Pictures", "Music", "Videos"):
+    os.makedirs(os.path.join(os.environ["NB_HOME"], _d), exist_ok=True)
+
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")

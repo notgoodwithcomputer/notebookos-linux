@@ -34,7 +34,7 @@ defect you must fix (740 = 768 minus the 28px top panel):
 ```
 writer 1321x156   journal 1060x161   academic 1080x236  cookbook 1065x521
 calendar 1203x450 illustrator 1124x370  sequencer 488x1029  video 1160x676
-packages 1142x475 settings 1372x130  tasks 1079x398    gbaide 889x1053
+packages 1142x475 settings 1372x130  tasks 1079x398    gbasdk 889x1053
 ```
 
 **Target: every app must lay out correctly at 1024x740 and look right at

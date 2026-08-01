@@ -28,11 +28,11 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 import uishot  # noqa: E402
 
-APPS = ["academic", "calculator", "accounting", "calendar", "cookbook",
-        "contacts", "g2048", "ebook", "gbaemu", "illustrator", "media",
-        "journal", "maps", "gbaide", "packages", "language", "novel",
-        "screenplay", "settings", "sysmon", "tasks", "writer", "music",
-        "video", "sequencer", "terminal"]
+# Derived from the desktop's own launch table so a newly added app is swept
+# automatically — a hardcoded list silently stopped covering the apps added
+# after it was written. installer is skipped: it enumerates real block devices.
+import finder as _finder  # noqa: E402
+APPS = sorted(set(_finder.APP_MODULES.values()) - {"installer"})
 
 out = sys.argv[1]
 sizes = [tuple(int(v) for v in s.split("x")) for s in sys.argv[2:]] or \
@@ -41,9 +41,15 @@ os.makedirs(out, exist_ok=True)
 os.environ.setdefault("NB_HOME", os.path.join(out, "nbhome"))
 os.makedirs(os.environ["NB_HOME"], exist_ok=True)
 uishot.load_theme()
+import nbapp  # noqa: E402
 
 for (W, H) in sizes:
     print("\n=== %dx%d ===" % (W, H))
+    # An app that derives its layout from the panel must be told which panel it
+    # is being allocated on, or it sizes for the developer's monitor and this
+    # sweep measures a squeeze that no user will ever see. Same patch, same
+    # reason, as minsize_sweep.measure_one.
+    nbapp.screen_size = lambda W=W, H=H: (W, H)
     for name in APPS:
         try:
             if name in sys.modules:

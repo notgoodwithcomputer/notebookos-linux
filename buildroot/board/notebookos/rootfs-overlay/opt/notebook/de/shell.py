@@ -20,6 +20,11 @@ from gi.repository import Gtk, Gdk, GLib, Pango, GdkX11  # noqa: E402,F401
 import time
 import os
 import json
+
+# Raised by the Media Viewer while a video plays edge-to-edge; see
+# _poll_video_full. Holds the player's PID so a stale flag cannot strand the
+# desktop with no menu bar.
+VIDEO_FULL_FLAG = "/tmp/nb-video-fullscreen"
 # subprocess is imported lazily inside the functions that spawn processes
 # (launch / _paint_below_bar / _power / _do_power). None of those run during
 # construct or the first paint, so the boot-foreground panel never pays the
@@ -255,6 +260,34 @@ class Panel(Gtk.Window):
         except Exception:
             pass
         return False
+
+    # ---- video fullscreen ----
+    def _poll_video_full(self):
+        """Stand down while a video is playing edge-to-edge.
+
+        This bar is a DOCK with keep-above, so it paints OVER a fullscreen app
+        window — which meant the Media Viewer's fullscreen was fullscreen
+        everywhere except the top 46px, where the menu bar sat across the
+        picture. The player raises a flag; we get out of the way.
+
+        The flag carries the player's PID and we check it is still alive, so a
+        player that dies mid-film cannot leave the machine with no menu bar."""
+        want_hidden = False
+        try:
+            with open(VIDEO_FULL_FLAG) as fh:
+                pid = fh.read().strip()
+            want_hidden = bool(pid) and os.path.isdir("/proc/" + pid)
+            if not want_hidden:
+                os.remove(VIDEO_FULL_FLAG)     # stale: its owner is gone
+        except (OSError, ValueError):
+            want_hidden = False
+        if want_hidden and self.get_visible():
+            self.hide()
+        elif not want_hidden and not self.get_visible():
+            self.show()
+            self._reserve_strut()
+            self._apply_shape()
+        return True
 
     # ---- shape mask ----
     def _on_realize(self, *_):
@@ -645,13 +678,74 @@ class Panel(Gtk.Window):
             body = "The clipboard contains only blank space."
         else:
             body = text if len(text) <= 2000 else text[:2000] + "\n…"
-        dlg = Gtk.MessageDialog(
-            transient_for=None, modal=True, message_type=Gtk.MessageType.OTHER,
-            buttons=Gtk.ButtonsType.OK, text="Clipboard")
-        dlg.format_secondary_text(body)
+        self._card_dialog(_t("Clipboard"), body, scroll_body=True)
+
+    def _card_dialog(self, heading, body, ok_label=None, danger=False,
+                     scroll_body=False):
+        """An undecorated Papertone dialog card — the shape every app in this OS
+        uses for a confirm.
+
+        These two were the last stock Gtk.MessageDialogs in the desktop shell.
+        A MessageDialog arrives wearing the window manager's title bar and
+        Adwaita's grey, which on a Papertone desktop reads as a window from a
+        different computer — and one of them is the Shut Down confirm, which is
+        among the most-seen dialogs in the system.
+
+        Returns True only when the confirming button was pressed. With no
+        `ok_label` it is a plain acknowledgement card with one Close button.
+        """
+        dlg = Gtk.Dialog(transient_for=None, modal=True)
+        dlg.set_decorated(False)
         dlg.set_position(Gtk.WindowPosition.CENTER)
-        dlg.run()
+        dlg.get_style_context().add_class("pdlg")
+        area = dlg.get_content_area()
+        area.set_spacing(0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.get_style_context().add_class("pdlgbox")
+        hd = Gtk.Label(label=heading, xalign=0)
+        hd.get_style_context().add_class("pdlgtitle")
+        box.pack_start(hd, False, False, 0)
+
+        msg = Gtk.Label(label=body, xalign=0)
+        msg.get_style_context().add_class("pdlgmsg")
+        msg.set_line_wrap(True)
+        msg.set_width_chars(40)
+        msg.set_max_width_chars(46)
+        if scroll_body:
+            # The clipboard can hold a whole document; it must not be allowed to
+            # inflate the card past the edges of the screen.
+            msg.set_selectable(True)
+            sw = Gtk.ScrolledWindow()
+            sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            sw.set_size_request(-1, 260)
+            sw.add(msg)
+            box.pack_start(sw, True, True, 0)
+        else:
+            box.pack_start(msg, False, False, 0)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        cancel = Gtk.Button(label=_t("Cancel") if ok_label else _t("Close"))
+        cancel.get_style_context().add_class("pdlgcancel")
+        cancel.connect("clicked",
+                       lambda *_: dlg.response(Gtk.ResponseType.CANCEL))
+        row.pack_end(cancel, False, False, 0)
+        if ok_label:
+            ok = Gtk.Button(label=ok_label)
+            ok.get_style_context().add_class("danger" if danger else "pdlgok")
+            ok.connect("clicked", lambda *_: dlg.response(Gtk.ResponseType.OK))
+            row.pack_end(ok, False, False, 0)
+        box.pack_start(row, False, False, 0)
+        area.add(box)
+        # Cancel is the default and holds focus, so a stray Return or Escape can
+        # never power the machine off.
+        cancel.set_can_default(True)
+        dlg.set_default(cancel)
+        dlg.set_default_response(Gtk.ResponseType.CANCEL)
+        dlg.show_all()
+        cancel.grab_focus()
+        resp = dlg.run()
         dlg.destroy()
+        return resp == Gtk.ResponseType.OK
 
     def _label_menu(self, button):
         # Mac OS 7 Finder "Label" menu: "None" plus a set of named colour
@@ -692,7 +786,7 @@ class Panel(Gtk.Window):
         """Rename the six labels, Mac OS 7 Labels-control-panel style: one row
         per label, its colour swatch beside an entry holding the name."""
         dlg = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        dlg.set_title("Labels")
+        dlg.set_title(_t("Labels"))
         dlg.set_modal(True)
         dlg.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         dlg.set_resizable(False)
@@ -705,10 +799,10 @@ class Panel(Gtk.Window):
         box.set_margin_start(34); box.set_margin_end(34)
         dlg.add(box)
 
-        head = Gtk.Label(label="Labels", xalign=0)
+        head = Gtk.Label(label=_t("Labels"), xalign=0)
         head.get_style_context().add_class("nbabout-name")
         box.pack_start(head, False, False, 0)
-        sub = Gtk.Label(label="Rename the labels in the Label menu.", xalign=0)
+        sub = Gtk.Label(label=_t("Rename the labels in the Label menu."), xalign=0)
         sub.get_style_context().add_class("nbabout-key")
         sub.set_margin_bottom(16)
         box.pack_start(sub, False, False, 0)
@@ -808,9 +902,9 @@ class Panel(Gtk.Window):
         Deliberately free of marketing copy: it used to lead with "Offline by
         design.", which describes the product rather than this machine. What
         belongs here is what the user cannot otherwise look up — the release,
-        the kernel it is running, and the date the image was built."""
+        the system core it is running, and the date the image was built."""
         dlg = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        dlg.set_title("About This Notebook")
+        dlg.set_title(_t("About This Notebook"))
         dlg.set_modal(True)
         dlg.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         dlg.set_resizable(False)
@@ -848,10 +942,12 @@ class Panel(Gtk.Window):
         rows = []
         kernel = read_first_line("/proc/sys/kernel/osrelease")
         if kernel:
-            rows.append(("Kernel", kernel))
+            # Same two labels the Settings About page uses for these exact
+            # values — one machine fact cannot have two names in one OS.
+            rows.append(("System core", kernel))
         built = nbapp.os_release_field("BUILD_ID")
         if built:
-            rows.append(("Compiled", built))
+            rows.append(("Built", built))
         mem = self._about_memory()
         if mem:
             rows.append(("Memory", mem))
@@ -903,7 +999,7 @@ class Panel(Gtk.Window):
             try:
                 import subprocess
                 subprocess.Popen(["sh", "-c",
-                                  "xset +dpms; xset dpms force off"])
+                                  "xset +dpms; xset dpms force off; python3 /opt/notebook/de/login.py --lock"])
             except OSError:
                 pass
         else:
@@ -911,21 +1007,9 @@ class Panel(Gtk.Window):
 
     def _confirm_power(self, mode):
         verb = "Shut Down" if mode == "poweroff" else "Restart"
-        dlg = Gtk.MessageDialog(
-            transient_for=None, modal=True,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.NONE, text="%s?" % verb)
-        dlg.format_secondary_text("Unsaved work in open apps will be lost.")
-        dlg.set_position(Gtk.WindowPosition.CENTER)
-        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        confirm = dlg.add_button(verb, Gtk.ResponseType.OK)
-        # signage red marks the alert/destructive action, per the design system.
-        confirm.get_style_context().add_class("danger")
-        # Cancel is the default so a stray Return or Escape can never power off.
-        dlg.set_default_response(Gtk.ResponseType.CANCEL)
-        resp = dlg.run()
-        dlg.destroy()
-        if resp == Gtk.ResponseType.OK:
+        if self._card_dialog(_t("%s?") % _t(verb),
+                             _t("Unsaved work in open apps will be lost."),
+                             ok_label=_t(verb), danger=True):
             self._do_power(mode)
 
     def _do_power(self, mode):
@@ -1139,6 +1223,18 @@ menuitem.sysmenu-item:selected { background: #EAE3D2; }
   min-width: 8px; min-height: 30px;
 }
 .sysmenu-scroll scrollbar slider:hover { background: #9A9484; }
+
+/* The desktop shell's dialog card: same paper, rule and type as every app's
+   confirm, so a system question does not look like a window from another
+   computer. Undecorated, so it carries no window-manager title bar. */
+.pdlg { background: #FCFBF8; border: 1px solid #C9C4B6; }
+.pdlgbox { padding: 20px 22px 18px 22px; }
+.pdlgtitle { font-family: "Newsreader","Liberation Serif",serif;
+             font-size: 19px; color: #1A1916; }
+.pdlgmsg { font-size: 13px; color: #2A2620; }
+.pdlgcancel, .pdlgok { padding: 4px 16px; }
+.pdlgok { background: #1A1916; color: #FCFBF8; border: 1px solid #1A1916; }
+.pdlgok label { color: #FCFBF8; }
 
 /* destructive confirm button (Restart / Shut Down): signage red, the design
    system's one accent for an alert. The label needs naming separately: the

@@ -4,7 +4,7 @@ Sequencer — Notebook OS multitrack tone sequencer (native GTK).
 
 A transport deck (rewind / fast-forward / stop / play / record) above an
 8-track timeline. Each track carries an instrument-voice selector, arm, mute,
-solo, gain and pan; a playhead sweeps the lanes and recording an armed track
+solo and gain; a playhead sweeps the lanes and recording an armed track
 commits a take clip. Global controls: tempo (BPM), metronome, pattern length,
 varispeed pitch and master level.
 
@@ -94,6 +94,10 @@ _VOICE = {n: (o, p) for (n, o, p) in VOICES}         # name -> (octave, perc)
 
 # ---- tone engine tuning ----
 SR = 48000            # synth sample rate (mono, S16LE)
+# The transport runs on a 100 ms tick and varispeed stretches it by up to
+# +12%, so a take the playhead has just stepped into is up to 0.112 s "late".
+# Anything inside that window counts as entering the clip at its start.
+TICK_SLACK = 0.13
 SR_KHZ = "%d kHz" % (SR // 1000)                     # honest rate label (UI)
 BLOCK = 2048          # samples pushed per appsrc need-data (≈23 blocks/sec)
 _TSIZE = 2048         # sine wavetable length (power of two, phase-masked)
@@ -147,12 +151,28 @@ def capture_devices():
     so a USB microphone or a USB audio interface shows up exactly like the
     built-in codec does — the kernel has CONFIG_SND_USB_AUDIO=y, so any
     USB-audio-class device enumerates as its own card and needs no extra
-    driver. The returned name is "hw:<card>,<device>", which addresses that
+    driver. The returned name is "plughw:<card>,<device>", which addresses that
     input directly rather than whatever ALSA happens to call "default".
 
-    Always returns at least the system default, and never raises: with no
-    arecord, no sound card, or a device that appears mid-session, the caller
-    still gets a usable list."""
+    "plughw", NOT "hw", AND THIS IS NOT COSMETIC. A raw "hw:" name hands the
+    application the hardware's own format, take it or leave it, and a capture
+    PCM is almost never willing to give one channel: measured on real hardware,
+    a HyperX USB microphone and an Intel HDA analog input BOTH publish
+    "CHANNELS: 2" and nothing else. The take is recorded as mono (one channel is
+    what a microphone lane is), so every one of them answered
+
+        arecord: set_params: Channels count non available
+
+    and exited at once. Recording was therefore impossible on ordinary hardware:
+    the take simply never appeared. "plughw" is the same device with alsa-lib's
+    conversion layer in front of it, which is what turns the request into
+    something the card accepts — the identical reason nbaudio's asound.conf puts
+    `plug` in front of the playback and capture slaves it writes.
+
+    Returns an EMPTY list on a machine with no capture hardware, so the Input
+    menu can honestly say there is no microphone instead of ticking a "system
+    default" that can never record. Never raises: a device that appears
+    mid-session is picked up the next time the menu opens."""
     devs = []
     if _have("arecord"):
         try:
@@ -167,13 +187,61 @@ def capture_devices():
                 label = cname.strip()
                 if dname.strip() and dname.strip().lower() != label.lower():
                     label = "%s - %s" % (label, dname.strip())
-                devs.append(("hw:%s,%s" % (card, dev), label))
+                devs.append(("plughw:%s,%s" % (card, dev), label))
+            if not devs and any(ln.strip().startswith("card ")
+                                for ln in out.splitlines()):
+                # the tool listed hardware in a shape this parser didn't know:
+                # fall back to the system default rather than declare a
+                # machine that plainly has an input to be deaf
+                devs.append(("default", "System default input"))
         except Exception:
             pass
-    # The system default last: a named device is the honest choice when one
-    # exists, but there must always be something selectable.
-    devs.append(("default", "System default input"))
+    # No unconditional "System default input": a machine with no capture
+    # hardware used to show a ticked input that could never record, and
+    # "No microphone or input found" could never be reached.
     return devs
+
+
+class StackHistory:
+    """Presents this app's own two-stack history to nbapp.undo_menu_items.
+
+    The Sequencer banks whole-arrangement snapshots rather than the text
+    checkpoints nbapp.UndoHistory takes, so it cannot use that class directly -
+    but its Edit menu must still be worded exactly as Novel, Journal, Academics
+    and Illustrator word theirs, naming what a step would take back ("Undo
+    Clear All Takes"). This is the six methods undo_menu_items asks for, over
+    the stacks the app already keeps. A snapshot banked without a name gives
+    the bare "Undo", which is right for drawing a part in a lane."""
+
+    def __init__(self, app):
+        # the app, not its lists: New / Open REPLACE the stacks
+        self._app = app
+
+    def can_undo(self):
+        return bool(self._app._undo_stack)
+
+    def can_redo(self):
+        return bool(self._app._redo_stack)
+
+    def undo(self):
+        return self._app._undo()
+
+    def redo(self):
+        return self._app._redo()
+
+    @staticmethod
+    def _top(names):
+        # translated here, exactly as nbapp.UndoHistory._label_at does
+        if not names or not names[-1]:
+            return None
+        # translate, THEN trim the ellipsis, exactly as UndoHistory does
+        return _t(names[-1]).rstrip(" \u2026")
+
+    def undo_label(self):
+        return self._top(self._app._undo_names)
+
+    def redo_label(self):
+        return self._top(self._app._redo_names)
 
 
 class Recorder:
@@ -260,14 +328,62 @@ class Player:
     def __init__(self):
         self.procs = []
 
-    def play(self, path, seek_s=0.0):
+    def play(self, path, seek_s=0.0, gain=1.0):
+        """Sound one take. `gain` is the lane's fader times the master, 0..2.
+
+        THE FADERS USED TO DO NOTHING TO A RECORDED TAKE. aplay has no volume of
+        its own, so a take played at full scale whatever the track's Gain and the
+        Master said — pull Master to zero and the synth lanes went quiet while
+        every recording carried on at full volume. Mute and Solo were already
+        honoured (the caller gates on _audible), which made the two faders the
+        odd ones out. ffmpeg's `volume` filter is the same stage the seek path
+        below already relies on, so a level costs nothing new; unity gain keeps
+        the direct one-process path."""
         if not (_have("aplay") and path and os.path.exists(path)):
             return
-        # aplay cannot seek, so a clip entered mid-way is skipped rather than
-        # played from its start (which would sound out of time).
-        if seek_s > 0.05:
-            return
+        # The playhead advances a WHOLE tick before the app asks which clips it
+        # has entered, so a take entered at its very start always arrives here
+        # with about one tick of offset. Treating that as "mid-way" dropped
+        # every take on every pass — a recording that could never be heard.
+        if seek_s <= TICK_SLACK:
+            seek_s = 0.0
         try:
+            gain = max(0.0, min(2.0, float(gain)))
+        except (TypeError, ValueError):
+            gain = 1.0
+        # a fader all the way down means silence, not "play it anyway"
+        if gain <= 0.001:
+            return
+        level = abs(gain - 1.0) > 0.005
+        try:
+            if seek_s > 0.0 or level:
+                # aplay can neither seek nor set a level; decode through ffmpeg
+                # and pipe a fresh WAV stream into it, so a clip the playhead
+                # lands inside (after a seek) still sounds in time, and at the
+                # level the faders are set to.
+                if not _have("ffmpeg"):
+                    # no ffmpeg: sounding the take at the wrong level is far
+                    # better than a recording that cannot be heard at all
+                    self.procs.append(subprocess.Popen(
+                        ["aplay", "-q", path], stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL))
+                    return
+                cmd = ["ffmpeg", "-v", "quiet"]
+                if seek_s > 0.0:
+                    cmd += ["-ss", "%.3f" % seek_s]
+                cmd += ["-i", path]
+                if level:
+                    cmd += ["-filter:a", "volume=%.3f" % gain]
+                cmd += ["-f", "wav", "-"]
+                src = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                snk = subprocess.Popen(
+                    ["aplay", "-q", "-"], stdin=src.stdout,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                src.stdout.close()   # aplay owns the read end now
+                self.procs.append(src)
+                self.procs.append(snk)
+                return
             self.procs.append(subprocess.Popen(
                 ["aplay", "-q", path],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
@@ -558,9 +674,12 @@ class Lane(Gtk.DrawingArea):
             cr.rectangle(x + 0.5, top + 0.5, cw - 1, ch - 1)
             cr.stroke()
             cr.set_dash([])
-        # playhead
+        # The playhead is a POSITION, not an alert: ink, by the same rule the
+        # drag preview above follows. In red it competed with the REC chips and
+        # the recording region for the one signage colour, and it is on screen
+        # at all times - including when nothing is being recorded at all.
         px = self.app.pos / L * W
-        cr.set_source_rgb(*RED)
+        cr.set_source_rgb(*INK)
         cr.rectangle(round(px) - 1, 0, 2, H)
         cr.fill()
         self._play_px = px
@@ -744,26 +863,51 @@ class ToneEngine:
     _TABLE = [math.sin(2 * math.pi * i / _TSIZE) for i in range(_TSIZE)]
     _SILENCE = bytes(BLOCK * 2)
 
+    # A failed sink is retried on the NEXT press of Play / Record, at most this
+    # many times. See start().
+    RETRIES = 3
+
     def __init__(self):
         self.available = False    # True once the pipeline is actually streaming
         self.failed = False       # True once we tried and Gst / the sink refused
         self._pipe = None
         self._src = None
         self._started = False
+        self._tries = 0           # how many times we have built the pipeline
         self._lock = threading.Lock()
         # each voice: [freq, phase, pos_samples, n_samples, amp, perc]
         self._voices = []
 
     # -- lifecycle -------------------------------------------------------
     def start(self):
-        """Build + play the pipeline on first use (idempotent). Latches
-        ``failed`` and returns False on any error so callers fall to silence."""
-        if self._started:
-            return self.available
+        """Build + play the pipeline on first use (idempotent). Sets ``failed``
+        and returns False on any error so callers fall to silence.
+
+        A FAILURE IS NOT FINAL. This used to latch for the life of the process:
+        one refusal from the sink and the window read "No sound on this
+        computer" until the app was closed and reopened, however many times Play
+        was pressed. That is the wrong lifetime for a shared device — the sound
+        card may not have settled yet on the first Play after boot, another
+        program may have had it for a moment, and Settings > Sound can point
+        `default` at a different card while this window is open (nbaudio
+        rewrites /etc/asound.conf), which is precisely a case where the next try
+        would succeed. start() is only ever called from an explicit Play or
+        Record, so retrying costs one pipeline per button press and is bounded
+        at RETRIES so a machine with genuinely no sound card settles into
+        silence instead of rebuilding for ever."""
+        if self.available:
+            return True
+        if self._started and (not GST_OK or self._tries >= self.RETRIES):
+            return False
         self._started = True
+        self._tries += 1
         if not GST_OK:
             self.failed = True
             return False
+        # a previous attempt may have left a pipeline in NULL — drop it first so
+        # a retry never leaks one
+        self._teardown()
+        self.failed = False
         try:
             Gst.init(None)
             self._pipe = Gst.parse_launch(
@@ -802,6 +946,10 @@ class ToneEngine:
                 self._pipe.set_state(Gst.State.NULL)
         except Exception:
             pass
+        # drop the references too, so a retry (see start()) cannot keep the old
+        # pipeline — and its hold on the sound device — alive behind the new one
+        self._pipe = None
+        self._src = None
         with self._lock:
             self._voices = []
 
@@ -891,18 +1039,26 @@ class Sequencer(nbapp.AppWindow):
         self._runner_id = None     # 100ms transport tick source, when engaged
         self._undo_stack = []      # arrangement snapshots, newest last
         self._redo_stack = []
+        # what each snapshot would take back, for the Edit menu ("Undo Clear
+        # All Takes"). None = an edit that needs no name (drawing a part).
+        self._undo_names = []
+        self._redo_names = []
+        self.history = StackHistory(self)
         self._rendered = {}        # last-rendered values, so refresh() only
         #                            rewrites a widget when its value changed
         # real sound engine (lazily started on first Play/Record) + beat tracker
         self.engine = ToneEngine()
         self._last_beat = None
+        # what the engine is ACTUALLY voicing per lane, so the meters read the
+        # sound rather than an animation: (amplitude, started_at, seconds, perc)
+        self._vu_note = [None] * TRACKS
         # capture (Mic tracks) — see Recorder / Player / capture_devices
         self.recorder = Recorder()
         self.player = Player()
         self._cap_device = None      # ALSA name; None = first available
         self._played = set()         # clips already triggered this pass
         # tempo, metronome, length, pitch, master and the 8 tracks
-        # (name/input/arm/mute/solo/gain/pan/clips) are restored from disk; a
+        # (name/input/arm/mute/solo/gain/clips) are restored from disk; a
         # fresh install yields the empty default tape.
         self._load_state()
 
@@ -926,7 +1082,7 @@ class Sequencer(nbapp.AppWindow):
         return [
             {"name": "Track %d" % (i + 1), "input": "Synth",
              "armed": False, "muted": False, "solo": False,
-             "gain": 80, "pan": 50, "clips": []}
+             "gain": 80, "clips": []}
             for i in range(TRACKS)
         ]
 
@@ -970,7 +1126,6 @@ class Sequencer(nbapp.AppWindow):
             "muted": bool(t.get("muted")),
             "solo": bool(t.get("solo")),
             "gain": _clampi(t.get("gain"), 0, 100, 80),
-            "pan": _clampi(t.get("pan"), 0, 100, 50),
             "clips": clips,
         }
 
@@ -1002,12 +1157,62 @@ class Sequencer(nbapp.AppWindow):
     def _load_state(self):
         """Restore the last session from sequencer.json (session recovery)."""
         data = None
+        parsed = False
         try:
             with open(CFG_FILE) as fh:
                 data = json.load(fh)
+            parsed = True
         except Exception:
             data = None
+        if parsed and not self._is_project(data):
+            self._quarantine()
         self._apply(data)
+
+    @staticmethod
+    def _is_project(data):
+        """Whether `data` is recognisable as something this app wrote. Every
+        store _serialize produces carries a non-empty "tracks" list (a project
+        always has TRACKS of them, even when they are all empty), and every
+        entry in it is a dict carrying both "name" and "clips", so this cannot
+        misfire on our own file — including a brand-new empty project.
+
+        CHECKING THE LIST ITSELF, not just that it IS a list, is the whole
+        point. "tracks" holding eight strings (or numbers, or dicts of
+        something else) passed the old test, so nothing was quarantined:
+        _norm_track then rejected every entry and fell back to the eight
+        default tracks, the close-time autosave wrote those over the store, and
+        because a blank eight-track tape OUTWEIGHS the damaged store,
+        nbapp._bak_would_shrink could not tell the .bak refresh on the SECOND
+        open was a regression — so the only remaining copy of the take list was
+        overwritten with blankness. Two opens, two closes, no user action."""
+        if not (isinstance(data, dict) and isinstance(data.get("tracks"), list)
+                and data["tracks"]):
+            return False
+        return all(isinstance(t, dict) and "name" in t and "clips" in t
+                   for t in data["tracks"])
+
+    def _quarantine(self):
+        """Move a store this app cannot read as a project aside, under the same
+        <name>.damaged-<timestamp> name nbapp.preserve_damaged uses.
+
+        nbapp quarantines any store that fails to PARSE. It deliberately cannot
+        cover this case: valid JSON of the wrong shape parses perfectly, and only
+        this app knows the shape is not a project. Without this the app opens on
+        its blank default and the close-time autosave writes that blankness over
+        the file. nbapp's one .bak is not enough on its own here — a blank
+        sequencer project is four named tracks, which outweighs the store it
+        replaced, so the .bak guard cannot tell this is a regression (see
+        nbapp._bak_would_shrink)."""
+        try:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            dest = "%s.damaged-%s" % (CFG_FILE, stamp)
+            n = 2
+            while os.path.exists(dest):
+                dest = "%s.damaged-%s-%d" % (CFG_FILE, stamp, n)
+                n += 1
+            os.replace(CFG_FILE, dest)
+        except OSError:
+            pass
 
     def _serialize(self):
         """The full project as a plain dict (autosave and File ▸ Save share it)."""
@@ -1022,7 +1227,7 @@ class Sequencer(nbapp.AppWindow):
             "tracks": [
                 {"name": tk["name"], "input": tk["input"],
                  "armed": tk["armed"], "muted": tk["muted"],
-                 "solo": tk["solo"], "gain": tk["gain"], "pan": tk["pan"],
+                 "solo": tk["solo"], "gain": tk["gain"],
                  "clips": [([s, e, w] if w else [s, e])
                            for (s, e, w) in map(clip_parts, tk["clips"])]}
                 for tk in self.tracks
@@ -1063,7 +1268,7 @@ class Sequencer(nbapp.AppWindow):
     def _arrangement(self):
         """The part of a project a single click can destroy: the tape length,
         and each track's takes, name, instrument and switches.
-        The continuous mix controls (gain, pan, tempo, pitch, master) are
+        The continuous mix controls (gain, tempo, pitch, master) are
         deliberately NOT in here — they are visible on their own faders and
         putting one back is a drag, not a lost recording. Leaving them out keeps
         Undo from moving a control the user never touched."""
@@ -1089,15 +1294,21 @@ class Sequencer(nbapp.AppWindow):
         if self.rec_start is not None:
             self.rec_start = min(self.rec_start, self.length)
 
-    def _remember(self):
+    def _remember(self, name=None):
         """Bank the arrangement so the edit about to happen can be undone. Any
-        fresh edit makes the redone future unreachable, so the Redo trail goes."""
+        fresh edit makes the redone future unreachable, so the Redo trail goes.
+
+        `name` is the menu wording of the edit being made, which the Edit menu
+        shows ("Undo Clear All Takes"); None for one that needs no name."""
         self._undo_stack.append(self._arrangement())
+        self._undo_names.append(name)
         if len(self._undo_stack) > UNDO_DEPTH:
             self._undo_stack.pop(0)
+            self._undo_names.pop(0)
         self._redo_stack = []
+        self._redo_names = []
 
-    def _step_history(self, take, give):
+    def _step_history(self, take, give, take_names, give_names):
         """Move one snapshot from `take` to `give` and adopt it. Undo and Redo
         are the same operation with the stacks swapped."""
         # End a take in flight first: it would otherwise be committed on top of
@@ -1108,8 +1319,10 @@ class Sequencer(nbapp.AppWindow):
         if not take:
             return False
         give.append(self._arrangement())
+        give_names.append(take_names.pop() if take_names else None)
         if len(give) > UNDO_DEPTH:
             give.pop(0)
+            give_names.pop(0)
         self._restore_arrangement(take.pop())
         self._sync_controls()       # names / instruments back into the heads
         self._update_length_btn()
@@ -1119,10 +1332,12 @@ class Sequencer(nbapp.AppWindow):
         return True
 
     def _undo(self):
-        self._step_history(self._undo_stack, self._redo_stack)
+        self._step_history(self._undo_stack, self._redo_stack,
+                           self._undo_names, self._redo_names)
 
     def _redo(self):
-        self._step_history(self._redo_stack, self._undo_stack)
+        self._step_history(self._redo_stack, self._undo_stack,
+                           self._redo_names, self._undo_names)
 
     def _on_destroy(self, *_):
         # never leave an arecord/aplay child running past the window
@@ -1163,20 +1378,24 @@ class Sequencer(nbapp.AppWindow):
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception:
-            self._flash("Couldn't open that project")
+            self._flash(_t("Couldn't open that project"))
             return False
         # Every app writes JSON into the shared Documents folder, so a readable
         # dict is not proof this is ours. Verify the Sequencer project shape
         # BEFORE mutating anything — adopting a foreign file would wipe the
         # tracks, overwrite session recovery with the empty default, and let a
         # later Save clobber that file. On mismatch flash and change nothing.
-        if not isinstance(data, dict) or not isinstance(data.get("tracks"),
-                                                         list):
-            self._flash("That file isn't a Sequencer project")
+        # ONE definition of "is this ours" (_is_project), shared with session
+        # recovery. This used to accept any dict with a "tracks" LIST in it,
+        # whatever the list held, so a foreign or damaged file was adopted: the
+        # tape went blank, _save() wrote that blankness over session recovery,
+        # and _path pointed at the user's file so the next Save clobbered it too.
+        if not self._is_project(data):
+            self._flash(_t("That file isn't a Sequencer project"))
             return False
         if self.transport == "rec":
             self._stop_transport()
-        self._remember()   # opening the wrong project is one step back
+        self._remember("Open")   # opening the wrong project is one step back
         self._apply(data)
         self._path = path
         self._sync_controls()
@@ -1200,7 +1419,7 @@ class Sequencer(nbapp.AppWindow):
     def _do_file_new(self):
         if self.transport == "rec":
             self._stop_transport()
-        self._remember()
+        self._remember("New Project")
         self._apply({})
         self._path = None
         self._sync_controls()
@@ -1230,7 +1449,7 @@ class Sequencer(nbapp.AppWindow):
             self._update_proj()
             self._flash_saved()
         else:
-            self._flash("Couldn't save the project")
+            self._flash(_t("Couldn't save the project"))
 
     def _file_save_as(self):
         path = self._choose_file(save=True)
@@ -1300,7 +1519,9 @@ class Sequencer(nbapp.AppWindow):
                     p = os.path.join("~", os.path.relpath(p, HOME))
                 self.proj_lbl.set_text(p)
             else:
-                self.proj_lbl.set_text("No project — File ▸ New / Open")
+                # states the situation instead of reciting a menu path (and is
+                # translated here: this is only ever applied with set_text)
+                self.proj_lbl.set_text(_t("Not saved to a file"))
         except Exception:
             pass
 
@@ -1315,7 +1536,6 @@ class Sequencer(nbapp.AppWindow):
             for i, tk in enumerate(self.tracks):
                 tw = self.track_widgets[i]
                 tw["gain"].set_value(tk["gain"])
-                tw["pan"].set_value(tk["pan"])
                 tw["inst"].set_label(tk["input"])
                 tw["name"].set_text(tk["name"])
                 # the name ellipsizes in the fixed-width head — keep the full
@@ -1339,13 +1559,17 @@ class Sequencer(nbapp.AppWindow):
 
         btns = Gtk.Box(spacing=6)
         self.tbuttons = {}
-        specs = [("rew", "rew", self._on_rew), ("ff", "ff", self._on_ff),
-                 ("stop", "stopsq", self._on_stop), ("play", "play",
-                  self._on_play)]
-        for key, icon, cb in specs:
+        # Every transport control is a bare symbol. RTZ below already spells
+        # itself out for anyone who has never used a deck; these did not.
+        specs = [("rew", "rew", self._on_rew, "Rewind"),
+                 ("ff", "ff", self._on_ff, "Fast forward"),
+                 ("stop", "stopsq", self._on_stop, "Stop"),
+                 ("play", "play", self._on_play, "Play")]
+        for key, icon, cb, tip in specs:
             b = Gtk.Button()
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("tbtn")
+            b.set_tooltip_text(tip)
             img = Gtk.Image()
             b.add(img)
             b.connect("clicked", cb)
@@ -1356,6 +1580,7 @@ class Sequencer(nbapp.AppWindow):
         rec.set_relief(Gtk.ReliefStyle.NONE)
         rec.get_style_context().add_class("tbtn")
         rec.get_style_context().add_class("recbtn")
+        rec.set_tooltip_text(_t("Record"))
         # the rec dot sits on the rec button, not the rail — its opaque backing
         # tracks the button surface (base #FCFBF8 → signage red when armed)
         self.recdot = Dot(14, bg=SURF)
@@ -1525,7 +1750,7 @@ class Sequencer(nbapp.AppWindow):
         self._ruler_cell = rcell
         # The ruler's head cell must end exactly where a track head ends, or the
         # bar grid sits left of the clips it measures. Both ASK for 262px, but a
-        # head's gain/pan row needs 283 and GTK honours the larger — so put them
+        # head's gain row needs 283 and GTK honours the larger — so put them
         # in one size group and the cell adopts the head's REAL width in the
         # first allocation, whatever the font or a translated label does to it.
         self._head_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
@@ -1657,9 +1882,10 @@ class Sequencer(nbapp.AppWindow):
         r2.pack_start(vu, False, False, 0)
         head.pack_start(r2, False, False, 0)
 
-        # row 3: gain and pan side by side (kept to one row so eight track
-        # heads fit the fixed-height surface; the dB / L·R readouts and the
-        # tooltips disambiguate the two faders)
+        # row 3: gain. There was a Pan fader here too, but the tone engine is
+        # mono (one channel, see SR/caps) and nothing ever read the value: it
+        # was a fader that moved and changed nothing you could hear, so it is
+        # gone rather than pretending.
         r3 = Gtk.Box(spacing=6)
         gcap = self._minicap("G")
         gcap.set_size_request(10, -1)
@@ -1677,22 +1903,6 @@ class Sequencer(nbapp.AppWindow):
         gainlbl.set_size_request(40, -1)
         gainlbl.set_xalign(1)
         r3.pack_start(gainlbl, False, False, 0)
-        pcap = self._minicap("P")
-        pcap.set_size_request(10, -1)
-        r3.pack_start(pcap, False, False, 0)
-        pan = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
-        pan.set_draw_value(False)
-        pan.set_value(self.tracks[i]["pan"])
-        pan.set_hexpand(True)
-        pan.set_size_request(60, -1)
-        pan.set_tooltip_text(_t("Pan"))
-        pan.connect("value-changed", self._on_pan, i)
-        r3.pack_start(pan, True, True, 0)
-        panlbl = Gtk.Label()
-        panlbl.get_style_context().add_class("smallnum")
-        panlbl.set_size_request(40, -1)
-        panlbl.set_xalign(1)
-        r3.pack_start(panlbl, False, False, 0)
         head.pack_start(r3, False, False, 0)
 
         row.pack_start(head, False, False, 0)
@@ -1706,8 +1916,8 @@ class Sequencer(nbapp.AppWindow):
             # button that carries a custom child replaces that child, which
             # would throw the caret away the first time the voice is cycled
             "head": head, "name": name, "mute": mute, "solo": solo,
-            "arm": arm, "inst": instlbl, "vu": vu, "gain": gain, "pan": pan,
-            "gainlbl": gainlbl, "panlbl": panlbl, "clr": clr})
+            "arm": arm, "inst": instlbl, "vu": vu, "gain": gain,
+            "gainlbl": gainlbl, "clr": clr})
         return row
 
     def _minicap(self, text):
@@ -1735,7 +1945,7 @@ class Sequencer(nbapp.AppWindow):
         self.specs_lbl = Gtk.Label(label="%s · 16-bit" % SR_KHZ)
         self.specs_lbl.set_xalign(1)
         bar.pack_end(self.specs_lbl, False, False, 0)
-        self.proj_lbl = Gtk.Label(label=_t("No project — File ▸ New / Open"))
+        self.proj_lbl = Gtk.Label(label=_t("Not saved to a file"))
         self.proj_lbl.set_xalign(1)
         self.proj_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         bar.pack_end(self.proj_lbl, True, True, 0)
@@ -1830,7 +2040,7 @@ class Sequencer(nbapp.AppWindow):
     def _set_capture_device(self, dev):
         self._cap_device = dev
         label = dict(capture_devices()).get(dev, dev)
-        self._flash("Input: %s" % label)
+        self._flash(_t("Input: %s") % label)
         self._save_soon()
 
     def _mic_armed(self):
@@ -1864,7 +2074,7 @@ class Sequencer(nbapp.AppWindow):
         died = self.recorder.failed_early()
         path = self.recorder.stop()
         if died and path is None:
-            self._flash("Nothing was recorded — try another input")
+            self._flash(_t("Nothing was recorded — try another input"))
         return path
 
     def _stop_transport(self, seek_to=None):
@@ -1875,18 +2085,31 @@ class Sequencer(nbapp.AppWindow):
                       and self.pos - self.rec_start > 0.2
                       and any(tk["armed"] for tk in self.tracks))
         if committing:
-            self._remember()   # a take that lands is a step Undo can walk back
-            for tk in self.tracks:
-                if tk["armed"]:
-                    # a Mic track's clip carries the captured audio; a synth
-                    # track's clip stays a plain region the engine voices.
-                    if wav and tk.get("input") == MIC:
-                        tk["clips"].append((self.rec_start, self.pos, wav))
-                    else:
-                        tk["clips"].append((self.rec_start, self.pos))
+            # A Mic track's clip is only worth keeping if audio was actually
+            # captured: _fire_beat never voices a Mic lane, so a Mic clip with
+            # no WAV behind it is a take that can never make a sound. Committing
+            # one left the tape looking recorded on a machine with no working
+            # input, with nothing to explain the silence.
+            keep = [tk for tk in self.tracks if tk["armed"]
+                    and not (tk.get("input") == MIC and not wav)]
+            dropped = [tk for tk in self.tracks if tk["armed"]
+                       and tk.get("input") == MIC and not wav]
+            if keep:
+                # a take that lands is a step Undo can walk back
+                self._remember("Record")
+            for tk in keep:
+                # a Mic track's clip carries the captured audio; a synth
+                # track's clip stays a plain region the engine voices.
+                if wav and tk.get("input") == MIC:
+                    tk["clips"].append((self.rec_start, self.pos, wav))
+                else:
+                    tk["clips"].append((self.rec_start, self.pos))
+            if dropped:
+                self._flash(_t("Nothing was recorded — try another input"))
         self.transport = "stop"
         self.rec_start = None
         self.engine.silence()   # cut any ringing step tones on stop
+        self._vu_note = [None] * TRACKS   # meters follow the engine — drop them
         self._last_beat = None
         if seek_to is not None:
             self.pos = seek_to
@@ -1930,7 +2153,7 @@ class Sequencer(nbapp.AppWindow):
         """Wipe one track's takes — runs only after the confirm is accepted."""
         if not self.tracks[i]["clips"]:
             return
-        self._remember()
+        self._remember("Clear Takes")
         # if this armed track is mid-take, end recording first so the take
         # being wiped can't be re-committed on the next Stop
         if self.transport == "rec" and self.tracks[i]["armed"]:
@@ -1943,13 +2166,6 @@ class Sequencer(nbapp.AppWindow):
         if self._loading:
             return
         self.tracks[i]["gain"] = int(scale.get_value())
-        self._save_soon()
-        self.refresh()
-
-    def _on_pan(self, scale, i):
-        if self._loading:
-            return
-        self.tracks[i]["pan"] = int(scale.get_value())
         self._save_soon()
         self.refresh()
 
@@ -2124,21 +2340,21 @@ class Sequencer(nbapp.AppWindow):
 
     # ================= bulk track ops (menu helpers) =================
     def _arm_all(self, on):
-        self._remember()
+        self._remember("Arm All Tracks" if on else "Disarm All Tracks")
         for tk in self.tracks:
             tk["armed"] = bool(on)
         self._save()
         self.refresh()
 
     def _mute_all(self, on):
-        self._remember()
+        self._remember("Mute All Tracks" if on else "Unmute All Tracks")
         for tk in self.tracks:
             tk["muted"] = bool(on)
         self._save()
         self.refresh()
 
     def _solo_all(self, on):
-        self._remember()
+        self._remember("Clear Solo" if not on else None)
         for tk in self.tracks:
             tk["solo"] = bool(on)
         self._save()
@@ -2158,7 +2374,7 @@ class Sequencer(nbapp.AppWindow):
     def _clear_takes(self):
         if self.transport == "rec":
             self._stop_transport()
-        self._remember()
+        self._remember("Clear All Takes")
         for tk in self.tracks:
             tk["clips"] = []
         self._save()
@@ -2180,10 +2396,11 @@ class Sequencer(nbapp.AppWindow):
             # The base Cut/Copy/Paste act on a focused text widget, of which
             # this app has none — they would be dead. The arrangement history
             # is what an Edit menu means here.
-            return [
-                ("Undo    Ctrl+Z", self._undo if self._undo_stack else None),
-                ("Redo    Ctrl+Y", self._redo if self._redo_stack else None),
-            ]
+            # the SHARED builder every other editor uses, so all four word
+            # (and key) Undo/Redo identically: Redo prints Ctrl+Shift+Z like
+            # the rest of the OS (Ctrl+Y still works), and each entry names the
+            # action it takes back.
+            return nbapp.undo_menu_items(self.history)
         if name == "Transport":
             # a leading check marks the metronome when it is on, so the menu
             # shows its state (matching the View menus across the DE). The
@@ -2211,7 +2428,7 @@ class Sequencer(nbapp.AppWindow):
                 ("Unmute All Tracks", lambda: self._mute_all(False)),
                 ("Clear Solo", lambda: self._solo_all(False)),
                 nbapp.SEP,
-                ("Clear All Takes", lambda: self._clear_takes_confirm()),
+                ("Clear All Takes…", lambda: self._clear_takes_confirm()),
             ]
         if name == "Input":
             # Every ALSA capture device, so a USB mic or audio interface can be
@@ -2234,8 +2451,11 @@ class Sequencer(nbapp.AppWindow):
             items.append(nbapp.SEP)
             # what the user needs to know, not where the files sit: the raw
             # dotfile path was meaningless to anyone who isn't the person who
-            # wrote it (and the folder is hidden anyway)
-            items.append(("Recordings are saved with your project", None))
+            # wrote it (and the folder is hidden anyway). It used to claim the
+            # takes travel WITH the project — they do not: a project file
+            # references them by absolute path, so a project copied to a USB
+            # stick arrives without its audio. Say the true thing.
+            items.append(("Recordings stay on this computer", None))
             return items
         return super().menu_items(name)
 
@@ -2260,7 +2480,11 @@ class Sequencer(nbapp.AppWindow):
                 if key in self._played:
                     continue
                 self._played.add(key)
-                self.player.play(wav, seek_s=self.pos - st)
+                # the same two faders the synth lanes are voiced through, so a
+                # recording and a synth part answer to one mix
+                self.player.play(wav, seek_s=self.pos - st,
+                                 gain=(tk["gain"] / 100.0)
+                                 * (self.master / 100.0))
         self.player.reap()
 
     def _runner(self):
@@ -2333,12 +2557,16 @@ class Sequencer(nbapp.AppWindow):
             vari = 0.1
         real_beat = beat_len / vari
         step = real_beat * 0.6
+        m = self.master / 100.0
         if self.metronome:
             down = (beat % BEATS_PER_BAR) == 0
+            # THROUGH THE MASTER, like every other voice. The click used to be
+            # voiced at a fixed level, so pulling Master to zero silenced the
+            # whole arrangement and left the metronome ticking on at full volume
+            # — a master fader that plainly was not the master.
             self.engine.note(1760.0 if down else 1174.0,
                              min(0.09, real_beat * 0.5),
-                             0.5 if down else 0.3, perc=True)
-        m = self.master / 100.0
+                             (0.5 if down else 0.3) * m, perc=True)
         for i, tk in enumerate(self.tracks):
             if not self._audible(tk):
                 continue
@@ -2354,8 +2582,10 @@ class Sequencer(nbapp.AppWindow):
             else:
                 continue
             perc = _VOICE.get(tk["input"], (1.0, False))[1]
-            self.engine.note(self._track_freq(i) * vari, step,
-                             (tk["gain"] / 100.0) * m, perc=perc)
+            amp = (tk["gain"] / 100.0) * m
+            self.engine.note(self._track_freq(i) * vari, step, amp, perc=perc)
+            # the meter follows this note's envelope (see _vu_level)
+            self._vu_note[i] = (min(1.0, amp), time.monotonic(), step, perc)
 
     def _update_audio_lbl(self):
         """Keep the status-bar sound note current (neutral when absent).
@@ -2365,9 +2595,9 @@ class Sequencer(nbapp.AppWindow):
         they will hear anything."""
         try:
             if self.engine.available:
-                txt = "Sound ready"
+                txt = _t("Sound ready")
             elif self.engine.failed or not GST_OK:
-                txt = "No sound on this computer"
+                txt = _t("No sound on this computer")
             else:
                 txt = ""
             self.audio_lbl.set_text(txt)
@@ -2395,17 +2625,35 @@ class Sequencer(nbapp.AppWindow):
         return True
 
     def _vu_level(self, tk, i):
-        if not self._audible(tk):
+        """How loud this lane IS right now, read off the tone engine.
+
+        It used to be a sine wave scaled by the gain SETTING, which meant the
+        meters bounced identically whether anything was sounding or not — the
+        one control someone uses to check a level was the one that lied. Now it
+        follows the envelope of the note the engine was actually handed, and a
+        Mic lane reads nothing at all, because the capture runs in `arecord`
+        and this program never sees its samples: a still meter is honest, an
+        animated one is not."""
+        if not self._audible(tk) or self.transport not in ("play", "rec"):
             return 0.0
-        active = ((self.transport == "rec" and tk["armed"])
-                  or (self.transport in ("play", "rec")
-                      and self._clip_at(tk, self.pos)))
-        if not active:
+        if tk.get("input") == MIC:
+            return 0.0          # not metered — see docstring
+        note = self._vu_note[i] if i < len(self._vu_note) else None
+        if not note:
             return 0.0
-        t = self.tick
-        wob = (abs(math.sin(t * 0.29 + i * 1.7)) * 0.55
-               + abs(math.sin(t * 0.11 + i)) * 0.45)
-        return min(1.0, (tk["gain"] / 100) * (0.4 + wob * 0.7))
+        amp, t0, dur, perc = note
+        if dur <= 0:
+            return 0.0
+        frac = (time.monotonic() - t0) / dur
+        if frac < 0.0 or frac >= 1.0:
+            return 0.0
+        if perc:
+            env = 1.0 - frac                 # drums decay across the note
+        elif frac > 0.875:
+            env = (1.0 - frac) / 0.125       # tonic release ramp (n/8)
+        else:
+            env = 1.0
+        return max(0.0, min(1.0, amp * env))
 
     # ================= refresh =================
     def refresh(self):
@@ -2506,7 +2754,7 @@ class Sequencer(nbapp.AppWindow):
             r["master"] = self.master
             mv = self.master
             if mv <= 0:
-                self.master_lbl.set_text("0% · off")
+                self.master_lbl.set_text(_t("0% · off"))
             else:
                 dbi = int(round(20 * math.log10(mv / 100.0)))
                 db_txt = "0" if dbi == 0 else "%+d" % dbi
@@ -2530,25 +2778,37 @@ class Sequencer(nbapp.AppWindow):
             g = tk["gain"]
             gdb = int(round((g - 90) / 6))
             tw["gainlbl"].set_text("0 dB" if gdb == 0 else "%+d dB" % gdb)
-            p = tk["pan"]
-            tw["panlbl"].set_text(
-                "C" if p == 50 else
-                ("L%d" % ((50 - p) * 2) if p < 50 else "R%d" % ((p - 50) * 2)))
             tw["vu"].set_level(self._vu_level(tk, i))
+            # a Mic lane's meter stays dark on purpose (the capture runs
+            # outside this program) — say so rather than let it read as a
+            # dead input. Only written when the voice changes.
+            mic = (tk.get("input") == MIC)
+            if tw.get("vu_mic") != mic:
+                tw["vu_mic"] = mic
+                tw["vu"].set_tooltip_text(
+                    _t("A microphone's level isn't shown here") if mic
+                    else None)
             # per-track clear is only meaningful once a take exists
             tw["clr"].set_sensitive(bool(tk["clips"]))
         # status bar summaries
+        # every status string is translated HERE, at the point it is applied:
+        # refresh() rewrites these labels with a bare set_text(), so returning
+        # English snapped the status bar back to English on a localised install
+        # the moment anything changed.
         armed = [tk["name"] for tk in self.tracks if tk["armed"]]
         if not armed:
-            armed_txt = "No tracks armed"
+            armed_txt = _t("No tracks armed")
         elif len(armed) <= 2:
-            armed_txt = ", ".join(armed) + " armed"
+            armed_txt = _t("%s armed") % ", ".join(armed)
         else:
-            armed_txt = "%d tracks armed" % len(armed)
+            armed_txt = _t("%d tracks armed") % len(armed)
         self.armed_lbl.set_text(armed_txt)
         n = sum(len(tk["clips"]) for tk in self.tracks)
+        # the counted form is left SUBSTITUTED, not _t()d: the catalogs carry
+        # "%d take%s" as a "singular|plural" pair that nbi18n rebuilds from the
+        # finished string, and _t() on that key would hand back the raw pair.
         self.takes_lbl.set_text(
-            "No takes" if n == 0 else "%d take%s" % (n, "" if n == 1 else "s"))
+            _t("No takes") if n == 0 else "%d take%s" % (n, "" if n == 1 else "s"))
         self.specs_lbl.set_text(
             "%s · 16-bit · %d tracks · %s"
             % (SR_KHZ, TRACKS, _fmt_len(self.length)))
@@ -2728,7 +2988,13 @@ class Sequencer(nbapp.AppWindow):
         .trackrow { border-bottom: 1px solid #D7D2C5; }
         .trackhead { background: #F1EEE6; border-right: 1px solid #C9C4B6;
                      padding: 8px 16px; }
-        .trackhead.armed { box-shadow: inset 3px 0 0 #C8341E; }
+        /* the armed lane is marked in INK, not the accent: a 3px accent
+           edge means SELECTED everywhere else in the OS (Tasks, Academics,
+           Journal, Cookbook, Contacts, Packages, Music), and this row is not
+           a selection - it is the lane the machine will record onto. The REC
+           chip beside it carries the recording meaning in the one signage
+           red. */
+        .trackhead.armed { box-shadow: inset 3px 0 0 #1A1916; }
         .trackhead * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .trackname { font-size: 14px; font-weight: 700; color: #1A1916; }
         .mbtn, .sbtn, .armbtn { min-height: 22px; min-width: 22px;
@@ -2738,7 +3004,14 @@ class Sequencer(nbapp.AppWindow):
                          color: #6E695E; border-radius: 2px; box-shadow: none; }
         .mbtn:hover, .sbtn:hover, .armbtn:hover { background: #EFEBE0; }
         .mbtn.on { background: #1A1916; border-color: #1A1916; color: #FCFBF8; }
-        .sbtn.on { background: #C8341E; border-color: #C8341E; color: #FCFBF8; }
+        /* Mute and Solo are ENGAGED CONTROLS, so both are ink chips (as the
+           metronome is, and as Music paints shuffle/repeat). Solo used to be
+           the signage red, which put a second meaning on the one colour this
+           screen reserves for recording. */
+        .sbtn.on { background: #1A1916; border-color: #1A1916; color: #FCFBF8; }
+        /* THE ONE SIGNAGE RED on this window means RECORD: the transport's
+           record button, and the REC chip of every track that will be
+           recorded onto. Nothing else may take it. */
         .armbtn { color: #6E695E; }
         .armbtn.on { background: #C8341E; border-color: #C8341E;
                      color: #FCFBF8; }
@@ -2767,9 +3040,7 @@ class Sequencer(nbapp.AppWindow):
                        box-shadow: none; }
 
         /* ---- status bar ---- */
-        .statusbar { background: #F1EEE6; border-top: 1px solid #D7D2C5;
-                     min-height: 32px; padding: 0 18px; }
-        .statusbar label { font-size: 12px; color: #6E695E; }
+        /* .statusbar is Papertone's - see the theme. */
 
         /* ---- confirm card (destructive-action prompt) ---- */
         .seqscrim { background: rgba(26,25,22,0.28); }

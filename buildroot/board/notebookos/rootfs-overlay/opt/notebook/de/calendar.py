@@ -28,6 +28,7 @@ import os
 import re
 import sys
 import json
+import subprocess
 from datetime import date, timedelta
 
 import cairo
@@ -75,6 +76,31 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 EVENTS_FILE = os.path.join(CFG_DIR, "calendar.json")
 CALENDARS_FILE = os.path.join(CFG_DIR, "calendars.json")
+# The Academics app's store. Class meetings are MIRRORED onto this calendar,
+# never copied into it: Academics owns them, so they are rebuilt from that file
+# on every load and are deliberately absent from calendar.json. That keeps one
+# writer per store, and means editing your timetable in Academics is the only
+# way a class time can change — there is no second copy to drift.
+ACADEMICS_FILE = os.path.join(CFG_DIR, "academics.json")
+# The same store under the name it carried when the app was called Academic
+# Notes; academics.py reads it as a fallback and so must every mirror of it.
+ACADEMICS_LEGACY = os.path.join(CFG_DIR, "academic.json")
+# The calendar mirrored classes appear on. Reserved: it is not in calendars.json
+# and cannot be renamed or deleted, because it is not really a calendar of the
+# user's, it is a window onto another app.
+CLASSES_CAL = "Classes"
+# Work shifts live on their own calendar rather than in a separate app: a job
+# needs nothing from a scheduler that a calendar does not already do, so a
+# shift is an ordinary event with a shift-shaped way of entering it. Created on
+# demand the first time a shift is added, and colour-fast so a rota reads as a
+# block at a glance.
+WORK_CAL = "Work"
+WORK_COLOR = "#417E74"
+# How far either side of this week the weekly class pattern is expanded into
+# real dates. Bounded on purpose: a timetable is a repeating rule, and turning
+# it into occurrences forever would grow without limit.
+_CLASS_WEEKS_BACK = 8
+_CLASS_WEEKS_AHEAD = 26
 DOCUMENTS = os.path.join(HOME, "Documents")
 
 # Custom dialog response for the Event detail's Delete button (positive so it
@@ -86,6 +112,41 @@ RESPONSE_DELETE = 20
 # _install_css / _color_class). Deliberately NOT the signage red: that one is
 # reserved for today (and for alerts), and a calendar painted in it put a
 # second, competing #C8341E on the same screen as the today marker.
+def _fmt_hours(hours):
+    """A shift length said the way a person would say it: "8 hours",
+    "7 hours 30 minutes", "45 minutes"."""
+    total = int(round(hours * 60))
+    h, m = divmod(total, 60)
+    # Each count gets a WHOLE sentence of its own rather than a glued-on "s".
+    # "1 minutes" and "1 hour 1 minutes" both read as bugs in English, and the
+    # suffix trick that would paper over them cannot be expressed at all in
+    # Russian, Polish or Serbian — and cannot be expressed TWICE in one string
+    # in any language, because nbi18n picks a translation's form from the
+    # FIRST count only. Two counts therefore need four separate sentences.
+    if not h:
+        return _t("1 minute") if m == 1 else _t("%d minutes") % m
+    if not m:
+        return _t("1 hour") if h == 1 else _t("%d hours") % h
+    if h == 1:
+        return _t("1 hour 1 minute") if m == 1 else _t("1 hour %d minutes") % m
+    return (_t("%d hours 1 minute") % h if m == 1
+            else _t("%d hours %d minutes") % (h, m))
+
+
+def _hhmm_to_hours(hhmm):
+    """"HH:MM" -> hours as a float (14:30 -> 14.5), or None if it is not a
+    time. Calendar stores start/end as float hours, Academics stores them as
+    clock strings; this is the seam between the two."""
+    try:
+        h, m = str(hhmm).split(":")
+        h, m = int(h), int(m)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not (0 <= h < 24 and 0 <= m < 60):
+        return None
+    return h + m / 60.0
+
+
 PALETTE = [
     "#4A5E73",  # slate
     "#6E7B57",  # olive
@@ -123,10 +184,32 @@ REPEATS = [
 ]
 REPEAT_LABELS = dict(REPEATS)
 # A year of a weekly event is 53 records of ~90 bytes; a year of a daily one is
-# 366. Capped so no rule can ever write an unbounded store, and re-extended
-# whenever the series is opened for editing.
+# 366. Capped so no rule can ever write an unbounded store.
 REPEAT_LIMIT = {"day": 366, "week": 53, "fortnight": 27, "month": 12,
                 "year": 5}
+# The cap alone made every repeat a silent time bomb: "Every week" ran out
+# thirteen months later and simply was not there, and a birthday set to "Every
+# year" died after five. The run is therefore RE-EXTENDED (see
+# Calendar._extend_series) every time the app opens, so each rule always has
+# this much of the future already written in front of today. Days, not
+# occurrences, so a daily event does not have to grow a year at a time.
+REPEAT_AHEAD = {"day": 120, "week": 400, "fortnight": 400, "month": 400,
+                "year": 1830}
+
+
+def _next_repeat(d, rule, n=1):
+    """`d` advanced by n turns of `rule`, or None for a rule with no period."""
+    if rule == "day":
+        return d + timedelta(days=n)
+    if rule == "week":
+        return d + timedelta(days=7 * n)
+    if rule == "fortnight":
+        return d + timedelta(days=14 * n)
+    if rule == "month":
+        return _add_months(d, n)
+    if rule == "year":
+        return _add_months(d, 12 * n)
+    return None
 
 
 def _add_months(d, n):
@@ -175,6 +258,17 @@ _DMY_RE = re.compile(r"^(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?$")
 _ORDINAL_RE = re.compile(r"^(\d{1,2})(?:st|nd|rd|th)?$", re.I)
 
 
+# The abbreviations people actually write that are NOT simply the first three
+# letters of the month. "Sept" is the common one, and leaving it out was not
+# harmless: "sept 3 checkup" fell through to the time parser, which ate the 3 as
+# an hour and filed the event on today at 15:00 under the name "sept checkup".
+# Kept as an explicit list rather than a blanket four-letter rule, which would
+# have made "Marc" a month and quietly deleted a man's name from his own event.
+_MONTH_EXTRA = {"sept": 9, "sep.": 9, "sept.": 9, "jan.": 1, "feb.": 2,
+                "mar.": 3, "apr.": 4, "jun.": 6, "jul.": 7, "aug.": 8,
+                "oct.": 10, "nov.": 11, "dec.": 12}
+
+
 def _word_tokens():
     """(weekday word -> 0-6, month word -> 1-12), in English and in the active
     language, full names and three-letter forms."""
@@ -189,6 +283,8 @@ def _word_tokens():
             low = form.lower()
             months.setdefault(low, i + 1)
             months.setdefault(low[:3], i + 1)
+    for form, i in _MONTH_EXTRA.items():
+        months.setdefault(form, i)
     return days, months
 
 
@@ -200,13 +296,24 @@ DAY_WORDS, MONTH_WORDS = _word_tokens()
 # map "on" and "at" to whatever unrelated label happens to share the word.
 _GLUE = {"at", "on", "the", "of", "next", "this",
          "a", "à", "au", "le", "la", "el", "en", "de", "u", "na"}
+# Words that ANNOUNCE a clock time, so the bare number after one of them is
+# read as an hour ("lunch at 1") where every other bare number stays in the
+# event's name. Grammar, not interface text — deliberately not run through _t()
+# for the same reason as _GLUE above.
+_TIME_LEAD = {"at", "@", "from", "à", "um", "alle"}
 
 
-def _parse_time(word):
-    """'3pm', '15:00', '9.30am', '7' -> an hour as a float, or None. A bare
-    number is read as a clock hour only in the 1-23 range, and one that would
-    land before breakfast is nudged to the afternoon ('bridge 7' is 19:00, not
-    07:00) — nobody types a bare number meaning seven in the morning."""
+def _parse_time(word, bare_ok=False):
+    """'3pm', '15:00', '9.30am' -> an hour as a float, or None.
+
+    A BARE number ('7') is a time only when `bare_ok` — i.e. when something in
+    the line said a time was coming, such as "at". Reading every stray integer
+    as a clock hour is why "meeting with 3 people" became a 15:00 event called
+    "meeting with people", "table for 4" moved to 16:00 and "buy 2 tickets"
+    lost its 2: the number was silently taken out of the name. A bare hour that
+    would land before breakfast is still nudged to the afternoon ('bridge at 7'
+    is 19:00, not 07:00) — nobody writes a bare number meaning seven in the
+    morning."""
     m = _TIME_RE.match(word)
     if not m:
         return None
@@ -221,7 +328,10 @@ def _parse_time(word):
         hh = hh % 12 + (12 if suffix == "pm" else 0)
     else:
         if m.group(2) is None:
-            # a bare number: a clock hour only, and only a plausible one
+            # a bare number: a clock hour only when a time was announced, and
+            # only a plausible one
+            if not bare_ok:
+                return None
             if not 1 <= hh <= 23:
                 return None
             if hh < 8:
@@ -235,10 +345,16 @@ def parse_quick_event(text, base_day, cal_names=()):
     """Turn what somebody typed into (title, day, start-hour, calendar).
 
     Understands, in any order and mixed into the name: a time ('3pm', '15:00',
-    '9.30am', 'noon'), a day ('today', 'tomorrow', 'thursday', '14/8',
-    '14 August', 'August 14'), and '#Calendar' to file it. Whatever is left is
-    the name. A weekday or a bare date always resolves FORWARD, so 'thursday'
-    typed on a Friday means the Thursday coming, not the one just gone.
+    '9.30am', 'noon', 'at 7'), a day ('today', 'tomorrow', 'thursday', '14/8',
+    '14 August', 'August 14', 'Sept 3'), and '#Calendar' to file it. Whatever
+    is left is the name. A weekday or a bare date always resolves FORWARD, so
+    'thursday' typed on a Friday means the Thursday coming, not the one just
+    gone.
+
+    A number on its own is a TIME only after a word that announces one ("at").
+    "table for 4" is a table for four, not a 16:00 appointment called "table
+    for", and the caller shows the parsed title back so the difference is
+    visible before Enter.
 
     Returns None when there is no name left to file — a time on its own is not
     an event. `base_day` is the day used when none was typed. Never raises."""
@@ -254,6 +370,7 @@ def parse_quick_event(text, base_day, cal_names=()):
         w = words[i]
         low = w.lower().strip(",")
         nxt = words[i + 1].lower().strip(",") if i + 1 < len(words) else ""
+        prev = words[i - 1].lower().strip(",") if i else ""
 
         if len(w) > 1 and w[0] == "#" and cal_names:
             key = low[1:]
@@ -327,7 +444,10 @@ def parse_quick_event(text, base_day, cal_names=()):
                     hour = got
                     i += 2
                     continue
-            got = _parse_time(low)
+            # A bare integer counts as a time ONLY when the word before it
+            # announced one ("lunch at 1"). Without that test every number in
+            # a title was eaten as a clock hour — see _parse_time.
+            got = _parse_time(low, bare_ok=(prev in _TIME_LEAD))
             if got is not None:
                 hour = got
                 i += 1
@@ -394,6 +514,10 @@ class Calendar(nbapp.AppWindow):
         self.cals_on = {c["name"]: True for c in self.calendars}
         # Restore persisted events; ship empty on a fresh install (no seed).
         self.events = self._load_events()  # dicts {id,date,start,end,title,cal}
+        # Classes mirrored from Academics: derived, read-only, and kept in their
+        # OWN list so that every path which writes calendar.json iterates
+        # self.events and therefore cannot persist them by accident.
+        self.class_events = self._load_class_events()
         # Tokens of every event this session has read, created or adopted. Lets
         # merge-on-write (see _save_events) tell a foreign, concurrently-added
         # disk record (keep it) from one this session deliberately deleted (an
@@ -401,6 +525,12 @@ class Calendar(nbapp.AppWindow):
         self._seen = set()
         for e in self.events:
             self._mark_seen(e)
+        # Keep every repeating series running past today (see _extend_series).
+        # Done on open, before anything is drawn, so a weekly event that reached
+        # the end of its written run is already back on the grid rather than
+        # missing until some later action happens to rebuild it. Persisted
+        # after the window exists so the write goes through the normal path.
+        self._extended = self._extend_series()
 
         self._doc_path = None          # current File-menu document (None=unsaved)
         self.seg_btns = {}
@@ -415,6 +545,8 @@ class Calendar(nbapp.AppWindow):
         body.pack_start(self._build_main(), True, True, 0)
 
         self._refresh()
+        if self._extended:
+            self._save_events()
 
         # Flush on close so the final add / edit / delete is never lost.
         self.connect("destroy", self._on_destroy)
@@ -447,18 +579,23 @@ class Calendar(nbapp.AppWindow):
 
     # ------------------------------------------------------------------ menus
     def menu_items(self, name):
-        """File carries the standard document operations plus New Event; View
-        carries the view switch and per-calendar visibility (and New Calendar);
-        Go carries date navigation. Everything else falls back to the base so
+        """File carries the calendar's create actions; View carries the view
+        switch and per-calendar visibility (and New Calendar); Go carries date
+        navigation. Everything else falls back to the base so
         Cut/Copy/Paste/Close/About keep working."""
         if name == "File":
+            # calendar.json / calendars.json are the sole source of truth and
+            # are rewritten on every edit, so there is no document to Save and
+            # nothing a Save As would rescue. The old New / Open / Save /
+            # Save As were worse than redundant: Open REPLACED the whole store —
+            # the same store the Tasks app and the desktop widget read — so a
+            # mistaken pick silently wiped every event. File now offers only
+            # what the app can actually make (see docs/MENU-CONVENTIONS.md, the
+            # single-store File menu).
             return [
-                ("New Event…", lambda: self._open_new_event()),
-                nbapp.SEP,
-                ("New    Ctrl+N", lambda: self._file_new()),
-                ("Open…    Ctrl+O", lambda: self._file_open()),
-                ("Save    Ctrl+S", lambda: self._file_save()),
-                ("Save As…    Ctrl+Shift+S", lambda: self._file_save_as()),
+                ("New Event…    Ctrl+N", lambda: self._open_new_event()),
+                ("Add a Shift…", lambda: self._shift_dialog()),
+                ("New Calendar…", lambda: self._new_calendar()),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]
@@ -476,8 +613,8 @@ class Calendar(nbapp.AppWindow):
                 mark = "•  " if on else "     "
                 items.append(
                     (mark + cname, lambda n=cname: self._toggle_cal_by_name(n)))
-            items.append(nbapp.SEP)
-            items.append(("New Calendar…", lambda: self._new_calendar()))
+            # New Calendar… lives in File with the app's other create actions;
+            # repeating it here would put the same item twice in one menu bar.
             return items
         if name == "Go":
             unit = {"month": "Month", "week": "Week", "day": "Day"}.get(
@@ -500,24 +637,19 @@ class Calendar(nbapp.AppWindow):
         self._rebuild_body()
 
     def _on_key(self, w, ev):
-        """The document shortcuts every File-based app in the DE honours:
-        Ctrl+S save, Ctrl+Shift+S Save As, Ctrl+O open, Ctrl+N new. Anything
-        else falls through to the base (Esc dismisses the About card / an open
-        menu, else closes). The base already connects this via self._on_key, so
-        the override is picked up without a second connect (a double-connect
-        would fire each shortcut twice)."""
+        """Ctrl+N starts a new event — the one thing this app creates.
+
+        The Ctrl+S / Ctrl+Shift+S / Ctrl+O document shortcuts were removed with
+        the File items they belonged to: the calendar has no document, and a key
+        that opened a save picker with nothing in the menu to name it was a
+        shortcut nobody could discover (docs/MENU-CONVENTIONS.md rule 3). The
+        base already connects this via self._on_key, so the override is picked
+        up without a second connect (a double-connect would fire it twice)."""
         try:
             if ev.state & Gdk.ModifierType.CONTROL_MASK:
                 shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
-                kv = ev.keyval
-                if kv in (Gdk.KEY_s, Gdk.KEY_S):
-                    self._file_save_as() if shift else self._file_save()
-                    return True
-                if kv in (Gdk.KEY_o, Gdk.KEY_O) and not shift:
-                    self._file_open()
-                    return True
-                if kv in (Gdk.KEY_n, Gdk.KEY_N) and not shift:
-                    self._file_new()
+                if ev.keyval in (Gdk.KEY_n, Gdk.KEY_N) and not shift:
+                    self._open_new_event()
                     return True
         except Exception:
             pass
@@ -533,7 +665,15 @@ class Calendar(nbapp.AppWindow):
         for c in self.calendars:
             if c["name"] == name:
                 return c["color"]
+        if name == CLASSES_CAL:
+            return "#6E695E"
         return "#9A9484"
+
+    def _event_color(self, e):
+        """An event's colour. A mirrored class carries its own — the colour it
+        has in Academics — so the timetable and the calendar agree at a glance
+        about which class is which."""
+        return e.get("color") or self._cal_color(e["cal"])
 
     def _color_class(self, color):
         """CSS class carrying a chip's left-border color. Palette colors map to
@@ -545,6 +685,12 @@ class Calendar(nbapp.AppWindow):
 
     def _chip_class(self, cal_name):
         return self._color_class(self._cal_color(cal_name))
+
+    def _event_chip_class(self, e):
+        """The chip class for one event, honouring a mirrored class's own
+        colour so the calendar and the Academics timetable agree about which
+        class is which."""
+        return self._color_class(self._event_color(e))
 
     def _load_calendars(self):
         """Restore named calendars from calendars.json, or the single default
@@ -561,6 +707,24 @@ class Calendar(nbapp.AppWindow):
         """Coerce raw calendar records into [{name,color}], dropping blanks and
         de-duplicating names (case-insensitive). Returns [] on garbage."""
         out, seen = [], set()
+        if isinstance(data, dict):
+            # Calendars stored as an object keyed by name: the values are still
+            # the user's calendars. _save_calendars rewrites this file on close,
+            # so a wrapper of the wrong type used to cost every calendar in it.
+            #
+            # A WRAPPED list ({"calendars": [...]}) is the same file with one
+            # more layer, and taking .values() alone left a list-inside-a-list
+            # that matched nothing: _load_calendars fell back to the single
+            # stock "Personal", and closing the window wrote that over every
+            # named calendar the user had. _event_list has recognised this shape
+            # for its own file since round 3 — this is the same store, one
+            # directory entry along. Never raises.
+            inner = data.get("calendars")
+            if not isinstance(inner, list):
+                inner = next((v for v in data.values()
+                              if isinstance(v, list)
+                              and any(isinstance(x, dict) for x in v)), None)
+            data = inner if inner is not None else list(data.values())
         if not isinstance(data, list):
             return out
         for item in data:
@@ -648,8 +812,8 @@ class Calendar(nbapp.AppWindow):
         self.quick.get_style_context().add_class("quickentry")
         self.quick.set_placeholder_text(_t("Add event"))
         self.quick.set_tooltip_text(
-            "Type the event with a day and a time if you like, then press "
-            "Enter — dentist thursday 3pm")
+            _t("Event name, with an optional day and time, then Enter. "
+               "Example: dentist thursday 3pm"))
         self.quick.set_width_chars(8)   # never sets the sidebar's width
         self.quick.connect("changed", self._on_quick_changed)
         self.quick.connect("activate", self._on_quick_add)
@@ -692,17 +856,22 @@ class Calendar(nbapp.AppWindow):
         return parse_quick_event(text, self.sel, self._cal_names())
 
     def _on_quick_changed(self, *_):
-        """Read back the day and time that were understood, live, under the
-        field — so 'dentist thursday 3pm' visibly becomes 'Thu 30 Jul · 15:00'
-        before Enter is pressed, and an empty box teaches the shape by
-        example."""
+        """Read back the event that was understood, live, under the field — so
+        'dentist thursday 3pm' visibly becomes 'dentist · Thu 30 Jul · 15:00'
+        before Enter is pressed, and an empty box teaches the shape by example.
+
+        The NAME leads the readback. It used to show only the day and time,
+        which meant any word the parser took out of the title vanished without
+        trace until after Enter — the one part of the guess nobody could
+        check."""
         got = self._quick_parse()
         if got is None:
-            self.quick_hint.set_text(_t("Try: dentist thursday 3pm"))
+            self.quick_hint.set_text(_t("Example: dentist thursday 3pm"))
             return
-        _title, day, hour, cal = got
+        title, day, hour, cal = got
         h = int(hour)
-        stamp = "%s %d %s  ·  %02d:%02d" % (
+        stamp = "%s  ·  %s %d %s  ·  %02d:%02d" % (
+            title,
             WEEKDAYS_FULL[day.weekday()][:3], day.day, MONTHS[day.month - 1][:3],
             h, int(round((hour - h) * 60)))
         if cal:
@@ -1014,7 +1183,13 @@ class Calendar(nbapp.AppWindow):
         cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
         cancel.get_style_context().add_class("dlgcancel")
         ok = dlg.add_button(ok_label, Gtk.ResponseType.OK)
-        ok.get_style_context().add_class("destructive")
+        # The shared OS treatment (Papertone .destructive-action), the same red
+        # slab the Finder, Contacts, Cookbook, Journal and Terminal use for a
+        # single destructive choice. The quieter local .destructive stays for
+        # the two places it is right: a Delete that sits BESIDE a primary Save
+        # (_event_dialog), and _confirm_series, where both choices destroy
+        # something and neither is "the" action.
+        ok.get_style_context().add_class("destructive-action")
         area = dlg.get_content_area()
         area.set_spacing(10)
         area.set_margin_top(24); area.set_margin_bottom(16)
@@ -1055,8 +1230,8 @@ class Calendar(nbapp.AppWindow):
         left.pack_start(self.title_lbl, False, False, 0)
 
         nav = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        prev = self._nav_btn("back", self._on_prev)
-        nxt = self._nav_btn("fwd", self._on_next)
+        prev = self._nav_btn("back", self._on_prev, "Previous")
+        nxt = self._nav_btn("fwd", self._on_next, "Next")
         nav.pack_start(prev, False, False, 0)
         nav.pack_start(nxt, False, False, 0)
         left.pack_start(nav, False, False, 0)
@@ -1096,9 +1271,13 @@ class Calendar(nbapp.AppWindow):
         col.pack_start(self.body_area, True, True, 0)
         return col
 
-    def _nav_btn(self, icon, handler):
+    def _nav_btn(self, icon, handler, tip=None):
         b = Gtk.Button(); b.set_relief(Gtk.ReliefStyle.NONE)
         b.get_style_context().add_class("navbtn")
+        # Icon-only, so name it: nbi18n patches set_tooltip_text, which is why
+        # a plain English string here still reaches the catalogs.
+        if tip:
+            b.set_tooltip_text(tip)
         b.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 18, "#1A1916")))
         b.connect("clicked", handler)
         return b
@@ -1108,8 +1287,7 @@ class Calendar(nbapp.AppWindow):
         # at the FASTEST way to fill it — the quick-add box in the sidebar —
         # and shows what to type rather than naming a button.
         lbl = Gtk.Label(
-            label=_t("Nothing here yet. Type one into the box on the left — "
-                     "try “dentist thursday 3pm”."),
+            label=_t("No events. Add one in the box on the left."),
             xalign=0)
         lbl.set_line_wrap(True)   # a longer translation wraps, never widens
         lbl.get_style_context().add_class("emptyhint")
@@ -1199,7 +1377,7 @@ class Calendar(nbapp.AppWindow):
             chip = Gtk.Label(label=e["title"], xalign=0)
             chip.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
             cc = chip.get_style_context()
-            cc.add_class("evchip"); cc.add_class(self._chip_class(e["cal"]))
+            cc.add_class("evchip"); cc.add_class(self._event_chip_class(e))
             chipbox = Gtk.EventBox(); chipbox.add(chip)
             # A month cell is too narrow to print the time beside the name
             # without eating the name, so it goes on the hover instead — along
@@ -1406,7 +1584,7 @@ class Calendar(nbapp.AppWindow):
         # rather than floating in the middle of a tall one.
         chip.set_yalign(0.0)
         cc = chip.get_style_context()
-        cc.add_class("evchip"); cc.add_class(self._chip_class(e["cal"]))
+        cc.add_class("evchip"); cc.add_class(self._event_chip_class(e))
         if not lead:
             cc.add_class("evcont")
         # A continuation sits flush under the row above so the hours of one
@@ -1421,22 +1599,134 @@ class Calendar(nbapp.AppWindow):
         return box
 
     # ------------------------------------------------------------ persistence
+    def _load_class_events(self):
+        """Build the mirrored class events from the Academics store.
+
+        Academics keeps a WEEKLY PATTERN ("Organic Chemistry, Wednesdays
+        14:00-15:30"), not dated occurrences, so this expands that pattern
+        across a window either side of today — far enough that browsing a few
+        months back or forward still shows the timetable, bounded so a term of
+        classes can never turn into an unbounded list.
+
+        Never raises: a missing or damaged academics.json simply means no
+        classes are mirrored, which is also the correct answer for anyone who
+        does not use that app.
+        """
+        # Resolved per read, not once at import: on a machine that upgraded from
+        # the release where this app was called Academic Notes the term still
+        # lives under the old name, and mirroring nothing would quietly empty
+        # the timetable out of the calendar. Matches academics.LEGACY_FILE.
+        path = ACADEMICS_FILE
+        try:
+            if not os.path.exists(path) and os.path.exists(ACADEMICS_LEGACY):
+                path = ACADEMICS_LEGACY
+        except OSError:
+            pass
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return []
+        if not isinstance(data, dict):
+            return []
+        classes = data.get("classes")
+        if not isinstance(classes, list):
+            return []
+
+        today = date.today()
+        first = today - timedelta(days=today.weekday() + 7 * _CLASS_WEEKS_BACK)
+        out = []
+        for c in classes:
+            if not isinstance(c, dict):
+                continue
+            name = str(c.get("name") or c.get("label") or "").strip()
+            if not name:
+                continue
+            color = str(c.get("color") or "")
+            default_room = str(c.get("room") or "")
+            meets = c.get("meets")
+            if not isinstance(meets, list):
+                continue
+            for m in meets:
+                if not isinstance(m, dict):
+                    continue
+                try:
+                    weekday = int(m.get("day"))
+                except (TypeError, ValueError):
+                    continue
+                start = _hhmm_to_hours(m.get("start"))
+                if not 0 <= weekday <= 6 or start is None:
+                    continue
+                end = _hhmm_to_hours(m.get("end"))
+                if end is None or end <= start:
+                    end = min(start + 1.0, 23.99)
+                room = str(m.get("room") or default_room)
+                for wk in range(_CLASS_WEEKS_BACK + _CLASS_WEEKS_AHEAD):
+                    d = first + timedelta(days=weekday + 7 * wk)
+                    out.append({
+                        "id": "class:%s:%d:%s:%s" % (name, weekday,
+                                                     m.get("start"), d),
+                        "date": d, "start": start, "end": end,
+                        "title": name, "cal": CLASSES_CAL,
+                        "repeat": "none", "series": "",
+                        "color": color,
+                        "room": room,
+                        # The flag every write path checks. A derived event is
+                        # not the user's to edit here.
+                        "derived": "academics",
+                    })
+        return out
+
+    @staticmethod
+    def _event_list(data):
+        """The list of event records inside whatever calendar.json holds.
+
+        The store is a bare list, but a wrapped one ({"events": [...]}) or one
+        keyed by id is still the user's calendar, and _save_events rewrites the
+        whole file — so refusing to recognise the wrapper used to delete every
+        event in it on close. Returns None when there is no list of records to
+        be found, which is the only honest 'this is not a calendar'."""
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            inner = data.get("events")
+            if isinstance(inner, list):
+                return inner
+            vals = list(data.values())
+            if vals and all(isinstance(v, dict) for v in vals):
+                return vals                      # object keyed by event id
+            for v in vals:
+                if isinstance(v, list) and any(isinstance(x, dict) for x in v):
+                    return v
+        return None
+
     def _load_events(self):
         """Restore saved events from calendar.json (the shape _save_events
         writes). On a fresh install — no file, or an unreadable/foreign one —
-        ship empty. An existing empty list is honoured. Never raises."""
+        ship empty. An existing empty list is honoured. Never raises.
+
+        Records this loader cannot make sense of are kept verbatim in
+        self._orphans and written back out by _save_events. An event whose date
+        no longer parses cannot be drawn on a grid of days, but its TITLE is
+        something the user typed and nothing else can reproduce, so it is
+        carried through the round trip instead of being quietly deleted on
+        close."""
+        self._orphans = []
         try:
             with open(EVENTS_FILE) as fh:
                 data = json.load(fh)
         except Exception:
             return []
-        if not isinstance(data, list):
+        items = self._event_list(data)
+        if items is None:
             return []
         out = []
-        for item in data:
+        for item in items:
             ev = self._norm_event(item)
             if ev is not None:
                 out.append(ev)
+            elif item not in (None, "", [], {}):
+                self._orphans.append(item)
         return out
 
     def _norm_event(self, item):
@@ -1516,9 +1806,10 @@ class Calendar(nbapp.AppWindow):
                 data = json.load(fh)
         except Exception:
             return None
-        if not isinstance(data, list):
+        items = self._event_list(data)
+        if items is None:
             return None
-        return [it for it in data if isinstance(it, dict)]
+        return [it for it in items if isinstance(it, dict)]
 
     def _merge_disk_events(self):
         """Fold back any event that appeared in calendar.json since this session
@@ -1535,10 +1826,18 @@ class Calendar(nbapp.AppWindow):
         mem_tokens = set()
         for e in self.events:
             mem_tokens |= self._event_tokens(e)
+        orphans = getattr(self, "_orphans", None)
+        if orphans is None:
+            orphans = self._orphans = []
         for raw in disk:
             norm = self._norm_event(raw)
             if norm is None:
-                continue                 # unsalvageable record — drop it
+                # Unsalvageable: carried through the write untouched rather than
+                # dropped (the equality test is what stops our own orphans, read
+                # back off disk here, from being appended twice per save).
+                if raw not in orphans:
+                    orphans.append(raw)
+                continue
             rt = self._event_tokens(norm)
             if rt & mem_tokens:
                 continue                 # already in memory (memory wins on edits)
@@ -1589,9 +1888,28 @@ class Calendar(nbapp.AppWindow):
                 pass   # a merge hiccup must never cost us the in-memory events
         try:
             data = [self._event_record(e) for e in self.events]
+            # Records this session could not read (see _load_events) ride along
+            # untouched, so a title the user typed is not deleted by the act of
+            # opening and closing the app. New / Open replace the store on
+            # purpose (merge=False), and those carry nothing forward.
+            if merge:
+                data.extend(getattr(self, "_orphans", []))
+            else:
+                self._orphans = []
             nbapp.atomic_write_json(EVENTS_FILE, data)
-        except Exception:
-            pass
+            self._save_warned = False
+        except Exception as exc:
+            # See academics._save_to_disk. Silence here reads as "Calendar
+            # deleted my appointments": the store keeps whatever the last write
+            # that succeeded put there, so an event added after the disk filled
+            # up is simply absent next time. Warn once per run of failures.
+            if not getattr(self, "_save_warned", False):
+                self._save_warned = True
+                try:
+                    self._flash_status(
+                        nbapp.save_failure_reason(exc, EVENTS_FILE))
+                except Exception:
+                    pass
 
     def _on_destroy(self, *_):
         self._save_events()
@@ -1613,8 +1931,12 @@ class Calendar(nbapp.AppWindow):
             return None
 
     def _events_on(self, d):
+        """Everything on a day: the user's own events plus the classes mirrored
+        from Academics. The mirror obeys the same show/hide toggle as any
+        calendar, so a term timetable can be turned off without leaving
+        Academics."""
         return sorted(
-            [e for e in self.events
+            [e for e in list(self.events) + list(self.class_events)
              if e["date"] == d and self.cals_on.get(e["cal"], True)],
             key=lambda e: e["start"])
 
@@ -1705,8 +2027,52 @@ class Calendar(nbapp.AppWindow):
         prefilled, with Save (edit in place) and Delete. Returns True so the
         click doesn't also fall through to the day-pick / new-event handler on
         the cell or slot behind the chip."""
+        if e.get("derived"):
+            # A class is a reflection of the timetable in Academics. Offering an
+            # editor here would either lie (the edit cannot be saved) or create
+            # a second copy that drifts from the real one — so send them to the
+            # place the change actually belongs.
+            self._open_derived(e)
+            return True
         self._event_dialog(e)
         return True
+
+    def _open_derived(self, e):
+        """Explain where a mirrored event lives, and offer to go there."""
+        # A card, not a stock MessageDialog: the rest of this app's dialogs are
+        # undecorated Papertone sheets, and a window-manager title bar here made
+        # one explanation look like it came from a different program.
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        _box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        _box.set_margin_top(18); _box.set_margin_bottom(6)
+        _box.set_margin_start(20); _box.set_margin_end(20)
+        _hd = Gtk.Label(label=_t("“%s” is a class") % e.get("title", ""),
+                        xalign=0)
+        _hd.get_style_context().add_class("dlghead")
+        _box.pack_start(_hd, False, False, 0)
+        _msg = Gtk.Label(
+            label=_t("Class times are edited in Academics."), xalign=0)
+        _msg.set_line_wrap(True); _msg.set_width_chars(38)
+        _box.pack_start(_msg, False, False, 0)
+        dlg.get_content_area().add(_box)
+        dlg.add_button(_t("Not Now"), Gtk.ResponseType.CANCEL)
+        ok = dlg.add_button(_t("Open Academics"), Gtk.ResponseType.OK)
+        ok.get_style_context().add_class("suggested-action")
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        resp = dlg.run()
+        dlg.destroy()
+        if resp == Gtk.ResponseType.OK:
+            try:
+                subprocess.Popen(
+                    ["python3", os.path.join(os.path.dirname(
+                        os.path.abspath(__file__)), "academics.py"),
+                     "schedule"],
+                    env=dict(os.environ,
+                             PYTHONPATH=os.path.dirname(
+                                 os.path.abspath(__file__))))
+            except (OSError, ValueError):
+                pass
 
     def _on_show_more(self, _w, _ev, d):
         """The month cell's '+N more' overflow chip → that day's Day view, so
@@ -1873,7 +2239,14 @@ class Calendar(nbapp.AppWindow):
             except (ValueError, KeyError):
                 break
             default_cal = cal_names[0] if cal_names else "Personal"
-            cal = calpick.get_active_text() or default_cal
+            # By INDEX into cal_names, never calpick.get_active_text(): nbi18n
+            # translates what a ComboBoxText shows, so the stock calendar
+            # "Personal" reads back as "Личное" / "Personnel" / "个人" and that
+            # is what got filed on the event. The event then belonged to a
+            # calendar that does not exist — no colour, dropped by the calendar
+            # filter, and reopening it silently reset the picker to row 0.
+            ci = calpick.get_active()
+            cal = cal_names[ci] if 0 <= ci < len(cal_names) else default_cal
             ridx = reppick.get_active()
             rule = keys[ridx] if 0 <= ridx < len(keys) else "none"
             # Honour the chosen duration verbatim — do NOT clamp end back to
@@ -1912,6 +2285,51 @@ class Calendar(nbapp.AppWindow):
         return sorted((e for e in self.events if e.get("series") == sid),
                       key=lambda e: e["date"])
 
+    def _extend_series(self, today=None):
+        """Grow every repeating series so it still runs REPEAT_AHEAD days past
+        today. Returns True when anything was written.
+
+        A repeat is stored as real dated records and the run has to be capped
+        (see REPEAT_LIMIT), which on its own meant every repeating event
+        silently stopped: a weekly event created in January 2026 held its last
+        occurrence in January 2027 and after that the bin day, the class and
+        the standing order were simply gone, with the picker still saying
+        "Every week" and no end date anywhere. Extending on open makes the run
+        effectively endless for anyone who opens the Calendar within the
+        horizon, while every write stays bounded — at most REPEAT_LIMIT new
+        records per series per open, and none at all once the run is long
+        enough."""
+        today = today or self.today
+        groups = {}
+        for e in self.events:
+            sid = e.get("series")
+            rule = e.get("repeat", "none")
+            if sid and rule in REPEAT_AHEAD:
+                groups.setdefault((sid, rule), []).append(e)
+        added = False
+        for (sid, rule), members in groups.items():
+            seed = max(members, key=lambda m: m["date"])
+            last = seed["date"]
+            want = today + timedelta(days=REPEAT_AHEAD[rule])
+            if last >= want:
+                continue
+            fields = {"start": seed.get("start", 9.0),
+                      "end": seed.get("end", 10.0),
+                      "title": seed.get("title", ""),
+                      "cal": seed.get("cal", DEFAULT_CAL["name"])}
+            d = last
+            for _ in range(REPEAT_LIMIT.get(rule, 0)):
+                try:
+                    nxt = _next_repeat(d, rule)
+                except (OverflowError, ValueError):
+                    break
+                if nxt is None or nxt > want:
+                    break
+                self._new_event(nxt, fields, rule, sid)
+                d = nxt
+                added = True
+        return added
+
     def _new_event(self, day, fields, rule="none", series=""):
         """Build one stored event and register it with the merge-on-write
         bookkeeping, so a concurrent writer can never resurrect or clobber it."""
@@ -1921,6 +2339,187 @@ class Calendar(nbapp.AppWindow):
         self.events.append(ev)
         self._mark_seen(ev)
         return ev
+
+    # ---------------------------------------------------------------- shifts
+    def _ensure_work_calendar(self):
+        """The Work calendar, created the first time a shift is added.
+
+        Not seeded on a fresh install: someone who never works a rota should
+        not have an empty Work calendar sitting in their sidebar forever."""
+        for c in self.calendars:
+            if c["name"] == WORK_CAL:
+                return
+        self.calendars.append({"name": WORK_CAL, "color": WORK_COLOR})
+        self.cals_on.setdefault(WORK_CAL, True)
+        self._save_calendars()
+
+    def _shift_dialog(self):
+        """Enter a work shift.
+
+        Deliberately NOT the event dialog. That one offers starts from 08:00 to
+        20:30 in half hours and a maximum duration of three hours — it cannot
+        express a 06:00 start, a ten-hour day, or a night shift at all. Here the
+        times are typed, any hour is allowed, and a shift is assumed to repeat
+        weekly because most rotas do.
+        """
+        # Built the way every other dialog in this app is built (see
+        # _event_dialog): an undecorated .nbdialog with its buttons added as
+        # real action widgets, so Enter and Escape behave.
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("nbdialog")
+        cancel = dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        cancel.get_style_context().add_class("dlgcancel")
+        ok = dlg.add_button(_t("Add Shift"), Gtk.ResponseType.OK)
+        ok.get_style_context().add_class("suggested-action")
+        dlg.set_default_response(Gtk.ResponseType.OK)
+
+        box = dlg.get_content_area()
+        box.set_spacing(12)
+        box.set_margin_top(24)
+        box.set_margin_bottom(16)
+        box.set_margin_start(28)
+        box.set_margin_end(28)
+        heading = Gtk.Label(label=_t("Add a shift"), xalign=0)
+        heading.get_style_context().add_class("dlgtitle")
+        box.pack_start(heading, False, False, 0)
+
+        dayval = [self.sel]
+        sub = Gtk.Label(xalign=0)
+        sub.get_style_context().add_class("dlgsub")
+
+        def _fmt(*_):
+            d = dayval[0]
+            sub.set_text("%s, %d %s %d" % (_t(WEEKDAYS_FULL[d.weekday()]),
+                                           d.day, _t(MONTHS[d.month - 1]),
+                                           d.year))
+        _fmt()
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.pack_start(sub, True, True, 0)
+
+        def _step(delta):
+            try:
+                dayval[0] = dayval[0] + timedelta(days=delta)
+            except (OverflowError, OSError, ValueError):
+                return
+            _fmt()
+
+        for icon, tip, delta in (("back", _t("Previous day"), -1),
+                                 ("fwd", _t("Next day"), 1)):
+            b = Gtk.Button()
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            b.get_style_context().add_class("daystep")
+            b.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 14, INK)))
+            b.set_tooltip_text(tip)
+            b.connect("clicked", lambda _w, d=delta: _step(d))
+            row.pack_start(b, False, False, 0)
+        box.pack_start(self._field(_t("Day"), row), False, False, 0)
+
+        what = Gtk.Entry()
+        what.set_placeholder_text(_t("Example: Late shift"))
+        what.set_activates_default(True)
+        box.pack_start(self._field(_t("Name"), what),
+                       False, False, 0)
+
+        times = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        s_ent = Gtk.Entry(text="09:00")
+        s_ent.set_width_chars(7)
+        s_ent.set_max_length(5)
+        e_ent = Gtk.Entry(text="17:00")
+        e_ent.set_width_chars(7)
+        e_ent.set_max_length(5)
+        times.pack_start(self._field(_t("Starts"), s_ent), False, False, 0)
+        times.pack_start(self._field(_t("Ends"), e_ent), False, False, 0)
+        box.pack_start(times, False, False, 0)
+
+        reppick = Gtk.ComboBoxText()
+        rep_keys = ["none", "week", "fortnight"]
+        for key in rep_keys:
+            reppick.append_text(_t(REPEAT_LABELS[key]))
+        reppick.set_active(1)          # most rotas are the same every week
+        box.pack_start(self._field(_t("Repeats"), reppick), False, False, 0)
+
+        note = Gtk.Label(xalign=0)
+        note.get_style_context().add_class("dlgsub")
+        box.pack_start(note, False, False, 0)
+
+        err = Gtk.Label(xalign=0)
+        err.get_style_context().add_class("dlgerror")
+        err.set_no_show_all(True)
+        box.pack_start(err, False, False, 0)
+
+        def _preview(*_):
+            sh, eh = _hhmm_to_hours(s_ent.get_text()), _hhmm_to_hours(
+                e_ent.get_text())
+            if sh is None or eh is None or sh == eh:
+                note.set_text("")
+                return
+            hours = (eh - sh) if eh > sh else (24 - sh + eh)
+            over = ("  ·  " + _t("finishes the next morning")) if eh <= sh else ""
+            # The tail is concatenated OUTSIDE the key. With "%s long%s" the
+            # second %s is the optional tail, but it looks exactly like an
+            # English plural suffix to the spec checker, so the key could
+            # never carry both specs and _t() fell back to English here.
+            note.set_text((_t("%s long") % _fmt_hours(hours)) + over)
+        s_ent.connect("changed", _preview)
+        e_ent.connect("changed", _preview)
+        _preview()
+
+        dlg.show_all()
+        err.hide()
+        what.grab_focus()
+        while True:
+            resp = dlg.run()
+            if resp != Gtk.ResponseType.OK:
+                dlg.destroy()
+                return
+            sh = _hhmm_to_hours(s_ent.get_text())
+            eh = _hhmm_to_hours(e_ent.get_text())
+            if sh is None or eh is None:
+                err.set_text(_t("Times look like 09:00."))
+                err.show()
+                continue
+            if sh == eh:
+                err.set_text(_t("A shift needs to start and finish at "
+                                "different times."))
+                err.show()
+                continue
+            ridx = reppick.get_active()
+            rule = rep_keys[ridx] if 0 <= ridx < len(rep_keys) else "none"
+            name = what.get_text().strip() or _t("Work")
+            dlg.destroy()
+            self._create_shift(dayval[0], name, sh, eh, rule)
+            return
+
+    def _create_shift(self, day, name, start, end, rule):
+        """Write a shift — and, past midnight, the two halves of one.
+
+        A calendar event belongs to a single day, so a 22:00-06:00 shift is
+        stored as an evening block on the day it starts and a morning block on
+        the day after, sharing a series id. That is what makes it DRAWABLE: one
+        record with end < start would render as a negative-height block, and one
+        clamped to 23:59 would quietly lose the morning."""
+        self._ensure_work_calendar()
+        sid = _gen_id()
+        overnight = end <= start
+        for d in _repeat_dates(day, rule):
+            if overnight:
+                self._new_event(d, {"start": start, "end": 24.0,
+                                    "title": name, "cal": WORK_CAL},
+                                rule, sid)
+                self._new_event(d + timedelta(days=1),
+                                {"start": 0.0, "end": end,
+                                 "title": name, "cal": WORK_CAL},
+                                rule, sid)
+            else:
+                self._new_event(d, {"start": start, "end": end,
+                                    "title": name, "cal": WORK_CAL},
+                                rule, sid)
+        self.sel = day
+        self.cur_y, self.cur_m = day.year, day.month
+        self.cals_on[WORK_CAL] = True
+        self._save_events()
+        self._refresh()
 
     def _create_event(self, day, fields, rule):
         """Add an event — or, with a repeat rule, the whole run of them."""
@@ -1963,6 +2562,10 @@ class Calendar(nbapp.AppWindow):
         for e in members:
             e.update(fields)
         existing["date"] = day
+        # Opening a series for editing is also when its run gets topped up —
+        # the behaviour the comment beside REPEAT_LIMIT has always claimed and
+        # which, until this call existed, nothing anywhere actually did.
+        self._extend_series()
 
     def _delete_event(self, existing):
         """Confirm and remove an event. One of a series asks whether to drop
@@ -1998,9 +2601,9 @@ class Calendar(nbapp.AppWindow):
         dlg.get_style_context().add_class("nbdialog")
         cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
         cancel.get_style_context().add_class("dlgcancel")
-        one = dlg.add_button("Just this one", RESP_ONE)
+        one = dlg.add_button("This Event", RESP_ONE)
         one.get_style_context().add_class("destructive")
-        every = dlg.add_button("All of them", RESP_ALL)
+        every = dlg.add_button("All Events", RESP_ALL)
         every.get_style_context().add_class("destructive")
         area = dlg.get_content_area()
         area.set_spacing(10)
@@ -2010,7 +2613,7 @@ class Calendar(nbapp.AppWindow):
         t.get_style_context().add_class("dlgtitle")
         area.pack_start(t, False, False, 0)
         b = Gtk.Label(
-            label=_t("“%s” repeats. There are %d of them in the calendar.")
+            label=_t("“%s” repeats %d times in the calendar.")
             % (title, n), xalign=0)
         b.set_line_wrap(True); b.set_max_width_chars(40)
         b.get_style_context().add_class("dlgbody")

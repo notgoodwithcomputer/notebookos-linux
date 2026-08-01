@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Regenerate the gdk-pixbuf loader cache, on the machine, at boot.
+#
+# THE BUG THIS EXISTS FOR: the cache shipped in the image disagreed with what
+# was actually on disk, in BOTH directions. It registered
+# libpixbufloader-svg.so and -xpm.so, neither of which is installed, so every
+# pixbuf SVG load failed outright with "cannot open shared object file"; and it
+# omitted libpixbufloader-tiff.so, which IS installed, so TIFFs were pushed
+# down a slow external-converter fallback for no reason. Nothing regenerated
+# it, so it drifted further from the truth every time an image-format package
+# was switched on or off.
+#
+# Why on the target and not in post-build: the HOST's
+# gdk-pixbuf-query-loaders cannot introspect the TARGET's shared objects --
+# it loads them against the host's libgdk_pixbuf and dies on a symbol mismatch
+# ("undefined symbol: g_once_init_leave_pointer"), then exits 0 having written
+# an EMPTY cache. A build-time seed would therefore have made things worse
+# while looking like it worked. The same reasoning is why S35fontcache seeds
+# fontconfig here rather than at build time.
+#
+# Runs synchronously and early: it is a handful of small shared objects, and
+# the first thing the desktop does is draw icons.
+STAMP=/var/cache/gdk-pixbuf-loaders.stamp
+
+start() {
+	command -v gdk-pixbuf-query-loaders >/dev/null 2>&1 || return 0
+	dir=$(echo /usr/lib/gdk-pixbuf-2.0/*/loaders 2>/dev/null | head -1)
+	[ -d "$dir" ] || return 0
+	cache="${dir%/loaders}/loaders.cache"
+	# Only redo the work when the loader set has actually changed.
+	sig=$(ls -1 "$dir" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1)
+	if [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$sig" ]; then
+		return 0
+	fi
+	printf "Refreshing image loader cache: "
+	if gdk-pixbuf-query-loaders > "$cache.new" 2>/dev/null && [ -s "$cache.new" ]; then
+		mv "$cache.new" "$cache"
+		mkdir -p "$(dirname "$STAMP")"
+		echo "$sig" > "$STAMP"
+		echo "OK"
+	else
+		# Never ship a cache we could not build; the old one still works for
+		# the formats it does list.
+		rm -f "$cache.new"
+		echo "skipped"
+	fi
+}
+
+stop() {
+	:
+}
+
+case "$1" in
+	start) start ;;
+	stop)  stop ;;
+	restart) stop; start ;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

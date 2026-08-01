@@ -47,6 +47,21 @@ CROWN_MAX = 5
 EX_COLUMN = 560
 
 
+def _quarantine(path):
+    """Move a store this app could not make sense of aside, under the same
+    <name>.damaged-<timestamp> name nbapp.preserve_damaged uses. Never raises."""
+    try:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = "%s.damaged-%s" % (path, stamp)
+        n = 2
+        while os.path.exists(dest):
+            dest = "%s.damaged-%s-%d" % (path, stamp, n)
+            n += 1
+        os.replace(path, dest)
+    except OSError:
+        pass
+
+
 def _strip_accents(s):
     return "".join(c for c in unicodedata.normalize("NFD", s)
                    if unicodedata.category(c) != "Mn")
@@ -96,6 +111,7 @@ class Language(nbapp.AppWindow):
         self._graded = False      # this exercise has been answered
         self._check_btn = None    # the current exercise's Check / Continue
         self._check_id = 0
+        self._quarantine_pending = False
         self._load_progress()
 
         self.stack = Gtk.Stack()
@@ -142,17 +158,86 @@ class Language(nbapp.AppWindow):
                                        if last == y else 1)
             self.progress["streak_day"] = today
 
+    @staticmethod
+    def norm_progress(d):
+        """Coerce a loaded progress file into the shape every reader here
+        assumes: two counters, a day string, a crown map and a seen list.
+
+        NOTHING re-validated these. The file is small, so it is exactly the kind
+        a hand-edit or a half-finished write leaves in a foreign shape, and each
+        wrong type broke something different and silently:
+
+          * `xp` or `streak` as a string / list / object made the streak line's
+            "%d XP" raise inside __init__ — the app would not OPEN AT ALL, with
+            no way back short of deleting the file from a terminal this OS does
+            not really offer;
+          * `crowns` as anything but an object made _crowns() raise the moment a
+            course was opened;
+          * `seen` as anything but a list made finishing a lesson raise on
+            .append, so the lesson's progress was never recorded.
+
+        A wrong type costs ITSELF (that one counter resets) and nothing else,
+        and every other key in the file rides through untouched."""
+        out = dict(d) if isinstance(d, dict) else {}
+        for key in ("xp", "streak"):
+            v = out.get(key)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                try:
+                    v = int(str(v).strip())      # "250" is still 250 XP
+                except (TypeError, ValueError):
+                    v = 0
+            out[key] = int(v)
+        sd = out.get("streak_day")
+        out["streak_day"] = sd if isinstance(sd, str) else ""
+        crowns = out.get("crowns")
+        if not isinstance(crowns, dict):
+            crowns = {}
+        clean = {}
+        pending = [crowns]
+        while pending:
+            level = pending.pop()
+            for k, v in level.items():
+                if isinstance(v, dict):
+                    # A wrapper key around the crown map, not a skill: descend
+                    # rather than call a course's worth of crowns unreadable.
+                    if len(pending) < 3:
+                        pending.append(v)
+                    continue
+                if not isinstance(k, str):
+                    continue
+                try:
+                    clean[k] = max(0, min(CROWN_MAX, int(v)))
+                except (TypeError, ValueError):
+                    continue
+        out["crowns"] = clean
+        seen = out.get("seen")
+        if isinstance(seen, dict):
+            seen = list(seen.keys())     # a set written as an object
+        if not isinstance(seen, list):
+            seen = []
+        out["seen"] = [s for s in seen if isinstance(s, str)]
+        return out
+
     def _load_progress(self):
         try:
             with open(CFG_FILE, encoding="utf-8") as fh:
                 d = json.load(fh)
-            if isinstance(d, dict):
-                self.progress = d
         except Exception:
-            self.progress = {}
+            d = None
+        self.progress = self.norm_progress(d)
+        # A store that PARSED but is not a progress file at all (a bare list,
+        # some other app's) would otherwise be replaced by the destroy-time save
+        # with a fresh, empty one. nbapp's generic quarantine cannot see it —
+        # valid JSON of the wrong shape parses perfectly — so move it aside on
+        # the way past instead, the same way accounting.py and cookbook.py do.
+        if d is not None and not isinstance(d, dict):
+            self._quarantine_pending = True
 
     def _save_progress(self):
         try:
+            if getattr(self, "_quarantine_pending", False):
+                self._quarantine_pending = False
+                _quarantine(CFG_FILE)
             nbapp.atomic_write_json(CFG_FILE, self.progress)
         except Exception:
             pass
@@ -167,7 +252,7 @@ class Language(nbapp.AppWindow):
         t = Gtk.Label(label=_t("Learn a language"))
         t.get_style_context().add_class("hometitle")
         head.pack_start(t, False, False, 0)
-        s = Gtk.Label(label=_t("Offline courses · pronunciation shown in IPA"))
+        s = Gtk.Label(label=_t("Pronunciation shown in IPA"))
         s.get_style_context().add_class("homesub")
         head.pack_start(s, False, False, 0)
         st = Gtk.Label(label="")
@@ -198,8 +283,22 @@ class Language(nbapp.AppWindow):
         flow.set_halign(Gtk.Align.CENTER)
         flow.set_size_request(3 * 200 + 2 * 16, -1)
         if not self.courses:
-            empty = Gtk.Label(label=_t("No courses installed."))
-            empty.get_style_context().add_class("homesub")
+            # Courses ship with the system, so an empty picker means the course
+            # files are gone, not that there is nothing to do yet. Say what the
+            # screen is for and what actually restores it — "No courses
+            # installed." named the absence and left the reader with no move.
+            empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            empty.set_valign(Gtk.Align.CENTER)
+            t = Gtk.Label(label=_t("No courses installed"))
+            t.get_style_context().add_class("hometitle")
+            empty.pack_start(t, False, False, 0)
+            s = Gtk.Label(label=_t(
+                "Reinstall Notebook OS to restore the courses."))
+            s.get_style_context().add_class("homesub")
+            s.set_line_wrap(True)
+            s.set_max_width_chars(46)
+            s.set_justify(Gtk.Justification.CENTER)
+            empty.pack_start(s, False, False, 0)
             outer.pack_start(empty, True, True, 0)
             return outer
         self._card_flow = flow
@@ -426,10 +525,61 @@ class Language(nbapp.AppWindow):
                 pool.extend(s.get("words", []))
         return pool
 
+    @staticmethod
+    def _term_key(s):
+        """A term's identity for the synonym maps: case and spacing are noise,
+        DIACRITICS ARE NOT.
+
+        _norm() strips accents, which is the right leniency for grading what a
+        learner typed on a keyboard that may not carry them -- and exactly the
+        wrong key here. Under _norm the Mandarin course's `shi` (to be) and
+        `shi` (ten) are one term, so treating them as synonyms would accept
+        "ten" as a reading of the verb. Matching on the spelling as written
+        keeps French `fille`/`fille` together, which is the real case, and these
+        two apart."""
+        return " ".join((s or "").strip().lower().split())
+
+    @staticmethod
+    def _synonyms(pool):
+        """(meanings of each target term, target terms for each meaning) across a
+        whole course, both keyed on _term_key.
+
+        A word does not have to mean only one thing, and two of the shipped
+        courses say so: French `fille` is taught as "girl" in BASICS > People and
+        as "daughter" in PEOPLE > Family, and Mandarin `shi` is "yes" in
+        Greetings and "to be" in Verbs. Both readings are correct.
+
+        THE BUG THIS EXISTS FOR: "Translate to English" showed `fille` and
+        accepted exactly ONE of its two meanings, so a learner who had done both
+        skills and typed "daughter" was marked WRONG for a right answer -- which
+        also cost them the crown for a perfect lesson and then asked the same
+        question again, to be marked wrong a second time. Worse, `choose` drew
+        its distractors from the whole course filtered only against the answer's
+        OWN meaning, so it could offer "fille" with both "girl" and "daughter"
+        among the options and score only one of them: a question with no right
+        answer available. _check_type has always consulted an `alts` list and
+        nothing ever filled it in."""
+        by_target, by_english = {}, {}
+        for w in pool:
+            if not isinstance(w, dict):
+                continue
+            t, e = w.get("t"), w.get("e")
+            if not isinstance(t, str) or not isinstance(e, str):
+                continue
+            tk, ek = Language._term_key(t), Language._term_key(e)
+            if not tk or not ek:
+                continue
+            by_target.setdefault(tk, []).append(e)
+            by_english.setdefault(ek, []).append(t)
+        return by_target, by_english
+
     def _build_lesson(self, ui, si):
         skill = self.course["units"][ui]["skills"][si]
         words, phrases = self._skill_items(skill)
         pool = self._course_words()
+        # Every reading this course records for a term, so an exercise accepts
+        # all of them and never offers two of them as rival options.
+        self._syn_t, self._syn_e = self._synonyms(pool)
         items = words + phrases
         if not items:
             return None
@@ -474,6 +624,26 @@ class Language(nbapp.AppWindow):
         return {"ui": ui, "si": si, "ex": exercises, "i": 0, "wrong": 0,
                 "new_keys": new_keys}
 
+    def _alts_for(self, side, prompt, answer, keep=False):
+        """The OTHER accepted answers for `prompt`, looking it up as a target
+        term (side "t") or as an English meaning (side "e").
+
+        `keep=True` returns the answer itself as well, for the caller that needs
+        the whole set of readings to exclude rather than the alternatives to
+        accept. Never raises and returns [] when the maps are absent, so a
+        lesson built before they existed still grades."""
+        table = getattr(self, "_syn_t" if side == "t" else "_syn_e", None) or {}
+        found = table.get(self._term_key(prompt), [])
+        out, seen = [], set()
+        for a in found:
+            if not keep and _norm(a) == _norm(answer):
+                continue
+            if _norm(a) in seen:
+                continue
+            seen.add(_norm(a))
+            out.append(a)
+        return out
+
     def _make_exercise(self, kind, it, words, pool):
         if kind == "intro":
             return {"kind": "intro", "t": it["t"], "e": it["e"],
@@ -483,14 +653,23 @@ class Language(nbapp.AppWindow):
             return {"kind": "match",
                     "pairs": [(w["t"], w["e"], w.get("ipa", "")) for w in picks]}
         if kind == "translate_to_en":
+            # Accept EVERY meaning this course records for the prompt, not just
+            # the one this exercise was built from -- see _synonyms.
             return {"kind": "type", "prompt": it["t"], "ipa": it.get("ipa", ""),
-                    "answer": it["e"], "ask": _t("Translate to English")}
+                    "answer": it["e"], "ask": _t("Translate to English"),
+                    "alts": self._alts_for("t", it["t"], it["e"])}
         if kind == "translate_to_t":
             return {"kind": "type", "prompt": it["e"], "ipa": "",
                     "answer": it["t"], "ask": _t("Translate to %s")
-                    % self.course.get("name", "")}
+                    % self.course.get("name", ""),
+                    "alts": self._alts_for("e", it["e"], it["t"])}
         if kind == "choose":
-            others = [w["e"] for w in pool if _norm(w.get("e")) != _norm(it["e"])]
+            # Exclude every meaning of the PROMPT, not only the one being asked
+            # for: offering "fille" with both "girl" and "daughter" among the
+            # options is a question with no answer the grader will accept.
+            banned = {_norm(a) for a in
+                      self._alts_for("t", it["t"], it["e"], keep=True)}
+            others = [w["e"] for w in pool if _norm(w.get("e")) not in banned]
             opts = random.sample(others, min(3, len(others))) if others else []
             opts.append(it["e"])
             random.shuffle(opts)
@@ -598,7 +777,7 @@ class Language(nbapp.AppWindow):
         m.set_xalign(0.5)
         body.pack_start(m, False, False, 0)
         body.pack_start(Gtk.Box(), True, True, 0)
-        self._continue_footer(body, _t("Got it"), self._got_intro)
+        self._continue_footer(body, _t("Continue"), self._got_intro)
 
     def _got_intro(self):
         """Leave a teaching card. It is not graded, so mark it answered to get
@@ -623,7 +802,7 @@ class Language(nbapp.AppWindow):
         self._prompt_block(body, ex["prompt"], ex.get("ipa", ""))
         entry = Gtk.Entry()
         entry.get_style_context().add_class("exentry")
-        entry.set_placeholder_text(_t("Type your answer…"))
+        entry.set_placeholder_text(_t("Answer"))
         entry.connect("activate", lambda *_: self._check_type(entry, ex))
         body.pack_start(entry, False, False, 0)
         body.pack_start(Gtk.Box(), True, True, 0)
@@ -720,7 +899,7 @@ class Language(nbapp.AppWindow):
 
     # ---- exercise: match pairs ----
     def _ex_match(self, body, ex):
-        self._ask_label(body, _t("Tap the matching pairs"))
+        self._ask_label(body, _t("Match the pairs"))
         cols = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=40)
         cols.set_halign(Gtk.Align.CENTER)
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -833,7 +1012,7 @@ class Language(nbapp.AppWindow):
         self._graded = True
         L = self._lesson
         if ok:
-            self._toast(True, _t("Correct!"))
+            self._toast(True, _t("Correct"))
             GLib.timeout_add(750, self._advance)
             return
         L["wrong"] += 1
@@ -846,7 +1025,7 @@ class Language(nbapp.AppWindow):
             again["retry"] = True
             L["ex"].append(again)
         self._toast(False, (_t("Answer: %s") % answer) if answer
-                    else _t("Not quite"))
+                    else _t("Incorrect"))
         self._hold_for_continue()
 
     def _hold_for_continue(self):
@@ -909,7 +1088,7 @@ class Language(nbapp.AppWindow):
         star = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("star", 52, "#B8912E"))
         star.set_halign(Gtk.Align.CENTER)
         box.pack_start(star, False, False, 0)
-        t = Gtk.Label(label=_t("Lesson complete!"))
+        t = Gtk.Label(label=_t("Lesson complete"))
         t.get_style_context().add_class("donetitle")
         box.pack_start(t, False, False, 0)
         s = Gtk.Label(label=_t("%d / %d correct") % (correct, graded)
@@ -933,8 +1112,21 @@ class Language(nbapp.AppWindow):
     # ================= menu =================
     def menu_items(self, name):
         if name == "File":
+            # Courses takes you back to the picker, so it greys out when the
+            # picker is already what you are looking at rather than looking
+            # live and doing nothing. Reset Progress asks before it wipes
+            # anything, hence its ellipsis.
+            # Ask the Stack, not self.course: _show_home leaves the last opened
+            # course set, so `not self.course` would say "not home" forever
+            # after the first lesson. A Stack that has not been shown yet
+            # reports None, and the app always opens on the picker — so None
+            # means home too.
+            try:
+                on_home = self.stack.get_visible_child_name() in (None, "home")
+            except Exception:
+                on_home = False
             return [
-                ("Courses", self._show_home),
+                ("Courses", None if on_home else self._show_home),
                 nbapp.SEP,
                 ("Reset Progress…", self._reset_progress),
                 nbapp.SEP,
@@ -950,23 +1142,23 @@ class Language(nbapp.AppWindow):
         dlg.set_decorated(False)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.get_style_context().add_class("confirmcard")
-        t = Gtk.Label(label=_t("Start over?"), xalign=0)
+        t = Gtk.Label(label=_t("Reset Progress?"), xalign=0)
         t.get_style_context().add_class("confirmtitle")
         box.pack_start(t, False, False, 0)
         m = Gtk.Label(xalign=0, label=_t(
-            "This clears every crown, your XP and your streak in all courses. "
-            "It cannot be undone."))
+            "Clears all crowns, XP and streaks in every course. This cannot "
+            "be undone."))
         m.set_line_wrap(True)
         m.set_max_width_chars(44)
         m.get_style_context().add_class("confirmmsg")
         box.pack_start(m, False, False, 0)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         row.set_halign(Gtk.Align.END)
-        keep = Gtk.Button(label=_t("Keep My Progress"))
+        keep = Gtk.Button(label=_t("Cancel"))
         keep.set_relief(Gtk.ReliefStyle.NONE)
         keep.get_style_context().add_class("confirmkeep")
         keep.connect("clicked", lambda *_: dlg.response(Gtk.ResponseType.CANCEL))
-        wipe = Gtk.Button(label=_t("Reset Everything"))
+        wipe = Gtk.Button(label=_t("Reset"))
         wipe.set_relief(Gtk.ReliefStyle.NONE)
         wipe.get_style_context().add_class("confirmwipe")
         wipe.connect("clicked", lambda *_: dlg.response(Gtk.ResponseType.OK))
@@ -989,7 +1181,7 @@ class Language(nbapp.AppWindow):
         dlg.destroy()
         if not go:
             return
-        self.progress = {}
+        self.progress = self.norm_progress({})
         self._save_progress()
         self._refresh_home_streak()
         if self.course:

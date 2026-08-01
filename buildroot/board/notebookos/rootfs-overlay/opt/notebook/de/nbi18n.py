@@ -453,7 +453,15 @@ def _zh_date(s, units=None):
                 year = n + y_u
             elif not day:
                 day = "%d%s" % (int(n), d_u)
-    if not (month or year or wd):
+    # A real date WORD has to be present — a month or a weekday. Accepting a
+    # bare year here meant any four-digit number anywhere in the OS was rebuilt
+    # as a date in ja/ko/zh: the 2048 game's tiles read "2048年", and the
+    # Settings ▸ Displays list turned "1920x1080" into "1080年" (the second
+    # 4-digit run overwrote the first) and "1366x768" into "1366年768日" — which
+    # also fed xrandr --mode "1080年", so changing resolution failed outright in
+    # those three languages. With no month and no weekday there is no English
+    # word to translate, so there is nothing for this rule to do.
+    if not (month or wd):
         return None
     stamp = join.join(p for p in (year, month, day) if p)
     out = " ".join(p for p in (stamp, wd, " ".join(tail)) if p)
@@ -589,6 +597,34 @@ def _stamp(w, new):
         pass                                # not stampable: worst case, a re-run
 
 _TAG_RE = None
+
+
+def set_verbatim(widget, text):
+    """Put text the USER typed on a translatable widget, exactly as typed.
+
+    The auto-translate layer below cannot tell a label the app wrote from a
+    label holding the user's own words, so it looks up both. That is right for
+    chrome and wrong for content, and the difference is not cosmetic when the
+    widget is also where the app READS the value back from:
+
+        Novel keeps the manuscript title in its sidebar label and _serialize()
+        reads it straight out again. A writer on a Spanish install who named her
+        book "Notes" got "Notas" — on screen, in the file, and in the filename
+        Save As suggested, because the store was written from the translated
+        label. "Contents", "Journal", "Body", "Quote", "Save" and "Chapter 1"
+        all do the same thing; only a title with no catalog entry survived.
+
+    Stamping the widget with the exact string is what _stamped() checks, so the
+    setter and the show_all walk both leave it alone. Use this for any name,
+    title, filename or message a person typed."""
+    try:
+        _stamp(widget, text)
+    except Exception:
+        pass
+    try:
+        widget.set_text(text)
+    except Exception:
+        widget.set_label(text)
 
 
 def _t_markup(s):

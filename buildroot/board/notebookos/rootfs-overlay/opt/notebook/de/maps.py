@@ -13,7 +13,9 @@ Everything is on-disk — no network.
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+gi.require_version("Pango", "1.0")
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo  # noqa: E402
 
 import os          # noqa: E402
 import math        # noqa: E402
@@ -27,6 +29,38 @@ import nbicons     # noqa: E402
 from nbi18n import _t  # noqa: E402
 
 MAPS_DIR = "/opt/notebook/maps"
+
+
+# Every string on this canvas goes through Pango, never cairo's toy text API
+# (select_font_face + show_text). The toy API binds ONE face and does no
+# per-character fallback, and Nimbus Sans carries no CJK, no Devanagari and no
+# Hebrew — so "No maps" and the sentence under it came out as .notdef in five of
+# the seventeen shipped languages, and .notdef in that face is INVISIBLE rather
+# than a box. A reader in Japanese opened Maps with no pack installed and got a
+# blank window with nothing on it to explain why. Pango picks a face per glyph.
+
+def _layout(cr, text, size, bold=False):
+    """A Pango layout for `text` at `size` px in the interface face."""
+    layout = PangoCairo.create_layout(cr)
+    fd = Pango.FontDescription("Nimbus Sans")
+    fd.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
+    fd.set_absolute_size(size * Pango.SCALE)
+    layout.set_font_description(fd)
+    layout.set_text(text, -1)
+    return layout
+
+
+def _text_w(cr, text, size, bold=False):
+    """The drawn width of `text`, for centring and for sizing a plate under it."""
+    return _layout(cr, text, size, bold).get_pixel_size()[0]
+
+
+def _show_text(cr, x, y, text, size, bold=False):
+    """Draw `text` with its BASELINE at y — the anchor cr.show_text used, so
+    call sites keep the geometry they were tuned with."""
+    layout = _layout(cr, text, size, bold)
+    cr.move_to(x, y - layout.get_baseline() / Pango.SCALE)
+    PangoCairo.show_layout(cr, layout)
 
 # category -> (kind, colour, nominal width @street-zoom, casing colour)
 # categories match osm2nbmap3: 1 major road, 2 minor road, 3 path, 4 water,
@@ -87,31 +121,57 @@ class NBM2:
     CACHE = 64
 
     def __init__(self, path):
+        """Read the header + directory. Raises ValueError — and ONLY ValueError,
+        besides the OSError of a file that cannot be opened — for anything this
+        is not able to read as a pack.
+
+        ONE ERROR TYPE MATTERS BECAUSE THIS RUNS DURING WINDOW CONSTRUCTION.
+        struct.unpack on a short read raises struct.error, which is not a
+        ValueError and was not caught, so a HALF-COPIED PACK STOPPED MAPS FROM
+        OPENING AT ALL — traceback, no window, no way in to remove the file or
+        pick another map. A 2 GB continent pack copied onto a stick is exactly
+        the file most likely to arrive truncated, and the copy-it-to-the-Maps-
+        folder route is the one the app documents."""
         self.path = path
-        f = open(path, "rb")
+        f = open(path, "rb")                          # OSError: caller's to own
         self.f = f
-        if f.read(5) != b"NBM2\n":
-            raise ValueError("not an .nbm2 pack")
-        (nlen,) = struct.unpack("<H", f.read(2))
-        self.name = f.read(nlen).decode("utf-8", "replace")
-        self.minlat, self.minlon, self.maxlat, self.maxlon = \
-            struct.unpack("<4d", f.read(32))
-        (cde,) = struct.unpack("<i", f.read(4))
-        self.cell_deg = cde / 1e6
-        (self.quant,) = struct.unpack("<I", f.read(4))
-        (ncells,) = struct.unpack("<I", f.read(4))
-        self.places_off, self.places_zlen, self.places_cnt = \
-            struct.unpack("<QII", f.read(16))
-        self.dir = {}
-        for _ in range(ncells):
-            cy, cx, off, zl = struct.unpack("<iiQI", f.read(20))
-            self.dir[(cy, cx)] = (off, zl)
+        try:
+            if f.read(5) != b"NBM2\n":
+                raise ValueError("not an .nbm2 pack")
+            (nlen,) = struct.unpack("<H", f.read(2))
+            self.name = f.read(nlen).decode("utf-8", "replace")
+            self.minlat, self.minlon, self.maxlat, self.maxlon = \
+                struct.unpack("<4d", f.read(32))
+            (cde,) = struct.unpack("<i", f.read(4))
+            self.cell_deg = cde / 1e6
+            (self.quant,) = struct.unpack("<I", f.read(4))
+            (ncells,) = struct.unpack("<I", f.read(4))
+            self.places_off, self.places_zlen, self.places_cnt = \
+                struct.unpack("<QII", f.read(16))
+            self.dir = {}
+            for _ in range(ncells):
+                cy, cx, off, zl = struct.unpack("<iiQI", f.read(20))
+                self.dir[(cy, cx)] = (off, zl)
+            if not self.cell_deg:
+                raise ValueError("pack declares a zero cell size")
+        except ValueError:
+            raise
+        except Exception as exc:      # struct.error, MemoryError from a bad count
+            raise ValueError("unreadable .nbm2 pack: %s" % exc)
         self.payload_base = f.tell()
         self._cache = {}
         self._order = []
         self._places = None
 
     def cell(self, cy, cx):
+        """The features in one cell, or () when it holds none — or when its
+        payload is unreadable.
+
+        A corrupt payload must NOT raise: this is called from the draw handler,
+        once per visible cell per frame, so a raise here would be a traceback on
+        every repaint for as long as the window stayed open. The empty answer is
+        cached like any other, so a damaged cell is decoded once and then costs
+        nothing."""
         key = (cy, cx)
         c = self._cache.get(key)
         if c is not None:
@@ -121,8 +181,11 @@ class NBM2:
             self._cache[key] = ()
             return ()
         off, zl = loc
-        self.f.seek(self.payload_base + off)
-        feats = self._parse(lzma.decompress(self.f.read(zl)))
+        try:
+            self.f.seek(self.payload_base + off)
+            feats = self._parse(lzma.decompress(self.f.read(zl)))
+        except Exception:
+            feats = ()
         self._cache[key] = feats
         self._order.append(key)
         if len(self._order) > self.CACHE:
@@ -171,22 +234,37 @@ class NBM2:
         return out
 
     def places(self):
+        """The searchable place index, or [] when it cannot be read.
+
+        Never raises, for the same reason cell() does not: the FIRST caller is
+        _default_view, during window construction, so an unreadable index used
+        to mean Maps would not open at all (lzma.LZMAError, "end-of-stream
+        marker was reached", from a pack whose payload was truncated or
+        zeroed). A pack with no readable index still has a header, so the view
+        can still be centred on its bounding box and the streets still draw —
+        only the search box and the low-zoom labels go quiet.
+
+        Whatever was decoded before the damage is kept: a truncated index is
+        still a usable index for the towns that made it in."""
         if self._places is not None:
             return self._places
         out = []
-        if self.places_cnt:
-            self.f.seek(self.payload_base + self.places_off)
-            raw = lzma.decompress(self.f.read(self.places_zlen))
-            i = 0
-            for _ in range(self.places_cnt):
-                rank = raw[i]
-                i += 1
-                nl, i = _rv(raw, i)
-                nm = raw[i:i + nl].decode("utf-8", "replace")
-                i += nl
-                la, lo = struct.unpack_from("<ii", raw, i)
-                i += 8
-                out.append((rank, nm, la / 1e6, lo / 1e6))
+        try:
+            if self.places_cnt:
+                self.f.seek(self.payload_base + self.places_off)
+                raw = lzma.decompress(self.f.read(self.places_zlen))
+                i = 0
+                for _ in range(self.places_cnt):
+                    rank = raw[i]
+                    i += 1
+                    nl, i = _rv(raw, i)
+                    nm = raw[i:i + nl].decode("utf-8", "replace")
+                    i += nl
+                    la, lo = struct.unpack_from("<ii", raw, i)
+                    i += 8
+                    out.append((rank, nm, la / 1e6, lo / 1e6))
+        except Exception:
+            pass
         self._places = out
         return out
 
@@ -319,23 +397,55 @@ class Maps(nbapp.AppWindow):
     def _open_map(self, path):
         try:
             self.pack = NBM2(path)
-        except (OSError, ValueError):
+            self._position_for(path)
+        except Exception:
+            # EVERYTHING, because this runs from __init__: a pack that fails in
+            # a way not thought of here must leave the window standing with the
+            # note below, not stop Maps from opening. NBM2 narrows what it can
+            # raise to OSError/ValueError, and cell()/places() no longer raise at
+            # all; this is the backstop for whatever is left.
             # A truncated or corrupt pack (a half-copied continent, say) used to
             # leave a blank sheet of paper and not one word about why.
             self.pack = None
-            self._empty = (_t("This map could not be read"),
-                           _t("The file %s is damaged or incomplete.")
-                           % os.path.basename(path))
+            # Name the file AND the way out: "damaged or incomplete" on its own
+            # tells a reader what went wrong and nothing about what to do, and
+            # the usual cause here is a copy that was interrupted. The second
+            # sentence is the SAME line the no-maps state already uses, so the
+            # instruction is one wording in every language rather than two.
+            self._empty = (
+                _t("This map could not be read"),
+                (_t("The file %s is damaged or incomplete.")
+                 % os.path.basename(path)) + " "
+                + _t("Map files are read from the Maps folder in Home."))
             self._invalidate()
             self.canvas.queue_draw()
             return
         self._empty = None
         self._hi = None
+        self._invalidate()
+        self.canvas.queue_draw()
+
+    def _position_for(self, path):
+        """Point the view at the freshly-opened pack: the remembered position if
+        the config still names this same pack, else its own default view. Inside
+        _open_map's guard, because reading the pack's place index is part of it
+        and a damaged index must not escape."""
         cfg = self._load_cfg()
-        if cfg.get("pack") == path and "scale" in cfg:
-            self.cx = cfg["cx"]
-            self.cy = cfg["cy"]
-            self.scale = cfg["scale"]
+        saved = None
+        if isinstance(cfg, dict) and cfg.get("pack") == path:
+            try:
+                # A hand-edited or half-written config must not put a string
+                # where the draw handler expects a number: everything below is
+                # arithmetic on these three, every frame. A non-number here is
+                # simply "no remembered position", not a damaged map.
+                cx, cy = float(cfg["cx"]), float(cfg["cy"])
+                scale = float(cfg["scale"])
+                if scale > 0 and cx == cx and cy == cy and scale == scale:
+                    saved = (cx, cy, scale)
+            except (KeyError, TypeError, ValueError):
+                saved = None
+        if saved is not None:
+            self.cx, self.cy, self.scale = saved
         else:
             self._default_view()
         self._invalidate()
@@ -356,11 +466,18 @@ class Maps(nbapp.AppWindow):
             self.scale = max(self._min_scale(), 200.0)
 
     def _min_scale(self):
+        """The most zoomed-OUT scale allowed, so a view never spans more than
+        MAXCELLS cells. With no map open there is no cell size to measure
+        against, so nothing is out of bounds."""
+        if not self.pack:
+            return 1.0
         w = self.canvas.get_allocated_width() or 900
         h = self.canvas.get_allocated_height() or 600
         return math.sqrt(w * h / MAXCELLS) / self.pack.cell_deg
 
     def _fit(self):
+        if not self.pack:
+            return          # View > Fit Region with nothing open: nothing to fit
         b = (self.pack.minlon, self.pack.minlat, self.pack.maxlon, self.pack.maxlat)
         w = self.canvas.get_allocated_width() or 900
         h = self.canvas.get_allocated_height() or 600
@@ -381,6 +498,14 @@ class Maps(nbapp.AppWindow):
                 self.cy - (sy - h / 2) / self.scale)
 
     def _zoom(self, factor, fx=None, fy=None):
+        # NO MAP, NOTHING TO ZOOM. The +/- buttons and the scroll wheel are live
+        # on the no-map and damaged-pack states too, and they used to reach
+        # _min_scale, which read cell_deg off a pack that is None: the button
+        # did nothing and put a traceback on the console every time it was
+        # pressed, on the very screen a person lands on when a pack will not
+        # read. There is nothing to say here — the sheet already says it.
+        if not self.pack:
+            return
         w = self.canvas.get_allocated_width()
         h = self.canvas.get_allocated_height()
         if fx is None:
@@ -421,10 +546,7 @@ class Maps(nbapp.AppWindow):
         elif self._empty:
             self._draw_empty(cr, aw, ah)
         cr.set_source_rgba(0, 0, 0, 0.4)
-        cr.select_font_face("sans-serif", 0, 0)
-        cr.set_font_size(9)
-        cr.move_to(6, ah - 6)
-        cr.show_text("© OpenStreetMap contributors")
+        _show_text(cr, 6, ah - 6, "© OpenStreetMap contributors", 9)
         return False
 
     # A scale bar reads 1, 2 or 5 at some power of ten — the steps every printed
@@ -457,13 +579,11 @@ class Maps(nbapp.AppWindow):
         label = ("%d m" % metres if metres < 1000
                  else "%g km" % (metres / 1000.0))
         x0, y0 = 12, ah - 26
-        cr.select_font_face("sans-serif", 0, 0)
-        cr.set_font_size(11)
-        te = cr.text_extents(label)
+        tw = _text_w(cr, label, 11)
         # a paper plate under the bar, so it stays legible over dark parkland
         # or water as well as over the pale land fill
         cr.set_source_rgba(0.99, 0.98, 0.96, 0.82)
-        cr.rectangle(x0 - 6, y0 - 15, max(px, te.width) + 14, 26)
+        cr.rectangle(x0 - 6, y0 - 15, max(px, tw) + 14, 26)
         cr.fill()
         cr.set_source_rgb(0.20, 0.19, 0.17)
         cr.set_line_width(1.4)
@@ -472,8 +592,7 @@ class Maps(nbapp.AppWindow):
         cr.line_to(x0 + px, y0)
         cr.line_to(x0 + px, y0 - 5)
         cr.stroke()
-        cr.move_to(x0, y0 - 8)
-        cr.show_text(label)
+        _show_text(cr, x0, y0 - 8, label, 11)
 
     def _visible_cells(self, aw, ah):
         lon0 = self.cx - (aw / 2) / self.scale
@@ -591,7 +710,6 @@ class Maps(nbapp.AppWindow):
     def _draw_labels(self, cr, labels, aw, ah):
         labels.sort(key=lambda f: f[1])
         placed = []
-        cr.select_font_face("sans-serif", 0, 0)
         for f in labels:
             la, lo = f[3][0]
             mx, my = _merc(la, lo)
@@ -604,13 +722,13 @@ class Maps(nbapp.AppWindow):
             if any(abs(sx - px) < 64 and abs(sy - py) < 16 for px, py in placed):
                 continue
             placed.append((sx, sy))
-            cr.set_font_size(LABEL_SIZE.get(f[1], 11))
-            te = cr.text_extents(f[2])
+            lay = _layout(cr, f[2], LABEL_SIZE.get(f[1], 11))
+            tw = lay.get_pixel_size()[0]
             # The name sits ABOVE its marker, the way every map sets a place
             # name. Centred on the point, the marker dot was punched through the
             # middle of the word ("Fontvi.eille", "Monaco-Vi.lle").
-            cr.move_to(sx - te.width / 2, sy - 5)
-            cr.text_path(f[2])
+            cr.move_to(sx - tw / 2, sy - 5 - lay.get_baseline() / Pango.SCALE)
+            PangoCairo.layout_path(cr, lay)
             cr.set_source_rgba(1, 1, 1, 0.92)
             cr.set_line_width(2.6)
             cr.set_line_join(1)
@@ -703,42 +821,30 @@ class Maps(nbapp.AppWindow):
     def _show_empty(self):
         # On the canvas, not buried in the status strip, and phrased as
         # something a person can act on rather than as a filesystem path.
-        self._empty = (_t("No maps on this device"),
-                       _t("Copy a map file onto a USB stick, then into the "
-                          "Maps folder in your home folder with the Finder."))
+        self._empty = (_t("No maps"),
+                       _t("Map files are read from the Maps folder "
+                          "in Home."))
         self.canvas.queue_draw()
         return False
 
     def _draw_empty(self, cr, aw, ah):
         """The centred notice shown when there is no map to draw."""
         head, detail = self._empty
-        cr.select_font_face("sans-serif", 0, 0)
         cr.set_source_rgb(0.43, 0.41, 0.37)
-        cr.set_font_size(19)
-        te = cr.text_extents(head)
-        cr.move_to((aw - te.width) / 2, ah / 2 - 14)
-        cr.show_text(head)
-        cr.set_font_size(13)
+        _show_text(cr, (aw - _text_w(cr, head, 19)) / 2, ah / 2 - 14, head, 19)
         cr.set_source_rgb(0.60, 0.58, 0.52)
-        # wrap the detail to a reading measure by words, so a long sentence
-        # never runs off both edges of a narrow window
-        words = detail.split()
-        line, lines = "", []
-        for w in words:
-            trial = (line + " " + w).strip()
-            if cr.text_extents(trial).width > min(430, aw - 60) and line:
-                lines.append(line)
-                line = w
-            else:
-                line = trial
-        if line:
-            lines.append(line)
-        y = ah / 2 + 12
-        for ln in lines:
-            te = cr.text_extents(ln)
-            cr.move_to((aw - te.width) / 2, y)
-            cr.show_text(ln)
-            y += 19
+        # Pango wraps the detail to a reading measure, so a long sentence never
+        # runs off both edges of a narrow window. Wrapping it here by splitting
+        # on spaces was wrong twice over: Chinese and Japanese put no spaces
+        # between words, so the whole sentence stayed one unbreakable "word"
+        # and ran straight off both edges.
+        measure = max(120, int(min(430, aw - 60)))
+        lay = _layout(cr, detail, 13)
+        lay.set_width(measure * Pango.SCALE)
+        lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+        lay.set_alignment(Pango.Alignment.CENTER)
+        cr.move_to((aw - measure) / 2, ah / 2 + 12 - lay.get_baseline() / Pango.SCALE)
+        PangoCairo.show_layout(cr, lay)
 
     # ================= menu =================
     def menu_items(self, name):

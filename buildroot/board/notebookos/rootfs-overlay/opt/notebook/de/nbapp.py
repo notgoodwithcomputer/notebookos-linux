@@ -17,6 +17,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 
 import time
+import sys
 import os
 import re
 import json
@@ -63,6 +64,126 @@ def _reap_stale_tmp(d):
         pass
 
 
+def _payload_weight(obj):
+    """How much user content a parsed store holds, as a count of leaves that
+    actually say something. Only ever used to compare two versions of the SAME
+    store, so the absolute number means nothing — all that matters is that
+    losing records lowers it.
+
+    A zero counts as nothing on purpose. An app's blank default is mostly
+    zeroes — 2048 writes a 4x4 board of them and a best score of 0 — and
+    counting those made an untouched board outweigh a store full of the user's
+    text, which is the exact comparison this feeds."""
+    if isinstance(obj, dict):
+        return sum(_payload_weight(v) for v in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return sum(_payload_weight(v) for v in obj)
+    if obj is None or obj is False or obj == "" or obj == 0:
+        return 0
+    return 1
+
+
+def _record_counts(obj, path="", out=None, depth=0):
+    """How many records sit in each list inside a parsed store, keyed by the
+    STRUCTURAL place that list lives: "classes", "lectures/*/ranges", ...
+
+    _payload_weight answers "how much is in here" as ONE number for the whole
+    store, and that turned out to be the wrong question. See _bak_would_shrink.
+
+    List elements collapse to a single "*" step rather than their index, and the
+    counts at a path are SUMMED. Two reasons, both learned the hard way:
+    per-index keys ("lectures[0]/ranges", "lectures[1]/ranges", ...) make the
+    map as large as the store — 80,000 keys and 600ms on a heavily formatted
+    term, where the summed form costs 3ms — and they also make a mere REORDER of
+    a list look like loss at every index that moved. A sum only falls when
+    records actually went missing, which is the only thing being asked.
+
+    Only DICT elements are descended into. A list of lists is a list of values,
+    not of records — Writer's and Academics' formatting spans are [start, end,
+    tag] triples, and Tasks' project list is [name, colour] pairs — and losing
+    any of them already shows up in the count of the list that holds them.
+    Walking into them instead cost 240,000 extra visits and 200ms on one term of
+    heavily formatted notes, to learn nothing that the parent count did not
+    already say. `depth` bounds a store nested far deeper than any app writes."""
+    if out is None:
+        out = {}
+    if depth > 12:
+        return out
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, (dict, list, tuple)):
+                _record_counts(v, "%s/%s" % (path, k) if path else str(k),
+                               out, depth + 1)
+    elif isinstance(obj, (list, tuple)):
+        out[path] = out.get(path, 0) + len(obj)
+        child = (path + "/*") if path else "*"
+        for v in obj:
+            if isinstance(v, dict):
+                _record_counts(v, child, out, depth + 1)
+    return out
+
+
+def _loses_records(new, old):
+    """True when any list in `old` comes back SHORTER in `new` — i.e. records
+    the user had are missing, whatever else grew."""
+    try:
+        a, b = _record_counts(new), _record_counts(old)
+    except Exception:
+        return False
+    return any(a.get(k, 0) < n for k, n in b.items())
+
+
+def _bak_would_shrink(bak, raw):
+    """True when refreshing `bak` with `raw` would replace a fuller copy of the
+    user's work with an emptier one, in which case the caller must keep the one
+    already on disk.
+
+    THE BUG THIS EXISTS FOR — loss on the SECOND open, which the one-open tests
+    could not see: a store that is valid JSON in a shape the app no longer
+    recognises reads as "no data". The app opens blank and its close-time save
+    writes that blankness over the store — but the refresh in preserve_damaged
+    has just copied the user's real bytes to <store>.bak, so nothing is lost
+    yet, and every open+close test passes.
+
+    Then the person opens the app a second time. That is a fresh process with an
+    empty _BACKED_UP, and the store parses now (it holds the blank state), so
+    the refresh runs again and writes the BLANK store over the .bak — the only
+    remaining copy. Two opens and two closes, no user action at all, and an
+    address book, a diary or a manuscript is gone for good.
+
+    Keeping the fuller copy is always the safe direction. The worst it can cost
+    is a hidden .bak older than someone expected; the alternative costs the only
+    copy of their work.
+
+    WEIGHT ALONE IS NOT ENOUGH, and this is not theoretical — it was measured in
+    Academics. _payload_weight collapses the whole store to one number, so a
+    store that LOST records can still outweigh the copy that has them whenever
+    the app writes more fields per record than it reads back. Academics'
+    _save_to_disk decorates every homework record with a derived "course" (and
+    every class with a derived "name") that its loader ignores, so 200 saved
+    assignments weighed 604 and the 260 the user actually had weighed 523. The
+    guard saw growth, refreshed the .bak, and 60 assignments went from
+    recoverable to gone on the second open.
+
+    So ask the question that actually matters — "are there fewer records than
+    there were?" — alongside the weight, and keep the old copy if EITHER says
+    this one is poorer. A store that legitimately shrinks (the user cleared
+    their completed homework) simply keeps a slightly older recovery copy, which
+    is the outcome this whole mechanism exists to provide."""
+    try:
+        with open(bak, "r", encoding="utf-8") as fh:
+            old = fh.read()
+    except OSError:
+        return False                  # no previous backup, nothing to protect
+    try:
+        new_obj, old_obj = json.loads(raw), json.loads(old)
+    except (ValueError, UnicodeDecodeError):
+        return False                  # an unreadable .bak is not worth keeping
+    if _loses_records(new_obj, old_obj):
+        return True
+    return _payload_weight(new_obj) < _payload_weight(old_obj)
+
+
 def preserve_damaged(path):
     """Move an unreadable store aside so its bytes survive being overwritten.
 
@@ -97,13 +218,17 @@ def preserve_damaged(path):
         # preserves the user's real data, and the second would then overwrite
         # that backup with the empty state we were trying to protect against.
         # It also keeps autosave to a single extra write per file per run.
+        # ...and never refresh it with LESS than it already holds, or the second
+        # open of a wrong-shape store overwrites the copy the first open just
+        # saved. See _bak_would_shrink.
         if path not in _BACKED_UP:
             _BACKED_UP.add(path)
-            try:
-                with open(path + ".bak", "w", encoding="utf-8") as bh:
-                    bh.write(raw)
-            except OSError:
-                pass                     # a backup is a bonus, never a blocker
+            if not _bak_would_shrink(path + ".bak", raw):
+                try:
+                    with open(path + ".bak", "w", encoding="utf-8") as bh:
+                        bh.write(raw)
+                except OSError:
+                    pass                 # a backup is a bonus, never a blocker
         return None
     except (OSError, ValueError, UnicodeDecodeError):
         pass
@@ -114,6 +239,48 @@ def preserve_damaged(path):
         dest = "%s.damaged-%s-%d" % (path, stamp, n)
         n += 1
     try:
+        os.replace(path, dest)
+        return dest
+    except OSError:
+        return None
+
+
+def quarantine_unrecognized(path):
+    """Move a store the app could not read any of its own content out of aside,
+    AT LOAD TIME, before the app's first save can replace it. Returns the
+    quarantine path, or None when there was nothing to move. Never raises.
+
+    preserve_damaged covers the store that fails to PARSE. It deliberately
+    cannot cover this one: valid JSON in a shape the app does not recognise
+    parses perfectly, and only the app knows its own shape. The app then opens
+    on its blank default and the close-time flush writes that blankness over the
+    user's file.
+
+    THE .bak IS NOT ENOUGH HERE, and the measurement that says otherwise is
+    reading the FIRST open only. preserve_damaged keeps one previous-good copy
+    guarded by _bak_would_shrink, which compares _payload_weight — a count of
+    non-empty leaves. An app's blank default is not empty: Writer's is a page
+    size, an orientation and four margins (weight 7), Screenplay's is a default
+    title (1), Novel's is a seeded "Chapter 1" (5). A wrong-shape store holding
+    one long paragraph of the user's prose in an unexpected key weighs 1. So the
+    blank OUTWEIGHS the work, the guard sees no regression, and the SECOND open
+    writes the blank state over the .bak — the only remaining copy. Two opens,
+    two closes, no user action at all. Measured across all four writing apps:
+    eight damaged shapes were destroyed on cycle 2 with the .bak guard in place.
+
+    This is the shared implementation of the private `_quarantine` helpers
+    sequencer.py, mealplanner.py and language.py each grew for the same reason.
+    The <name>.damaged-<timestamp> name is preserve_damaged's, so there is one
+    recovery convention on the disk and not two."""
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            return None
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = "%s.damaged-%s" % (path, stamp)
+        n = 2
+        while os.path.exists(dest):
+            dest = "%s.damaged-%s-%d" % (path, stamp, n)
+            n += 1
         os.replace(path, dest)
         return dest
     except OSError:
@@ -159,6 +326,27 @@ def atomic_write_text(path, text):
         except OSError:
             pass
         raise
+
+
+def save_failure_reason(exc, path=None):
+    """A sentence a person can act on, for a save that did not happen.
+
+    A silent failed save is the worst outcome this OS can produce: the app
+    carries on showing work that is no longer anywhere, and the file keeps
+    whatever the last write that DID succeed put there -- so the first thing
+    you entered survives and everything after it appears to vanish on close.
+    Every caller that ignores a False from its save is one of these waiting to
+    happen; this at least lets the ones that ask say something true."""
+    import errno as _errno
+    no = getattr(exc, "errno", None)
+    if no == _errno.ENOSPC:
+        return _t("The disk is full, so this could not be saved.")
+    if no in (_errno.EROFS, _errno.EACCES, _errno.EPERM):
+        return _t("This location is read-only, so this could not be saved.")
+    if no == _errno.EDQUOT:
+        return _t("There is no room left for new files, so this could not "
+                  "be saved.")
+    return _t("This could not be saved.")
 
 
 def atomic_write_json(path, obj, indent=None, ensure_ascii=True):
@@ -556,8 +744,27 @@ def _logo_pixbuf():
 # installer) — correctly hides the home. Ref-counted across processes via a
 # per-PID marker dir, so closing one of several open apps doesn't prematurely
 # reveal the home, and a crashed app's stale marker is reaped on the next check.
-_APP_FLAG = "/tmp/nb-app-active"
-_APP_DIR = "/tmp/nb-apps"
+# Both live in /tmp on purpose: it is a tmpfs, so a reboot clears it. That is
+# what keeps a RECYCLED pid from being mistaken for a live app and refusing to
+# launch it. The names carry the NB_HOME they belong to, so a test running an
+# app against a sandbox home cannot collide with a real one -- on the machine
+# NB_HOME is exported once by session.sh, so every app agrees on one directory
+# and the single-instance guard still sees its siblings.
+def _app_scope():
+    home = os.environ.get("NB_HOME") or ""
+    if home in ("", "/root"):
+        return ""
+    import hashlib
+    return "-" + hashlib.md5(home.encode("utf-8", "replace")).hexdigest()[:8]
+
+
+_APP_SCOPE = _app_scope()
+_APP_FLAG = "/tmp/nb-app-active" + _APP_SCOPE
+_APP_DIR = "/tmp/nb-apps" + _APP_SCOPE
+# Public aliases: the desktop and the Finder watch these, and must never
+# re-derive the paths themselves or the two halves can disagree.
+APP_FLAG = _APP_FLAG
+APP_DIR = _APP_DIR
 
 
 def _refresh_app_flag():
@@ -581,13 +788,81 @@ def _refresh_app_flag():
         pass
 
 
-def _register_app():
+def _register_app(win=None):
     try:
         os.makedirs(_APP_DIR, exist_ok=True)
-        open(os.path.join(_APP_DIR, str(os.getpid())), "w").close()
+        # The marker carries the MODULE NAME, not just the pid, so
+        # claim_single_instance() below can tell whether the app already open is
+        # this one or a different one.
+        with open(os.path.join(_APP_DIR, str(os.getpid())), "w") as _fh:
+            _fh.write(_app_module_name(win) + "\n")
         _refresh_app_flag()
     except Exception:
         pass
+
+
+def _app_module_name(win=None):
+    """Which app this is, e.g. "academics".
+
+    Taken from the WINDOW CLASS's module, not from sys.argv[0]: the same app
+    can be started as academics.py, through a wrapper, or with a different
+    working directory, and all of those must count as the same app. argv[0]
+    says something different in each case, which would let a second copy
+    through exactly when it matters.
+    """
+    if win is not None:
+        try:
+            mod = type(win).__module__
+            if mod and mod != "__main__":
+                return mod
+        except Exception:
+            pass
+    try:
+        return os.path.splitext(os.path.basename(sys.argv[0]))[0] or "?"
+    except Exception:
+        return "?"
+
+
+def claim_single_instance(win=None):
+    """Exit at once if this app is ALREADY open in another process.
+
+    THE BUG THIS EXISTS FOR — a lost update that read exactly like deletion.
+    Nothing stopped a second copy of an app being started, and there are two
+    routes to every app that has a desktop tile: the Finder AND the tile. Open
+    Academics, add a class, then click the Classes tile: a SECOND Academics
+    starts and reads the store as it is at that moment. Keep working in the
+    first, then close the second -- with Esc or the snail logo, both of which
+    simply close -- and the second writes ITS stale model over the file. Every
+    class, assignment or entry added after the second copy opened is gone, and
+    the one thing that survives is whatever had been saved before it started.
+
+    That is why it never happened in Cookbook or Novel: they have no tile, so
+    there is only one way in and rarely two copies.
+
+    This is a single-screen appliance where the front app is fullscreen: two
+    copies of one app is never something anybody asked for, and the older copy
+    is the one already on screen. So the newcomer stands down. It exits with
+    os._exit so no atexit hook, no destroy handler and above all no SAVE can
+    run on the way out -- a tidy shutdown here is precisely what would destroy
+    the data.
+    """
+    me = _app_module_name(win)
+    mine = str(os.getpid())
+    try:
+        names = os.listdir(_APP_DIR)
+    except OSError:
+        return
+    for name in names:
+        if not name.isdigit() or name == mine:
+            continue
+        if not os.path.isdir("/proc/" + name):
+            continue                      # dead; _refresh_app_flag reaps it
+        try:
+            with open(os.path.join(_APP_DIR, name)) as fh:
+                if fh.read().strip() == me:
+                    os._exit(0)
+        except OSError:
+            continue
 
 
 def _unregister_app():
@@ -596,6 +871,33 @@ def _unregister_app():
     except OSError:
         pass
     _refresh_app_flag()
+
+
+def day_ordinal(day):
+    """Days since 1970-01-01 for a "YYYY-MM-DD" key, or None if it is not one.
+
+    For asking whether two dates are consecutive, which is how anything built
+    on a run of days (a streak, a gap in a log) has to be counted.
+
+    Plain civil-date arithmetic — the standard days-from-civil algorithm — for
+    two reasons this OS has already paid for. time.strptime() pulls in the
+    stdlib `calendar` module, which the Calendar app's calendar.py shadows on
+    PYTHONPATH, so it crashes the app that calls it. And stepping back a day by
+    subtracting 86400 from a timestamp skips or repeats a day across a
+    daylight-saving change, twice a year, in whichever direction hurts.
+    """
+    try:
+        y, m, d = (int(p) for p in str(day).split("-"))
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= m <= 12:
+        return None
+    y -= m <= 2
+    era = (y if y >= 0 else y - 399) // 400
+    yoe = y - era * 400
+    doy = (153 * (m + (-3 if m > 2 else 9)) + 2) // 5 + d - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
 
 
 def screen_size():
@@ -673,9 +975,9 @@ def nb_pretty_name():
 # with tools/appshot.py:
 #
 #     multiplier 1.05  fits          multiplier 1.10  Cookbook 1037 wide
-#     multiplier 1.15  Cookbook 1043 wide, 1.25 also GBA IDE 1056
+#     multiplier 1.15  Cookbook 1043 wide, 1.25 also GBA SDK 1056
 #     floor 15px       fits (widest Cookbook 1004, tallest Video 725)
-#     floor 16px       GBA IDE 1026 wide
+#     floor 16px       GBA SDK 1026 wide
 #
 # So the ceiling for a multiplier is 1.05 — five percent, which nobody can see,
 # and it is the WORST five percent to spend: a multiplier inflates the 34px
@@ -714,7 +1016,7 @@ def nb_pretty_name():
 # Both transforms are identity at the defaults, so a machine where nobody has
 # touched the setting behaves exactly as before.
 
-# The floor, in px. 16 is the true wall (the GBA IDE lands 2px past 1024 there);
+# The floor, in px. 16 is the true wall (the GBA SDK lands 2px past 1024 there);
 # 15 keeps ~20px of width and ~15px of height in hand for the languages whose
 # strings run longer than English, which is the margin a hard 1024 panel needs.
 TEXT_MIN = 15
@@ -1086,9 +1388,13 @@ class AppWindow(Gtk.Window):
 
     def __init__(self):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        # FIRST, before this window costs anything and — critically — before
+        # the subclass below loads a single store: if this app is already open
+        # in another process, stand down. See claim_single_instance().
+        claim_single_instance(self)
         install_css()
         # A fullscreen app owns the screen — hide the desktop home while we run.
-        _register_app()
+        _register_app(self)
         self.connect("destroy", lambda *_: _unregister_app())
         self.set_decorated(False)
         # Opaque visual BEFORE the window is realised (set_visual only takes
@@ -1161,7 +1467,7 @@ class AppWindow(Gtk.Window):
         logo = Gtk.Button(); logo.set_relief(Gtk.ReliefStyle.NONE)
         logo.get_style_context().add_class("menuitem")
         logo.get_style_context().add_class("logo")
-        logo.set_tooltip_text("Back to Finder")
+        logo.set_tooltip_text(_t("Back to Finder"))
         img = Gtk.Image()
         # Reserve the icon's box up front so the deferred decode below cannot
         # reflow the menu bar, then fill the pixbuf on an idle tick — AFTER the

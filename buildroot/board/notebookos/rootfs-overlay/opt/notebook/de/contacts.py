@@ -137,7 +137,13 @@ def parse_birthday(text):
         return _valid(b, int(c)) if c else None
     if a > 12:                                   # day first, unambiguously
         return _valid(b, a)
-    if b > 12 and c is None:                     # "03/14" written month-first
+    if b > 12:                                   # "12/25/1990" — month first
+        # The second number is past twelve, so it cannot be a month and the
+        # order can only be M/D. This used to be tested only when no year
+        # followed, which meant the full American form "12/25/1990" — Christmas,
+        # a real date typed by half the world — parsed as month 25 and came back
+        # None. The card still showed the text, so nothing looked wrong; that
+        # person was just silently missing from the birthdays-soon banner.
         return _valid(a, b)
     return _valid(b, a)                          # ambiguous -> day first
 
@@ -240,6 +246,21 @@ class Contacts(nbapp.AppWindow):
             # missing / unreadable / malformed -> empty state
             return []
         raw = data.get("people") if isinstance(data, dict) else data
+        if raw is None and isinstance(data, dict):
+            # The wrapper key is gone or was written under another name. The
+            # cards are still in the file; take the first list of records
+            # instead of opening on "No contacts" and saving that over them.
+            for v in data.values():
+                if isinstance(v, list) and any(isinstance(x, dict) for x in v):
+                    raw = v
+                    break
+        # The address book stored as an object keyed by name or id: its values
+        # are still the user's cards. Rejecting the wrapper used to open the app
+        # on "No contacts", and _on_destroy then wrote that empty book over the
+        # only copy of every number in it — so read what is there and let a bad
+        # record cost itself alone.
+        if isinstance(raw, dict):
+            raw = list(raw.values())
         if not isinstance(raw, list):
             return []
         return [self._normalize_person(p, i)
@@ -257,12 +278,24 @@ class Contacts(nbapp.AppWindow):
         return person
 
     def _save(self):
-        """Persist the full address book. Swallows I/O errors so a bad write
-        never crashes the app."""
+        """Persist the full address book. Never raises, so a bad write cannot
+        crash the app — but it does SAY when the write failed."""
         try:
             nbapp.atomic_write_json(CONTACTS_FILE, {"people": self.people})
-        except Exception:
-            pass
+            self._save_warned = False
+        except Exception as exc:
+            # See academics._save_to_disk. This used to be a bare `pass`, and a
+            # full disk or a read-only filesystem then looked exactly like
+            # "Contacts lost my address book": the file keeps whatever the last
+            # write that worked put there, so the people added since simply are
+            # not there the next time it opens. Warn once per run of failures so
+            # a jammed disk does not strobe the status line.
+            if not getattr(self, "_save_warned", False):
+                self._save_warned = True
+                try:
+                    self._flash(nbapp.save_failure_reason(exc, CONTACTS_FILE))
+                except Exception:
+                    pass
 
     def _on_destroy(self, *_):
         # Capture any in-progress edit before the final write. The inline field
@@ -361,11 +394,28 @@ class Contacts(nbapp.AppWindow):
         entries = self._visible_order_pairs()
 
         if not entries:
-            empty = Gtk.Label(
-                label=_t("No contacts") if not self.people
-                else _t("Nobody matches that"))
-            empty.get_style_context().add_class("listempty")
+            # Two different empty columns, and only one of them is "add your
+            # first contact". An empty BOOK is answered by the card pane beside
+            # this one, which names the space and points at the + button in this
+            # column's own header; here it only needs the heading. A search that
+            # matched nobody is this column's own state, and used to end at
+            # "Nobody matches that" — naming the absence and leaving the reader
+            # stuck with a filtered list and no stated way back.
+            empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             empty.set_margin_top(40); empty.set_margin_bottom(40)
+            if not self.people:
+                head = Gtk.Label(label=_t("No contacts"))
+            else:
+                head = Gtk.Label(label=_t("No matching contacts"))
+            head.get_style_context().add_class("listempty")
+            empty.pack_start(head, False, False, 0)
+            if self.people:
+                hint = Gtk.Label(label=_t("Clear the search to see all contacts."))
+                hint.get_style_context().add_class("listempty")
+                hint.set_line_wrap(True)
+                hint.set_max_width_chars(22)
+                hint.set_justify(Gtk.Justification.CENTER)
+                empty.pack_start(hint, False, False, 0)
             self.list_box.pack_start(empty, False, False, 0)
             self.list_box.show_all()
             return
@@ -546,7 +596,7 @@ class Contacts(nbapp.AppWindow):
         self._card_col = None  # re-set below when a card (not the empty state)
 
         if not self.people:
-            empty = Gtk.Label(label=_t("No contacts yet — click + to add one"))
+            empty = Gtk.Label(label=_t("No contacts. Add one with +."))
             empty.get_style_context().add_class("detailempty")
             empty.set_hexpand(True); empty.set_vexpand(True)
             empty.set_halign(Gtk.Align.CENTER); empty.set_valign(Gtk.Align.CENTER)
@@ -1027,55 +1077,37 @@ class Contacts(nbapp.AppWindow):
         text_w = PW - ML - MR
         surf = cairo.PDFSurface(path, PW, PH)
         cr = cairo.Context(surf)
-        y = [MT]                         # cursor top, boxed so helpers can bump it
+
+        # Laid out with nbprint.PdfText (PangoCairo). The private wrap()/emit()
+        # this replaces used cairo's TOY font API, which binds one FreeType face
+        # and does no per-character fallback: an address book with a name,
+        # address or note in Japanese, Chinese, Korean, Hindi or Yiddish printed
+        # as a page of empty .notdef boxes — and the wrapping was measured
+        # against those boxes, so even the line breaks were wrong. Pango picks a
+        # face per glyph, so a name prints in the script it was typed in.
+        pt = nbprint.PdfText(surf, cr, ML, MT, PH - MB, text_w)
 
         def ink(hexc):
             r, g, b = nbicons._hex(hexc)
             cr.set_source_rgb(r, g, b)
 
-        def face(bold, serif=False):
-            cr.select_font_face(
-                "Serif" if serif else "Sans", cairo.FONT_SLANT_NORMAL,
-                cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL)
-
-        def wrap(text, size, bold, serif):
-            face(bold, serif)
-            cr.set_font_size(size)
-            lines, cur = [], ""
-            for w in text.split(" "):
-                trial = w if not cur else cur + " " + w
-                if not cur or cr.text_extents(trial)[2] <= text_w:
-                    cur = trial
-                else:
-                    lines.append(cur)
-                    cur = w
-            lines.append(cur)
-            return lines
-
         def emit(text, size, bold, color, serif=False,
                  gap_before=0.0, gap_after=0.0):
-            lh = size * 1.4
-            y[0] += gap_before
-            for ln in (wrap(text, size, bold, serif) if text else [""]):
-                if y[0] + lh > PH - MB:
-                    surf.show_page()
-                    y[0] = MT
-                face(bold, serif)
-                cr.set_font_size(size)
-                ink(color)
-                cr.move_to(ML, y[0] + size)
-                cr.show_text(ln)
-                y[0] += lh
-            y[0] += gap_after
+            """Same signature the toy-font helper had, so the page below reads
+            unchanged. `serif` picks the family per line, which is why this is a
+            wrapper rather than a bare alias for pt.emit."""
+            pt.family = "serif" if serif else "sans-serif"
+            pt.emit(text, size, bold=bold, color=color,
+                    gap_before=gap_before, gap_after=gap_after)
 
         def rule():
-            if y[0] + 1 <= PH - MB:
+            if pt.y + 1 <= PH - MB:
                 ink("#ECE7DA")
                 cr.set_line_width(1.0)
-                cr.move_to(ML, y[0])
-                cr.line_to(PW - MR, y[0])
+                cr.move_to(ML, pt.y)
+                cr.line_to(PW - MR, pt.y)
                 cr.stroke()
-            y[0] += 18
+            pt.y += 18
 
         people = sorted(self.people, key=lambda p: p.get("name", "").lower())
         # Cover header, then each contact alphabetically.
@@ -1086,7 +1118,7 @@ class Contacts(nbapp.AppWindow):
         rule()
         for idx, p in enumerate(people):
             if idx:
-                y[0] += 8
+                pt.y += 8
                 rule()
             emit(p.get("name", "") or "Unnamed", 20, True, "#1A1916",
                  serif=True, gap_before=6, gap_after=2)
@@ -1094,7 +1126,7 @@ class Contacts(nbapp.AppWindow):
             if role:
                 emit(role, 11, False, "#79736A", gap_after=6)
             else:
-                y[0] += 4
+                pt.y += 4
             for label, key in FIELDS:
                 val = p.get(key, "")
                 if val:
@@ -1155,11 +1187,19 @@ class Contacts(nbapp.AppWindow):
     # ------------------------------------------------------------- menus
     def menu_items(self, name):
         if name == "File":
+            # contacts.json is the sole source of truth and is rewritten on
+            # every edit, so there is no Save here — only the create action and
+            # a one-way render of the book. Export writes the PDF straight into
+            # $NB_HOME/Documents and asks nothing, so it takes NO ellipsis;
+            # Print opens the printer dialog, so it does. Both grey out on an
+            # empty book, where they used to look live and only flash "No
+            # contacts to export".
+            has = bool(self.people)
             return [
                 ("New Contact", lambda: self._new_contact()),
                 nbapp.SEP,
-                ("Export to PDF", self._export_pdf),
-                ("Print…", self._print),
+                ("Export to PDF", self._export_pdf if has else None),
+                ("Print…", self._print if has else None),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]

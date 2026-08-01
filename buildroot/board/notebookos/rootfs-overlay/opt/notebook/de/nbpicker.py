@@ -34,7 +34,7 @@ GRID_ICON_PX = 84
 _CSS = b"""
 .nbpicker .pickerfooter { background: #F1EEE6; border-top: 1px solid #C9C4B6;
                           padding: 10px 16px; }
-.nbpicker .pickername { background: #FBFAF6; color: #1A1916;
+.nbpicker .pickername { background: #FCFBF8; color: #1A1916;
                         border: 1px solid #C9C4B6; border-radius: 2px;
                         padding: 5px 8px; }
 .nbpicker .pickerok { padding: 6px 20px; background: #C8341E; color: #FCFBF8;
@@ -47,12 +47,30 @@ _CSS = b"""
                           border: 1px solid #C9C4B6; border-radius: 2px;
                           box-shadow: none; font-size: 13px; }
 .nbpicker .pickercancel:hover { background: #F1EEE6; }
+.nbpicker .pickerfooter .pickerwarn,
 .nbpicker .pickerwarn { color: #C8341E; font-size: 12.5px; }
 .nbpicker .pickerempty { color: #8A857A; font-size: 14px; background: #FCFBF8; }
-.nbpicker .pickerfooter label { color: #6E695E; font-size: 13px; }
+/* The footer caption ("Save As:") is a bare label sitting DIRECTLY in the
+   footer box. It has to be selected as such: as a plain descendant rule this
+   also matched the label node inside every BUTTON in the footer, and since a
+   colour declared on a label node beats one inherited from the button, the
+   OS-wide Save / Open button painted its word in muted grey on signage red --
+   barely readable, in every app that opens this dialog. The two button rules
+   below carry the footer class as well so they outrank it wherever GTK still
+   prefers the later rule. */
+.nbpicker .pickerfooter > label { color: #6E695E; font-size: 13px; }
+.nbpicker .pickerfooter .pickerok label,
+.nbpicker .pickerok label { color: #FCFBF8; }
+.nbpicker .pickerfooter .pickerok:disabled label { color: #FCFBF8; }
+.nbpicker .pickerfooter .pickercancel label,
+.nbpicker .pickercancel label { color: #2A2620; }
 .nbpicker .pickernewfolder { padding: 4px 10px; border-radius: 2px; }
 .nbpicker .pickernewfolder:hover { background: #E7E3D9; }
 .nbpicker .pickernewfolder label { color: #2A2620; font-size: 12.5px; }
+.nbpicker .pickerfooter .pickerdlgtitle,
+.nbpicker .pickerdlgtitle { color: #1A1916; font-size: 16px; font-weight: 700; }
+.nbpicker .pickerfooter .pickerdlgmsg,
+.nbpicker .pickerdlgmsg { color: #2A2620; font-size: 13px; }
 """
 _CSS_DONE = False
 
@@ -100,7 +118,9 @@ class _Picker:
         self._filter = ""
         self._raw = []
         self._result = None
-        self._confirmed = False
+        # The live replace-confirmation dialog, while one is up. Kept on the
+        # instance so a test can drive the real card instead of a stand-in.
+        self._replace_dlg = None
         self.cur = (start_dir if start_dir and os.path.isdir(start_dir)
                     else finder.HOME)
 
@@ -202,6 +222,7 @@ class _Picker:
         self.crumb = finder.Crumbs()
         bar.pack_start(self.crumb, True, True, 6)
         self.search = Gtk.SearchEntry()
+        nbicons.style_search_entry(self.search)
         self.search.set_placeholder_text("Search")
         self.search.set_size_request(140, -1)
         self.search.connect("search-changed", self._on_search)
@@ -331,7 +352,7 @@ class _Picker:
             self.name_entry.set_text(self.suggested)
             self.name_entry.connect("activate", lambda *_: self._commit_save())
             self.name_entry.connect("changed",
-                                    lambda *_: setattr(self, "_confirmed", False))
+                                    lambda *_: self.warn.set_text(""))
             foot.pack_start(self.name_entry, True, True, 0)
             foot.pack_start(self.warn, False, False, 0)
         else:
@@ -371,8 +392,7 @@ class _Picker:
             if self._filter:
                 msg = "Nothing here matches “%s”." % self._filter
             elif self.patterns:
-                msg = ("This folder has nothing this app can open.\n"
-                       "Try another folder in the sidebar.")
+                msg = "No files here that this app can open."
             else:
                 msg = "This folder is empty."
             self._empty.set_text(msg)
@@ -555,12 +575,88 @@ class _Picker:
         if self.default_ext and not os.path.splitext(name)[1]:
             name += self.default_ext
         path = os.path.join(self.cur, name)
-        if os.path.exists(path) and not self._confirmed:
-            self.warn.set_text('“%s” exists — Save again to replace'
-                               % name)
-            self._confirmed = True
+        if os.path.isdir(path):
+            # Not a replaceable file at all — saving onto a folder cannot work,
+            # and offering to "replace" one would be a promise we can't keep.
+            self.warn.set_text('A folder here is already called “%s”' % name)
+            self.name_entry.grab_focus()
+            return
+        if os.path.exists(path) and not self._confirm_replace(name):
+            # Declined: change nothing, leave the name in the box so the user
+            # can edit it into a new one.
+            self.warn.set_text("")
+            self.name_entry.grab_focus()
             return
         self._finish(path)
+
+    def _confirm_replace(self, name):
+        """Ask, in so many words, before an existing file is overwritten.
+
+        This is the OS's shared Save dialog — Writer, Illustrator, the GBA SDK
+        and the video editor all end up here — so it is the single widest path
+        by which a user could lose a file they already have. It used to ARM the
+        Save button instead: a one-line hint in the footer and a second press
+        destroyed the file, with no statement of what was about to happen and
+        no way to say no except noticing the hint in time. A destructive action
+        gets its own card, with the consequence spelled out and Cancel resting
+        under the keyboard focus (novel.py's Replace-file card, same shape).
+
+        Returns True only if the user explicitly chose Replace."""
+        dlg = Gtk.Dialog(transient_for=self.dlg, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("finder")
+        dlg.get_style_context().add_class("nbpicker")
+        dlg.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        area = dlg.get_content_area()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.get_style_context().add_class("pickerfooter")
+        box.set_size_request(380, -1)
+
+        head = Gtk.Label(label="Replace file?", xalign=0)
+        head.get_style_context().add_class("pickerdlgtitle")
+        box.pack_start(head, False, False, 0)
+
+        msg = Gtk.Label(
+            label=("A file called “%s” is already in this folder. Saving "
+                   "replaces it. This cannot be undone." % name), xalign=0)
+        msg.get_style_context().add_class("pickerdlgmsg")
+        msg.set_line_wrap(True)
+        # width AND max width: a label in a box only as wide as its widest
+        # child otherwise wraps at the button row and turns into a column.
+        msg.set_width_chars(38)
+        msg.set_max_width_chars(38)
+        box.pack_start(msg, False, False, 0)
+
+        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        cancel = Gtk.Button(label="Cancel")
+        cancel.get_style_context().add_class("pickercancel")
+        cancel.connect("clicked",
+                       lambda *_: dlg.response(Gtk.ResponseType.CANCEL))
+        replace = Gtk.Button(label="Replace")
+        replace.get_style_context().add_class("pickerok")
+        replace.connect("clicked",
+                        lambda *_: dlg.response(Gtk.ResponseType.OK))
+        btns.pack_end(replace, False, False, 0)
+        btns.pack_end(cancel, False, False, 0)
+        box.pack_start(btns, False, False, 0)
+        area.pack_start(box, True, True, 0)
+
+        dlg.connect("delete-event",
+                    lambda *_: (dlg.response(Gtk.ResponseType.CANCEL), True)[1])
+        dlg.connect("key-press-event", lambda _w, ev:
+                    dlg.response(Gtk.ResponseType.CANCEL)
+                    if ev.keyval == Gdk.KEY_Escape else None)
+        dlg.show_all()
+        # Focus rests on Cancel, never on Replace: a stray Return or Space in
+        # front of a destructive card must not be the thing that deletes a file.
+        cancel.grab_focus()
+        self._replace_dlg = dlg
+        try:
+            resp = dlg.run()
+        finally:
+            self._replace_dlg = None
+            dlg.destroy()
+        return resp == Gtk.ResponseType.OK
 
     def _on_key(self, _w, ev):
         if ev.keyval == Gdk.KEY_Escape:

@@ -31,6 +31,7 @@ import subprocess
 
 import nbapp
 import nbicons
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 # crypt is a stdlib C module; it is present on the target image but guard the
@@ -41,32 +42,25 @@ try:
 except Exception:
     _crypt = None
 
-# settings.py owns the canonical time-zone table; import it so the installer's
-# zone list is byte-identical to the one the live Settings app applies. The
-# import is side-effect free (settings builds no window at import time).
-try:
-    import settings as _settings
-    TIMEZONES = list(_settings.TIMEZONES)
-except Exception:
-    # Degrade to a minimal built-in list if settings can't be imported, so the
-    # window still constructs. (label, IANA, POSIX-TZ) — same shape as settings.
-    TIMEZONES = [
-        ("UTC", "UTC", "UTC0"),
-        ("London", "Europe/London", "GMT0BST,M3.5.0/1,M10.5.0"),
-        ("Eastern (New York)", "America/New_York", "EST5EDT,M3.2.0,M11.1.0"),
-    ]
-
-# Keyboard layouts — copied verbatim from settings.py's Keyboard page so the two
-# apps agree on the exact (label, xkb-code) set.
-KBD_LAYOUTS = [("English (US)", "us"), ("English (UK)", "gb"),
-               ("German", "de"), ("French", "fr"), ("Spanish", "es")]
+# Keyboard layouts — nbi18n's own list, not a private copy. The desktop applies
+# the layout from nbi18n.keyboard() at every session start, so a layout offered
+# here that nbi18n does not know is a layout the installed machine will never
+# use: the installer's five-entry private list is exactly why an install set to
+# French came up on US QWERTY. (label, xkb-code), widest-compatible order.
+KBD_LAYOUTS = [(lbl, code) for code, lbl in nbi18n.KEYBOARDS]
 
 # System locale. This is an offline appliance built without locale-gen, so only
 # C / C.UTF-8 are guaranteed to resolve; the rest are offered honestly and take
 # effect only if the target image ships their data.
-LOCALES = [("C.UTF-8 (Unicode)", "C.UTF-8"), ("C (POSIX)", "C"),
-           ("English (US) UTF-8", "en_US.UTF-8"),
-           ("English (UK) UTF-8", "en_GB.UTF-8")]
+#
+# The LABELS say what the choice means to the person making it. They used to be
+# the raw identifiers — "C.UTF-8 (Unicode)", "C (POSIX)", "English (US) UTF-8" —
+# which name nothing a person installing a computer has heard of, on the very
+# first screen they ever see. The codes on the right are unchanged.
+LOCALES = [("Unicode (every language)", "C.UTF-8"),
+           ("Basic (English letters only)", "C"),
+           ("English (United States)", "en_US.UTF-8"),
+           ("English (United Kingdom)", "en_GB.UTF-8")]
 
 # ---- release contract (shared with the ISO builder; do not change) ----
 OS_NAME = "Notebook OS"
@@ -96,8 +90,22 @@ SB_GRUBCFG_SRC = os.path.join(INSTALL_DIR, "grub.cfg")     # menu (grub prefix /
 
 # GPT layout / labels.
 ESP_SIZE_MIB = 128
+# Headroom over the raw payload size. The install writes the extracted tree
+# (about the size of the tar, which is uncompressed) plus the ext4 metadata
+# reserve, the journal and the ESP copy of the kernel — and a root filled to
+# the last byte is a computer that cannot save a file. 1.2x the payload is the
+# smallest figure that leaves the installed machine usable.
+PAYLOAD_HEADROOM = 1.2
+# A root partition with no room to breathe at all is not an install anyone
+# wants, so never claim a disk fits on the payload figure alone.
+MIN_FREE_MIB = 256
 ESP_LABEL = "NBOS_ESP"
 ROOT_LABEL = "notebookos"
+# The swap partition is named so /etc/fstab can refer to it by LABEL rather
+# than by a device path that changes the moment another disk is plugged in.
+# Verified on the target build: busybox swapon is compiled with
+# FEATURE_SWAPONOFF_LABEL and resolves LABEL= through blkid.
+SWAP_LABEL = "nbos-swap"
 TARGET_MNT = "/mnt/nbtarget"
 
 RED = "#C8341E"
@@ -180,7 +188,7 @@ class Installer(nbapp.AppWindow):
 
     STEPS = [
         ("welcome", "Welcome"),
-        ("target", "Target disk"),
+        ("target", "Choose the disk"),
         ("options", "Options"),
         ("summary", "Summary"),
         ("progress", "Install"),
@@ -204,15 +212,46 @@ class Installer(nbapp.AppWindow):
         # in a neutral state and never enable the destructive action.
         self.medium_ok = os.path.exists(ROOTFS_TAR)
         self.missing_tools = [t for t in REQUIRED_TOOLS if not self.tools.get(t)]
+        # Can this image turn a password into a stored hash AT ALL? _hash_password
+        # is the very last thing the engine does, at 90% — by which point the
+        # target has been wiped, partitioned, formatted and had the whole system
+        # extracted onto it. "No password hashing available" arriving THERE means
+        # the answer came after the user's files were already gone. Ask now, once,
+        # on the screens where backing out is still free.
+        self.can_hash = self._hashing_available()
+        # Filled in when the Summary step is reached: another disk already
+        # carrying the fixed root PARTUUID (see _partuuid_clash).
+        self._partuuid_other = ""
+        # How big the system being installed actually is. The install ERASES the
+        # target (wipefs, sgdisk -Z, mkfs) and only then extracts the tar, so a
+        # disk that turns out to be too small is discovered after the user's
+        # files are already gone. Measure the payload up front and refuse the
+        # disk on the screen where it is chosen. 0 when there is no payload —
+        # every other gate already refuses to install in that state.
+        try:
+            self.payload_bytes = os.path.getsize(ROOTFS_TAR)
+        except OSError:
+            self.payload_bytes = 0
 
         # Wizard state, filled as the user advances.
         self.cfg = {
             "disk": None, "disk_model": "", "disk_size": 0,
             "disk_contents": "",
             "hostname": "notebook",
-            "tz": 0, "kbd": 0, "locale": 0,
-            "username": "", "password": "", "password2": "",
+            # The name the machine calls its owner. Shown at sign-in and in
+            # Settings; it does NOT create a second account, because the
+            # desktop runs as the administrator and NB_HOME is /root (see
+            # _configure_login's note on the removed _create_user).
+            "username": "",
+            # The layout the live session is using now, so the installed machine
+            # inherits the keyboard the user is demonstrably typing on.
+            "kbd": self._kbd_index(nbi18n.keyboard()),
+            "locale": 0,
+            "password": "", "password2": "",
             "root_passwordless": False,
+            # OEM: prepare the machine, but leave the answers that belong to
+            # the person who will USE it for their first start-up.
+            "oem": False,
             "swap": False, "swap_mib": 2048,
         }
         self._step = 0
@@ -406,6 +445,10 @@ class Installer(nbapp.AppWindow):
             sl = Gtk.Label(label=sub, xalign=0)
             sl.get_style_context().add_class("inst-sublabel")
             sl.set_line_wrap(True)
+            # Cap the NATURAL width. Without it a long hint asks for its whole
+            # length, and since the label column is packed start and the control
+            # end, the hint grows straight into the control beside it.
+            sl.set_max_width_chars(52)
             lblbox.pack_start(sl, False, False, 0)
         r.pack_start(lblbox, False, False, 0)
         r.pack_end(widget, False, False, 0)
@@ -420,22 +463,21 @@ class Installer(nbapp.AppWindow):
         if self.medium_ok:
             self._para(col,
                        "This copies %s onto a disk inside this machine and "
-                       "sets the machine up to start from it. Along the way "
-                       "you name the computer, pick your time zone and "
-                       "keyboard, and create the account you sign in with. "
-                       "When it is finished, take out the installer and "
-                       "restart." % OS_PRETTY)
+                       "sets the machine up to start from it. The steps ask "
+                       "for a computer name, a keyboard layout and an "
+                       "administrator password. When it is finished, remove "
+                       "the installer and restart." % OS_PRETTY)
             self._danger(col,
-                         "The disk you choose will be wiped completely, and "
+                         "The chosen disk will be wiped completely, and "
                          "everything on it is gone for good. Nothing is "
-                         "written to any disk until you say so on the Summary "
-                         "step — you can back out until then.")
+                         "written to any disk before the Summary step is "
+                         "confirmed.")
         else:
             # Neutral state: no live medium (construct-all / a normal desktop
             # session). The whole destructive path stays unreachable.
             self._para(col,
-                       "There is nothing here to install. This installer only "
-                       "works when you start the computer from a %s installer "
+                       "There is nothing here to install. This installer runs "
+                       "only when the computer is started from a %s installer "
                        "USB stick or disc." % OS_NAME,
                        cls="inst-para")
             note = self._para(col,
@@ -448,13 +490,15 @@ class Installer(nbapp.AppWindow):
     # ---------------------------------------------------------------- 2 target
     def _page_target(self):
         outer, col = self._page_scaffold(
-            "Target disk",
-            "Choose the disk to install onto. The disk you started the "
-            "installer from is never listed, so it cannot be erased by "
-            "mistake.")
+            "Choose the disk",
+            "Choose the disk to install onto. The disk the installer was "
+            "started from is never listed.")
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         top.set_margin_top(6)
-        rescan = Gtk.Button(label=_t("Rescan"))
+        # "Look again", not "Rescan": the Settings Backup page has always
+        # called this same action Look again, and "scan" names the machine's
+        # mechanism where the button can name what the person gets.
+        rescan = Gtk.Button(label=_t("Look again"))
         rescan.get_style_context().add_class("inst-btn")
         rescan.connect("clicked", lambda *_: self._refresh_disks())
         top.pack_end(rescan, False, False, 0)
@@ -483,7 +527,7 @@ class Installer(nbapp.AppWindow):
         card = self._disk_card
         for ch in card.get_children():
             card.remove(ch)
-        self._disk_msg_row(card, "Scanning disks…")
+        self._disk_msg_row(card, "Looking for disks…")
         card.show_all()
         self._erase_parent_hide()
         self._validate()
@@ -523,13 +567,13 @@ class Installer(nbapp.AppWindow):
         if not disks:
             # disks is None → lsblk absent; [] → none eligible.
             if disks is None or not self.tools.get("lsblk"):
-                self._disk_msg_row(card, "This computer cannot list its disks, "
-                                         "so there is nothing to install onto.")
+                self._disk_msg_row(card, "This computer's disks cannot be "
+                                         "listed.")
             else:
                 self._disk_msg_row(card, "No disk was found that can be "
-                                         "installed onto. Connect one and press "
-                                         "Rescan. (The disk you started the "
-                                         "installer from is never offered.)")
+                                         "installed onto. Attach one and press "
+                                         "Look again. The installer's own disk "
+                                         "is never offered.")
             card.show_all()
             self._erase_parent_hide()
             self._validate()
@@ -541,8 +585,11 @@ class Installer(nbapp.AppWindow):
         # the disk could not be chosen.
         self._disk_anchor = Gtk.RadioButton()
         radios = []
+        need = self._min_disk_bytes()
+        usable = 0
         for i, (name, size, model, contents) in enumerate(disks):
             dev = "/dev/" + name
+            too_small = self._disk_too_small(size)
             r = Gtk.Box(spacing=12)
             r.get_style_context().add_class("inst-item")
             if i != 0:
@@ -588,7 +635,15 @@ class Installer(nbapp.AppWindow):
             # indicator, and the text drew straight through the circle.)
             col2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
             col2.pack_start(rb, False, False, 0)
-            line = self._contents_line(contents)
+            # A disk too small to hold the system cannot be chosen at all. The
+            # install erases before it extracts, so "try it and see" costs the
+            # user everything that was on the disk. The reason goes in the row
+            # itself — a greyed-out line with no explanation is just a bug.
+            if too_small:
+                line = _t("Too small: needs at least %s") % human_bytes(need)
+            else:
+                usable += 1
+                line = self._contents_line(contents)
             if line:
                 sub = Gtk.Label(label=line, xalign=0)
                 sub.get_style_context().add_class("inst-disk-sub")
@@ -598,15 +653,27 @@ class Installer(nbapp.AppWindow):
                 col2.pack_start(sub, False, False, 0)
             r.pack_start(col2, True, True, 0)
             card.pack_start(r, False, False, 0)
-            radios.append((rb, dev))
+            if too_small:
+                # Insensitive on the ROW, so neither the radio nor its text can
+                # be clicked and the whole line reads as unavailable.
+                r.set_sensitive(False)
+            radios.append((rb, dev, too_small))
+        if not usable:
+            self._disk_msg_row(
+                card,
+                _t("No disk here is big enough for %s. Attach a disk of at "
+                   "least %s and press Look again.")
+                % (OS_NAME, human_bytes(need)))
         card.show_all()
         self._erase_parent_hide()
         # Re-select the disk chosen before a rescan / step change if it is still
         # present, so the user's choice (and the enabled Next) survives. Done
         # after _erase_parent_hide so the toggle's erase banner stays visible.
+        # A now-too-small disk is never re-selected (the swap size can grow
+        # between one visit to this step and the next).
         if self._prev_disk:
-            for rb, dev in radios:
-                if dev == self._prev_disk:
+            for rb, dev, small in radios:
+                if dev == self._prev_disk and not small:
                     rb.set_active(True)
                     break
         self._validate()
@@ -640,12 +707,12 @@ class Installer(nbapp.AppWindow):
         empty = (contents == "EMPTY")
         if empty:
             self._disk_erase.set_text(
-                "%s will be set up from scratch for %s. Nothing on it is "
-                "lost." % (dev, OS_PRETTY))
+                "%s is empty. It will be set up from scratch for %s."
+                % (dev, OS_PRETTY))
         else:
             self._disk_erase.set_text(
-                "Everything on %s will be erased for good — every file, photo "
-                "and program on it. Make sure this is the right disk." % dev)
+                "Everything on %s will be erased for good: every file, photo "
+                "and program on it. Check that this is the right disk." % dev)
         for w, cls in ((p, "inst-danger"), (self._disk_erase,
                                             "inst-danger-txt")):
             ctx = w.get_style_context()
@@ -759,18 +826,97 @@ class Installer(nbapp.AppWindow):
             elif label:
                 bits.append('"%s" (%s)' % (label, size))
             else:
-                bits.append("%s (%s)" % (_t("Something we cannot name"), size))
+                # An unrecognised area, stated plainly. "Something we cannot
+                # name" apologises for the installer instead of telling the
+                # reader the one thing they need — that this too will be wiped.
+                bits.append("%s (%s)" % (_t("Something else"), size))
         extra = len(parts) - 3
         if extra > 0:
             bits.append(_t("and %d more") % extra)
         return ", ".join(bits)
+
+    @staticmethod
+    def _kbd_index(code):
+        for i, (_lbl, c) in enumerate(KBD_LAYOUTS):
+            if c == code:
+                return i
+        return 0
+
+    def _min_disk_bytes(self, swap_mib=None):
+        """The smallest disk this install can land on, in bytes.
+
+        ESP + swap + the payload with headroom. `swap_mib` defaults to what the
+        Options step currently holds, so the disk step gates on the swap the
+        user has actually asked for rather than a guess.
+
+        Returns 0 when there is no payload to measure: with no rootfs.tar there
+        is nothing to install and _install_ready already refuses, and gating
+        every disk off a size of zero would grey out the whole list for the
+        wrong reason.
+        """
+        if not self.payload_bytes:
+            return 0
+        mib = ESP_SIZE_MIB + MIN_FREE_MIB
+        if swap_mib is None:
+            swap_mib = int(self.cfg.get("swap_mib", 0)) \
+                if self.cfg.get("swap") else 0
+        mib += max(0, int(swap_mib))
+        return int(mib * 1024 * 1024 + self.payload_bytes * PAYLOAD_HEADROOM)
+
+    def _disk_too_small(self, size, swap_mib=None):
+        need = self._min_disk_bytes(swap_mib)
+        return bool(need) and int(size or 0) < need
+
+    def _partuuid_clash(self):
+        """Another disk that ALREADY carries the fixed root PARTUUID, or "".
+
+        Every install writes the same root PARTUUID, because the prebuilt GRUB
+        boots `root=PARTUUID=<that>` (see the release contract at the top of
+        this file). Install onto a second disk while the first still holds a
+        Notebook OS root and the machine has two partitions answering to the
+        same name: which one it starts from is then whichever the kernel
+        happens to enumerate first, and that can change between boots — the
+        symptom being a machine that boots the OLD install, with none of the
+        user's new work in it, apparently at random.
+
+        Reported, never blocked. The fix (unplug the other disk, or install
+        over it instead) is the user's to make, and refusing to install would
+        be a worse answer than telling them what is about to happen. Entirely
+        best-effort: any failure to probe returns "" and says nothing."""
+        lsblk = self.tools.get("lsblk")
+        target = self.cfg.get("disk") or ""
+        if not lsblk or not target:
+            return ""
+        rc, out = run_cmd([lsblk, "-Pn", "-o", "NAME,PARTUUID,TYPE,PKNAME"])
+        if rc != 0:
+            return ""
+        want = ROOT_PARTUUID.lower()
+        tname = os.path.basename(target)
+        for ln in out.splitlines():
+            d = dict(re.findall(r'([A-Z]+)="([^"]*)"', ln))
+            if d.get("TYPE") != "part":
+                continue
+            if (d.get("PARTUUID") or "").lower() != want:
+                continue
+            parent = (d.get("PKNAME") or "").strip()
+            if parent and parent != tname:
+                return "/dev/" + parent
+        return ""
+
+    def _clash_line(self):
+        if not self._partuuid_other:
+            return ""
+        return (_t("%s already has %s on it. Two installed copies on one "
+                   "machine can start up in either order. Detach that disk, or "
+                   "install over it instead.")
+                % (self._partuuid_other, OS_PRETTY))
 
     def _contents_line(self, contents):
         """The one sentence that says what is on the chosen disk today."""
         if not contents:
             return ""
         if contents == "EMPTY":
-            return _t("This disk is empty — there is nothing on it to lose.")
+            return _t("This disk is empty.")
         return _t("On it now: %s") % contents
 
     def _excluded_disks(self):
@@ -823,67 +969,114 @@ class Installer(nbapp.AppWindow):
         # stepping in and out with the length of whatever each one contains.
         ctl = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
+        # -- who is this for --
+        # First, because the answer decides whether the rest of this page is
+        # asked at all. Somebody setting a machine up FOR someone else should
+        # not have to invent that person's password and then remember it long
+        # enough to pass it on.
+        oem_card = self._card(col, top=6)
+        self._cb_oem = Gtk.CheckButton(
+            label=_t("Set this up for someone else"))
+        self._cb_oem.set_active(self.cfg["oem"])
+        self._cb_oem.connect("toggled", self._on_oem_toggled)
+        self._field_row(
+            oem_card, "Who is this for", self._cb_oem, first=True,
+            sub=_t("Set on first start-up instead of here"))
+
         # -- identity --
         card = self._card(col, top=6)
+        self._e_user = Gtk.Entry()
+        self._e_user.set_width_chars(20)
+        self._e_user.set_placeholder_text(_t("Name"))
+        self._e_user.connect("changed", lambda *_: self._validate())
+        self._e_user.connect("activate", self._activate_next)
+        ctl.add_widget(self._e_user)
+        self._field_row(card, "Name", self._e_user, first=True,
+                        sub=_t("Shown on the sign-in screen"))
+
         self._e_host = Gtk.Entry()
         self._e_host.set_text(self.cfg["hostname"])
         self._e_host.set_width_chars(20)
         self._e_host.connect("changed", lambda *_: self._validate())
         self._e_host.connect("activate", self._activate_next)
         ctl.add_widget(self._e_host)
-        self._field_row(card, "Computer name", self._e_host, first=True,
-                        sub="What this computer calls itself")
+        self._field_row(card, "Computer name", self._e_host)
 
         # -- region --
+        # No time-zone picker. This image ships no zoneinfo database and no
+        # tool that can convert one zone to another, so every clock on the
+        # machine — the panel, Calendar, Journal, file dates — reads UTC no
+        # matter what a picker here claimed. A control that changes nothing is
+        # worse than no control; the note below says the true thing instead.
         self._grp(col, "Region")
         card2 = self._card(col)
-        self._c_tz = Gtk.ComboBoxText()
-        for label, _iana, _posix in TIMEZONES:
-            self._c_tz.append_text(label)
-        self._c_tz.set_active(0)
-        self._c_tz.connect("changed", lambda *_: self._validate())
-        ctl.add_widget(self._c_tz)
-        self._field_row(card2, "Time zone", self._c_tz, first=True)
         self._c_kbd = Gtk.ComboBoxText()
         for label, _code in KBD_LAYOUTS:
             self._c_kbd.append_text(label)
-        self._c_kbd.set_active(0)
+        # Start on the layout this live session is ALREADY typing with: the user
+        # has just typed a hostname on it, so it is the one answer we know is
+        # right for their keyboard.
+        self._c_kbd.set_active(max(0, self.cfg["kbd"]))
+        # Connected AFTER set_active, so starting on the layout the live
+        # session already uses does not fire and wipe the password fields.
+        self._c_kbd.connect("changed", self._on_kbd_changed)
         ctl.add_widget(self._c_kbd)
-        self._field_row(card2, "Keyboard layout", self._c_kbd)
+        self._field_row(card2, "Keyboard layout", self._c_kbd, first=True)
         self._c_locale = Gtk.ComboBoxText()
         for label, _code in LOCALES:
             self._c_locale.append_text(label)
         self._c_locale.set_active(0)
         ctl.add_widget(self._c_locale)
+        # The sub-label used to say "leave this as Unicode", naming a standard
+        # nobody installing a computer has heard of. Point at the choice on the
+        # screen instead — the first entry in the list, whose own label already
+        # says what it does.
         self._field_row(card2, "Text and characters", self._c_locale,
-                        sub="Leave this as Unicode unless you have a reason to "
-                            "change it")
+                        sub="Leave as the first choice unless another is "
+                            "required")
+        tznote = self._para(col, "This computer keeps time in UTC and carries "
+                                 "no time-zone list. Set the clock to local "
+                                 "time in Settings after restarting.",
+                            top=8, cls="inst-note")
+        tznote.set_margin_bottom(4)
 
-        # -- account --
-        self._grp(col, "Login account")
-        card3 = self._card(col)
-        self._e_user = Gtk.Entry()
-        self._e_user.set_width_chars(20)
-        self._e_user.set_placeholder_text(_t("username"))
-        self._e_user.connect("changed", lambda *_: self._validate())
-        self._e_user.connect("activate", self._activate_next)
-        ctl.add_widget(self._e_user)
-        self._field_row(card3, "Username", self._e_user, first=True,
-                        sub="Lower-case letters, digits, - and _")
+        # -- administrator password --
+        # NOT a "login account". This is a single-user computer: the desktop
+        # always runs as the administrator and everything you make is saved in
+        # one place, so a username field here would name an account nothing
+        # ever used. The password is very real, though — de/login.py asks for
+        # it on the sign-in screen every time the installed machine starts and
+        # every time it wakes from sleep.
+        #
+        # This sub-label used to say "the desktop itself does not ask for it",
+        # which was true when it was written and has not been true since the
+        # sign-in screen was added. It is the worst sentence on the page to get
+        # wrong: somebody who believes nothing will ever ask for this password
+        # types something they have no intention of remembering, and there is
+        # no way back into an offline machine that will not accept it.
+        self._grp(col, "Administrator password")
+        card3 = None    # created after the note below, so the note sits above
         self._e_pw = Gtk.Entry()
         self._e_pw.set_visibility(False)
         self._e_pw.set_width_chars(20)
         self._e_pw.connect("changed", lambda *_: self._validate())
         self._e_pw.connect("activate", self._activate_next)
         ctl.add_widget(self._e_pw)
-        self._field_row(card3, "Password", self._e_pw)
+        # The explanation belongs to the PAIR, not to the first box. Hung under
+        # "Password" it made that row two lines tall while "Confirm password"
+        # was one, so the two boxes sat at different heights and the first read
+        # as the bigger control. Same words, once, above both.
+        card3 = self._card(col) if card3 is None else card3
+        self._grp_note(col, _t("This password is asked for every time the "
+                               "computer starts. It cannot be recovered."))
+        pwrow = self._field_row(card3, "Password", self._e_pw, first=True)
         self._e_pw2 = Gtk.Entry()
         self._e_pw2.set_visibility(False)
         self._e_pw2.set_width_chars(20)
         self._e_pw2.connect("changed", lambda *_: self._validate())
         self._e_pw2.connect("activate", self._activate_next)
         ctl.add_widget(self._e_pw2)
-        self._field_row(card3, "Confirm password", self._e_pw2)
+        pw2row = self._field_row(card3, "Confirm password", self._e_pw2)
         # Let a novice confirm what they typed rather than guess behind dots.
         self._chk_showpw = Gtk.CheckButton(label=_t("Show passwords"))
         self._chk_showpw.get_style_context().add_class("inst-check")
@@ -893,15 +1086,54 @@ class Installer(nbapp.AppWindow):
         spwrow.get_style_context().add_class("bordered")
         spwrow.pack_start(self._chk_showpw, True, True, 0)
         card3.pack_start(spwrow, False, False, 0)
+        # Greyed out together when the tick below makes the password moot, so
+        # the page never asks twice for something it will then throw away.
+        self._pw_rows = [pwrow, pw2row, spwrow]
+        # The one security decision on the whole install, made by someone who
+        # has never heard of a root console. It has to say what it ALLOWS and
+        # when not to switch it on — a checkbox nobody can evaluate is not a
+        # choice, it is a trap.
+        #
+        # What it actually does (see _configure_login): no password is set, so
+        # the sign-in screen never appears and the machine starts straight into
+        # the desktop. The old label promised a passwordless ROOT CONSOLE, and
+        # the log line still said "left as shipped" — but as shipped there is
+        # no console on tty1 at all and root's account is locked, so the one
+        # thing the words named was the one thing it did not do.
         self._chk_rootless = Gtk.CheckButton(
-            label=_t("Also leave an administrator console open with no "
+            label=_t("Start straight into the desktop without asking for a "
                      "password"))
         self._chk_rootless.get_style_context().add_class("inst-check")
-        self._chk_rootless.connect("toggled", lambda *_: self._validate())
+        self._chk_rootless.connect("toggled", self._on_rootless_toggle)
+        # Let the tick's own label wrap: translated it is half again as long,
+        # and a CheckButton label never wraps on its own, so it would set the
+        # installer's minimum width from one very long line.
+        _rl = self._chk_rootless.get_child()
+        if isinstance(_rl, Gtk.Label):
+            _rl.set_line_wrap(True)
+            _rl.set_max_width_chars(58)
+            _rl.set_xalign(0)
+        rbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        rbox.pack_start(self._chk_rootless, False, False, 0)
+        rsub = Gtk.Label(
+            label=_t("Anyone who can reach this computer could then read, "
+                     "change or erase everything on it without being asked for "
+                     "anything. Leave it switched off unless this machine will "
+                     "have a single user."),
+            xalign=0)
+        rsub.get_style_context().add_class("inst-sublabel")
+        rsub.set_line_wrap(True)
+        # Cap the measure so the consequence wraps into a readable paragraph
+        # instead of one line across a 1920px page (and never widens the card).
+        rsub.set_max_width_chars(64)
+        # line the consequence up with the tick's LABEL, not with the tick box
+        rsub.set_margin_start(22)
+        rsub.set_halign(Gtk.Align.START)
+        rbox.pack_start(rsub, False, False, 0)
         rrow = Gtk.Box()
         rrow.get_style_context().add_class("inst-item")
         rrow.get_style_context().add_class("bordered")
-        rrow.pack_start(self._chk_rootless, True, True, 0)
+        rrow.pack_start(rbox, True, True, 0)
         card3.pack_start(rrow, False, False, 0)
 
         # -- swap --
@@ -921,8 +1153,7 @@ class Installer(nbapp.AppWindow):
         self._sp_swap.connect("value-changed", lambda *_: self._validate())
         ctl.add_widget(self._sp_swap)
         self._field_row(card4, "How much to set aside", self._sp_swap,
-                        sub="In megabytes. Useful on a machine with little "
-                            "memory; leave it off otherwise (known as swap).")
+                        sub="In megabytes (known as swap).")
 
         # -- inline validation hint --
         self._opt_hint = Gtk.Label(xalign=0)
@@ -931,6 +1162,17 @@ class Installer(nbapp.AppWindow):
         self._opt_hint.set_margin_top(16)
         col.pack_start(self._opt_hint, False, False, 0)
         return outer
+
+    def _grp_note(self, parent, text):
+        """A sentence that belongs to a whole group of rows rather than to one
+        of them. Under a single field it silently makes that field's row taller
+        than its neighbours, which reads as the control being a different
+        size."""
+        lbl = Gtk.Label(label=text, xalign=0)
+        lbl.get_style_context().add_class("inst-note")
+        lbl.set_line_wrap(True)
+        lbl.set_max_width_chars(72)
+        parent.pack_start(lbl, False, False, 0)
 
     def _grp(self, parent, text):
         lbl = Gtk.Label(label=text, xalign=0)
@@ -946,6 +1188,53 @@ class Installer(nbapp.AppWindow):
         self._e_pw.set_visibility(vis)
         self._e_pw2.set_visibility(vis)
 
+    def _on_kbd_changed(self, combo):
+        """Put the chosen layout on the RUNNING keyboard, now.
+
+        THE PASSWORD IS TYPED THREE ROWS BELOW THIS DROP-DOWN, AND IT IS
+        CHECKED BY A MACHINE THAT DOES NOT EXIST YET. This layout used to be
+        written into the installed tree and applied nowhere else, so somebody
+        who set the keyboard to French here and then typed their password was
+        still typing on the US layout the live medium boots with: the hash
+        written to the target is of "qwerty" while the installed machine turns
+        those same keys into "azerty". The sign-in screen then rejects the
+        password its owner chose, on every boot, for good — no network, no
+        getty on tty1, and de/login.py cannot tell a wrong password from a
+        wrongly-typed one. Every non-US install was one drop-down away from it.
+
+        Applying it here means the password is typed on the same layout that
+        will be asked to check it. The two password fields are cleared with it:
+        whatever was typed before the change was made of the OLD layout's
+        characters and is no longer what the person meant. Best-effort — a
+        machine with no setxkbmap simply keeps the layout it has, and the
+        installed system is configured either way.
+        """
+        i = combo.get_active()
+        if 0 <= i < len(KBD_LAYOUTS):
+            # By INDEX, never get_active_text(): nbi18n translates what a
+            # ComboBoxText shows, so the visible text is not the xkb code the
+            # list was built from.
+            code = KBD_LAYOUTS[i][1]
+            setxkbmap = shutil.which("setxkbmap")
+            if setxkbmap:
+                try:
+                    # nbi18n owns the argv: "ru,us" needs grp:alt_shift_toggle
+                    # or its Latin half is unreachable, and a password with a
+                    # digit or a Latin letter in it could not be typed at all.
+                    run_cmd(nbi18n.xkb_args(code), timeout=10)
+                except Exception:                              # noqa: BLE001
+                    pass
+            self._e_pw.set_text("")
+            self._e_pw2.set_text("")
+        self._validate()
+
+    def _on_rootless_toggle(self, btn):
+        # With no console password wanted, the password fields are dead: grey
+        # them rather than keep demanding an answer that is then discarded.
+        for row in getattr(self, "_pw_rows", []):
+            row.set_sensitive(not btn.get_active())
+        self._validate()
+
     def _activate_next(self, *_):
         # Enter in a field advances the wizard, but only when Next is actually
         # available (visible + enabled) — so it can never bypass validation or
@@ -960,7 +1249,7 @@ class Installer(nbapp.AppWindow):
     def _page_summary(self):
         outer, col = self._page_scaffold(
             "Summary",
-            "Review the plan. Nothing is written until you confirm.")
+            "Review the plan. Nothing is written until it is confirmed.")
         # The irreversible warning goes ABOVE the review card, not under it. The
         # card is seven rows tall, so on a 768px panel anything below it starts
         # past the fold — and the two things that must never be missed are the
@@ -974,17 +1263,28 @@ class Installer(nbapp.AppWindow):
         self._install_block.set_no_show_all(True)   # only when there IS a block
         col.pack_start(self._install_block, False, False, 0)
 
+        # A warning that does not stop the install but changes what the user
+        # should do — today, only "another disk already has Notebook OS on it".
+        # ABOVE the seven-row card for the same reason the danger banner is:
+        # below it, on a 768px panel, it is past the fold and unread. Paper and
+        # ink rather than a second red, so the erase warning keeps its weight.
+        self._summary_warn = Gtk.Label(xalign=0)
+        self._summary_warn.get_style_context().add_class("inst-callout")
+        self._summary_warn.set_line_wrap(True)
+        self._summary_warn.set_max_width_chars(72)
+        self._summary_warn.set_margin_top(12)
+        self._summary_warn.set_no_show_all(True)
+        col.pack_start(self._summary_warn, False, False, 0)
+
         # No in-page Install button: on a 768px-tall panel it sat BELOW the fold
         # with the footer's Next hidden, so the one screen that has to offer a
         # way forward appeared to offer none. The action now lives in the footer
         # (see _set_step / _on_next), where every other step's forward control
         # is and where nothing can push it off-screen.
         self._summary_card = self._card(col, top=16)
-        self._summary_note = Gtk.Label(xalign=0)
-        self._summary_note.get_style_context().add_class("inst-note")
-        self._summary_note.set_line_wrap(True)
-        self._summary_note.set_margin_top(16)
-        col.pack_start(self._summary_note, False, False, 0)
+        # No standing note under the card: it explained that the installer also
+        # writes the start-up files, which the "How the disk is divided" row in
+        # the card above already states as a fact.
 
         # The same plan in its exact technical form. Muted and last, but never
         # dropped: anyone recovering a machine that will not start needs these
@@ -1013,17 +1313,16 @@ class Installer(nbapp.AppWindow):
         if self.cfg["swap"]:
             layout += ("  ·  Spare memory space, %s"
                        % self._mib_text(int(self.cfg["swap_mib"])))
-        layout += "  ·  Notebook OS and your files, all the remaining space"
+        layout += "  ·  Notebook OS and files, all the remaining space"
 
-        tz = TIMEZONES[self.cfg["tz"]][0]
         kbd = KBD_LAYOUTS[self.cfg["kbd"]][0]
         loc = LOCALES[self.cfg["locale"]][0]
-        user = self.cfg["username"] or "—"
         if self.cfg["root_passwordless"]:
-            acct = ("%s  ·  plus an administrator console that asks for no "
-                    "password" % user)
+            # Say the same thing the checkbox said, in the review that is the
+            # last chance to catch it.
+            acct = _t("None. The machine starts straight into the desktop.")
         else:
-            acct = "%s  ·  asks for a password to sign in" % user
+            acct = _t("asked for every time this computer starts")
 
         rows = [
             ("Disk", dtxt),
@@ -1032,16 +1331,24 @@ class Installer(nbapp.AppWindow):
         # disk it names — this is the row that catches a wrong choice while
         # backing out is still free.
         if self.cfg.get("disk_contents") == "EMPTY":
-            rows.append(("What is on it now", _t("Nothing — the disk is empty")))
+            rows.append(("What is on it now", _t("Nothing. The disk is empty.")))
         elif self.cfg.get("disk_contents"):
             rows.append(("What is on it now", self.cfg["disk_contents"]))
         rows += [
             ("How the disk is divided", layout),
-            ("Computer name", self.cfg["hostname"]),
-            ("Login account", acct),
-            ("Time zone", tz),
-            ("Keyboard", kbd),
-            ("Text and characters", loc),
+            ("Name",
+             _t("Chosen on first start-up") if self.cfg.get("oem")
+             else (self.cfg.get("username") or _t("Not set"))),
+            ("Computer name",
+             _t("Chosen on first start-up") if self.cfg.get("oem")
+             else self.cfg["hostname"]),
+            ("Administrator password",
+             _t("Chosen on first start-up") if self.cfg.get("oem") else acct),
+            ("Keyboard",
+             _t("Chosen on first start-up") if self.cfg.get("oem") else kbd),
+            ("Text and characters",
+             _t("Chosen on first start-up") if self.cfg.get("oem") else loc),
+            ("Clock", _t("UTC. Set local time in Settings afterwards.")),
         ]
         for i, (k, v) in enumerate(rows):
             val = Gtk.Label(label=v, xalign=1)
@@ -1051,10 +1358,16 @@ class Installer(nbapp.AppWindow):
             self._field_row(card, k, val, first=(i == 0))
         card.show_all()
 
-        self._summary_note.set_text(
-            "The installer also sets up the start-up files, so this machine "
-            "switches straight on into Notebook OS.")
-        tech = ("In technical terms: a %d MiB FAT32 EFI system partition, "
+        clash = self._clash_line()
+        if clash:
+            self._summary_warn.set_text(clash)
+            self._summary_warn.set_no_show_all(False)
+            self._summary_warn.show()
+        else:
+            self._summary_warn.set_text("")
+            self._summary_warn.set_no_show_all(True)
+            self._summary_warn.hide()
+        tech = ("Details: a %d MiB FAT32 EFI system partition, "
                 "%san ext4 root filesystem labelled \"%s\" with PARTUUID %s, "
                 "and the GRUB loader written to /EFI/BOOT/BOOTX64.EFI."
                 % (ESP_SIZE_MIB,
@@ -1083,7 +1396,7 @@ class Installer(nbapp.AppWindow):
             self._install_block.hide()
         else:
             self._summary_danger.set_text(
-                "This computer cannot be installed to right now.")
+                _t("This computer cannot be installed to right now."))
             self._install_block.set_text(reason)
             self._install_block.set_no_show_all(False)
             self._install_block.show()
@@ -1096,8 +1409,26 @@ class Installer(nbapp.AppWindow):
         if self.missing_tools:
             return False, ("This copy of %s is missing the tools that prepare "
                            "a disk, so it cannot install itself." % OS_NAME)
+        # Checked HERE, not when the password is finally written: by then the
+        # disk has been erased and the whole system extracted onto it.
+        if not self.cfg.get("root_passwordless") and not self.can_hash:
+            return False, (_t("This installer cannot store a password, so it "
+                              "cannot finish an install that asks for one. On "
+                              "the Options step, either switch on starting "
+                              "without a password, or use a different %s "
+                              "installer.") % OS_NAME)
         if not self.cfg.get("disk"):
-            return False, "Go back to Target disk and choose a disk first."
+            return False, "Go back to “Choose the disk” and pick one first."
+        # Last gate before the erase. The disk step already refuses a disk
+        # that is too small, but the swap size is chosen AFTER it, so a disk
+        # that fitted can stop fitting; this is the check that is true at the
+        # moment the install actually starts.
+        if self._disk_too_small(self.cfg.get("disk_size")):
+            return False, (_t("%s is too small: it needs at least %s. Go back "
+                              "to “Choose the disk” and pick a bigger one, "
+                              "or set aside less spare memory.")
+                           % (self.cfg["disk"],
+                              human_bytes(self._min_disk_bytes())))
         return True, ""
 
     def _mib_text(self, mib):
@@ -1177,7 +1508,7 @@ class Installer(nbapp.AppWindow):
         self._log_buf.set_text("")
         self._prog_bar.set_fraction(0.0)
         self._prog_bar.set_text("0%")
-        self._prog_status.set_text("Starting…")
+        self._prog_status.set_text(_t("Starting…"))
         self._fail_box.set_no_show_all(True)
         self._fail_box.hide()
 
@@ -1189,8 +1520,8 @@ class Installer(nbapp.AppWindow):
         # went to, and this page is built before there is an answer.
         self._done_para = self._para(
             col,
-            "%s is installed. Take out the installer USB stick or disc, then "
-            "restart — the machine will start up from the disk you chose."
+            "%s is installed. Remove the installer USB stick or disc, then "
+            "restart. The machine will start up from the disk chosen here."
             % OS_PRETTY)
         # Filled in after a Secure Boot install (see _install_done); hidden
         # otherwise, so the ordinary case reads as a clean two-line finish.
@@ -1218,18 +1549,14 @@ class Installer(nbapp.AppWindow):
         restart.connect("clicked", lambda *_: self._confirm_restart())
         btnrow.pack_start(restart, False, False, 0)
         col.pack_start(btnrow, False, False, 0)
-        self._para(col,
-                   "There is no rush — you can carry on using this session for "
-                   "as long as you like. The installed copy will be waiting "
-                   "whenever you switch the machine on again.", cls="inst-note")
         return outer
 
     def _confirm_shutdown(self):
         self._open_confirm(
             "Switch off now?",
-            "The computer will switch off. Take the installer USB stick or "
-            "disc out while it is off, then press the power button — it will "
-            "start up into %s from the disk you installed to." % OS_PRETTY,
+            "The computer will switch off. Remove the installer USB stick or "
+            "disc while it is off, then press the power button. It will start "
+            "up into %s from the disk just installed to." % OS_PRETTY,
             "Switch off",
             lambda: self._do_power("poweroff"))
 
@@ -1238,8 +1565,8 @@ class Installer(nbapp.AppWindow):
         # still inserted lands back in the live installer — so confirm and remind.
         self._open_confirm(
             "Restart now?",
-            "Remove the install medium first, then restart, so the machine boots "
-            "from the disk you installed to. If the medium is still inserted the "
+            "Remove the install medium first, so the machine starts from the "
+            "disk just installed to. If the medium is still inserted the "
             "machine may start the live installer again.",
             "Restart",
             lambda: self._do_power("reboot"))
@@ -1306,6 +1633,12 @@ class Installer(nbapp.AppWindow):
         if key == "target":
             self._refresh_disks()
         elif key == "summary":
+            # One lsblk, on arrival, cached for the page (_refresh_summary is
+            # re-run by every _validate and must not shell out each time).
+            try:
+                self._partuuid_other = self._partuuid_clash()
+            except Exception:                                  # noqa: BLE001
+                self._partuuid_other = ""
             self._refresh_summary()
         elif key == "progress":
             self._reset_progress()
@@ -1323,13 +1656,13 @@ class Installer(nbapp.AppWindow):
         GLib.idle_add(self._flush_paint)
 
         # Put the cursor where the user will type next, so the keyboard works
-        # without a mouse click first. Username is the first empty field on the
-        # Options step (hostname already carries a sensible default).
-        if key == "options" and hasattr(self, "_e_user"):
+        # without a mouse click first. The password is the first empty field on
+        # the Options step (hostname already carries a sensible default).
+        if key == "options" and hasattr(self, "_e_pw"):
             try:
-                self._e_user.grab_focus_without_selecting()
+                self._e_pw.grab_focus_without_selecting()
             except Exception:
-                self._e_user.grab_focus()
+                self._e_pw.grab_focus()
 
         # rail state
         for j, (row, num, lbl) in enumerate(self._rail_rows):
@@ -1383,14 +1716,29 @@ class Installer(nbapp.AppWindow):
         if self._step > 0:
             self._set_step(self._step - 1)
 
+    # Rows the new owner answers on their first start-up. Greyed rather than
+    # hidden: the page must not jump about under the pointer, and seeing what
+    # WILL be asked is the whole reassurance this option needs to give.
+    _OEM_DEFERRED = ("_e_user", "_e_host", "_c_kbd", "_c_locale",
+                     "_e_pw", "_e_pw2", "_chk_rootless")
+
+    def _on_oem_toggled(self, _btn=None):
+        oem = self._cb_oem.get_active()
+        self.cfg["oem"] = oem
+        for name in self._OEM_DEFERRED:
+            w = getattr(self, name, None)
+            if w is not None:
+                w.set_sensitive(not oem)
+        self._validate()
+
     def _commit_step(self):
         key = self.STEPS[self._step][0]
         if key == "options":
+            self.cfg["oem"] = self._cb_oem.get_active()
+            self.cfg["username"] = self._e_user.get_text().strip()
             self.cfg["hostname"] = self._e_host.get_text().strip()
-            self.cfg["tz"] = max(0, self._c_tz.get_active())
             self.cfg["kbd"] = max(0, self._c_kbd.get_active())
             self.cfg["locale"] = max(0, self._c_locale.get_active())
-            self.cfg["username"] = self._e_user.get_text().strip()
             self.cfg["password"] = self._e_pw.get_text()
             self.cfg["password2"] = self._e_pw2.get_text()
             self.cfg["root_passwordless"] = self._chk_rootless.get_active()
@@ -1425,25 +1773,39 @@ class Installer(nbapp.AppWindow):
             self._foot_hint.set_text(hint)
 
     def _validate_options(self):
+        if self._cb_oem.get_active():
+            # Every answer on this page now belongs to the new owner, so there
+            # is nothing here left to get wrong.
+            return True, ""
         host = self._e_host.get_text().strip()
-        user = self._e_user.get_text().strip()
         pw = self._e_pw.get_text()
         pw2 = self._e_pw2.get_text()
         if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$", host):
             return False, "Enter a valid hostname (letters, digits and -)."
-        if not re.match(r"^[a-z_][a-z0-9_-]{0,31}$", user):
-            return False, ("Enter a valid username (starts with a lower-case "
-                           "letter or _, then letters, digits, - or _).")
-        if user in ("root", "daemon", "bin", "sys", "nobody"):
-            return False, "That username is reserved; choose another."
-        if len(pw) < 1:
-            return False, "Enter a password for the account."
-        if pw != pw2:
-            return False, "The passwords do not match."
+        # Only when the password is going to be USED. With the passwordless tick
+        # on, nothing reads it, so demanding one would be a made-up obstacle.
+        if not self._chk_rootless.get_active():
+            if len(pw) < 1:
+                return False, "Enter an administrator password."
+            if pw != pw2:
+                return False, "The passwords do not match."
+        swap_mib = 0
         if self._chk_swap.get_active():
-            sz = int(self._sp_swap.get_value())
-            if sz < 256:
-                return False, "Swap size must be at least 256 MiB."
+            swap_mib = int(self._sp_swap.get_value())
+            if swap_mib < 256:
+                # The page calls this spare memory throughout (and prints
+                # every other figure in MB), so the one message that refused a
+                # value must not be the only place that says swap and MiB.
+                return False, "Spare memory must be at least 256 MB."
+        # Swap is chosen here, AFTER the disk. Turning it on (or raising it) can
+        # push a disk that fitted a moment ago past what it can hold, and the
+        # install would then erase the disk before finding out.
+        if self._disk_too_small(self.cfg.get("disk_size"), swap_mib):
+            return False, (_t("%s is too small for these choices: it needs at "
+                              "least %s. Set aside less spare memory, or go "
+                              "back and choose a bigger disk.")
+                           % (self.cfg.get("disk") or _t("The chosen disk"),
+                              human_bytes(self._min_disk_bytes(swap_mib))))
         return True, ""
 
     # ---------------------------------------------------------- confirm + start
@@ -1457,8 +1819,8 @@ class Installer(nbapp.AppWindow):
         # translated sentence would stop the pair matching any catalog entry
         # and drop this dialog back to English on a Spanish install.
         body = (_t("Everything on %s will be erased for good, and %s will be "
-                   "installed in its place. There is no undo, and no way to "
-                   "get the old contents back.") % (disk, OS_PRETTY))
+                   "installed in its place. This cannot be undone.")
+                % (disk, OS_PRETTY))
         # Name the contents in the last dialog too. Someone who has clicked
         # through four screens is no longer reading them; this is the one they
         # do read, and "Windows" here has stopped more mistakes than any
@@ -1466,6 +1828,9 @@ class Installer(nbapp.AppWindow):
         line = self._contents_line(self.cfg.get("disk_contents"))
         if line:
             body += "\n\n" + line
+        clash = self._clash_line()
+        if clash:
+            body += "\n\n" + clash
         self._open_confirm(
             "Erase %s and install?" % disk, body,
             "Erase and install",
@@ -1610,7 +1975,7 @@ class Installer(nbapp.AppWindow):
 
     def _begin_pulse(self, status):
         self._prog_status.set_text(status)
-        self._prog_bar.set_text("Working…")
+        self._prog_bar.set_text(_t("Working…"))
         self._pulse_on = True
         self._prog_bar.pulse()
         GLib.timeout_add(140, self._pulse_tick)
@@ -1635,6 +2000,11 @@ class Installer(nbapp.AppWindow):
 
     def _install_failed(self, msg):
         self._working = False
+        # What WAS on that disk is now gone — the engine wipes it before it
+        # does anything else. Backing up to the Summary from here would
+        # otherwise show a "What is on it now: Windows" row, and repeat it in
+        # the confirmation, about a disk that no longer holds any of it.
+        self.cfg["disk_contents"] = ""
         self._post_progress(self._prog_bar.get_fraction(), "Installation stopped")
         self._fail_box.set_no_show_all(False)
         # Plain English first, the exact reason after it. Be straight about the
@@ -1642,9 +2012,9 @@ class Installer(nbapp.AppWindow):
         # by the time anything can fail the old contents are already gone —
         # telling the user "nothing was written" would be a comforting lie.
         self._fail_lbl.set_text(
-            "The installation stopped part-way through and could not finish. "
-            "The disk was already being erased, so it will not start up as it "
-            "is — go back and try again.\n\n"
+            "The installation stopped part-way through. The disk was already "
+            "being erased, so it will not start up as it is. Go back and try "
+            "again.\n\n"
             "What went wrong: %s" % msg)
         self._fail_box.show_all()
         # Open the detailed report: this is the moment it earns its place.
@@ -1662,8 +2032,8 @@ class Installer(nbapp.AppWindow):
         disk = self.cfg.get("disk")
         if disk:
             self._done_para.set_text(
-                "%s is now installed on %s (%s), at %s. Take out the installer "
-                "USB stick or disc, then start the machine again — it will "
+                "%s is now installed on %s (%s), at %s. Remove the installer "
+                "USB stick or disc, then start the machine again. It will "
                 "start up from that disk."
                 % (OS_PRETTY, self.cfg.get("disk_model") or "the disk",
                    human_bytes(self.cfg.get("disk_size") or 0), disk))
@@ -1674,13 +2044,11 @@ class Installer(nbapp.AppWindow):
             # press, in the order they will meet it; the exact file names stay
             # because they have to type/choose them.
             self._done_sb.set_text(
-                "One thing to do the first time you switch this machine on. "
-                "It checks who signed the software it starts, so it will ask "
-                "you to approve Notebook OS once. A blue screen appears: "
-                "choose \"Enroll key from disk\", pick EFI/BOOT/MOK.cer, "
-                "confirm, and restart. If you get a start-up error instead, "
-                "open your firmware's boot menu and run EFI/BOOT/mmx64.efi to "
-                "do the same thing.")
+                "Secure Boot: the Notebook OS key must be approved once, on "
+                "the first start-up. A blue screen appears: choose \"Enroll "
+                "key from disk\", pick EFI/BOOT/MOK.cer, confirm, and restart. "
+                "If a start-up error appears instead, open the firmware boot "
+                "menu and run EFI/BOOT/mmx64.efi to enrol the key there.")
             self._done_sb.set_no_show_all(False)
             self._done_sb.show()
         self._set_step(self._steps_index("done"))
@@ -1788,7 +2156,10 @@ class Installer(nbapp.AppWindow):
         self._phase(0.30, "Formatting partitions")
         self._sh([mkvfat, "-F32", "-n", ESP_LABEL, esp])
         if swap and self.tools.get("mkswap"):
-            self._sh([self.tools["mkswap"], swappart])
+            # Labelled, so _configure_fstab can name it without hard-coding a
+            # device path. Without the fstab line the partition was created,
+            # formatted and then never switched on by anything.
+            self._sh([self.tools["mkswap"], "-L", SWAP_LABEL, swappart])
         self._sh([mkext4, "-F", "-L", ROOT_LABEL, rootpart])
 
         # d. Mount root and extract the system. tar reports no progress, so the
@@ -1907,14 +2278,48 @@ class Installer(nbapp.AppWindow):
         return out
 
     # -- target-tree configuration (Python file writes; guarded) --
+    # The marker de/firstrun.py looks for. Under /var: machine state, not a
+    # document, and it survives on the installed root.
+    OEM_MARKER = "var/lib/notebookos/first-run"
+
+    # The one name this file will write when it is handed something it cannot.
+    # Matches the shipped /etc/hostname, so the fallback is the state the image
+    # already ships rather than an invention.
+    DEFAULT_HOSTNAME = "notebook"
+
     def _configure_target(self, root):
-        self._write_file(os.path.join(root, "etc", "hostname"),
-                         self.cfg["hostname"] + "\n")
+        # Never write a name the machine cannot carry. The Options step refuses
+        # an invalid one — but "set this up for someone else" skips that whole
+        # validation (every answer on the page belongs to the new owner), so a
+        # blank or half-typed field left behind before the tick went on reached
+        # this line unchecked and became an EMPTY /etc/hostname on the installed
+        # machine. busybox `hostname -F` on an empty file is an error at every
+        # boot, and firstrun.py's own hostname field is validated, so the only
+        # way in was through here.
+        host = (self.cfg.get("hostname") or "").strip()
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$", host):
+            host = self.DEFAULT_HOSTNAME
+        self._write_file(os.path.join(root, "etc", "hostname"), host + "\n")
+        if self.cfg.get("username"):
+            self._write_file(os.path.join(root, "etc", "notebookos-user"),
+                             self.cfg["username"] + "\n")
         self._write_os_release(root)
-        self._configure_timezone(root)
+        self._configure_fstab(root)
+        if self.cfg.get("oem"):
+            # Everything impersonal is written; the four answers that belong to
+            # the person who will use this machine are left for their first
+            # start-up. Root stays LOCKED as the image ships it, so the machine
+            # comes up without a sign-in screen and firstrun.py is the first
+            # thing they meet -- setting a password here would defeat the point
+            # and hand them a secret they did not choose.
+            self._write_file(os.path.join(root, self.OEM_MARKER),
+                             "Notebook OS: first-run setup is owed.\n"
+                             "de/firstrun.py removes this once it is done.\n")
+            self._post_log("set up for someone else: they choose the name, "
+                           "language, keyboard and password on first start")
+            return
         self._configure_keyboard(root)
         self._configure_locale(root)
-        self._create_user(root)
         self._configure_login(root)
 
     def _write_file(self, path, data, mode=None):
@@ -1946,36 +2351,80 @@ class Installer(nbapp.AppWindow):
             'PRETTY_NAME="%s"\n' % OS_PRETTY)
         self._write_file(os.path.join(root, "etc", "os-release"), data)
 
-    def _configure_timezone(self, root):
-        _lbl, iana, posix = TIMEZONES[self.cfg["tz"]]
-        # POSIX TZ string is tool-free and works without zoneinfo (the appliance
-        # ships no tzdata); this is what actually drives the clock.
-        self._write_file(os.path.join(root, "etc", "TZ"), posix + "\n")
-        # If the target tree does ship the zoneinfo file, point localtime at it.
-        zi = os.path.join(root, "usr", "share", "zoneinfo", iana)
-        if os.path.exists(zi):
-            link = os.path.join(root, "etc", "localtime")
-            try:
-                if os.path.islink(link) or os.path.exists(link):
-                    os.remove(link)
-                os.symlink("/usr/share/zoneinfo/" + iana, link)
-                self._post_log("linked %s -> /usr/share/zoneinfo/%s"
-                               % (link, iana))
-            except OSError as e:
-                raise InstallError("cannot set localtime: %s" % e)
+    def _configure_fstab(self, root):
+        """Add the swap partition to the installed /etc/fstab.
+
+        Without this the install created the partition, ran mkswap on it, and
+        then nothing ever switched it on: /etc/inittab's `swapon -a` reads
+        /etc/fstab, and the shipped fstab has no swap line. The user lost the
+        disk space and gained nothing.
+
+        By LABEL, not by device path: /dev/sda2 becomes /dev/sdb2 the day
+        another disk is plugged in. Verified on this build — busybox swapon is
+        compiled with FEATURE_SWAPONOFF_LABEL and resolves LABEL= via blkid.
+        """
+        if not self.cfg.get("swap"):
+            return
+        self._append_file(
+            os.path.join(root, "etc", "fstab"),
+            "# %s installer — swap partition\n"
+            "LABEL=%s\tswap\tswap\tdefaults\t0\t0\n" % (OS_NAME, SWAP_LABEL))
+
+    @staticmethod
+    def _xkb_parts(code):
+        """An nbi18n layout code -> (layout, variant, options) for xorg.conf.
+
+        nbi18n codes are setxkbmap strings: "jp(kana)" is a VARIANT (writing it
+        as XkbLayout produces no keymap at all) and "ru,us" is a dual layout
+        that needs a switch key or its Latin half is unreachable — which for
+        Russian, Hindi, Greek and Yiddish means no way to type a password.
+        """
+        variant = ""
+        m = re.match(r"^([^(]+)\((.+)\)$", code or "")
+        if m:
+            code, variant = m.group(1), m.group(2)
+        options = "grp:alt_shift_toggle" if "," in (code or "") else ""
+        return code or "us", variant, options
 
     def _configure_keyboard(self, root):
         code = KBD_LAYOUTS[self.cfg["kbd"]][1]
-        # Persistent X keyboard layout (the desktop runs on X; setxkbmap is the
-        # live equivalent, this file is the on-disk form).
-        conf = ('Section "InputClass"\n'
-                '    Identifier "system-keyboard"\n'
-                '    MatchIsKeyboard "on"\n'
-                '    Option "XkbLayout" "%s"\n'
-                'EndSection\n' % code)
+        layout, variant, options = self._xkb_parts(code)
+        # Persistent X keyboard layout for anything that starts X before the
+        # desktop session does (and for a bare X on this machine).
+        conf = ['Section "InputClass"',
+                '    Identifier "system-keyboard"',
+                '    MatchIsKeyboard "on"',
+                '    Option "XkbLayout" "%s"' % layout]
+        if variant:
+            conf.append('    Option "XkbVariant" "%s"' % variant)
+        if options:
+            conf.append('    Option "XkbOptions" "%s"' % options)
+        conf.append("EndSection")
         self._write_file(
             os.path.join(root, "etc", "X11", "xorg.conf.d", "00-keyboard.conf"),
-            conf)
+            "\n".join(conf) + "\n")
+        # ...and the file the DESKTOP actually reads. session.sh applies
+        # nbi18n.keyboard(), which reads locale.json out of $NB_HOME; the
+        # installer never wrote it, so every install fell back to "us" and an
+        # AZERTY install came up QWERTY. The UI language goes in the same file:
+        # someone installing from a French live session wants a French machine.
+        self._write_locale_json(root, code)
+
+    def _write_locale_json(self, root, kbd_code):
+        import json
+        # NB_HOME is /root on this appliance (session.sh sets it, and there is
+        # no second account) — see _configure_login: this is a single-user
+        # machine by design.
+        path = os.path.join(root, "root", ".config", "notebook", "locale.json")
+        data = {"keyboard": kbd_code, "lang": nbi18n.current_lang()}
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as fh:
+                json.dump(data, fh)
+            self._post_log("wrote %s (keyboard=%s lang=%s)"
+                           % (path, data["keyboard"], data["lang"]))
+        except OSError as e:
+            raise InstallError("cannot write %s: %s" % (path, e))
 
     def _configure_locale(self, root):
         code = LOCALES[self.cfg["locale"]][1]
@@ -1986,96 +2435,51 @@ class Installer(nbapp.AppWindow):
                  "export LC_ALL=%s\n" % (code, code))
         self._append_file(os.path.join(root, "etc", "profile"), block)
 
-    def _create_user(self, root):
-        user = self.cfg["username"]
-        pw = self.cfg["password"]
-        uid = self._next_uid(root)
-        gid = uid
-        home = "/home/" + user
-        pwhash = self._hash_password(pw)
-        lastchg = int(time.time() // 86400)
-
-        # /etc/passwd
-        self._append_file(
-            os.path.join(root, "etc", "passwd"),
-            "%s:x:%d:%d:%s:%s:/bin/sh\n" % (user, uid, gid, user, home))
-        # /etc/shadow
-        self._append_file(
-            os.path.join(root, "etc", "shadow"),
-            "%s:%s:%d:0:99999:7:::\n" % (user, pwhash, lastchg))
-        # primary group
-        self._append_file(
-            os.path.join(root, "etc", "group"),
-            "%s:x:%d:\n" % (user, gid))
-        # supplementary groups (only those the image actually has)
-        self._add_to_groups(root, user,
-                            ("wheel", "audio", "video", "input", "plugdev",
-                             "netdev", "cdrom", "dialout"))
-        # home directory owned by the new account
-        try:
-            os.makedirs(os.path.join(root, "home", user), exist_ok=True)
-            os.chown(os.path.join(root, "home", user), uid, gid)
-            self._post_log("created %s (uid %d)" % (home, uid))
-        except OSError as e:
-            raise InstallError("cannot create home dir: %s" % e)
-
-    def _next_uid(self, root):
-        used = set()
-        try:
-            with open(os.path.join(root, "etc", "passwd")) as fh:
-                for ln in fh:
-                    f = ln.split(":")
-                    if len(f) >= 3:
-                        try:
-                            used.add(int(f[2]))
-                        except ValueError:
-                            pass
-        except OSError:
-            pass
-        uid = 1000
-        while uid in used:
-            uid += 1
-        return uid
-
-    def _add_to_groups(self, root, user, groups):
-        path = os.path.join(root, "etc", "group")
-        try:
-            with open(path) as fh:
-                lines = fh.readlines()
-        except OSError as e:
-            raise InstallError("cannot read %s: %s" % (path, e))
-        wanted = set(groups)
-        out = []
-        for ln in lines:
-            raw = ln.rstrip("\n")
-            f = raw.split(":")
-            if len(f) >= 4 and f[0] in wanted:
-                members = [m for m in f[3].split(",") if m]
-                if user not in members:
-                    members.append(user)
-                f[3] = ",".join(members)
-                raw = ":".join(f)
-            out.append(raw + "\n")
-        try:
-            with open(path, "w") as fh:
-                fh.writelines(out)
-            self._post_log("added %s to groups: %s"
-                           % (user, ", ".join(sorted(wanted))))
-        except OSError as e:
-            raise InstallError("cannot update %s: %s" % (path, e))
+    # No _create_user. It wrote /etc/passwd, /etc/shadow, the groups and a
+    # home directory for an account that nothing on this machine ever used:
+    # session.sh pins NB_HOME=/root and S99notebookos starts the desktop as the
+    # administrator, so /home/<user> stayed empty forever while every document
+    # lived in /root. This is a single-user computer; the password the Options
+    # step collects guards the desktop and the console, and _configure_login
+    # sets it.
 
     def _configure_login(self, root):
         if self.cfg["root_passwordless"]:
-            # Keep the live image's convenience: tty1 auto-logs into a root
-            # shell. Nothing to change (the tar already ships this form); note
-            # it so the log is explicit.
-            self._post_log("tty1: passwordless root console (left as shipped)")
+            # No password anywhere: root's account stays locked exactly as the
+            # image ships it, de/login.py's has_password() therefore answers
+            # "nothing to ask for", and the machine starts straight into the
+            # desktop. There is no console getty to leave alone either — the
+            # shipped inittab deliberately has none.
+            self._post_log("no password set: the machine starts straight into "
+                           "the desktop, and there is no text console")
             return
-        # Secure default: switch tty1 to a normal login prompt, and give root a
-        # known password (the account password) so the machine is recoverable
-        # instead of relying on the image's empty root password.
+        # Secure default: a text console on tty2 with a real login prompt, and
+        # root given the password just collected — which is what the desktop
+        # sign-in screen (de/login.py) checks as well, so the same password
+        # opens the machine both ways and there is exactly one to remember.
         self._rewrite_getty(root)
         self._set_root_password(root, self._hash_password(self.cfg["password"]))
+
+    # The text console goes on tty2, NEVER tty1.
+    #
+    # X OWNS tty1. S99notebookos starts the desktop with `xinit ... -- :0 vt1`,
+    # and the shipped /etc/inittab says so in as many words ("NO GETTY ON tty1.
+    # X owns tty1"). This installer used to append a tty1 getty anyway — the
+    # shipped file has no `tty1::` line to replace, so the replace loop always
+    # fell through to the append — which put busybox init's respawning getty and
+    # the X server on the same virtual terminal on every installed machine.
+    # Ctrl+Alt+F2 reaches the console; tty1 stays the desktop's.
+    CONSOLE_TTY = "tty2"
+
+    def _getty_line(self):
+        return "%s::respawn:/sbin/getty 38400 %s\n" % (self.CONSOLE_TTY,
+                                                       self.CONSOLE_TTY)
+
+    def _getty_block(self):
+        return ("# Text console, added by the %s installer. Reach it with\n"
+                "# Ctrl+Alt+F%s; Ctrl+Alt+F1 comes back to the desktop.\n"
+                "# NOT tty1: X owns tty1 (S99notebookos runs xinit on vt1).\n"
+                % (OS_NAME, self.CONSOLE_TTY[-1])) + self._getty_line() + "\n"
 
     def _rewrite_getty(self, root):
         path = os.path.join(root, "etc", "inittab")
@@ -2084,20 +2488,38 @@ class Installer(nbapp.AppWindow):
                 lines = fh.readlines()
         except OSError as e:
             raise InstallError("cannot read %s: %s" % (path, e))
+        line = self._getty_line()
         out = []
         changed = False
         for ln in lines:
-            if ln.startswith("tty1::"):
-                out.append("tty1::respawn:/sbin/getty 38400 tty1\n")
-                changed = True
-            else:
-                out.append(ln)
+            # Replace an existing console getty on ANY virtual terminal — a
+            # second install over the first must not leave two of them — and
+            # remove a tty1 getty outright wherever one came from.
+            if ln.startswith(("tty1::", "%s::" % self.CONSOLE_TTY)):
+                if not changed:
+                    out.append(line)
+                    changed = True
+                continue
+            out.append(ln)
         if not changed:
-            out.append("tty1::respawn:/sbin/getty 38400 tty1\n")
+            # Put it at the head of the console section rather than after the
+            # ::shutdown: lines at the end of the file, so the installed
+            # inittab still reads as something a person could maintain.
+            for anchor in ("# Put a getty", "ttyS1::"):
+                for i, ln in enumerate(out):
+                    if ln.startswith(anchor):
+                        out.insert(i, self._getty_block())
+                        changed = True
+                        break
+                if changed:
+                    break
+        if not changed:
+            out.append(line)
         try:
             with open(path, "w") as fh:
                 fh.writelines(out)
-            self._post_log("tty1: switched to a login prompt")
+            self._post_log("%s: text console with a login prompt "
+                           "(tty1 is left to the desktop)" % self.CONSOLE_TTY)
         except OSError as e:
             raise InstallError("cannot update %s: %s" % (path, e))
 
@@ -2130,6 +2552,24 @@ class Installer(nbapp.AppWindow):
             self._post_log("root: password set")
         except OSError as e:
             raise InstallError("cannot update %s: %s" % (path, e))
+
+    def _hashing_available(self):
+        """True when a password typed on the Options step can actually be
+        stored. Same two routes _hash_password uses, tried for real rather than
+        assumed: `crypt` is absent from Python 3.13 and openssl is not on this
+        image at all, so neither can be taken on faith."""
+        if _crypt is not None:
+            try:
+                h = _crypt.crypt("probe", _crypt.mksalt(_crypt.METHOD_SHA512))
+                if isinstance(h, str) and h.startswith("$6$") and len(h) > 20:
+                    return True
+            except Exception:                                  # noqa: BLE001
+                pass
+        openssl = shutil.which("openssl")
+        if openssl:
+            rc, out = run_cmd([openssl, "passwd", "-6", "probe"])
+            return rc == 0 and out.strip().startswith("$6$")
+        return False
 
     def _hash_password(self, pw):
         if _crypt is not None:

@@ -16,7 +16,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo  # noqa: E402
 
 import time
 import os
@@ -24,6 +25,7 @@ import sys
 import json
 
 import nbapp
+import nbicons
 import nbpicker
 import nbprint
 from nbi18n import _t  # noqa: E402
@@ -70,6 +72,42 @@ DOCS_DIR = os.path.join(HOME, "Documents")
 # First-run default: a blank UNTITLED page (no-seed rule). The title page shows
 # this until a user file is opened or saved.
 DEFAULT_TITLE = "UNTITLED SCREENPLAY"
+
+
+# The exported script goes through Pango, never cairo's toy text API. The toy
+# API binds ONE face and does no per-character fallback, and the face
+# "monospace" resolves to carries no CJK, no Devanagari and no Hebrew — so a
+# screenplay written in any of those exported a correct title page followed by
+# BLANK sheets, because .notdef in that face draws nothing at all rather than a
+# box. Pango keeps the monospace face for the Latin the format is built around
+# and falls back per glyph for the rest.
+_PDF_FAMILY = "Liberation Mono, DejaVu Sans Mono, monospace"
+
+
+def _pdf_layout(cr, text, size):
+    lay = PangoCairo.create_layout(cr)
+    # a PDF user unit IS a point: at Pango's default 96dpi every line would come
+    # out a third larger than the half-letter grid above was measured for
+    PangoCairo.context_set_resolution(lay.get_context(), 72.0)
+    fd = Pango.FontDescription()
+    fd.set_family(_PDF_FAMILY)
+    fd.set_size(int(size * Pango.SCALE))
+    lay.set_font_description(fd)
+    lay.set_text(text, -1)
+    return lay
+
+
+def _pdf_w(cr, text, size):
+    """The drawn width of `text`, in points."""
+    return _pdf_layout(cr, text, size).get_pixel_size()[0]
+
+
+def _pdf_show(cr, x, y, text, size):
+    """Draw `text` with its BASELINE at y — the anchor cr.show_text used, so the
+    page grid keeps the geometry it was measured for."""
+    lay = _pdf_layout(cr, text, size)
+    cr.move_to(x, y - lay.get_baseline() / Pango.SCALE)
+    PangoCairo.show_layout(cr, lay)
 
 
 class Screenplay(nbapp.AppWindow):
@@ -123,8 +161,7 @@ class Screenplay(nbapp.AppWindow):
         self.saved = Gtk.Label()
         self.saved.get_style_context().add_class("savestate")
         self.saved.set_tooltip_text(
-            "Your script is kept automatically. Use File > Save to write "
-            "it to a file.")
+            _t("Save state. File ▸ Save writes the script to a file."))
         fbar.pack_end(self.saved, False, False, 4)
         fbar.pack_end(self._sep(), False, False, 14)
         self.words = Gtk.Label(label=_t("0 words"))
@@ -184,7 +221,18 @@ class Screenplay(nbapp.AppWindow):
         # the filename, so a script could never be titled from inside the app).
         # Frameless, centred entries keep the title-page look while taking the
         # caret; both are part of the document and persist with it.
+        # A Gtk.Entry's natural width comes from width-chars, NEVER from the text
+        # in it, and the untitled page's own title is 19 characters of 18px bold
+        # Courier. Left at the default the entry was ~170px wide and the title
+        # page opened reading "UNTITLED SCREENP" with the L of PLAY sliced down
+        # the middle — the first thing anyone saw of this app. 34 characters is
+        # wider than any of the three lines in the block and still far inside the
+        # page sheet, so the paper keeps its width and its centring (see the
+        # status label's ellipsize note below).
+        _TITLE_CHARS = 34
         self.scripttitle = Gtk.Entry()
+        self.scripttitle.set_width_chars(_TITLE_CHARS)
+        self.scripttitle.set_max_width_chars(_TITLE_CHARS)
         self.scripttitle.set_has_frame(False)
         self.scripttitle.set_alignment(0.5)
         self.scripttitle.set_placeholder_text(DEFAULT_TITLE)
@@ -192,6 +240,9 @@ class Screenplay(nbapp.AppWindow):
         self.scripttitle.get_style_context().add_class("scripttitle")
         self.scripttitle.connect("changed", self._on_titlebar_change)
         self.scriptsubtitle = Gtk.Entry()
+        # Same measure as the title, or "written by Alexander Hamilton" clips.
+        self.scriptsubtitle.set_width_chars(_TITLE_CHARS)
+        self.scriptsubtitle.set_max_width_chars(_TITLE_CHARS)
         self.scriptsubtitle.set_has_frame(False)
         self.scriptsubtitle.set_alignment(0.5)
         self.scriptsubtitle.set_placeholder_text(_t("written by"))
@@ -275,6 +326,7 @@ class Screenplay(nbapp.AppWindow):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         bar.get_style_context().add_class("findbar")
         self.find_entry = Gtk.SearchEntry()
+        nbicons.style_search_entry(self.find_entry)
         self.find_entry.set_placeholder_text(_t("Find in script"))
         self.find_entry.set_width_chars(24)
         self.find_entry.get_style_context().add_class("findinput")
@@ -619,6 +671,19 @@ class Screenplay(nbapp.AppWindow):
         try:
             with open(DOC_FILE) as fh:
                 data = json.load(fh)
+            # A store that parses but is not this app's shape is moved aside
+            # BEFORE the first autosave can replace it. _collect_doc always
+            # emits a string "body" and a list "body_tags" (a blank script emits
+            # "" and []), so this cannot misfire on our own file — it is the
+            # same test File > Open already applies to a chosen file. nbapp's one
+            # .bak does not cover this: a blank script still carries the default
+            # title, which outweighs a wrong-shape store holding the user's
+            # scenes, so the second open overwrites the last copy. See
+            # nbapp.quarantine_unrecognized.
+            if not (isinstance(data, dict)
+                    and isinstance(data.get("body"), str)
+                    and isinstance(data.get("body_tags"), list)):
+                nbapp.quarantine_unrecognized(DOC_FILE)
             if isinstance(data, dict):
                 doc = {"body": str(data.get("body", ""))}
                 tags = data.get("body_tags")
@@ -771,7 +836,7 @@ class Screenplay(nbapp.AppWindow):
             else:
                 # Plain sentence, not a menu path fragment: a first-time writer
                 # needs to know the script is safe but has no file of its own.
-                self.status.set_text("Not saved to a file yet — File > Save")
+                self.status.set_text(_t("Not saved to a file"))
         except Exception:
             pass
 
@@ -1174,31 +1239,24 @@ class Screenplay(nbapp.AppWindow):
             cr.set_source_rgb(0.988, 0.984, 0.972)   # #FCFBF8
             cr.rectangle(0, 0, w, h); cr.fill()
             cr.set_source_rgb(0.102, 0.098, 0.086)    # #1A1916 ink
-            cr.select_font_face("monospace", 0, 0)
             if page_no <= 1:
-                cr.set_font_size(13.0)
-                ext = cr.text_extents(title)
-                cr.move_to((w - ext.width) / 2.0 - ext.x_bearing, h * 0.44)
-                cr.show_text(title)
+                _pdf_show(cr, (w - _pdf_w(cr, title, 13.0)) / 2.0,
+                          h * 0.44, title, 13.0)
                 return
-            cr.set_font_size(PDF_FS)
-            cw = cr.text_extents("M").x_advance or (PDF_FS * 0.6)
+            cw = _pdf_w(cr, "M", PDF_FS) or (PDF_FS * 0.6)
             # body page number, top-right (first body page reads as "1.")
             pn = "%d." % (page_no - 1)
-            pext = cr.text_extents(pn)
-            cr.move_to(w - PDF_MR - pext.width, PDF_MT - PDF_LEAD - 6)
-            cr.show_text(pn)
+            _pdf_show(cr, w - PDF_MR - _pdf_w(cr, pn, PDF_FS),
+                      PDF_MT - PDF_LEAD - 6, pn, PDF_FS)
             y = PDF_MT
             for row in rows[(page_no - 2) * lpp:(page_no - 1) * lpp]:
                 if row is not None:
                     col, text, right = row
                     if right:
-                        rext = cr.text_extents(text)
-                        x = w - PDF_MR - rext.width
+                        x = w - PDF_MR - _pdf_w(cr, text, PDF_FS)
                     else:
                         x = PDF_ML + col * cw
-                    cr.move_to(x, y)
-                    cr.show_text(text)
+                    _pdf_show(cr, x, y, text, PDF_FS)
                 y += PDF_LEAD
 
         return page_count, draw_page
@@ -1317,9 +1375,9 @@ class Screenplay(nbapp.AppWindow):
                     for i, el in enumerate(ELEMENTS)]
         if name == "Insert":
             return [
-                ("Scene Heading — INT.",
+                ("Scene Heading, INT.",
                  lambda: self._insert_snippet("INT. ", 0)),
-                ("Scene Heading — EXT.",
+                ("Scene Heading, EXT.",
                  lambda: self._insert_snippet("EXT. ", 0)),
                 nbapp.SEP,
                 ("Fade In", lambda: self._insert_snippet("FADE IN:", 1)),

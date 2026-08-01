@@ -22,11 +22,11 @@ import subprocess
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")
 
-APPS = ["writer", "novel", "journal", "academic", "screenplay", "ebook",
+APPS = ["writer", "novel", "journal", "academics", "screenplay", "ebook",
         "cookbook", "contacts", "accounting", "calendar", "music",
         "illustrator", "sequencer", "video", "media", "g2048", "packages",
         "settings", "sysmon", "calculator", "terminal", "tasks", "language",
-        "maps", "finder", "gbaide", "gbaemu", "widgets"]
+        "maps", "finder", "gbasdk", "gbaemu", "widgets"]
 
 CHILD = r'''
 import os, sys, time, resource, importlib, inspect

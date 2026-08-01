@@ -6,6 +6,7 @@ TARGET="$1"
 
 # executable bits (overlays lose them)
 chmod 0755 "$TARGET/etc/init.d/S35fontcache" 2>/dev/null || true
+chmod 0755 "$TARGET/etc/init.d/S39btfirmware" 2>/dev/null || true
 chmod 0755 "$TARGET/etc/init.d/S99notebookos" 2>/dev/null || true
 chmod 0755 "$TARGET/opt/notebook/session.sh" 2>/dev/null || true
 chmod 0755 "$TARGET/opt/notebook/de/"*.py 2>/dev/null || true
@@ -75,11 +76,12 @@ if [ -x "$HOSTPY" ]; then
     fi
 fi
 
-# boot straight to the desktop: auto-login root on tty1 (appliance, single seat)
-if [ -f "$TARGET/etc/inittab" ]; then
-    sed -i 's|^\(tty1::respawn:\).*|tty1::respawn:/sbin/getty -n -l /bin/sh 38400 tty1|' \
-        "$TARGET/etc/inittab" || true
-fi
+# NO auto-login getty on tty1. This hook used to force one back in even if the
+# overlay removed it, which is how an unauthenticated root shell survived. The
+# desktop is started by S99notebookos (xinit), not by a login on tty1, so there
+# is nothing to put here. Deliberately left as a comment: re-adding a getty
+# with "-n -l /bin/sh" hands anyone at the keyboard -- or any USB device
+# pretending to be one -- a root shell.
 
 # SINGLE X LAUNCHER. This appliance starts X + the desktop exclusively via
 # S99notebookos (xinit -> session.sh -> shell). The Buildroot xserver package
@@ -96,24 +98,45 @@ rm -f "$TARGET/etc/init.d/S40xorg"
 # X and D-Bus use unix sockets — so drop the failing init.
 rm -f "$TARGET/etc/init.d/S40network"
 
-# NO BLUETOOTH. The kernel is built without CONFIG_BT (the whole net/bluetooth
-# stack, including the AF_BLUETOOTH socket family, is gone), and the bluez
-# packages are deselected — but Buildroot never removes files a now-deselected
-# package installed on an earlier build, so purge the remnants here. Without
-# this, a stale bluetoothd/bluetoothctl and the S40bluetoothd init keep shipping
-# and S40bluetoothd fails noisily at every boot against a kernel that has no
-# Bluetooth at all.
-rm -f  "$TARGET/etc/init.d/S40bluetoothd"
-rm -f  "$TARGET/usr/libexec/bluetooth/bluetoothd"
-rm -rf "$TARGET/usr/libexec/bluetooth"
-rm -f  "$TARGET/usr/bin/bluetoothctl" "$TARGET/usr/bin/bluemoon" \
-       "$TARGET/usr/bin/btmon" "$TARGET/usr/bin/hcitool" \
-       "$TARGET/usr/bin/hciconfig" "$TARGET/usr/bin/l2ping"
-rm -f  "$TARGET"/usr/lib/libbluetooth.so*
-rm -f  "$TARGET/etc/dbus-1/system.d/bluetooth.conf"
-rm -f  "$TARGET/etc/udev/hwdb.d/20-bluetooth-vendor-product.hwdb"
-rm -rf "$TARGET/usr/lib/bluetooth" "$TARGET/lib/udev/rules.d/97-hid2hci.rules"
+# BLUETOOTH LE — SHIPPED ON PURPOSE (was: purged).
+#
+# This block used to delete the entire bluez stack. That was correct when the
+# kernel had no CONFIG_BT and the packages were deselected: Buildroot never
+# removes files a now-deselected package installed on an earlier build, so a
+# stale bluetoothd kept shipping and S40bluetoothd failed noisily every boot.
+#
+# That premise no longer holds. The kernel now builds CONFIG_BT + CONFIG_BT_LE
+# so the OS can speak BLE mesh. This does NOT reopen a network path:
+# net/bluetooth/bnep was removed outright by the no-internet strip, so
+# IP-over-Bluetooth is structurally impossible rather than merely disabled, and
+# CONFIG_BT_RFCOMM stays off so there is no serial-over-BT to run PPP over.
+#
+# Keep bluetoothd, bluetoothctl, btmon/btmgmt/btvirt and libbluetooth. Note
+# etc/dbus-1/system.d/bluetooth.conf MUST stay: without that policy file
+# bluetoothd cannot own its D-Bus name and every BLE operation fails.
+#
+# Still purge what we deliberately do not ship: the Bluetooth *audio* (bluealsa)
+# module and the hid2hci rule for switching classic HID dongles into HCI mode.
 rm -f  "$TARGET"/usr/lib/alsa-lib/libasound_module_*bluealsa* 2>/dev/null || true
+rm -f  "$TARGET/lib/udev/rules.d/97-hid2hci.rules"
+
+# btvirt and btmgmt are noinst_PROGRAMS in bluez's Makefile.tools: they get
+# compiled but `make install` deliberately skips them, so Buildroot never lands
+# them on the target. We want both. btvirt provides a virtual HCI controller,
+# which is the only way to exercise the BLE stack on a machine with no Bluetooth
+# radio (the build host has none), and btmgmt drives power/advertising from a
+# shell. BUILD_DIR is exported by Buildroot for post-build scripts.
+if [ -n "${BUILD_DIR:-}" ]; then
+    for _b in btvirt btmgmt; do
+        _src=$(find "$BUILD_DIR" -maxdepth 3 -path "*bluez5_utils*" \
+                    -name "$_b" -type f -perm -u+x 2>/dev/null | head -1)
+        if [ -n "$_src" ]; then
+            install -m 0755 "$_src" "$TARGET/usr/bin/$_b"
+        else
+            echo "post-build: WARNING: $_b not found under $BUILD_DIR" >&2
+        fi
+    done
+fi
 
 # PRINTING. Three fixes to the stock Buildroot CUPS install:
 #
@@ -227,4 +250,72 @@ Section "Device"
 EndSection
 EOF
 
+
+# ---------------------------------------------------------------------------
+# gdk-pixbuf loader cache.
+#
+# THE BUG: the cache shipped in the image disagreed with what is on disk in
+# BOTH directions. It registered libpixbufloader-svg.so, which is NOT
+# installed, so every pixbuf SVG load failed with "cannot open shared object
+# file"; and it omitted libpixbufloader-tiff.so, which IS installed, so TIFFs
+# were pushed down a slow external-converter fallback for no reason. Nothing
+# regenerated it, so it drifted further every time an image-format package was
+# switched on or off.
+#
+# The HOST's gdk-pixbuf-query-loaders CANNOT do this job: it loads the target's
+# shared objects against the host's libgdk_pixbuf and dies on a symbol mismatch
+# ("undefined symbol: g_once_init_leave_pointer"), then EXITS 0 having written
+# an empty cache -- a build-time seed that looks like it worked and is worse
+# than doing nothing. So run the TARGET's own binary through the target's
+# dynamic loader, which answers for the target's real modules, then strip the
+# build-machine prefix so the paths are right on the guest.
+#
+# S34pixbufloaders repeats this on the machine at boot, so an image built where
+# this step could not run still heals itself.
+PIXL=$(echo "$TARGET"/usr/lib/gdk-pixbuf-2.0/*/loaders 2>/dev/null | head -1)
+PIXLD="$TARGET/lib64/ld-linux-x86-64.so.2"
+[ -x "$PIXLD" ] || PIXLD="$TARGET/lib/ld-linux-x86-64.so.2"
+if [ -d "$PIXL" ] && [ -x "$PIXLD" ] && \
+   [ -x "$TARGET/usr/bin/gdk-pixbuf-query-loaders" ]; then
+    if GDK_PIXBUF_MODULEDIR="$PIXL" "$PIXLD" \
+         --library-path "$TARGET/usr/lib:$TARGET/lib" \
+         "$TARGET/usr/bin/gdk-pixbuf-query-loaders" \
+         > "$PIXL/../loaders.cache.new" 2>/dev/null && \
+       grep -q libpixbufloader "$PIXL/../loaders.cache.new"
+    then
+        sed -i "s,$TARGET,,g" "$PIXL/../loaders.cache.new"
+        mv "$PIXL/../loaders.cache.new" "$PIXL/../loaders.cache"
+        echo "post-build: gdk-pixbuf loaders.cache rebuilt from the target's own modules"
+    else
+        # Never replace a working cache with an empty one.
+        rm -f "$PIXL/../loaders.cache.new"
+        echo "post-build: NOTE loaders.cache left as-is; S34pixbufloaders will redo it at boot" >&2
+    fi
+fi
+
 exit 0
+# ---------------------------------------------------------------- lock root
+# Root ships with an EMPTY password ("root::"), which means anything that can
+# reach a login prompt, a getty or su becomes root by pressing Enter. Lock the
+# account: "!" is not a valid hash, so no typed password can ever match it.
+#
+# This does NOT stop the machine working. The desktop is started by
+# S99notebookos via xinit as root at boot; locking the PASSWORD prevents
+# authenticating AS root, it does not stop init running things as root. And
+# de/login.py treats a locked account as "nothing to ask for", so a live image
+# with no user account still boots straight to the desktop instead of stranding
+# somebody at a prompt no password can satisfy.
+# NOTE: doing this here does NOT work. Buildroot regenerates /etc/shadow from
+# its users table in "Generating root filesystems common tables", which runs
+# AFTER this script -- so an edit here is silently overwritten and root ships
+# with an empty password anyway. The lock is set by
+#     # BR2_TARGET_ENABLE_ROOT_LOGIN is not set
+# in buildroot/.config, which makes mkusers write a LOCKED root entry.
+# BR2_TARGET_GENERIC_ROOT_PASSWD is NOT the way: anything that does not start
+# with $1$/$5$/$6$ is taken as CLEAR TEXT and hashed, so setting it to "!" gives
+# root the literal password "!" -- worse than leaving it empty. Verify in
+# output/target/etc/shadow after a build, not here.
+if [ -f "$TARGET/etc/shadow" ]; then
+    grep -qE '^root:!' "$TARGET/etc/shadow" || \
+        echo "post-build: WARNING root is not locked in /etc/shadow" >&2
+fi

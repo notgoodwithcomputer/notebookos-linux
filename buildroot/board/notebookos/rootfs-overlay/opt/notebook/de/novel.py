@@ -25,6 +25,7 @@ import json
 import time
 
 import nbapp
+import nbi18n
 import nbpicker
 import nbicons
 import nbprint
@@ -81,6 +82,20 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 NOVEL_FILE = os.path.join(CFG_DIR, "novel.json")
 DOCS_DIR = os.path.join(HOME, "Documents")
+
+# The default manuscript name. It is built with _t() into the sidebar label,
+# and that label IS the model — _serialize() reads the title straight back out
+# of it — so on a Spanish install the default title is the SPANISH string.
+# Every later "is this still the default?" test and every fallback therefore
+# has to go through here rather than repeat the English literal, or it stops
+# matching the moment the OS is not in English. (UNTITLED_EN is kept for the
+# comparisons, so a manuscript saved on an English install is still recognised
+# as untitled when it is opened on a translated one.)
+UNTITLED_EN = "Untitled Novel"
+
+
+def _untitled():
+    return _t(UNTITLED_EN)
 
 # Straight quotes and hyphen-hyphen dashes become real typography as the
 # writer types (nbapp.smart_replacement, shared with Writer and Journal).
@@ -243,7 +258,14 @@ class Novel(nbapp.AppWindow):
     # ============================ SIDEBAR ============================
     def _sidebar(self):
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        side.set_size_request(336, -1)
+        # The sidebar SCALES with the panel instead of always taking 336px.
+        # At a fixed 336 this app's minimum came to exactly 1024: it "fits" a
+        # 1024 panel with nothing whatsoever to spare, so the manuscript column
+        # sat edge-to-edge with no margin and any drift in a font or a padding
+        # would push it off the screen. Same rule Academics uses for the same
+        # reason; at 1920 the divisor still yields the full 336.
+        sw, _sh = nbapp.screen_size()
+        side.set_size_request(min(336, max(240, sw // 5)), -1)
         side.get_style_context().add_class("nvside")
 
         # --- header ---
@@ -260,7 +282,7 @@ class Novel(nbapp.AppWindow):
         title_ev = Gtk.EventBox()
         title_ev.get_style_context().add_class("nvtitlebtn")
         title_ev.set_tooltip_text(_t("Rename manuscript"))
-        title = Gtk.Label(label=_t("Untitled Novel"), xalign=0)
+        title = Gtk.Label(xalign=0)
         title.get_style_context().add_class("nvtitle")
         title.set_line_wrap(True)
         # Break inside an over-long unbroken title so a pathological name can't
@@ -271,7 +293,32 @@ class Novel(nbapp.AppWindow):
         # — a 45-character manuscript name stretched the column from 336 to
         # 528px and shoved the editor sideways.
         title.set_max_width_chars(22)
+        # ...and cap the HEIGHT too. Capping only the width left the label free
+        # to grow DOWNWARD: it is packed expand=False, so it always takes its
+        # full natural height and the chapter ScrolledWindow below it gets
+        # whatever is left. A ~500-character title wrapped to 30-odd lines,
+        # pushed the app's minimum height to 915px on a 740px panel, squeezed
+        # the chapter list to a ~26px sliver (every chapter row unreachable) and
+        # shoved "New Chapter" off the bottom.
+        #
+        # IDIOM — "wrap, but at most N lines". There is no other set_lines() in
+        # de/, against 118 set_line_wrap() calls, so this is the pattern to copy
+        # anywhere a WRAPPING label sits in a fixed-height column: set_lines(N)
+        # bounds the block and set_ellipsize(END) is what makes GTK honour it
+        # (Pango only applies a line limit when it has an ellipsize mode to
+        # truncate with — set_lines alone silently does nothing). The full title
+        # still lives in the model, in the file and in the rename dialog; only
+        # this one display is clipped.
+        title.set_lines(3)
+        title.set_ellipsize(Pango.EllipsizeMode.END)
         self.title_lbl = title
+        # The title the writer typed. THE MODEL IS THIS STRING, not the
+        # label: nbi18n auto-translates whatever is set on a Gtk.Label, and
+        # _serialize used to read the manuscript title straight back out of
+        # the widget — so a book named "Notes" on a Spanish install was
+        # stored, displayed and saved-as "Notas". Every write goes through
+        # _set_title (verbatim), every read through self._title.
+        self._set_title(_untitled())
         title_ev.add(title)
         title_ev.connect("button-press-event",
                          lambda *_a: (self._rename_manuscript(), True)[1])
@@ -434,7 +481,7 @@ class Novel(nbapp.AppWindow):
         # overlay so clicks/focus pass straight through to the writing surface.
         overlay = Gtk.Overlay()
         overlay.add(self.view)
-        self.placeholder = Gtk.Label(label=_t("Empty chapter — type to begin"))
+        self.placeholder = Gtk.Label(label=_t("Empty chapter"))
         self.placeholder.get_style_context().add_class("nvplaceholder")
         self.placeholder.set_halign(Gtk.Align.START)
         self.placeholder.set_valign(Gtk.Align.START)
@@ -465,6 +512,7 @@ class Novel(nbapp.AppWindow):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         bar.get_style_context().add_class("nvfindbar")
         self.find_entry = Gtk.SearchEntry()
+        nbicons.style_search_entry(self.find_entry)
         self.find_entry.set_placeholder_text(_t("Find in manuscript"))
         self.find_entry.set_width_chars(26)
         self.find_entry.get_style_context().add_class("nvfindentry")
@@ -547,6 +595,19 @@ class Novel(nbapp.AppWindow):
             self._do_find()
             if not self._find_hits:
                 return
+        # A hit names a CHAPTER, and the chapter list can have changed under it:
+        # nothing re-runs the find, so deleting a chapter (or File > Open, or an
+        # undo) with the find bar still open left hits pointing past the end of
+        # self.chapters, and the next press of "Next match" raised IndexError
+        # inside the handler — the find buttons went dead for the rest of the
+        # session with nothing on screen to explain it. Re-find against the
+        # manuscript as it stands now.
+        if any(ci >= len(self.chapters) for ci, _s, _e in self._find_hits):
+            # _do_find ends by stepping to the first match, so it has already
+            # moved the selection — returning here is what stops one press of
+            # "Next" from counting twice.
+            self._do_find()
+            return
         self._find_i = (self._find_i + direction) % len(self._find_hits)
         ci, s_off, e_off = self._find_hits[self._find_i]
         if ci != self.active:
@@ -999,12 +1060,24 @@ class Novel(nbapp.AppWindow):
 
     def _load_state(self):
         """Read the session-recovery manuscript from disk, or None so the
-        caller falls back to the app's empty single-chapter default."""
+        caller falls back to the app's empty single-chapter default.
+
+        A file that parses but holds no manuscript is QUARANTINED here, before
+        __init__'s `if not saved: self._save_state()` can write the seeded empty
+        Chapter 1 over it. nbapp's one .bak cannot save this: a seeded blank
+        manuscript is a title, a chapter number and a "Chapter 1" heading line,
+        which OUTWEIGHS a store holding a whole book under an unexpected key, so
+        _bak_would_shrink sees no regression and the second open overwrites the
+        only remaining copy. See nbapp.quarantine_unrecognized."""
         try:
             with open(NOVEL_FILE) as fh:
-                return self._parse_state(json.load(fh))
+                data = json.load(fh)
         except Exception:
-            return None
+            return None                  # missing / unreadable: nothing to lose
+        state = self._parse_state(data)
+        if state is None:
+            nbapp.quarantine_unrecognized(NOVEL_FILE)
+        return state
 
     def _parse_state(self, data):
         """Validate a decoded manuscript document into a normalized state dict
@@ -1050,7 +1123,7 @@ class Novel(nbapp.AppWindow):
         dp = data.get("doc_path")
         if not isinstance(dp, str) or not dp:
             dp = None
-        return {"title": str(data.get("title", "Untitled Novel")),
+        return {"title": str(data.get("title", _untitled())),
                 "parts": parts, "chapters": chapters, "active": active,
                 "doc_path": dp}
 
@@ -1058,7 +1131,7 @@ class Novel(nbapp.AppWindow):
         """The full editable model as a JSON-serializable dict. Shared by the
         session-recovery writer and the File ▸ Save / Save As writers."""
         return {
-            "title": self.title_lbl.get_text(),
+            "title": self._title,
             "active": self.active,
             "doc_path": self.doc_path,
             "parts": [{"name": p.get("name", "")} for p in self.parts],
@@ -1114,7 +1187,7 @@ class Novel(nbapp.AppWindow):
         # down inside GTK's own line btree.
         outgoing = self.chapters
         self.chapters = []
-        self.title_lbl.set_text(state["title"])
+        self._set_title(state["title"])
         # Copied, not adopted: an undo snapshot is restored through here too, and
         # the live self.parts is later appended to and renamed in place — which
         # would edit the stored history out from under itself.
@@ -1200,7 +1273,7 @@ class Novel(nbapp.AppWindow):
         self.chapters = []
         self._total_words = 0
         self.active = 0
-        self.title_lbl.set_text("Untitled Novel")
+        self._set_title(_untitled())
         self._new_chapter(select=True)
         self._init_counts()
         self._refresh_chapter_list()
@@ -1221,7 +1294,8 @@ class Novel(nbapp.AppWindow):
         if len(self.parts) > 1 or (self.parts
                                    and self.parts[0]["name"].strip()):
             return True
-        if self.title_lbl.get_text().strip() not in ("", "Untitled Novel"):
+        if self._title.strip() not in ("", UNTITLED_EN,
+                                                     _untitled()):
             return True
         # The heading line IS the chapter title and is excluded from the word
         # count, so a typed-but-bodyless heading still counts as content.
@@ -1327,7 +1401,7 @@ class Novel(nbapp.AppWindow):
         if self.doc_path:
             suggested = os.path.basename(self.doc_path)
         else:
-            suggested = (self.title_lbl.get_text().strip() or "Untitled Novel")
+            suggested = (self._title.strip() or _untitled())
         path = nbpicker.save_file(self, title="Save Manuscript As",
                                   start_dir=DOCS_DIR, suggested_name=suggested,
                                   patterns=("*.json",), default_ext=".json")
@@ -1546,7 +1620,7 @@ class Novel(nbapp.AppWindow):
 
         # --- 1. title page -------------------------------------------------
         tp = new_page(folio=False)
-        title = (self.title_lbl.get_text().strip() or "Untitled Novel")
+        title = (self._title.strip() or _untitled())
         tlayout = self._mk_layout(mcr, self._esc(title), F_TITLE,
                                   PAGE_W - 80, Pango.Alignment.CENTER)
         _tw, th = tlayout.get_pixel_size()
@@ -1720,7 +1794,7 @@ class Novel(nbapp.AppWindow):
         sequential pages (title, Contents, chapters) to a shareable PDF."""
         self._close_style()
         self._close_prompt()
-        initial = (self.title_lbl.get_text().strip() or "Untitled Novel")
+        initial = (self._title.strip() or _untitled())
         self._prompt_text("Export to PDF", initial, "Filename", "Export",
                           self._commit_export_pdf)
 
@@ -1920,9 +1994,23 @@ class Novel(nbapp.AppWindow):
             return True
         return False
 
+    # ---- manuscript title: the model, and the one place it is written ----
+    def _set_title(self, text):
+        """Record the manuscript title and show it, EXACTLY as typed.
+
+        nbi18n.set_verbatim, not label.set_text: the auto-translate layer
+        rewrites any label text that happens to be a catalog key, and this
+        label is the manuscript's name — 'Notes' came back 'Notas' in Spanish,
+        'Contents' came back 'Indice', and because _serialize read the title
+        out of the widget the rewrite was saved to the file and used as the
+        Save As filename. The default IS localised (see _untitled), so it is
+        passed in already translated."""
+        self._title = text if isinstance(text, str) else str(text or "")
+        nbi18n.set_verbatim(self.title_lbl, self._title)
+
     # ---- manuscript title: rename ----
     def _rename_manuscript(self):
-        self._prompt_text("Rename manuscript", self.title_lbl.get_text(),
+        self._prompt_text("Rename manuscript", self._title,
                           "Manuscript title", "Save",
                           self._commit_manuscript_name)
 
@@ -1930,7 +2018,7 @@ class Novel(nbapp.AppWindow):
         # Empty falls back to the neutral default so the header is never blank.
         name = name.strip()
         self.undo.checkpoint("Rename manuscript")
-        self.title_lbl.set_text(name if name else "Untitled Novel")
+        self._set_title(name if name else _untitled())
         self._save_state()
         self.undo.commit()
 
@@ -1979,8 +2067,7 @@ class Novel(nbapp.AppWindow):
             "Delete chapter?",
             # Undoable now, and the confirm says so — the old wording sent a
             # writer looking for a backup that does not exist.
-            _t("Delete “%s”? Its text can be brought back with Undo (Ctrl+Z).")
-            % title,
+            _t("Delete “%s”? Its text will be removed.") % title,
             "Delete", lambda: self._delete_chapter(idx))
 
     def _delete_chapter(self, i):
@@ -2337,12 +2424,12 @@ class Novel(nbapp.AppWindow):
         .nvnewbtn:hover { background: #ECE8DD; }
         .nvnewbtn label { font-size: 15px; font-weight: 500; color: #2A2620; }
 
-        .nvformatbar { min-height: 54px; padding: 0 36px; background: #FBFAF6;
+        .nvformatbar { min-height: 54px; padding: 0 36px; background: #FCFBF8;
                        border-bottom: 1px solid #E6E1D4; }
         .nvstylebtn { min-height: 34px; padding: 0 13px;
                       border: 1px solid #DCD7C9; border-radius: 2px;
                       background: #FCFBF8; box-shadow: none; }
-        .nvstylebtn:hover { background: #F1EDE2; }
+        .nvstylebtn:hover { background: #F1EEE6; }
         .nvstylelab { font-family: "Newsreader","Liberation Serif",serif;
                       font-size: 16px; color: #1A1916; }
         .nvcaret { font-size: 11px; color: #8A857A; }

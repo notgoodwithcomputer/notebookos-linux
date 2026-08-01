@@ -40,6 +40,12 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib  # noqa: E402
 
 import os
+
+# Set while a video is playing edge-to-edge, so the desktop's menu bar can get
+# out of the way. It holds the PID: the panel checks the process is still alive
+# before honouring it, so a player that crashes mid-film cannot leave the
+# machine with no menu bar and no way to bring it back.
+VIDEO_FULL_FLAG = "/tmp/nb-video-fullscreen"
 import sys
 import time
 
@@ -66,15 +72,21 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 
 # Recognised media by extension. Images are decoded and displayed; video is
 # played through GStreamer when available (else described in the Info panel).
+# .heic / .heif / .avif are deliberately ABSENT. Nothing in this image can
+# decode them: GdkPixbuf ships no loader, and the guest ffmpeg (4.4.4) has
+# neither an AVIF demuxer nor HEIF item parsing — fed a real one it answers
+# "moov atom not found" and exits 1. Listing them made the Open dialog offer
+# files it would then refuse, and named them "HEIF image" in the Info panel as
+# if they were supported. Leaving them out is the honest state until a decoder
+# is in the image; the Finder still shows the files.
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif",
-              ".ico", ".svg", ".heic", ".heif", ".avif")
+              ".ico", ".svg")
 VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v")
 KIND = {
     ".png": "PNG image", ".jpg": "JPEG image", ".jpeg": "JPEG image",
     ".gif": "GIF image", ".bmp": "Bitmap image", ".webp": "WebP image",
     ".tiff": "TIFF image", ".tif": "TIFF image", ".ico": "Icon image",
-    ".svg": "SVG image", ".heic": "HEIF image", ".heif": "HEIF image",
-    ".avif": "AVIF image",
+    ".svg": "SVG image",
     ".mp4": "MPEG-4 video", ".webm": "WebM video", ".mov": "QuickTime video",
     ".mkv": "Matroska video", ".avi": "AVI video", ".m4v": "MPEG-4 video",
 }
@@ -98,8 +110,8 @@ SEL_RED = "#C8341E"
 def _decode_to_png(path):
     """Transcode an image GdkPixbuf has no loader for into a temporary PNG, using
     tools that ARE in the image: rsvg-convert for SVG (a vector format ffmpeg
-    can't rasterise) and ffmpeg for raster formats — WebP, HEIC/HEIF, AVIF, TIFF
-    and anything else libavcodec can decode. Returns the temp PNG path or None."""
+    can't rasterise) and ffmpeg for raster formats — WebP, TIFF and anything
+    else libavcodec can decode. Returns the temp PNG path or None."""
     import tempfile
     import shutil
     import subprocess
@@ -129,7 +141,7 @@ def _decode_to_png(path):
 
 def _pixbuf_any(path):
     """A GdkPixbuf for `path`. GdkPixbuf's own loaders (PNG/JPEG/GIF/TIFF/BMP/...)
-    are tried first; formats it lacks a loader for (WebP, HEIC, SVG, AVIF) fall
+    are tried first; formats it lacks a loader for (WebP, SVG) fall
     back to an ffmpeg/rsvg transcode. Raises if nothing can decode it."""
     try:
         return GdkPixbuf.Pixbuf.new_from_file(path)
@@ -153,7 +165,7 @@ def _thumbnail(path):
     """A THUMB_W x THUMB_H thumbnail for `path`, or None if nothing can read it.
 
     GdkPixbuf's scaling loader covers the formats it has a loader for, but the
-    image ships WITHOUT loaders for WebP, HEIC/HEIF, AVIF and SVG — so a folder
+    image ships WITHOUT loaders for WebP and SVG — so a folder
     holding those got a strip of blank white cells even though the stage showed
     each picture perfectly (the stage goes through _pixbuf_any, which falls back
     to an ffmpeg/rsvg transcode). Take the same fallback here and scale the
@@ -249,6 +261,13 @@ class MediaViewer(nbapp.AppWindow):
         stage.set_vexpand(True)
         self._stage = stage
         stage.connect("size-allocate", self._on_stage_alloc)
+        # Mouse movement over the picture brings the transport back while in
+        # fullscreen. Motion is watched on the WINDOW rather than the stage:
+        # the video surface is a child that would otherwise swallow the events,
+        # and a pointer moving anywhere means "the person is here, show them
+        # the controls".
+        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK)
+        self.connect("motion-notify-event", self._on_fs_motion)
 
         # empty-state (shown until a file is opened)
         self._empty = self._empty_state()
@@ -323,7 +342,7 @@ class MediaViewer(nbapp.AppWindow):
         t1 = Gtk.Label(label=_t("No file open"))
         t1.get_style_context().add_class("stage-title")
         wrap.pack_start(t1, False, False, 0)
-        t2 = Gtk.Label(label=_t("Click Open to choose an image or video."))
+        t2 = Gtk.Label(label=_t("Open an image or video."))
         t2.get_style_context().add_class("stage-sub")
         wrap.pack_start(t2, False, False, 0)
         return wrap
@@ -357,10 +376,13 @@ class MediaViewer(nbapp.AppWindow):
         box.pack_start(holder, True, True, 0)
 
         ctl = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self._vctl = ctl        # the transport row, hidden in fullscreen
         ctl.get_style_context().add_class("vtransport")
         self._v_play = Gtk.Button()
         self._v_play.set_relief(Gtk.ReliefStyle.NONE)
         self._v_play.get_style_context().add_class("toolbtn")
+        # The only unnamed control on the video transport.
+        self._v_play.set_tooltip_text(_t("Play"))
         try:
             self._v_play_img = Gtk.Image.new_from_pixbuf(
                 nbicons.pixbuf("play", 16, "#1A1916"))
@@ -456,7 +478,12 @@ class MediaViewer(nbapp.AppWindow):
         bar.pack_start(fitb, False, False, 0)
         bar.pack_start(self._tool("zoomin", "Zoom in  (+)", self._on_zoom_in),
                        False, False, 0)
-        bar.pack_start(self._tool("rotate", "Rotate right", self._on_rotate),
+        # The tooltip says "for viewing" because that is all it is: rotating
+        # turns the picture on screen and nothing else. This viewer has no save
+        # and no export, so the turn is lost the moment you move to the next
+        # picture — which, said nowhere, read as a rotate that failed to stick.
+        bar.pack_start(self._tool("rotate", "Rotate right (not saved to the "
+                                  "file)", self._on_rotate),
                        False, False, 0)
         # Getting rid of a bad shot is the other half of looking through a
         # folder, and there was no way to do it here at all. It goes to the same
@@ -582,7 +609,10 @@ class MediaViewer(nbapp.AppWindow):
         strip.get_style_context().add_class("filmstrip")
         strip.set_size_request(-1, 96)
 
-        empty = Gtk.Label(label=_t("No media"))
+        # Says what the strip is FOR rather than naming an absence: before
+        # anything is open "No media" told the reader only that the band was
+        # blank, which she could already see.
+        empty = Gtk.Label(label=_t("No images"))
         empty.set_hexpand(True)
         empty.set_halign(Gtk.Align.CENTER)
         empty.set_valign(Gtk.Align.CENTER)
@@ -633,12 +663,14 @@ class MediaViewer(nbapp.AppWindow):
         self._thumb_cache = {p: pb for p, pb in self._thumb_cache.items()
                              if p in keep}
         if not entries:
-            # "No media" is only true before anything is opened; with a video
-            # (or a lone image) on screen it contradicts what the user is
-            # looking at, so say what the strip is actually missing.
+            # The invitation to open something is only right before anything is
+            # opened; with a video (or a lone image) on screen it contradicts
+            # what the user is looking at, so say what the strip is missing.
+            # Both branches go through _t — the second used to be a bare
+            # English literal, so it stayed English in all 16 other languages.
             self._strip_empty.set_text(
                 _t("No other images in this folder") if self._media_path
-                else "No media")
+                else _t("No images"))
             self._strip_scroll.hide()
             self._strip_empty.show()
             return
@@ -858,8 +890,7 @@ class MediaViewer(nbapp.AppWindow):
         self._stop_slideshow()      # taking manual control ends a slideshow
         self._confirm(
             _t("Move to Trash"),
-            _t("“%s” moves to the Trash. You can put it back from the Finder.")
-            % os.path.basename(path),
+            _t("Move “%s” to the Trash?") % os.path.basename(path),
             _t("Move to Trash"), lambda: self._do_trash(path))
 
     def _do_trash(self, path):
@@ -1232,8 +1263,8 @@ class MediaViewer(nbapp.AppWindow):
             # names no internal tool: say what cannot happen and what still can
             self._show_notice(
                 "Video cannot be played",
-                "This copy of Notebook OS is missing the part that plays "
-                "video. Photos and pictures still open normally.")
+                "This copy of Notebook OS cannot play video. Images still "
+                "open.")
             return
         try:
             self._player.set_state(Gst.State.NULL)
@@ -1544,12 +1575,20 @@ class MediaViewer(nbapp.AppWindow):
             self._enter_video_fullscreen()
 
     def _enter_video_fullscreen(self):
-        """Hide all chrome so the video fills the screen edge to edge. The window
-        is already fullscreen; we just collapse the menubar, the info panel and
-        the filmstrip, leaving the video stage (and its transport) to expand."""
+        """Hide all chrome so the video fills the screen edge to edge.
+
+        The app window is already fullscreen (nbapp calls fullscreen()), but
+        that is NOT the whole screen: the desktop's menu bar is a strut-docked
+        DOCK window with keep-above, so it paints over the top 46px of the
+        picture. Collapsing this window's own chrome can never reach it. So
+        video-fullscreen also asks the panel to stand down, via a flag file the
+        shell watches — the same mechanism the desktop already uses for
+        app-active, and for the same reason: the panel is a separate process.
+        """
         if not self._video.get_visible():
             return
         self._vfull = True
+        self._hide_panel(True)
         # Everything that is not the picture goes: the menubar, the Open/rotate
         # TOOLBAR (it used to stay up, so "fullscreen" still had a file-chooser
         # strip across the top), the info panel and the filmstrip. Only the
@@ -1562,9 +1601,67 @@ class MediaViewer(nbapp.AppWindow):
         if hasattr(self, "_v_full_btn"):
             self._v_full_btn.set_label(_t("Exit Fullscreen"))
             self._v_full_btn.set_tooltip_text(_t("Leave fullscreen (Esc)"))
+        # ...AND the transport. "Fullscreen" that keeps a playback bar pinned
+        # across the bottom is not fullscreen, it is a smaller window. It comes
+        # back on any mouse movement and hides again a few seconds later, which
+        # is what every video player does and what keeps a visible way out.
+        self._vctl_hide_timer = None
+        # Hidden IMMEDIATELY, not after a grace period: fullscreen should be
+        # the picture and nothing else from the first frame. Any mouse movement
+        # brings it straight back (_on_fs_motion), so there is always a way to
+        # reach the controls and a visible way out.
+        ctl = getattr(self, "_vctl", None)
+        if ctl is not None:
+            ctl.hide()
+
+    def _on_fs_motion(self, _w, _ev):
+        if getattr(self, "_vfull", False):
+            self._fs_reveal(auto_hide=True)
+        return False
+
+    # -- transport auto-hide, fullscreen only --
+    def _fs_cancel_timer(self):
+        if getattr(self, "_vctl_hide_timer", None):
+            try:
+                GLib.source_remove(self._vctl_hide_timer)
+            except Exception:
+                pass
+            self._vctl_hide_timer = None
+
+    def _fs_reveal(self, auto_hide=True):
+        """Show the transport, then take it away again after a few seconds.
+
+        Called on entering fullscreen and on every mouse move over the picture,
+        so the controls are always one twitch away without ever sitting on top
+        of the film."""
+        ctl = getattr(self, "_vctl", None)
+        if ctl is None or not self._vfull:
+            return
+        ctl.show()
+        self._fs_cancel_timer()
+        if auto_hide:
+            self._vctl_hide_timer = GLib.timeout_add_seconds(3, self._fs_conceal)
+
+    def _fs_conceal(self):
+        self._vctl_hide_timer = None
+        ctl = getattr(self, "_vctl", None)
+        # Never hide it out from under a pointer that is ON it (mid-seek), and
+        # never while a menu/dialog owns the pointer.
+        if ctl is not None and self._vfull:
+            try:
+                if not ctl.get_state_flags() & Gtk.StateFlags.PRELIGHT:
+                    ctl.hide()
+            except Exception:
+                ctl.hide()
+        return False
 
     def _exit_video_fullscreen(self):
         self._vfull = False
+        self._fs_cancel_timer()
+        ctl = getattr(self, "_vctl", None)
+        if ctl is not None:
+            ctl.show()
+        self._hide_panel(False)
         bar = self._menubar_widget()
         if bar is not None:
             bar.show()
@@ -1576,6 +1673,22 @@ class MediaViewer(nbapp.AppWindow):
         if hasattr(self, "_v_full_btn"):
             self._v_full_btn.set_label(_t("Fullscreen"))
             self._v_full_btn.set_tooltip_text(_t("Fullscreen video (F)"))
+
+    def _hide_panel(self, hide):
+        """Ask the desktop's menu bar to get out of the way (or come back).
+
+        The flag carries THIS PROCESS'S PID, and the shell checks that the pid
+        is still alive before honouring it. A media player that crashes mid-film
+        must not leave the machine with no menu bar and no way to get it back —
+        that is the failure this costs one line to prevent."""
+        try:
+            if hide:
+                with open(VIDEO_FULL_FLAG, "w") as fh:
+                    fh.write(str(os.getpid()))
+            elif os.path.exists(VIDEO_FULL_FLAG):
+                os.remove(VIDEO_FULL_FLAG)
+        except OSError:
+            pass          # the panel staying up is a cosmetic loss, never fatal
 
     # -- menus --
     def _find_widget(self, cls, root=None):
@@ -1604,10 +1717,14 @@ class MediaViewer(nbapp.AppWindow):
 
     def menu_items(self, name):
         if name == "File":
-            # The app's Open action ahead of the inherited Close. Move to Trash
-            # is only offered when there is a file on screen to move.
-            return [("Open…", lambda: self._on_open(None)),
-                    ("Move to Trash",
+            # The app's Open action ahead of the inherited Close. Open carries
+            # its shortcut because _on_key really binds Ctrl+O; Move to Trash
+            # carries an ellipsis because it ASKS first (_on_trash raises a
+            # confirm card) — unlike the Finder's same-named item, which moves
+            # the file straight away and so takes none. It is only offered when
+            # there is a file on screen to move.
+            return [("Open…    Ctrl+O", lambda: self._on_open(None)),
+                    ("Move to Trash…",
                      (lambda: self._on_trash(None)) if self._media_path
                      else None),
                     nbapp.SEP] + super().menu_items(name)

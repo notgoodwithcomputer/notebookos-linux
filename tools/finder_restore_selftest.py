@@ -2,6 +2,19 @@
 """Headless test for Finder Trash 'Put Back' (restore to original location)."""
 import os
 import shutil
+import tempfile
+
+# finder.HOME is read at IMPORT time and defaults to the CALLER'S REAL HOME, so
+# this suite used to rmtree ~/.Trash and write into ~/Documents on the
+# developer's machine. Pin a throwaway one first (the rule
+# finder_fileops_selftest already follows), which also keeps the
+# single-instance guard off the unscoped /tmp/nb-apps -- a real app's marker
+# there makes claim_single_instance() os._exit(0) mid-suite: no output, exit 0,
+# a silent false pass.
+os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="nbfinder-restore-"))
+for _d in ("Documents", "Applications", "Pictures", "Music", "Videos"):
+    os.makedirs(os.path.join(os.environ["NB_HOME"], _d), exist_ok=True)
+
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")

@@ -28,6 +28,17 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, GdkPixbuf  # noqa: E402
 
+# The splash is the FIRST thing anyone reads on this computer, so it has to be
+# in their language too. nbi18n is a plain JSON read with no GTK dependency, but
+# the splash must come up even if the desktop tree is damaged — so a failed
+# import degrades to English rather than leaving the machine with no boot
+# screen at all.
+try:
+    from nbi18n import _t  # noqa: E402
+except Exception:          # pragma: no cover - defensive, see above
+    def _t(s):
+        return s
+
 READY_FLAG = "/tmp/nb-ready"          # shell writes this once the panel maps
 LOGO = "/opt/notebook/logo.png"       # the snail brand mark
 
@@ -113,11 +124,13 @@ class Splash(Gtk.Window):
         img.set_margin_bottom(6)
         content.pack_start(img, False, False, 0)
 
-        name = Gtk.Label(label="Notebook OS")
+        name = Gtk.Label(label=_t("Notebook OS"))
         name.get_style_context().add_class("splash-name")
         content.pack_start(name, False, False, 0)
 
-        sub = Gtk.Label(label="STARTING DESKTOP SESSION")
+        # "Desktop session" is what the machine calls this to itself. What is
+        # happening, to the person watching, is that the computer is starting.
+        sub = Gtk.Label(label=_t("STARTING UP"))
         sub.get_style_context().add_class("splash-sub")
         content.pack_start(sub, False, False, 0)
 
@@ -178,7 +191,13 @@ class Splash(Gtk.Window):
         # of the DrawingArea; finish() fills it to 100% when the desktop is up.
         if self._fraction != prev:
             self.bar.queue_draw()
-        return True
+            return True
+        # Capped: stop the timer outright rather than waking every 70ms to
+        # decide there is nothing to do. This runs on a CPU-rendered machine
+        # during the exact seconds the whole desktop is starting underneath it,
+        # and it can sit at the cap for the rest of the 30-second failsafe.
+        # _finish() paints the full bar directly, so nothing needs this timer.
+        return False
 
     # ---- dismissal ----
     def _poll_ready(self):

@@ -59,6 +59,44 @@ CREDIT_C = "#4F6B45"
 DEBIT_C = "#A23B2B"
 
 
+# ---------------------------------------------------------------- drawn text
+# Every string this file paints goes through Pango, never cairo's "toy" font
+# API (cr.select_font_face + cr.show_text).
+#
+# THE BUG THIS EXISTS FOR: the toy API binds ONE FreeType face and does no
+# per-character fallback, so it draws .notdef boxes for anything that face does
+# not carry. Nimbus Sans carries no CJK, no Devanagari and no Hebrew — so an
+# exported or printed ledger whose descriptions were typed in Japanese,
+# Chinese, Korean, Hindi or Yiddish came out as a page of empty boxes, and the
+# column-fitting in fit() MEASURED those boxes, so the truncation was wrong as
+# well. tofu_sweep.py cannot see this class: it asks whether some shipped face
+# has the glyph, which was true all along and is not the question show_text
+# answers. Sizes are set with set_absolute_size, which is device units, so the
+# same helper is correct on screen (px) and on a PDF surface (points).
+
+def _layout(cr, text, size, bold=False, family="Nimbus Sans"):
+    lay = PangoCairo.create_layout(cr)
+    fd = Pango.FontDescription(family)
+    fd.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
+    fd.set_absolute_size(size * Pango.SCALE)
+    lay.set_font_description(fd)
+    lay.set_text(text, -1)
+    return lay
+
+
+def _text_w(cr, text, size, bold=False):
+    """The drawn width of `text`, for right-alignment and truncation."""
+    return _layout(cr, text, size, bold).get_pixel_size()[0]
+
+
+def _show_text(cr, x, y, text, size, bold=False):
+    """Draw `text` with its BASELINE at y — the anchor cr.show_text used, so
+    every call site keeps the geometry it was tuned with."""
+    lay = _layout(cr, text, size, bold)
+    cr.move_to(x, y - lay.get_baseline() / Pango.SCALE)
+    PangoCairo.show_layout(cr, lay)
+
+
 def _cents(v):
     """Snap a money value to whole cents — the ONE rule that makes this ledger
     add up.
@@ -76,6 +114,16 @@ def _cents(v):
         return round(float(v), 2)
     except (TypeError, ValueError, OverflowError):
         return 0.0
+
+
+def _recovered_note(n):
+    """"We got your history back" — two COMPLETE sentences chosen by the count,
+    not "%d entr%s". No English suffix turns "entry" into "entries", and even
+    where one would, a fragment glued to a noun is not how Russian, Polish or
+    Serbian form a plural. At one salvaged entry the single-sentence version
+    used to read "Recovered 1 entries from a damaged ledger file"."""
+    return (_t("Recovered 1 entry from a damaged ledger file") if n == 1
+            else _t("Recovered %d entries from a damaged ledger file") % n)
 
 
 def _salvage_tx(text):
@@ -246,11 +294,16 @@ class Accounting(nbapp.AppWindow):
             st["damaged"] = True
             st["tx"] = self._parse_tx(_salvage_tx(text))
             n = len(st["tx"])
-            st["note"] = (_t("Recovered %d entries from a damaged ledger file")
-                          % n) if n else \
-                _t("The ledger file could not be read — starting a new ledger")
+            st["note"] = _recovered_note(n) if n else \
+                _t("The ledger file could not be read. A new ledger was started.")
             return st
         raw = data.get("tx") if isinstance(data, dict) else data
+        # Transactions stored as an object keyed by id rather than a list. The
+        # values are still the user's ledger lines, so read them in file order
+        # instead of declaring the whole book unreadable — a wrapper of the
+        # wrong type must not cost somebody their year of figures.
+        if isinstance(raw, dict):
+            raw = list(raw.values())
         st["tx"] = self._parse_tx(raw)
         if isinstance(data, dict):
             st["opening"] = self._num(data.get("opening", 0.0), 0.0)
@@ -268,14 +321,13 @@ class Accounting(nbapp.AppWindow):
             st["tx"] = []
             st["opening"] = 0.0
             st["note"] = _t(
-                "The ledger file could not be read — starting a new ledger")
+                "The ledger file could not be read. A new ledger was started.")
         elif len(st["tx"]) < len(raw):
             # A ledger, but some of its entries were not: keep the good ones,
             # keep the file that still holds the bad ones, and say how many
             # survived rather than quietly showing a short ledger as complete.
             st["quarantine"] = True
-            st["note"] = (_t("Recovered %d entries from a damaged ledger file")
-                          % len(st["tx"]))
+            st["note"] = _recovered_note(len(st["tx"]))
         return st
 
     def _autosave(self):
@@ -293,8 +345,18 @@ class Accounting(nbapp.AppWindow):
                 self._quarantine_pending = False
             nbapp.atomic_write_json(TX_FILE, {"tx": self.tx,
                                               "opening": self.opening})
-        except Exception:
-            pass
+            self._save_warned = False
+        except Exception as exc:
+            # See academics._save_to_disk. A silently failed write is the worst
+            # thing a ledger can do: the app carries on showing a balance that
+            # is not on disk anywhere, and every entry made after the disk
+            # filled up is gone the moment it closes. Warn once per run.
+            if not getattr(self, "_save_warned", False):
+                self._save_warned = True
+                try:
+                    self._flash(nbapp.save_failure_reason(exc, TX_FILE))
+                except Exception:
+                    pass
 
     def _on_destroy(self, *_):
         if self._search_timer:
@@ -417,36 +479,22 @@ class Accounting(nbapp.AppWindow):
             r, g, b = nbicons._hex(hexc)
             cr.set_source_rgb(r, g, b)
 
-        def face(bold=False):
-            cr.select_font_face(
-                "Nimbus Sans", cairo.FONT_SLANT_NORMAL,
-                cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL)
-
         def text_at(x, y, s, size, bold=False, color=INK):
-            face(bold)
-            cr.set_font_size(size)
             ink(color)
-            cr.move_to(x, y)
-            cr.show_text(s)
+            _show_text(cr, x, y, s, size, bold)
 
         def right_at(r_edge, y, s, size, bold=False, color=INK):
-            face(bold)
-            cr.set_font_size(size)
             ink(color)
-            w = cr.text_extents(s)[2]
-            cr.move_to(r_edge - w, y)
-            cr.show_text(s)
+            _show_text(cr, r_edge - _text_w(cr, s, size, bold), y, s, size, bold)
 
         def fit(s, size, maxw, bold=False):
-            face(bold)
-            cr.set_font_size(size)
-            if cr.text_extents(s)[2] <= maxw:
+            if _text_w(cr, s, size, bold) <= maxw:
                 return s
-            # ASCII "..." not U+2026: drawn with cairo's toy-font API, which does
-            # no per-glyph fallback, so an ellipsis glyph missing from the
-            # resolved sans face would tofu on the real no-GPU framebuffer
-            # (same guard as _cmoney's ASCII hyphen).
-            while s and cr.text_extents(s + "...")[2] > maxw:
+            # ASCII "..." rather than U+2026 stays, but for a different reason
+            # now: it is the ellipsis every other export in this OS uses, and
+            # Pango would render either. It is no longer a fallback guard --
+            # _show_text picks a face per glyph.
+            while s and _text_w(cr, s + "...", size, bold) > maxw:
                 s = s[:-1]
             return s + "..."
 
@@ -615,14 +663,9 @@ class Accounting(nbapp.AppWindow):
         cr.fill()
 
         # min / max value labels on the right gutter
-        cr.select_font_face("Nimbus Sans", cairo.FONT_SLANT_NORMAL,
-                            cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(9)
         cr.set_source_rgb(*nbicons._hex(MUTED))
-        cr.move_to(x1 + 6, sy(vmax) + 3)
-        cr.show_text(self._cmoney(vmax))
-        cr.move_to(x1 + 6, sy(vmin) + 3)
-        cr.show_text(self._cmoney(vmin))
+        _show_text(cr, x1 + 6, sy(vmax) + 3, self._cmoney(vmax), 9)
+        _show_text(cr, x1 + 6, sy(vmin) + 3, self._cmoney(vmin), 9)
 
     # ---------------------------------------------------------------- sidebar
     def _sidebar(self):
@@ -783,7 +826,7 @@ class Accounting(nbapp.AppWindow):
         scroll.get_style_context().add_class("rowscroll")
         self.rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.rows.get_style_context().add_class("rows")
-        self.empty = Gtk.Label(label=_t("No entries — add an entry above."))
+        self.empty = Gtk.Label(label=_t("No entries. Add one above."))
         self.empty.get_style_context().add_class("emptystate")
         self.rows.pack_start(self.empty, False, False, 0)
         scroll.add(self.rows)
@@ -873,7 +916,7 @@ class Accounting(nbapp.AppWindow):
         # window left open past midnight still stamps the new entry with today.
         self.fdate = Gtk.Label(label=time.strftime("%-d %b"))
         self.fdate.get_style_context().add_class("fdate")
-        self.fdate.set_tooltip_text(_t("New entries are dated today"))
+        self.fdate.set_tooltip_text(_t("Date of a new entry"))
         form.pack_start(self.fdate, False, False, 0)
 
         self.f_desc = Gtk.Entry()
@@ -902,12 +945,12 @@ class Accounting(nbapp.AppWindow):
         self.btn_debit.set_relief(Gtk.ReliefStyle.NONE)
         self.btn_debit.get_style_context().add_class("seg")
         self.btn_debit.get_style_context().add_class("segon")
-        self.btn_debit.set_tooltip_text(_t("Debit — money out of the account"))
+        self.btn_debit.set_tooltip_text(_t("Money out of the account"))
         self.btn_debit.connect("clicked", lambda *_: self._set_dir("debit"))
         self.btn_credit = Gtk.Button(label=_t("Credit"))
         self.btn_credit.set_relief(Gtk.ReliefStyle.NONE)
         self.btn_credit.get_style_context().add_class("seg")
-        self.btn_credit.set_tooltip_text(_t("Credit — money into the account"))
+        self.btn_credit.set_tooltip_text(_t("Money into the account"))
         self.btn_credit.connect("clicked", lambda *_: self._set_dir("credit"))
         seg.pack_start(self.btn_debit, False, False, 0)
         seg.pack_start(self.btn_credit, False, False, 0)
@@ -1198,8 +1241,8 @@ class Accounting(nbapp.AppWindow):
         if self._terms:
             return _t("Nothing here matches “%s”.") % self.filter
         if self._damaged:
-            return _t("The ledger file could not be read — starting a new ledger")
-        return _t("No entries — add an entry above.")
+            return _t("The ledger file could not be read. A new ledger was started.")
+        return _t("No entries. Add one above.")
 
     def _more_row(self, n):
         """Footer under a paged ledger: says how much of it is showing, and
@@ -1378,13 +1421,13 @@ class Accounting(nbapp.AppWindow):
         self._e_btn_debit = Gtk.Button(label=_t("Debit"))
         self._e_btn_debit.set_relief(Gtk.ReliefStyle.NONE)
         self._e_btn_debit.get_style_context().add_class("seg")
-        self._e_btn_debit.set_tooltip_text(_t("Debit — money out of the account"))
+        self._e_btn_debit.set_tooltip_text(_t("Money out of the account"))
         self._e_btn_debit.connect("clicked",
                                   lambda *_: self._e_set_dir("debit"))
         self._e_btn_credit = Gtk.Button(label=_t("Credit"))
         self._e_btn_credit.set_relief(Gtk.ReliefStyle.NONE)
         self._e_btn_credit.get_style_context().add_class("seg")
-        self._e_btn_credit.set_tooltip_text(_t("Credit — money into the account"))
+        self._e_btn_credit.set_tooltip_text(_t("Money into the account"))
         self._e_btn_credit.connect("clicked",
                                    lambda *_: self._e_set_dir("credit"))
         seg.pack_start(self._e_btn_debit, False, False, 0)
@@ -1653,7 +1696,8 @@ class Accounting(nbapp.AppWindow):
         cr.fill()
 
         vals = self._balance_series()
-        cr.select_font_face("Nimbus Sans")
+        # No cr.select_font_face: every string on this chart is drawn through
+        # Pango, which carries its own font description.
         if len(vals) < 2:
             cr.set_source_rgb(*nbicons._hex("#A39D8F"))
             # Drawn through Pango, not cairo's toy-font API. show_text() does
@@ -1666,7 +1710,7 @@ class Accounting(nbapp.AppWindow):
             fd = Pango.FontDescription("Nimbus Sans")
             fd.set_absolute_size(12 * Pango.SCALE)   # match the old 12px
             layout.set_font_description(fd)
-            layout.set_text(_t("No data. Add an entry to plot the balance."), -1)
+            layout.set_text(_t("No entries to plot"), -1)
             _w, h = layout.get_pixel_size()
             cr.move_to(4, H / 2 - h / 2)
             PangoCairo.show_layout(cr, layout)
@@ -1681,8 +1725,7 @@ class Accounting(nbapp.AppWindow):
         # size) so a large balance can't spill past the edge, clamped so it can
         # never swallow the whole plot on a narrow allocation.
         lo_s, hi_s = self._cmoney(vmin), self._cmoney(vmax)
-        cr.set_font_size(10)
-        label_w = max(cr.text_extents(lo_s)[2], cr.text_extents(hi_s)[2])
+        label_w = max(_text_w(cr, lo_s, 10), _text_w(cr, hi_s, 10))
         pad_l, pad_t, pad_b = 4, 12, 20
         pad_r = min(int(label_w) + 14, int(W * 0.5))
         x0, x1 = pad_l, W - pad_r
@@ -1732,12 +1775,9 @@ class Accounting(nbapp.AppWindow):
         # min / max value labels, right-aligned to the widget edge so they sit
         # flush in the gutter and never overrun it
         rt = W - 6
-        cr.set_font_size(10)
         cr.set_source_rgb(*nbicons._hex(MUTED))
-        cr.move_to(rt - cr.text_extents(hi_s)[2], sy(vmax) + 3)
-        cr.show_text(hi_s)
-        cr.move_to(rt - cr.text_extents(lo_s)[2], sy(vmin) + 3)
-        cr.show_text(lo_s)
+        _show_text(cr, rt - _text_w(cr, hi_s, 10), sy(vmax) + 3, hi_s, 10)
+        _show_text(cr, rt - _text_w(cr, lo_s, 10), sy(vmin) + 3, lo_s, 10)
 
     # ----------------------------------------------------------------- menus
     def menu_items(self, name):
@@ -1746,11 +1786,17 @@ class Accounting(nbapp.AppWindow):
             # committed entry). File offers only the in-memory add-entry action,
             # a one-way export of the ledger to a PDF under $NB_HOME/Documents,
             # and Close — no file open / save / save-as.
+            # Both exports write their file straight into $NB_HOME/Documents
+            # and ask nothing, so neither takes an ellipsis; Print opens the
+            # printer dialog, so it does — with the real ellipsis character,
+            # not the three ASCII dots this one item used to carry while every
+            # other Print… in the OS used "…". Exports come before Print, the
+            # order the single-store File menu is written in.
             return [(_t("New Entry"), self._reveal_form),
                     nbapp.SEP,
-                    (_t("Print..."), self._print),
                     (_t("Export to PDF"), self._export_pdf),
                     (_t("Export to CSV"), self._export_csv),
+                    (_t("Print…"), self._print),
                     nbapp.SEP,
                     (_t("Close    Esc"), self.close)]
         if name == "View":
@@ -1943,10 +1989,10 @@ class Accounting(nbapp.AppWindow):
                   border: 1px dashed #C9C4B6; border-radius: 3px;
                   background: transparent; box-shadow: none; }
         .addrow label { font-size: 14px; color: #8A857A; }
-        .addrow:hover { border-color: #B0AA99; background: #FBFAF6; }
+        .addrow:hover { border-color: #B0AA99; background: #FCFBF8; }
         .entryform { margin: 0 48px 12px; padding: 8px 14px; min-height: 52px;
                      border: 1px solid #CFC9BA; border-radius: 2px;
-                     background: #FBFAF6; }
+                     background: #FCFBF8; }
         /* inline validation under the entry form: signage-red as an alert,
            sitting in the form's own gutter so it lines up with the fields */
         .formerr { color: #C8341E; font-size: 12px; font-weight: 600;
@@ -1987,8 +2033,8 @@ class Accounting(nbapp.AppWindow):
         .txrow { min-height: 52px; padding: 0; margin: 0;
                  border: none; border-bottom: 1px solid #F0ECE0;
                  border-radius: 0; background: transparent; box-shadow: none; }
-        .txrow:hover { background: #F6F3EA; }
-        .txrow:focus { background: #F1EEE4; }
+        .txrow:hover { background: #F4F2EC; }
+        .txrow:focus { background: #F1EEE6; }
         .txdate { font-size: 14px; color: #8A857A; }
         .txdesc { font-size: 15px; color: #1A1916; }
         .txdebit { font-size: 15px; font-weight: 600; color: #A23B2B; }
@@ -1999,7 +2045,7 @@ class Accounting(nbapp.AppWindow):
            bolted onto the bottom of the table */
         .morerow { min-height: 62px; padding: 0; margin: 0; border: none;
                    border-radius: 0; background: transparent; box-shadow: none; }
-        .morerow:hover { background: #F6F3EA; }
+        .morerow:hover { background: #F4F2EC; }
         .morelab { font-size: 14px; font-weight: 600; color: #3A362E; }
         .morecount { font-size: 12px; color: #A39D8F; }
 

@@ -32,6 +32,17 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 STATE_FILE = os.path.join(CFG_DIR, "calculator.json")
 
+# What the display says when "=" cannot be answered. The old display read
+# "Error", which tells someone who has just mistyped a bracket nothing at all
+# about which mistake they made or what to do about it. Four causes cover
+# every failure this calculator can have, and each is one short sentence so it
+# still fits the display without ellipsizing. Kept as constants because they
+# are set on a worker path and translated at paint time.
+_WHY_ZERO = "Cannot divide by zero"
+_WHY_TOOBIG = "The answer is too big to show"
+_WHY_NOANSWER = "There is no answer to that"
+_WHY_UNREADABLE = "That is not a calculation this can work out"
+
 
 # key defs: (label, action, value, type)
 #   type -> num / op / eq / clear / fn
@@ -94,7 +105,8 @@ TOOLTIPS = {
     "√": "Square root", "π": "Pi (3.14159…)",
     "x²": "Square", "e": "Euler's number (2.71828…)",
     "1/x": "Reciprocal (1 divided by x)", "x!": "Factorial",
-    "±": "Negate (change sign)", "%": "Percent (divide by 100)",
+    "±": "Negate (change sign)",
+    "%": "Percent — 200+10% is 220; 50% on its own is 0.5",
 }
 ALT_TOOLTIP = {"sin": "Inverse sine", "cos": "Inverse cosine",
                "tan": "Inverse tangent"}
@@ -114,6 +126,62 @@ def _guarded_pow(base, exp):
     except (TypeError, ValueError):
         pass
     return base ** exp
+
+
+_PCT_REL = re.compile(r"([+\-])(\d+(?:\.\d+)?)%")
+_PCT_ANY = re.compile(r"(\d+(?:\.\d+)?)%")
+
+
+def _operand_start(s, i):
+    """Index where the operand ending at `i` begins: the start of the current
+    parenthesised level. Walking back over balanced groups is what keeps
+    "2*(3+10%)" from being rewritten with the "(" of an outer group inside it."""
+    depth = 0
+    while i > 0:
+        c = s[i - 1]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            if depth == 0:
+                return i
+            depth -= 1
+        i -= 1
+    return 0
+
+
+def _expand_percent(s):
+    """Rewrite `%` the way a calculator on a desk means it.
+
+    A percentage is nearly always OF something: a tip, VAT, a discount. Reading
+    "%" as nothing but "divide by 100" made 200+10% come back 200.1, where every
+    consumer calculator — and everyone pressing the key — says 220. So after
+    "+" or "-", "N%" means N percent OF the running left-hand value:
+
+        200+10%   -> 200+(200)*(10/100)   = 220
+        200-10%   -> 200-(200)*(10/100)   = 180
+        100+5%+5% -> 110.25, each 5% taken of the total so far
+
+    Everywhere else "N%" keeps its plain meaning of N/100, which is what makes
+    "50%", "200*10%" (= 20) and "10%*3" read correctly. Leftmost first, so a
+    chain compounds in the order it was typed."""
+    pos = 0
+    guard = 0
+    while guard < 64:
+        guard += 1
+        m = _PCT_REL.search(s, pos)
+        if m is None:
+            break
+        start = _operand_start(s, m.start())
+        left = s[start:m.start()]
+        if not left.strip():
+            # "+10%" with nothing in front of it (a leading sign) is not a
+            # percentage OF anything — leave it to the plain rule below.
+            pos = m.end()
+            continue
+        rep = "%s%s(%s)*(%s/100)" % (left, m.group(1), left, m.group(2))
+        s = s[:start] + rep + s[m.end():]
+        pos = start + len(rep)
+    return _PCT_ANY.sub(r"(\1/100)", s)
 
 
 def _postfix_fact(s):
@@ -225,7 +293,8 @@ class Calculator(nbapp.AppWindow):
         self.deg = self._load_prefs()
         self.just_evaled = False
         self.second = False
-        self.error = False   # last "=" failed; display shows "Error" in red
+        self.error = False   # last "=" failed; the display says why, in red
+        self._err_why = None  # which _WHY_* sentence to show while error
         self._buttons = []   # (keydef, button, label_widget)
 
         # Only a HANDFUL of keys ever change their face/tooltip (the DEG/RAD
@@ -489,18 +558,29 @@ class Calculator(nbapp.AppWindow):
         self._refresh()
         return True
 
+    def _fail(self, why):
+        """Record WHY the calculation failed and return the sentinel the
+        caller already tests for, so no call site has to change."""
+        self._err_why = why
+        return "Error"
+
     def evaluate(self):
+        # "Error" stays the sentinel the caller tests for; _err_why carries
+        # the sentence the DISPLAY shows, so the person is told what went
+        # wrong rather than only that something did. Reset on every attempt.
+        self._err_why = None
         js = self.expr
         if not js.strip():
             return "0"
         js = (js.replace("×", "*").replace("÷", "/")
                 .replace("−", "-").replace("π", "(PI)")
                 .replace("√", "sqrt").replace("^", "**"))
-        # percent  n%  -> (n/100)
-        js = re.sub(r"(\d+(?:\.\d+)?)%", r"(\1/100)", js)
+        # percent: "+10%" / "-10%" is ten percent OF the left-hand value, any
+        # other "n%" is n/100 (see _expand_percent)
+        js = _expand_percent(js)
         js = _postfix_fact(js)
         if js is None:
-            return "Error"
+            return self._fail(_WHY_UNREADABLE)
 
         # implicit multiplication: let a novice type "2π", "2(3)",
         # "(1+1)(2)", "3sin(0)", ")(" without getting "Error". Runs after the
@@ -604,10 +684,18 @@ class Calculator(nbapp.AppWindow):
             ast.fix_missing_locations(tree)
             r = eval(compile(tree, "<calc>", "eval"),  # noqa: S307
                      {"__builtins__": {}}, env)
+        except ZeroDivisionError:
+            return self._fail(_WHY_ZERO)
+        except (OverflowError, MemoryError):
+            return self._fail(_WHY_TOOBIG)
+        except (SyntaxError, NameError):
+            return self._fail(_WHY_UNREADABLE)
         except Exception:
-            return "Error"
+            # ValueError from sqrt(-1), log(0), tan(90), a fractional
+            # factorial: the expression reads fine, it just has no answer.
+            return self._fail(_WHY_NOANSWER)
         if isinstance(r, complex) or r is None:
-            return "Error"
+            return self._fail(_WHY_NOANSWER)
         # An INTEGER result is exact, and staying exact is worth more here than
         # a uniform twelve significant figures: 20! and 2^62 both fit on the
         # display to their last digit, and answering them "2.43290200818e+18"
@@ -619,28 +707,34 @@ class Calculator(nbapp.AppWindow):
                 s = str(r)
             except (ValueError, MemoryError):
                 # str() of an int with > 4300 digits raises on Python 3.11+
-                return "Error"
+                return self._fail(_WHY_TOOBIG)
             return s if len(s.lstrip("-")) <= _MAX_DIGITS else _sci(s)
         try:
-            if math.isinf(r) or math.isnan(r):
-                return "Error"
+            if math.isinf(r):
+                return self._fail(_WHY_TOOBIG)
+            if math.isnan(r):
+                return self._fail(_WHY_NOANSWER)
             # match toPrecision(12) then trim
             r = float("%.12g" % r)
             if r == int(r) and abs(r) < 1e16:
                 return str(int(r))
             return repr(r)
-        except (TypeError, ValueError, OverflowError):
+        except OverflowError:
+            return self._fail(_WHY_TOOBIG)
+        except (TypeError, ValueError):
             # a non-numeric result (e.g. a bare function name left by an
             # incomplete expression) reaches the numeric checks — degrade
             # to Error instead of crashing the app. (A huge integer, which
             # math.isinf() cannot coerce to a C double, is already handled
             # above and never reaches here.)
-            return "Error"
+            return self._fail(_WHY_UNREADABLE)
 
     def _refresh(self):
         disp_ctx = self.disp_lbl.get_style_context()
         if self.error:
-            self.disp_lbl.set_text("Error")
+            # "Error" names nothing. Say which of the four things happened,
+            # in the same red the failed "=" already used.
+            self.disp_lbl.set_text(_t(self._err_why or _WHY_UNREADABLE))
             disp_ctx.add_class("err")
         else:
             self.disp_lbl.set_text(self.expr or "0")
@@ -710,23 +804,35 @@ class Calculator(nbapp.AppWindow):
         # All) — this keypad has none, so those are dead. Replace with real
         # actions: copy the current result, and clear. View is empty in the base
         # (a dead button); give it a live Degrees/Radians angle-mode toggle. Both
-        # radio items stay clickable (the active one just carries a ✓) so there
+        # radio items stay clickable (the active one just carries a bullet) so there
         # is never a permanently-greyed menu entry.
         if name == "Edit":
             return [
                 (_t("Copy Result"), self._copy_result),
+                # Up AND Down both walk the history (see _on_key_calc); only
+                # one of them was on the menu, so half the feature had no way
+                # to be discovered.
                 (_t("Previous Calculation    Up"), lambda: self.recall(-1)),
+                (_t("Next Calculation    Down"), lambda: self.recall(1)),
                 nbapp.SEP,
-                (_t("Clear    AC"), self._clear_all),
+                # The four-space column is the KEYBOARD shortcut, everywhere
+                # in this OS. "AC" is the name of an on-screen key, so it
+                # advertised a keystroke that does not exist; Del is the key
+                # that actually does this (see _on_key_calc).
+                (_t("Clear    Del"), self._clear_all),
             ]
         if name == "View":
-            # A leading check marks the active choice (OS-wide convention: the
-            # tick is a prefix, aligned with a blank on the inactive item).
-            deg_mark = "✓ " if self.deg else "    "
-            rad_mark = "✓ " if not self.deg else "    "
+            # A leading BULLET marks the active choice, the OS-wide convention
+            # (Calendar, Tasks, Cookbook). U+2713 is in none of the bundled
+            # Nimbus Sans faces, so the tick that used to be here was drawn
+            # through CJK fallback in a foreign typeface -- see the same note
+            # in screenplay.py. The label is translated here because nbapp
+            # cannot: its _t() sees the marked label, which is not a catalog key.
+            deg_mark = "•  " if self.deg else "    "
+            rad_mark = "•  " if not self.deg else "    "
             return [
-                (deg_mark + "Degrees", lambda: self._set_deg(True)),
-                (rad_mark + "Radians", lambda: self._set_deg(False)),
+                (deg_mark + _t("Degrees"), lambda: self._set_deg(True)),
+                (rad_mark + _t("Radians"), lambda: self._set_deg(False)),
             ]
         return super().menu_items(name)
 
@@ -850,10 +956,17 @@ class Calculator(nbapp.AppWindow):
         .hist-box { background: #F8F7F2; }
         .disp-hist { font-size: 15px; color: #9A958A; margin-top: 14px;
                      min-height: 20px; }
+        /* min-height holds the display box at its full-size height, so the
+           shorter error sentence does not shrink the card and shift the
+           whole keypad up under the pointer. */
         .disp-main { font-size: 52px; font-weight: 500; color: #1A1916;
-                     letter-spacing: -0.01em; margin-top: 4px; }
-        /* signage-red marks the alert state: a failed "=" reads as "Error". */
-        .disp-main.err { color: #C8341E; }
+                     letter-spacing: -0.01em; margin-top: 4px;
+                     min-height: 62px; }
+        /* Signage-red marks the alert state. The error state is a SENTENCE,
+           not the word "Error", so it is set at a size that fits the display
+           instead of ellipsizing to "...o that" at 52px. The card is centred in
+           the window, so the shorter line just re-centres. */
+        .disp-main.err { color: #C8341E; font-size: 21px; font-weight: 600; }
 
         .keypad { background: #D7D2C5; }
         .key { border: none; border-radius: 0; box-shadow: none;

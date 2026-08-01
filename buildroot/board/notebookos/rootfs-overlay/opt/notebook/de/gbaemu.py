@@ -51,6 +51,65 @@ def _is_rom(path):
     return os.path.splitext(path)[1].lower() in ROM_EXT
 
 
+# The smallest a file can be and still hold the cartridge header its system
+# boots from: 0xC0 bytes for a GBA cartridge, 0x150 for a Game Boy one.
+_MIN_SIZE = {".gba": 0xC0, ".gb": 0x150, ".gbc": 0x150, ".sgb": 0x150}
+# The boot logo every cartridge carries, at 0x04 on a GBA and 0x104 on a Game
+# Boy. Only the first 16 bytes are compared: that is more than enough to tell a
+# cartridge from a text file or a half-copied download, and it does not reject a
+# ROM whose logo has been patched further in.
+_GBA_LOGO16 = bytes.fromhex("24ffae51699aa2213d84820a84e409ad")
+_GB_LOGO16 = bytes.fromhex("ceed6666cc0d000b03730083000c000d")
+
+
+def rom_problem(path):
+    """Why `path` cannot be played, as a sentence to show the person — or None
+    when it looks like a real cartridge.
+
+    THE BUG THIS EXISTS FOR: every file whose name ended in .gba was handed
+    straight to vbam. A game exported onto a USB stick and pulled out before it
+    finished copying, a download that stopped half way, a text file somebody
+    renamed — all of them launched, flashed a black screen, and came back with
+    "the game closed right away, see the emulator log", which is a developer's
+    answer to a question the player did not ask. Refuse it up front instead, and
+    say which of the two things it is: not a game, or a broken copy of one.
+
+    Deliberately permissive about everything else. Homebrew is a first-class
+    citizen here — the GBA SDK next door makes it — so a cartridge that carries
+    its logo or starts with a legal ARM branch is accepted whatever else is in
+    it, and an unknown extension (.zip) is left for vbam to judge."""
+    ext = os.path.splitext(path or "")[1].lower()
+    if ext not in _MIN_SIZE:
+        return None                        # .zip and friends: not ours to judge
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return _t("This file cannot be read, so it cannot be played.")
+    if size == 0:
+        return _t("This file is empty — there is no game in it. If it came "
+                  "from a USB stick or the GBA SDK, copy or export it again.")
+    if size < _MIN_SIZE[ext]:
+        return _t("This file is far too small to be a game — only part of it "
+                  "arrived. Copy it again, or export it again from the GBA SDK.")
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(0x150)
+    except OSError:
+        return _t("This file cannot be read, so it cannot be played.")
+    if ext == ".gba":
+        # A cartridge either carries the boot logo (gbafix, and every commercial
+        # ROM) or begins with the ARM branch a GBA jumps to (0xEA in the top
+        # byte of the little-endian first word).
+        if head[0x04:0x14] != _GBA_LOGO16 and head[3] != 0xEA:
+            return _t("This does not look like a Game Boy Advance game. It may "
+                      "be a different kind of file, or a copy that did not "
+                      "finish.")
+    elif head[0x104:0x114] != _GB_LOGO16:
+        return _t("This does not look like a Game Boy game. It may be a "
+                  "different kind of file, or a copy that did not finish.")
+    return None
+
+
 class GbaEmu(nbapp.AppWindow):
     app_name = "GBA Emulator"
     menus = ("File",)
@@ -173,8 +232,7 @@ class GbaEmu(nbapp.AppWindow):
             # tall pink slab with two lines of text floating at the top of it
             self._lib_body.pack_start(self._notice(
                 "Games can’t be played on this system",
-                "The part of Notebook OS that runs games is missing, so "
-                "nothing here will start. Your games are still listed."),
+                "The emulator is not installed. Games cannot be started."),
                 False, False, 0)
         if not self._roms:
             self._lib_body.pack_start(self._empty_state(), True, True, 0)
@@ -233,13 +291,12 @@ class GbaEmu(nbapp.AppWindow):
         g = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("cartridge", 52, GHOST))
         g.set_halign(Gtk.Align.CENTER)
         box.pack_start(g, False, False, 0)
-        t = Gtk.Label(label=_t("No games in your library"))
+        t = Gtk.Label(label=_t("No games"))
         t.get_style_context().add_class("emptytitle")
         box.pack_start(t, False, False, 0)
         s = Gtk.Label(
-            label="Make one in the GBA IDE — build a game, choose Compile & "
-                  "Export, and it appears here ready to play. Or use Open Game "
-                  "to pick a .gba, .gbc, .gb or .sgb file you already have.")
+            label="Open Game adds a .gba, .gbc, .gb or .sgb file. "
+                  "The GBA SDK writes games here when it exports.")
         s.set_justify(Gtk.Justification.CENTER)
         s.set_line_wrap(True)
         s.set_max_width_chars(54)
@@ -368,8 +425,7 @@ class GbaEmu(nbapp.AppWindow):
             if len(pads) > 2:
                 txt += " +%d more" % (len(pads) - 2)
         else:
-            txt = ("No game controller detected — keyboard works "
-                   "(arrows + Z/X); plug in a USB gamepad to use it.")
+            txt = "No controller detected. Keyboard: arrow keys, Z, X."
         self._ctrl_label.set_text(txt)
 
     # ================= launch =================
@@ -393,7 +449,18 @@ class GbaEmu(nbapp.AppWindow):
             self._flash("The emulator core isn’t installed.")
             return
         if not (rompath and os.path.isfile(rompath)):
-            self._flash("That ROM file is missing.")
+            self._alert(_t("That game is no longer there"),
+                        _t("The file has been moved or deleted since the "
+                           "library was last read. Choose Look for New Games "
+                           "in the File menu to bring the list up to date."))
+            return
+        # A file that cannot be a cartridge is refused HERE, with a sentence
+        # about the file, rather than launched and reported afterwards as "the
+        # game closed right away — see the emulator log".
+        why = rom_problem(rompath)
+        if why:
+            self._alert(_t("%s cannot be played") % os.path.basename(rompath),
+                        why)
             return
         if self._session is not None:       # a game is already running
             return
@@ -435,6 +502,53 @@ class GbaEmu(nbapp.AppWindow):
             self._ctrl_label.set_text(text)
         except Exception:
             pass
+
+    def _alert(self, heading, body):
+        """Say why something did not happen, in a card the reader cannot miss.
+
+        The status line at the foot of the window ellipsizes to one line, so a
+        two-sentence explanation of a broken file was cut off mid-word there —
+        the one place it had to be readable."""
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.get_style_context().add_class("emualert")
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        head.pack_start(Gtk.Image.new_from_pixbuf(
+            nbicons.pixbuf("cartridge", 24, MUTED)), False, False, 0)
+        ht = Gtk.Label(label=heading, xalign=0)
+        ht.set_line_wrap(True)
+        ht.set_max_width_chars(34)
+        ht.get_style_context().add_class("alerttitle")
+        head.pack_start(ht, True, True, 0)
+        box.pack_start(head, False, False, 0)
+        msg = Gtk.Label(label=body, xalign=0)
+        msg.set_line_wrap(True)
+        msg.set_width_chars(40)
+        msg.set_max_width_chars(44)
+        msg.get_style_context().add_class("alertbody")
+        box.pack_start(msg, False, False, 0)
+        ok = Gtk.Button(label=_t("Done"))
+        ok.set_relief(Gtk.ReliefStyle.NONE)
+        ok.get_style_context().add_class("emubtn")
+        ok.set_halign(Gtk.Align.END)
+        ok.connect("clicked", lambda *_: dlg.response(Gtk.ResponseType.OK))
+        box.pack_start(ok, False, False, 0)
+        dlg.get_content_area().add(box)
+        try:                     # the card carries its own button
+            area = dlg.get_action_area()
+            area.set_no_show_all(True)
+            area.hide()
+        except Exception:
+            pass
+        # Esc must dismiss it: there is no title bar to close.
+        dlg.connect("key-press-event",
+                    lambda _w, e: (dlg.response(Gtk.ResponseType.CANCEL) or True)
+                    if e.keyval == Gdk.KEY_Escape else False)
+        dlg.show_all()
+        ok.grab_focus()
+        dlg.run()
+        dlg.destroy()
 
     def _open_rom(self):
         start = HOME
@@ -496,7 +610,10 @@ class GbaEmu(nbapp.AppWindow):
         if name == "File":
             return [
                 ("Open Game…", lambda: self._open_rom()),
-                ("Rescan Library", lambda: (self._scan_roms(),
+                # Names the outcome — find games added since this window opened,
+                # e.g. one just exported from the GBA SDK — rather than the
+                # machine's word for how it looks ("Rescan").
+                ("Look for New Games", lambda: (self._scan_roms(),
                  self._render_library(), self._render_controllers())),
                 ("Emulator Log…", self._show_log),
                 nbapp.SEP,
@@ -511,7 +628,7 @@ class GbaEmu(nbapp.AppWindow):
         except OSError:
             text = ""
         if not text:
-            text = "No game has been launched yet."
+            text = "The log is empty."
         dlg = Gtk.Dialog(title="Emulator Log", transient_for=self, modal=True)
         dlg.set_decorated(False)
         dlg.set_default_size(560, 380)
@@ -566,6 +683,10 @@ class GbaEmu(nbapp.AppWindow):
         .ctrlbar { background: #F1EEE6; border-top: 1px solid #C9C4B6;
                    padding: 10px 22px; }
         .ctrllabel { font-size: 12.5px; color: #6E695E; }
+        .emualert { background: #FCFBF8; border: 1px solid #C9C4B6;
+                    padding: 22px 26px 16px; }
+        .alerttitle { font-size: 16px; font-weight: 700; color: #1A1916; }
+        .alertbody { font-size: 13px; color: #6E695E; }
         """
         prov = Gtk.CssProvider()
         try:

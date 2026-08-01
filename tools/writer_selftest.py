@@ -29,10 +29,19 @@ DE = os.path.abspath(os.path.join(HERE, "..", "buildroot", "board", "notebookos"
 if DE not in sys.path:
     sys.path.insert(0, DE)
 
-import writer  # noqa: E402
-
-os.environ.setdefault("NB_HOME", "/tmp/nbhome-writer-selftest")
+# NB_HOME MUST BE SET BEFORE `import writer`. writer.py reads it at module
+# level (writer.HOME / writer.CFG_DIR), and so does nbapp's single-instance
+# scope, so setting it afterwards -- as this file used to -- silently ran the
+# whole suite against the CALLER'S REAL HOME and put the instance markers in
+# the unscoped /tmp/nb-apps. A per-process directory also stops two copies of
+# this suite from colliding there: the loser is os._exit(0)ed by
+# claim_single_instance() with no output and exit status 0, which reads as a
+# pass while nothing was tested.
+os.environ.setdefault(
+    "NB_HOME", tempfile.mkdtemp(prefix="nbhome-writer-selftest-"))
 os.makedirs(os.environ["NB_HOME"], exist_ok=True)
+
+import writer  # noqa: E402
 
 w = writer.Writer()
 buf = w.buf
@@ -240,6 +249,65 @@ check("redo wipes it again", text() == "")
 w._undo()
 check("undo again", text() == kept)
 check("history is capped at 100 checkpoints", len(w._history) <= 100)
+
+# ---- the printed page's header and footer are the AUTHOR'S OWN text --------
+# They were drawn with cairo's toy API bound to Liberation Sans, which carries
+# no CJK, no Devanagari and no Hebrew: a header typed in any of those printed
+# as .notdef, which in that face is INVISIBLE — not a box — while the rest of
+# the page came out correctly. Measure ink, because that is the only thing that
+# distinguishes the two cases.
+import cairo  # noqa: E402
+
+
+def _furniture_ink(header, size=9):
+    """Non-blank pixels _pdf_show leaves for `header`."""
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 420, 60)
+    cr = cairo.Context(surf)
+    cr.set_source_rgb(1, 1, 1)
+    cr.paint()
+    cr.set_source_rgb(0, 0, 0)
+    w._pdf_show(cr, 6, 40, header, size)
+    surf.flush()
+    data, stride = surf.get_data(), surf.get_stride()
+    n = 0
+    for y in range(60):
+        for x in range(420):
+            i = y * stride + x * 4
+            if bytes(data[i:i + 3]) != b"\xff\xff\xff":
+                n += 1
+    return n
+
+
+for _name, _sample in (("latin", "Chapter One"),
+                       ("japanese", "第一章"),
+                       ("chinese", "第一章"),
+                       ("korean", "제1장"),
+                       ("hindi", "अध्याय एक"),
+                       ("yiddish", "קאַפּיטל איין"),
+                       ("russian", "Глава первая"),
+                       ("greek", "Κεφάλαιο")):
+    check("a header in %s prints as real glyphs" % _name,
+          _furniture_ink(_sample) > 0)
+
+# the size must not have shifted when this moved off the toy API: PDF units are
+# points, so Pango's resolution has to be pinned to 72dpi or every header would
+# come out a third larger than the author set
+_small = _furniture_ink("Chapter One", 9)
+_large = _furniture_ink("Chapter One", 18)
+check("header size still scales with the size asked for", _large > _small * 1.5)
+
+# and the page label on the canvas draws through Pango too
+_surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 200, 40)
+_cr = cairo.Context(_surf)
+_cr.set_source_rgb(1, 1, 1)
+_cr.paint()
+_cr.set_source_rgb(0, 0, 0)
+w._page_label(_cr, 6, 28, "ページ 2")
+_surf.flush()
+_d, _s = _surf.get_data(), _surf.get_stride()
+_ink = sum(1 for y in range(40) for x in range(200)
+           if bytes(_d[y * _s + x * 4:y * _s + x * 4 + 3]) != b"\xff\xff\xff")
+check("the page-break label draws a non-Latin page number", _ink > 0)
 
 print("RESULT: " + ("ALL PASS" if ok else "SOME FAILED"))
 sys.exit(0 if ok else 1)

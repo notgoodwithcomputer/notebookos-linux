@@ -32,17 +32,38 @@ from nbi18n import _t  # noqa: E402
 _ACCEL = os.environ.get("NB_ACCEL") == "1"
 
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Apps that are NOT READY to be seen by a user, and are therefore kept out of
+# the Applications folder in the shipped image.
+#
+# This is a SHIP-TIME decision and is deliberately separate from the user's own
+# "Remove from Applications" list: this one is ours, is not restorable from the
+# UI, and is checked into the tree so the reason travels with the code. An app
+# listed here still has its module on disk and still has its entry in
+# APP_MODULES, so a document that opens with it still opens with it — it simply
+# is not offered as something to launch.
+#
+# The bar for being here: the app promises a capability it cannot deliver, and
+# the honest fix is longer than the time available. Shipping a control that
+# does nothing is worse than shipping no control, so hide it, write down why,
+# and take it off this list when it is real.
+#
+# Format: "Display Name": "why, in one sentence, and what would remove it"
+HIDDEN_APPS = {
+}
+
 # display name (without .app) -> python module in the DE directory
 APP_MODULES = {
-    "Writer": "writer", "Novel": "novel", "Academic Notes": "academic",
+    "Writer": "writer", "Novel": "novel", "Academics": "academics",
     "Journal": "journal", "Screenplay": "screenplay", "Tasks": "tasks",
-    "Calendar": "calendar", "Cookbook": "cookbook", "E-book Reader": "ebook",
+    "Calendar": "calendar", "Cookbook": "cookbook",
+    "Meal Planner": "mealplanner", "E-book Reader": "ebook",
     "Calculator": "calculator", "Accounting": "accounting", "Contacts": "contacts",
     "Illustrator": "illustrator", "Sequencer": "sequencer",
     "Video Editor": "video", "Media Viewer": "media", "Music": "music",
     "Packages": "packages", "2048": "g2048",
-    "GBA Emulator": "gbaemu", "GBA IDE": "gbaide", "Language": "language",
-    "Maps": "maps",
+    "GBA Emulator": "gbaemu", "GBA SDK": "gbasdk", "Language": "language",
+    "Maps": "maps", "Workout": "workout",
     "Terminal": "terminal", "Settings": "settings",
     "System Monitor": "sysmon", "Install Notebook OS": "installer",
 }
@@ -50,9 +71,19 @@ APP_MODULES = {
 # a few app modules have no same-named glyph in nbicons — alias to a fitting one
 # (an unaliased name with no glyph falls back to a featureless square, which is
 # what the GBA Emulator was showing in the Applications folder).
-ICON_ALIAS = {"settings": "sys", "sysmon": "sys", "terminal": "toc",
-              "installer": "disk", "gbaide": "cartridge", "language": "globe",
-              "maps": "mappin", "gbaemu": "gamepad"}
+#
+# An alias must never point at a glyph another app or a FILE TYPE already
+# carries: sysmon aliased to the same gear as settings (two pixel-identical
+# rows), terminal to "toc" — which is also icon_for()'s fallback for a file the
+# OS cannot open — installer to the Devices "disk" and gbasdk to the .gba ROM
+# "cartridge". Those four now have their own glyphs in nbicons under their own
+# module names, so they need no alias at all; tools/icon_uniqueness_selftest.py
+# fails the build if a duplicate ever comes back.
+#
+# The map itself now lives in nbicons (nbicons.ALIAS / nbicons.glyph_for), so
+# that Packages — which also turns a module name into a glyph — cannot fall out
+# of step with this list, as it had.
+ICON_ALIAS = nbicons.ALIAS
 
 # file extension -> DE module that opens it, so double-clicking a document
 # launches its owning app with the file as argv[1] (media/writer/ebook accept a
@@ -86,16 +117,21 @@ FILE_OPENERS = {"writer", "ebook", "media", "music", "screenplay", "gbaemu"}
 # human "Kind" descriptor per app (matches the design's KIND column)
 APP_KIND = {
     "Writer": "Word Processor", "Novel": "Word Processor",
-    "Academic Notes": "Notebook", "Journal": "Diary",
+    "Academics": "School", "Journal": "Diary",
     "Screenplay": "Scriptwriting", "Tasks": "Productivity",
     "Calendar": "Productivity", "Cookbook": "Reference",
+    # Cookbook is where you look a recipe up ("Reference"); the Meal Planner is
+    # what you do with it — a week of meals — so it gets its own plain-language
+    # kind rather than sharing one.
+    "Meal Planner": "Cooking",
     "E-book Reader": "Reader", "Calculator": "Utility",
     "Accounting": "Finance", "Contacts": "Utility",
     "Illustrator": "Graphics",
     "Sequencer": "Audio", "Video Editor": "Video",
     "Media Viewer": "Media", "Music": "Music", "Packages": "System",
-    "2048": "Game", "GBA Emulator": "Game", "GBA IDE": "Development",
+    "2048": "Game", "GBA Emulator": "Game", "GBA SDK": "Development",
     "Language": "Education", "Maps": "Reference",
+    "Workout": "Health",
     "Terminal": "Utility",
     "Settings": "System", "System Monitor": "System",
     "Install Notebook OS": "System",
@@ -637,7 +673,7 @@ class Finder(Gtk.Window):
         # reports CREATED/DELETED even for a path that doesn't exist yet.
         self._app_flag_monitor = None
         try:
-            _flag = Gio.File.new_for_path("/tmp/nb-app-active")
+            _flag = Gio.File.new_for_path(nbapp.APP_FLAG)
             self._app_flag_monitor = _flag.monitor_file(
                 Gio.FileMonitorFlags.NONE, None)
             self._app_flag_monitor.connect("changed", self._on_app_flag_changed)
@@ -655,7 +691,7 @@ class Finder(Gtk.Window):
         # Reconcile visibility with the app-active flag: hide while a launched
         # app owns the screen, reappear when it exits.
         try:
-            active = os.path.exists("/tmp/nb-app-active")
+            active = os.path.exists(nbapp.APP_FLAG)
             if active and self.get_visible():
                 self.hide()
             elif not active and not self.get_visible():
@@ -681,7 +717,7 @@ class Finder(Gtk.Window):
         # flag exists an app owns the screen, so stay hidden (mirrors
         # _poll_app_flag) rather than flashing the Finder over the app's window.
         try:
-            if os.path.exists("/tmp/nb-app-active"):
+            if os.path.exists(nbapp.APP_FLAG):
                 return False
         except Exception:
             pass
@@ -931,8 +967,13 @@ class Finder(Gtk.Window):
                            getattr(self, "_home_size", (1180, 940)))
             self.resize(w, h)
 
-    def _icon_btn(self, name, cb, sensitive=True):
+    def _icon_btn(self, name, cb, sensitive=True, tip=None):
         b = Gtk.Button(); b.get_style_context().add_class("navbtn")
+        # An icon-only button with no tooltip is a control a person has to
+        # guess at. (set_tooltip_text is one of the setters nbi18n patches, so
+        # a plain English string here still translates.)
+        if tip:
+            b.set_tooltip_text(tip)
         img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(name, 18,
               "#3A362E" if sensitive else "#B8B3A6"))
         # Show the glyph HERE, not via the window's show_all: a caller that
@@ -955,11 +996,14 @@ class Finder(Gtk.Window):
     def _navbar(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         bar.get_style_context().add_class("navbar")
-        self.back_btn = self._icon_btn("back", lambda *_: self.go_back(), False)
-        self.fwd_btn = self._icon_btn("fwd", lambda *_: self.go_forward(), False)
+        self.back_btn = self._icon_btn("back", lambda *_: self.go_back(), False,
+                                     tip="Back")
+        self.fwd_btn = self._icon_btn("fwd", lambda *_: self.go_forward(), False,
+                                    tip="Forward")
         bar.pack_start(self.back_btn, False, False, 0)
         bar.pack_start(self.fwd_btn, False, False, 0)
-        bar.pack_start(self._icon_btn("up", lambda *_: self.go_up()), False, False, 0)
+        bar.pack_start(self._icon_btn("up", lambda *_: self.go_up(),
+                                    tip="Up one folder"), False, False, 0)
         # file operations (pointer-driven; no keyboard focus). A thin divider
         # separates navigation from actions.
         sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
@@ -1029,6 +1073,8 @@ class Finder(Gtk.Window):
         # window takes no keyboard focus (matchbox), so these are pointer-only.
         search = Gtk.SearchEntry(); search.set_placeholder_text(_t("Search"))
         search.set_size_request(150, -1)
+        # Our own magnifier, not the icon theme's — see nbicons.style_search_entry.
+        nbicons.style_search_entry(search)
         self._search_h = search.connect("search-changed", self._on_search)
         # Esc while searching clears the query and returns to the full listing.
         search.connect("stop-search", lambda *_: search.set_text(""))
@@ -1049,7 +1095,8 @@ class Finder(Gtk.Window):
         self.restore_btn.set_no_show_all(True)
         self.restore_btn.set_tooltip_text(_t("Restore selected item to where it came from"))
         self.restore_btn.connect("clicked", lambda *_: self._restore_selected())
-        self.trash_btn = self._icon_btn("trash", lambda *_: self._trash_selected())
+        self.trash_btn = self._icon_btn("trash", lambda *_: self._trash_selected(),
+                                     tip="Move to Trash")
         self.trash_btn.set_tooltip_text(_t("Move selected item to Trash"))
         self.trash_btn.set_no_show_all(True)
         bar.pack_end(self._viewswitch(), False, False, 0)  # rightmost
@@ -1145,7 +1192,10 @@ class Finder(Gtk.Window):
                 ej = Gtk.Button()
                 ej.set_relief(Gtk.ReliefStyle.NONE)
                 ej.get_style_context().add_class("sbeject")
-                ej.set_tooltip_text(_t("Eject — flush and safely remove"))
+                # "finish saving", not "flush": the tooltip says what the
+                # button does FOR you, not the name of the write-out it runs.
+                ej.set_tooltip_text(
+                    _t("Finish writing, then remove the drive safely"))
                 ej.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("eject", 13, "#6E695E")))
                 ej.connect("clicked", lambda _b, m=rel: self._eject(m))
                 hb.pack_start(ej, False, False, 6)
@@ -1177,7 +1227,7 @@ class Finder(Gtk.Window):
         if ok:
             self._flash_status(_t("Safe to remove the drive"))
         else:
-            self._flash_status(_t("Eject failed — %s")
+            self._flash_status(_t("Could not eject: %s")
                                % (err or _t("the drive is in use")))
         self._fill_sidebar()
 
@@ -1395,6 +1445,12 @@ class Finder(Gtk.Window):
                 if (rel == "Applications" and nm.endswith(".app")
                         and nm[:-4] in self._removed_apps):
                     continue
+                # Apps WE have withheld because they are not finished (see
+                # HIDDEN_APPS). Unlike the user's list this is not restorable
+                # from the UI — it is a statement that the app is not ready.
+                if (rel == "Applications" and nm.endswith(".app")
+                        and nm[:-4] in HIDDEN_APPS):
+                    continue
                 # NB: do NOT apply self._filter here — cache the FULL listing so
                 # live search can re-filter it in memory (see _populate_store),
                 # without re-reading the directory on every keystroke.
@@ -1444,7 +1500,7 @@ class Finder(Gtk.Window):
 
     # ---- live directory watch ---------------------------------------------
     # Without this the view is a one-shot snapshot: a file dropped into the
-    # shown folder by another app (e.g. a .gba the GBA IDE just exported to
+    # shown folder by another app (e.g. a .gba the GBA SDK just exported to
     # Documents) wouldn't appear until the user navigated away and back. Watch
     # the current directory with an inotify-backed monitor and auto-refresh.
     def _watch_dir(self, full):
@@ -1809,7 +1865,7 @@ class Finder(Gtk.Window):
             self.load(self.rel, record=False, keep_filter=True)
             return
         self.load(self.rel, record=False, keep_filter=True)
-        self._flash_status(_t("Undone — %s") % u["label"])
+        self._flash_status(_t("Undone: %s") % u["label"])
 
     def _flash_undoable(self, msg):
         # Say what happened AND how to take it back. The status bar is where
@@ -2121,7 +2177,7 @@ class Finder(Gtk.Window):
             # after on_done, which reloads the view and rewrites the status bar
             if not ok:
                 self._flash_status(
-                    _t("Copy stopped — nothing was changed")
+                    _t("Copy stopped. Nothing was changed.")
                     if state["cancelled"] else state["error"])
             return False
 
@@ -2146,7 +2202,7 @@ class Finder(Gtk.Window):
         if code == errno.EACCES or code == errno.EPERM:
             return _t("There was no permission to copy that here")
         if code == errno.EROFS:
-            return _t("That place is read-only, so nothing can be copied to it")
+            return _t("That location is read-only")
         return _t("The copy could not be finished")
 
     def _progress_dialog(self, title, subtitle, state):
@@ -2237,7 +2293,7 @@ class Finder(Gtk.Window):
         if p:
             self._clipboard = (p, True)
             self._update_paste()
-            self._flash_status(_t("Cut '%s' — open a folder, then Paste")
+            self._flash_status(_t("Cut '%s'. Open a folder, then Paste.")
                                % os.path.basename(p))
         else:
             self._flash_status(_t("Select an item to cut"))
@@ -2686,7 +2742,7 @@ class Finder(Gtk.Window):
         self._removed_apps.add(disp)
         self._save_removed_apps()
         self.load(self.rel, record=False, keep_filter=True)
-        self._flash_status(_t("Removed '%s' — restore it from Actions") % disp)
+        self._flash_status(_t("Removed '%s'. Restore it from Actions.") % disp)
 
     def _restore_removed_apps_dialog(self):
         # A modal list of the removed apps, each with its own Restore button,
@@ -3145,7 +3201,7 @@ class Finder(Gtk.Window):
             # (matchbox pins dialogs above main clients). Return when the
             # app exits. The flag file tells the widget column to hide too.
             try:
-                open("/tmp/nb-app-active", "w").close()
+                open(nbapp.APP_FLAG, "w").close()
             except Exception:
                 pass
             self.hide()
@@ -3209,7 +3265,7 @@ class Finder(Gtk.Window):
         if self._other_apps_running(exclude_pid=_pid):
             return
         try:
-            os.remove("/tmp/nb-app-active")
+            os.remove(nbapp.APP_FLAG)
         except Exception:
             pass
         self.show_all()
@@ -3234,7 +3290,7 @@ FINDER_CSS = b"""
                   box-shadow: none; }
 .finder .wintitle { font-weight: 700; font-size: 14px; letter-spacing: 0.08em; }
 /* Toolbar palette: the bar and the controls on it are ONE surface.
-   These previously sat at #FBFAF6 (near-white) with a #C4BFB1 border on a
+   These previously sat at #FCFBF8 (near-white) with a #C4BFB1 border on a
    #F1EEE6 bar, so every control read as a pale chip pasted onto a darker
    strip. The bar now uses the paper tone and the controls share it, separated
    by the standard hairline (#C9C4B6, the same rule weight as the installer and
@@ -3315,8 +3371,8 @@ FINDER_CSS = b"""
 .finder header button arrow {
                  color: #B7B1A3; opacity: 0.4;
                  min-width: 10px; min-height: 10px; }
-.finder .statusbar { background: #F1EEE6; border-top: 1px solid #D7D2C5;
-                     color: #8A857A; font-size: 12.5px; padding: 7px 18px; }
+/* .statusbar is Papertone's - see the theme. Finder used its own paler
+   ink and a larger size than every other status strip. */
 /* bottom-right resize grip: opaque (black-safe with no compositor), a hairline
    corner tab that reads as a drag handle */
 .finder .resizegrip { background: #ECE8DD; border-top: 1px solid #C9C4B6;
@@ -3370,7 +3426,7 @@ FINDER_CSS = b"""
 .finderprogress trough { min-height: 7px; border-radius: 4px; }
 .finderprogress progress { min-height: 7px; border-radius: 4px; }
 /* confirm dialog: a light Cancel and a signage-red destructive primary */
-.finderinfocancel { padding: 6px 18px; background: #FBFAF6; color: #2A2620;
+.finderinfocancel { padding: 6px 18px; background: #FCFBF8; color: #2A2620;
                  border: 1px solid #C4BFB1; border-radius: 2px; box-shadow: none;
                  font-size: 13px; }
 .finderinfocancel:hover { background: #ECE8DD; }

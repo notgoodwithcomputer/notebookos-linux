@@ -11,14 +11,33 @@ os.environ.setdefault("NB_HOME", "/tmp/nbhome-construct")
 os.makedirs(os.environ["NB_HOME"], exist_ok=True)
 import gi; gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
-APPS = ["writer","novel","journal","academic","screenplay","ebook","cookbook",
-        "contacts","accounting","calendar","music","illustrator",
-        "sequencer","video","media","g2048","packages","settings",
-        "sysmon","calculator","terminal","tasks","installer",
+# Stand clear of the single-instance lock. nbapp.claim_single_instance() exits
+# the process with os._exit(0) when the app it is building is already open in
+# another process — no traceback, no output, exit status 0. Constructing every
+# app in one process means ANY app left running on this desktop (an app being
+# screenshotted, an app under test in another window) silently killed this run
+# part-way through, and the missing "CONSTRUCT: n ok" line reads like a tool
+# that did not run rather than a result. Point the registry at our own
+# directory: this process is not a real app and must never stand down.
+import nbapp
+nbapp._APP_DIR = os.path.join(os.environ["NB_HOME"], "nb-apps")
+os.makedirs(nbapp._APP_DIR, exist_ok=True)
+# The app list is DERIVED from finder.APP_MODULES — the same table the desktop
+# uses to launch things — so coverage can never silently drift from what a user
+# can actually double-click. A hardcoded list did drift: language/maps/
+# gbasdk/gbaemu were all launchable but never launch-crash tested, while the
+# summary line still read like full coverage.
+import finder as _finder
+APPS = sorted(set(_finder.APP_MODULES.values())) + [
+        # Finder itself is not in APP_MODULES (the desktop starts it directly).
+        "finder",
         # Desktop / session-start components — NOT apps, but they construct a
         # Gtk.Window at boot and were previously untested, which is how a missing
         # `from nbi18n import _t` shipped a top-panel that crashed on construct.
-        "shell","widgets","desktopbg","splash","nbmediakeys"]
+        "shell","widgets","desktopbg","splash","nbmediakeys",
+        # Reached from the desktop's right-click menu rather than the
+        # Applications folder, so APP_MODULES does not cover it.
+        "widgetsettings"]
 ok = fail = 0
 for name in APPS:
     try:

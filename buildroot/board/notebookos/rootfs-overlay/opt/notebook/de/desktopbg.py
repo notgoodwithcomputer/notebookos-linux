@@ -26,6 +26,18 @@ environments have always drawn wallpaper.
 It is kept below everything, takes no focus, stays off the taskbar/pager, and
 does not accept input — clicking the desktop must not raise it above real
 windows.
+
+The colour is fixed
+-------------------
+The colour is passed in once, on the command line, by session.sh. There is no
+setting behind it and nothing to follow at runtime.
+
+Alternate backdrop colours used to be selectable, which is why this window is
+here at all: `xsetroot -solid <hex>` paints the X ROOT, and everything above is
+the explanation of why the root is not what is on screen — so choosing a colour
+repainted a surface this window sits on top of and nothing visible happened.
+That option has been removed, so the one papertone field is now painted
+unconditionally.
 """
 import sys
 
@@ -35,6 +47,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 
 DEFAULT_COLOR = "#DED4C2"
+
 
 
 def _rgba(color):
@@ -81,6 +94,8 @@ class Backdrop(Gtk.Window):
 
         self.connect("draw", self._on_draw)
         self.connect("map-event", self._on_map)
+        self._monitors = []
+        self._settle = 0
 
     def _fit(self, screen):
         try:

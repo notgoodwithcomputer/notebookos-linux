@@ -58,6 +58,7 @@ import sys
 import json
 import math
 import posixpath
+import time
 import zipfile
 try:
     import xml.etree.ElementTree as ET
@@ -77,6 +78,46 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 DOCUMENTS_DIR = os.path.join(HOME, "Documents")
 CONFIG_DIR = os.path.join(HOME, ".config", "notebook")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "ebook.json")
+
+
+def _holds_books(data):
+    """True when a parsed store plainly contains book-shaped records, whether or
+    not this app's loader managed to read them.
+
+    An empty shelf is a perfectly legitimate state (a new reader, or one who
+    removed their last volume), so the test is the SHAPE of what is in the file,
+    never emptiness."""
+    pools = list(data.values()) if isinstance(data, dict) else [data]
+    for pool in pools:
+        if isinstance(pool, dict):
+            pool = list(pool.values())
+        if not isinstance(pool, list):
+            continue
+        for rec in pool:
+            if isinstance(rec, dict) and any(
+                    isinstance(rec.get(k), str) and rec.get(k)
+                    for k in ("path", "title")):
+                return True
+    return False
+
+
+def _quarantine(path):
+    """Move a store this app could not make sense of aside, under the same
+    <name>.damaged-<timestamp> name nbapp.preserve_damaged uses. Never raises.
+
+    nbapp quarantines any store that fails to PARSE, and does it for us on every
+    write. It deliberately cannot cover the case here: valid JSON of the wrong
+    shape parses perfectly, and only this app knows the shape is not a shelf."""
+    try:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = "%s.damaged-%s" % (path, stamp)
+        n = 2
+        while os.path.exists(dest):
+            dest = "%s.damaged-%s-%d" % (path, stamp, n)
+            n += 1
+        os.replace(path, dest)
+    except OSError:
+        pass
 
 
 # ------------------------------------------------------------- EPUB parsing
@@ -392,6 +433,10 @@ class EbookReader(nbapp.AppWindow):
         # (or None). Both are restored from disk so the shelf is never fabricated.
         self._books = []
         self._open_path = None
+        # Set by _load_state when the file on disk plainly holds books that this
+        # loader could not adopt; the first _save_state moves it aside instead of
+        # replacing it. See _load_state's LAST RESORT note.
+        self._quarantine_pending = False
         self._load_state()
 
         self.content.pack_start(self._reading_bar(), False, False, 0)
@@ -426,43 +471,99 @@ class EbookReader(nbapp.AppWindow):
             self._show_current()
 
     # ---------------------------------------------------------- persistence
+    @staticmethod
+    def _as_books(v):
+        """Whatever the shelf slot holds, as a list of records. A shelf stored as
+        an OBJECT (keyed by path or title) still holds the volumes in its values;
+        a scalar there holds none."""
+        if isinstance(v, list):
+            return v
+        if isinstance(v, dict):
+            return list(v.values())
+        return []
+
     def _load_state(self):
-        """Restore the shelf and open book from ebook.json (best effort)."""
+        """Restore the shelf and open book from ebook.json (best effort).
+
+        A file that parses but is not shaped like this app's store is NOT
+        written off. Every page turn, every Add and every Remove rewrites this
+        whole file, so a shelf this loader shrugs off is destroyed by the next
+        thing the reader does — and the file is the only record of where they
+        had got to in twenty books. A bare list is read as the shelf it plainly
+        is, a shelf under a renamed or extra wrapper key is found, and one
+        stored as an object is read out of its values. Cookbook, Journal,
+        Contacts and Meal Planner have read their stores this way for several
+        rounds; the reader was the last store where a renamed wrapper cost the
+        lot. Never raises: a surprise in one record costs itself."""
         try:
             with open(CONFIG_PATH, encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception:
+            # First run (no file) or bytes that do not parse. An unparseable
+            # store is quarantined by nbapp.atomic_write_json before the next
+            # save replaces it, so those bytes are never lost.
             return
-        books = data.get("books") if isinstance(data, dict) else None
-        if isinstance(books, list):
-            for b in books:
-                if (isinstance(b, dict) and b.get("path")
-                        and b.get("title") and b.get("fmt")):
-                    try:
-                        pos = int(b.get("pos") or 0)
-                    except (TypeError, ValueError):
-                        pos = 0
-                    try:
-                        frac = float(b.get("frac") or 0.0)
-                    except (TypeError, ValueError):
-                        frac = 0.0
-                    self._books.append({
-                        "path": str(b["path"]),
-                        "title": str(b["title"]),
-                        "fmt": str(b["fmt"]),
-                        "pos": max(pos, 0),
-                        "frac": min(max(frac, 0.0), 1.0),
-                        "total": max(0, int(b.get("total") or 0))
-                        if str(b.get("total") or 0).lstrip("-").isdigit() else 0,
-                        "author": str(b.get("author") or ""),
-                    })
-        op = data.get("open") if isinstance(data, dict) else None
+        if isinstance(data, list):
+            data = {"books": data}
+        elif not isinstance(data, dict):
+            # Valid JSON, but a scalar — some other file, or a repair gone
+            # wrong. Nothing to read, and nothing may overwrite it either.
+            self._quarantine_pending = True
+            return
+        books = self._as_books(data.get("books"))
+        if not books:
+            # The wrapper key is gone or was written under another name. The
+            # volumes are still in the file; take the first list of records that
+            # looks like a shelf rather than opening on "No books" and writing
+            # that empty shelf straight over them.
+            for v in data.values():
+                cand = self._as_books(v)
+                if cand and any(isinstance(x, dict) and x.get("path")
+                                for x in cand):
+                    books = cand
+                    break
+        for b in books:
+            if (isinstance(b, dict) and b.get("path")
+                    and b.get("title") and b.get("fmt")):
+                try:
+                    pos = int(b.get("pos") or 0)
+                except (TypeError, ValueError):
+                    pos = 0
+                try:
+                    frac = float(b.get("frac") or 0.0)
+                except (TypeError, ValueError):
+                    frac = 0.0
+                self._books.append({
+                    "path": str(b["path"]),
+                    "title": str(b["title"]),
+                    "fmt": str(b["fmt"]),
+                    "pos": max(pos, 0),
+                    "frac": min(max(frac, 0.0), 1.0),
+                    "total": max(0, int(b.get("total") or 0))
+                    if str(b.get("total") or 0).lstrip("-").isdigit() else 0,
+                    "author": str(b.get("author") or ""),
+                })
+        op = data.get("open")
         if isinstance(op, str) and any(b["path"] == op for b in self._books):
             self._open_path = op
+        # LAST RESORT. If the file plainly holds books and we adopted none of
+        # them, the next save writes an empty shelf over it. Valid JSON of the
+        # wrong shape parses perfectly, so nbapp's generic quarantine cannot see
+        # it — only this app knows the shape is not a shelf. Move it aside on
+        # the way past instead, the way cookbook.py and language.py do.
+        if not self._books and _holds_books(data):
+            self._quarantine_pending = True
 
     def _save_state(self):
         """Persist the shelf and open book under $NB_HOME (best effort)."""
         try:
+            # A store that PARSED but was not a shelf is moved aside here,
+            # immediately before the write that would otherwise replace it — the
+            # same moment nbapp picks for the files it can detect, so there is
+            # never a window in which the reader has no file at all.
+            if getattr(self, "_quarantine_pending", False):
+                self._quarantine_pending = False
+                _quarantine(CONFIG_PATH)
             nbapp.atomic_write_json(
                 CONFIG_PATH, {"books": self._books, "open": self._open_path},
                 ensure_ascii=False, indent=2)
@@ -674,8 +775,7 @@ class EbookReader(nbapp.AppWindow):
         if not os.path.isfile(book["path"]):
             self._show_message(
                 book["fmt"], book["title"], self._short_path(book["path"]),
-                "This file is unavailable. It may be on a USB stick that "
-                "has been removed.")
+                "This file is no longer at that location.")
             return
         if book["fmt"] == "PDF":
             self._open_pdf(book)
@@ -687,12 +787,15 @@ class EbookReader(nbapp.AppWindow):
                 "This document format is not supported.")
 
     def _show_empty(self):
-        self._title_lbl.set_text("No document")
+        # _t throughout: _show_message hands its arguments straight to
+        # set_text(), so these strings — all four of them already translated in
+        # all 17 catalogs — were the one screen in the app that stayed English
+        # in every language, and it is the screen the reader sees FIRST.
+        self._title_lbl.set_text(_t("No document"))
         self._subtitle_lbl.set_text("")
         self._show_message(
-            "READER", "No document open",
-            "Books on a USB stick appear in the Library. You can also open an "
-            "EPUB or PDF file from this device.",
+            _t("READER"), _t("No document open"),
+            _t("Open an EPUB or PDF file."),
             # no note line here: the heading already says nothing is open, and
             # the button below says what to do about it.
             "", action=True)
@@ -1213,7 +1316,7 @@ class EbookReader(nbapp.AppWindow):
     def _unsupported_message(self, path):
         """Neutral notice when a chosen/opened file is not a readable format —
         never a silent no-op, which would just look broken to the reader."""
-        self._title_lbl.set_text("No document")
+        self._title_lbl.set_text(_t("No document"))
         self._subtitle_lbl.set_text("")
         self._show_message(
             "READER", "Unsupported format",
@@ -1224,13 +1327,30 @@ class EbookReader(nbapp.AppWindow):
     def _add_book(self, path, title, fmt, author=""):
         """Insert a book at the front of the shelf, de-duplicating by path so
         re-opening a volume moves it to the top rather than listing it twice.
-        A volume already on the shelf keeps its saved reading position."""
+        A volume already on the shelf keeps everything it had saved.
+
+        THE BUG THIS EXISTS FOR: this used to BUILD A FRESH record from
+        path/title/fmt/pos/author, which silently dropped every other key the
+        existing one held -- `frac`, how far down the page the reader had got,
+        and `total`, the page count the shelf shows progress against. Opening a
+        book from the Library is the commonest action in the app, and
+        _open_book() calls _save_state() right after this, so the loss went
+        straight to disk: the reader was dropped at the TOP of the right page
+        instead of the three-quarter mark they stopped at, and the shelf row's
+        "Page 6 / 9" vanished. _resume_scroll() then read this same stripped
+        record, so the restore it exists to perform was a silent no-op.
+        Carrying the record forward also means a key added here later cannot be
+        quietly thrown away by this path."""
         existing = self._book_by_path(path)
-        pos = existing.get("pos", 0) if existing else 0
+        rec = dict(existing) if isinstance(existing, dict) else {}
+        try:
+            pos = max(int(rec.get("pos") or 0), 0)
+        except (TypeError, ValueError):
+            pos = 0
+        rec.update({"path": path, "title": title, "fmt": fmt, "pos": pos,
+                    "author": author or ""})
         self._books = [b for b in self._books if b["path"] != path]
-        self._books.insert(0, {"path": path, "title": title, "fmt": fmt,
-                               "pos": max(int(pos or 0), 0),
-                               "author": author or ""})
+        self._books.insert(0, rec)
 
     # ------------------------------------------------------------- library
     def _library_modal(self):
@@ -1263,8 +1383,7 @@ class EbookReader(nbapp.AppWindow):
         t.get_style_context().add_class("sheetttl")
         box.pack_start(t, False, False, 0)
         s = Gtk.Label(
-            label="Books are loaded from a USB stick, or tap Open Book… "
-                  "below. EPUB and PDF are read on the device.",
+            label=_t("EPUB and PDF files. Add one with Open Book…, below."),
             xalign=0)
         s.get_style_context().add_class("sheetsub")
         s.set_line_wrap(True)
@@ -1378,9 +1497,12 @@ class EbookReader(nbapp.AppWindow):
         for child in shelf.get_children():
             shelf.remove(child)
         if not self._books:
+            # Already names the way in ("Use Open Book… below"); it just never
+            # said it in the reader's language — the catalogs carry this string
+            # in all 17 and the label was handed the raw English.
             empty = Gtk.Label(
-                label="No books on the device.\n"
-                      "Use Open Book… below to add an EPUB or PDF file.",
+                label=_t("No books.\n"
+                         "Use Open Book… below to add an EPUB or PDF file."),
                 xalign=0)
             empty.get_style_context().add_class("sheetempty")
             empty.set_line_wrap(True)
@@ -1570,9 +1692,15 @@ class EbookReader(nbapp.AppWindow):
                 ("Close    Esc", self.close),
             ]
         if name == "Library":
+            # Open Library… keeps its ellipsis: the shelf is a modal sheet you
+            # pick a book from, not an inline panel. Close Library greys out
+            # when the sheet is already down — it used to stay live and do
+            # nothing, which is the one thing a menu item must never do.
             return [
                 ("Open Library…", self._on_library_open),
-                ("Close Library", self._close_library),
+                ("Close Library",
+                 self._close_library if self._library_sheet.get_visible()
+                 else None),
             ]
         return super().menu_items(name)
 

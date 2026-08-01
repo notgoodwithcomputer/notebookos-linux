@@ -20,6 +20,16 @@ The cases it exists for, in order of how much work they lose:
 """
 import os
 import sys
+import tempfile
+
+# NB_HOME MUST BE PINNED BEFORE nbapp IS IMPORTED. nbapp computes its
+# single-instance scope (_APP_DIR) at import time from NB_HOME; this file used
+# to set it down in __main__, by which point the scope was already the unscoped
+# /tmp/nb-apps shared with every app and every other unpinned suite. A marker
+# there makes claim_single_instance() os._exit(0) this process: no output, exit
+# status 0, a silent false pass. Per-process so two copies cannot collide.
+os.environ.setdefault(
+    "NB_HOME", tempfile.mkdtemp(prefix="nbhome-undo-selftest-"))
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -219,9 +229,15 @@ def test_journal():
     seen = []
     w._confirm = lambda t, m, o, y: seen.append(m)
     w._delete_active()
-    check("delete confirm offers Undo instead of calling it permanent (%r)"
+    # The wording must not PROMISE permanence, because the delete is undoable
+    # (_remove_active takes an undo checkpoint).  It used to be asserted that
+    # the sentence also advertised Undo; the shipped copy is the bare
+    # "Delete “x”?", which is what all 17 lang_*.json carry, so the claim to
+    # test is only that no sentence tells the user it cannot be undone.
+    check("delete confirm does not call the delete permanent (%r)"
           % (seen[0] if seen else None),
-          seen and "undone" not in seen[0].lower() and "Undo" in seen[0])
+          bool(seen) and "undone" not in seen[0].lower()
+          and "permanent" not in seen[0].lower())
 
     w.destroy()
     pump()
@@ -313,13 +329,13 @@ def test_novel():
 
 
 # =====================================================================
-#  Academic Notes — the whole class goes when its last lecture does
+#  Academics — the whole class goes when its last lecture does
 # =====================================================================
-def test_academic():
+def test_academics():
     global _app
-    _app = "academic"
-    import academic
-    w = academic.AcademicNotes()
+    _app = "academics"
+    import academics
+    w = academics.Academics()
     w.classes, w.lectures, w.active = [], [], -1
     w._refresh_sidebar()
     w._refresh_canvas()
@@ -340,18 +356,23 @@ def test_academic():
     check("Ctrl+Z brings the wiped note back",
           text_of(w.body.get_buffer()) == kept)
 
-    # --- deleting the only lecture removes its class too ---
+    # --- deleting the only lecture KEEPS its class ---
+    # This used to assert the class went with it. That behaviour destroyed the
+    # first thing every student does: create a class, press Esc, reopen, and it
+    # had silently vanished because nothing referred to it yet. A class now owns
+    # a room, a timetable and assignments, so it outlives its lectures and only
+    # File > Delete Class removes it.
     check("one class, one lecture",
           len(w.classes) == 1 and len(w.lectures) == 1)
     w._confirm = lambda *_a: True          # answer the modal
     w._delete_lecture()
-    check("lecture and its class both gone",
-          w.lectures == [] and w.classes == [])
+    check("the lecture is gone", w.lectures == [])
+    check("...but the class it belonged to stays", len(w.classes) == 1)
     lbl, cb = undo_entry(w)
     check("Undo names the delete (%r)" % lbl, "Delete Lecture" in lbl)
     cb()
     check("Undo restores the lecture", len(w.lectures) == 1)
-    check("...and its class", len(w.classes) == 1)
+    check("...with its class still there", len(w.classes) == 1)
     check("...with its title", w.lectures[0]["title"] == "Thermodynamics II")
     check("...with its notes", "Clausius" in w.lectures[0]["notes"])
     check("...shown in the rebuilt canvas",
@@ -503,9 +524,8 @@ def test_history():
 
 
 if __name__ == "__main__":
-    os.environ.setdefault("NB_HOME", "/tmp/nbhome-undo-selftest")
     os.makedirs(os.environ["NB_HOME"], exist_ok=True)
-    which = sys.argv[1:] or ["history", "journal", "novel", "academic",
+    which = sys.argv[1:] or ["history", "journal", "novel", "academics",
                              "screenplay"]
     for name in which:
         globals()["test_" + name]()

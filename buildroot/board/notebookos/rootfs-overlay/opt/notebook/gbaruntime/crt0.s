@@ -1,4 +1,4 @@
-@ crt0.s — GBA cartridge startup for the Notebook OS GBA IDE runtime.
+@ crt0.s — GBA cartridge startup for the Notebook OS GBA SDK runtime.
 @ Lays down the ROM header, sets up the IRQ + system stacks, copies .data from
 @ ROM into RAM and zeroes .bss (the runtime has mutable globals), then calls main.
 	.section .gbaheader, "ax"

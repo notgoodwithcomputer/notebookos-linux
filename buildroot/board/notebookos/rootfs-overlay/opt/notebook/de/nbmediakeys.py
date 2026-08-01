@@ -29,9 +29,13 @@ from ctypes import c_int, c_uint, c_ulong, c_long, c_void_p, c_char_p, Structure
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo  # noqa: E402
 
 import cairo
+
+import nbaudio
+from nbi18n import _t
 
 # ---- XF86 media keysyms ----------------------------------------------------
 XF86_AudioLowerVolume = 0x1008FF11
@@ -244,6 +248,7 @@ class _OSD(Gtk.Window):
         self._kind = "volume"    # "volume" | "brightness"
         self._pct = 0
         self._muted = False
+        self._note = None        # a sentence INSTEAD of a level bar, or None
         self._hide_src = None
         self.area = Gtk.DrawingArea()
         self.area.connect("draw", self._draw)
@@ -260,8 +265,29 @@ class _OSD(Gtk.Window):
         except Exception:
             self.move(600, 900)
 
+    def show_note(self, kind, text):
+        """Say why this key did nothing, instead of showing a level it cannot
+        change. Pressing volume-up while sound goes out over HDMI used to move
+        the laptop's own (unheard) level and pop a percentage that had nothing
+        to do with what the viewer could hear — or, on a machine with no analog
+        card at all, show nothing whatever, which reads as a dead key."""
+        self._kind, self._note = kind, text
+        self._position()
+        self.area.queue_draw()
+        self.show_all()
+        try:
+            gw = self.get_window()
+            if gw is not None:
+                gw.raise_()
+        except Exception:
+            pass
+        if self._hide_src is not None:
+            GLib.source_remove(self._hide_src)
+        self._hide_src = GLib.timeout_add(OSD_MS, self._auto_hide)
+
     def show_level(self, kind, pct, muted=False):
         self._kind, self._pct, self._muted = kind, int(pct), bool(muted)
+        self._note = None
         self._position()
         self.area.queue_draw()
         self.show_all()
@@ -307,6 +333,13 @@ class _OSD(Gtk.Window):
         else:
             self._sun(cr)
         cr.restore()
+        # A note takes the whole width the bar and the percentage would have
+        # used. Pango wraps it to the measure and, crucially, falls back across
+        # fonts — see _text().
+        if self._note:
+            self._text(cr, self._note, 66, W - 66 - 20, H, 14, _INK,
+                       wrap=True)
+            return False
         # level bar
         bx, bw, by, bh = 66, W - 66 - 64, H / 2 - 4, 8
         self._rrect(cr, bx, by, bw, bh, 4)
@@ -315,17 +348,43 @@ class _OSD(Gtk.Window):
         if fillw > 1 and not (self._kind == "volume" and self._muted):
             self._rrect(cr, bx, by, fillw, bh, 4)
             cr.set_source_rgb(*_INK); cr.fill()
-        # percent / MUTED
-        cr.select_font_face("Nimbus Sans", cairo.FONT_SLANT_NORMAL,
-                            cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(16)
-        label = "Muted" if (self._kind == "volume" and self._muted) \
-            else "%d%%" % self._pct
-        te = cr.text_extents(label)
-        cr.set_source_rgb(*(_RED if (self._kind == "volume" and self._muted)
-                            else _INK))
-        cr.move_to(W - 20 - te.width, H / 2 + te.height / 2 - 1)
-        cr.show_text(label)
+        # percent / Muted
+        muted = (self._kind == "volume" and self._muted)
+        label = _t("Muted") if muted else "%d%%" % self._pct
+        self._text(cr, label, None, W - 20, H, 16,
+                   _RED if muted else _INK, right=True)
+        return False
+
+    @staticmethod
+    def _text(cr, text, x, edge, H, size, colour, wrap=False, right=False):
+        """Draw OSD text through Pango rather than cairo's toy font API.
+
+        THE BUG THIS FIXES: the toy API (select_font_face/show_text) binds ONE
+        font face with no fallback, so the moment these strings were translated
+        every non-Latin script — Hindi, Japanese, Korean, Yiddish, Chinese —
+        drew a row of tofu boxes. Nimbus Sans has no CJK or Devanagari coverage;
+        the Noto faces that do are only reachable through fontconfig, which is
+        what Pango consults and the toy API does not. Pango also does the line
+        breaking, so the note no longer needs a hand-rolled word wrapper that
+        measured with the wrong font in the first place.
+
+        `right=True` right-aligns to `edge`; otherwise text starts at `x` and
+        wraps within `edge - x`. Vertically centred in H either way.
+        """
+        layout = PangoCairo.create_layout(cr)
+        layout.set_font_description(Pango.FontDescription("Nimbus Sans %d" % size))
+        layout.set_text(text, -1)
+        if wrap:
+            layout.set_width((edge - x) * Pango.SCALE)
+            layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+        _lw, lh = layout.get_pixel_size()
+        cr.set_source_rgb(*colour)
+        if right:
+            lw = layout.get_pixel_size()[0]
+            cr.move_to(edge - lw, (H - lh) / 2.0)
+        else:
+            cr.move_to(x, (H - lh) / 2.0)
+        PangoCairo.show_layout(cr, layout)
         return False
 
     def _speaker(self, cr):
@@ -366,6 +425,17 @@ class MediaKeys:
         return True
 
     def _on_key(self, sym):
+        if sym in (XF86_AudioRaiseVolume, XF86_AudioLowerVolume, XF86_AudioMute):
+            # Sound going out over HDMI has no level here to change: the
+            # television's own volume control is the only one there is. Moving
+            # Master would change the laptop speakers nobody is listening to.
+            try:
+                on_tv = not nbaudio.has_volume()
+            except Exception:
+                on_tv = False
+            if on_tv:
+                self.osd.show_note("volume", _t("Volume is set on the television"))
+                return False
         if sym == XF86_AudioRaiseVolume:
             pct, muted = _volume(delta=VOL_STEP)
             if pct is not None:

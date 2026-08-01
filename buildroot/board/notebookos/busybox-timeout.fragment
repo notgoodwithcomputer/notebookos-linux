@@ -1,0 +1,8 @@
+# Arms the dbus start guard in opt/notebook/session.sh.
+#
+# session.sh wraps `dbus-launch` in `timeout 10` so a hung bus launch cannot
+# wedge the whole session at boot -- but only when timeout(1) actually exists,
+# because a missing applet would make the command not-found, leave the env
+# empty and silently take the session bus away from every GTK app. Without
+# this fragment the guard is present but never used.
+CONFIG_TIMEOUT=y

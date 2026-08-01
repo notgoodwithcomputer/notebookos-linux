@@ -13,6 +13,15 @@ Validates the newly-wired reading font-size controls:
   * it clamps at the min and max bounds.
 """
 import inspect
+import os
+import tempfile
+
+# PIN NB_HOME BEFORE IMPORTING THE APP: unset, the app reads and writes the
+# caller's own ~/.config/notebook, and the single-instance guard lands on the
+# unscoped /tmp/nb-apps shared with any running app -- where
+# nbapp.claim_single_instance() os._exit(0)s this process with no output and
+# exit status 0, which reads as a pass while nothing was tested.
+os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="ebook-selftest-"))
 
 import gi
 gi.require_version("Gtk", "3.0")

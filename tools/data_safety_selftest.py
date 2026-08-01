@@ -8,7 +8,7 @@ not an inconvenience, it is permanent loss.  Everything below is written from
 that premise: an app that raises is annoying, an app that quietly starts from
 empty and then saves over the user's real file is unrecoverable.
 
-Four sections, run in order, one command:
+Five sections, run in order, one command:
 
   1. ATOMIC WRITER    nbapp.atomic_write_json under every hostile condition —
                       unserialisable payload, read-only directory, full disk,
@@ -38,6 +38,13 @@ Four sections, run in order, one command:
                       with no re-read means the last writer wins and everything
                       the other one added since it loaded is gone.
 
+  5. RECORD LOSS      section 3 asks what happens to a store the app cannot
+                      read; this asks what happens to one it CAN, when there is
+                      a lot in it.  Academics' loader ended `return out[:200]`,
+                      so a student with 260 assignments lost 60 of them to an
+                      open and a close -- nothing damaged, nothing clicked.
+                      Plant a lot of records, open and close twice, and count.
+
 Every case that touches disk runs in its OWN SUBPROCESS against a throwaway
 NB_HOME, which is both faithful (apps are separate processes on the guest) and
 safe (the caller's real home is never touched).  Subprocess isolation is also
@@ -51,7 +58,7 @@ Run as:
   python3 tools/data_safety_selftest.py
 
 Options:
-  --section N[,N...]   run only these sections (1-4)
+  --section N[,N...]   run only these sections (1-5)
   --quiet              only failures and the summary
 """
 import argparse
@@ -229,6 +236,7 @@ _NOT_USER_DATA = {
     "gbabuild.py",      # generated C + the .gba image, rebuilt from source
     "installer.py",     # writes the freshly-installed system, not $HOME
     "nbmediakeys.py",   # sysfs backlight
+    "nbaudio.py",       # generated ALSA routing (temp+fsync+replace), not $HOME
     "nbgame.py",        # debug log
     "xrootbg.py", "xflushd.py", "xflush.py", "xnudge.py",
 }
@@ -239,27 +247,86 @@ _NOT_USER_DATA = {
 _ALLOWED = [
     ("settings.py", "/etc/hostname", "system config, not user work"),
     ("finder.py", "origins", "trash put-back sidecar, rebuilt on next trash"),
-    ("finder.py", "/tmp/nb-app-active", "runtime flag in /tmp"),
+    ("finder.py", "nbapp.APP_FLAG", "runtime flag in /tmp"),
     ("finder.py", 'open(d, "wb")', "chunked copy into a NEW destination file"),
+    # Cover art pulled out of a music file and cached so playing a track does
+    # not decode it again. Temp + os.replace into $NB_HOME/.cache; the source
+    # of truth is the audio file itself, so losing it costs one re-read.
+    ("music.py", 'pb.savev(tmp', "extracted cover art cache, regenerable"),
+    # The flattened export goes to "<path>.new" and is moved into place, so a
+    # failed export never replaces the previous PNG with a partial one.
+    ("illustrator.py", "write_to_png(tmp)", "temp + os.replace of the export"),
+    # A fresh mkstemp scratch frame handed to ffmpeg, deleted after the export.
+    ("video.py", "surf.write_to_png(p)", "mkstemp scratch frame, never $HOME"),
     ("shell.py", "/tmp/nb-ready", "runtime flag in /tmp"),
+    ("media.py", "VIDEO_FULL_FLAG", "runtime flag in /tmp, holds this pid"),
     ("video.py", "_exp_err_file", "ffmpeg stderr scratch"),
     ("gbaemu.py", "_log_path()", "append-only emulator log"),
     ("accounting.py", "DAMAGED_FILE", "writes the quarantine copy itself"),
     ("accounting.py", "DOCS_DIR, name", "regenerable CSV export of live data"),
+    # First-run setup writes machine configuration, not documents. The shadow
+    # write is a temp + os.replace (the safe pattern this check exists to
+    # enforce); the other two are small system files that the installer writes
+    # the same way, and neither holds anything a person authored.
+    ("firstrun.py", "shadow_tmp", "temp + chmod 600 + os.replace of /etc/shadow"),
+    ("firstrun.py", "HOSTNAME_FILE", "system config, not user work"),
+    ("firstrun.py", "USER_NAME_FILE", "the display name, system config"),
+    ("firstrun.py", "XKB_CONF", "system config, not user work"),
 ]
 
 
+# Methods that create or truncate a file WITHOUT going through open().  This
+# check used to look for open(..., 'w') alone, so a module could overwrite
+# somebody's only copy through any of these and stay green -- the gap was found
+# when a raw open() here was rewritten as pb.savev() and the check did not
+# notice the write had moved.  Each takes its destination path as the first
+# argument.
+_PATH_WRITERS = ("savev", "save_to_callbackv", "write_to_png")
+
+
+def _buffer_names(tree):
+    """Names bound to an in-memory buffer (io.BytesIO()/StringIO()).
+
+    The _PATH_WRITERS methods take either a path OR a file-like object, and
+    rendering to a BytesIO to hand the bytes to a pixbuf loader is the common
+    idiom here. That touches no file at all, so it must not be reported as a
+    truncating write."""
+    names = set()
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)):
+            continue
+        f = n.value.func
+        who = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+        if who in ("BytesIO", "StringIO"):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    names.add(t.id)
+    return names
+
+
 def _write_calls(path):
-    """Yield (lineno, snippet) for every open(..., 'w'|'wb'|'w+') in `path`."""
+    """Yield (lineno, snippet) for every file-creating call in `path`.
+
+    That means open(..., 'w'|'wb'|'w+'|'a') AND the pixbuf/cairo methods in
+    _PATH_WRITERS, which truncate their destination just as thoroughly."""
     try:
         tree = ast.parse(open(path, encoding="utf-8").read())
     except SyntaxError as e:
         return [("SYNTAX", str(e))]
     src = open(path, encoding="utf-8").read().splitlines()
+    buffers = _buffer_names(tree)
     hits = []
     for n in ast.walk(tree):
-        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                and n.func.id == "open"):
+        if not isinstance(n, ast.Call):
+            continue
+        if isinstance(n.func, ast.Attribute) and n.func.attr in _PATH_WRITERS:
+            dest = n.args[0] if n.args else None
+            if isinstance(dest, ast.Name) and dest.id in buffers:
+                continue                      # renders to memory, not a file
+            line = src[n.lineno - 1].strip() if n.lineno <= len(src) else ""
+            hits.append((n.lineno, line))
+            continue
+        if not (isinstance(n.func, ast.Name) and n.func.id == "open"):
             continue
         mode = ""
         if len(n.args) > 1 and isinstance(n.args[1], ast.Constant):
@@ -334,13 +401,13 @@ def section_write_paths():
 # proves those apps open cleanly on a damaged file, which is all they owe.
 # What is listed below is the stuff that exists nowhere else on earth.
 STORES = [
-    ("academic", "academic.json",   "lecture notes"),
+    ("academics", "academics.json", "lecture notes, timetable and homework"),
     ("accounting", "accounting.json", "the ledger"),
     ("calendar", "calendar.json",   "every appointment"),
     ("contacts", "contacts.json",   "every person they know"),
     ("cookbook", "cookbook.json",   "their recipes"),
     ("ebook", "ebook.json",         "the library and reading positions"),
-    ("gbaide", "gbaide.json",       "a game project"),
+    ("gbasdk", "gbasdk.json",       "a game project"),
     ("journal", "journal.json",     "years of diary entries"),
     ("music", "music.json",         "hand-built playlists"),
     ("novel", "novel.json",         "the manuscript"),
@@ -349,6 +416,24 @@ STORES = [
     ("tasks", "tasks-app.json",     "the task list"),
     ("video", "video.json",         "the edit timeline"),
     ("writer", "writer.json",       "the document in progress"),
+    # These were only ever covered by config_resilience_selftest, which proves
+    # the window CONSTRUCTS on a bad store and nothing at all about whether the
+    # close-time save then wrote over it.  Construction is not survival: the
+    # 13-app data-loss bug of record passed a construct-only test the whole
+    # time.  Every store a person can put their own work into belongs here.
+    ("illustrator", "illustrator.json", "their drawings"),
+    ("maps", "maps.json",           "saved places"),
+    ("media", "media.json",         "playback positions"),
+    ("workout", "workout.json",     "the training log and streaks"),
+    ("mealplanner", "mealplanner.json", "the week's meal plan"),
+    ("language", "language.json",   "course progress, XP and streaks"),
+    ("widgetsettings", "widgets.json", "the desktop tile layout"),
+    ("finder", "finder.json",       "Finder places and view settings"),
+    ("settings", "settings.json",   "every system preference"),
+    ("terminal", "terminal.json",   "shell history"),
+    ("calculator", "calculator.json", "the calculation tape"),
+    ("g2048", "g2048.json",         "the game in progress and best score"),
+    ("gbaemu", "gbaemu.json",       "the ROM library and save slots"),
 ]
 
 # Three ways a store goes bad on a machine with one copy of everything: a
@@ -517,14 +602,218 @@ def section_shared_stores():
 
 
 # ==========================================================================
+#  Section 5 — a HEALTHY store must not lose records either
+# ==========================================================================
+# Section 3 asks what happens to a store the app cannot read.  This asks the
+# question nobody had asked: what happens to a store it CAN read, when there is
+# simply a lot in it.
+#
+# THE BUG THIS EXISTS FOR.  Academics' loader ended `return out[:200]`.  A
+# student with 260 assignments opened the app; the loader silently dropped 60 of
+# them and the close-time save wrote the surviving 200 straight over the store.
+# Nothing was damaged, nothing was clicked, and the app looked entirely normal.
+#
+# The .bak did not save them either, and that part generalises to every app: a
+# cap is applied at LOAD time, but the SAVE writes derived fields the loader
+# never reads back (Academics decorates each assignment with its "course"), so
+# the truncated store OUTWEIGHED the full one, _bak_would_shrink saw growth, and
+# the second open overwrote the last copy.  Two opens, two closes, gone.
+#
+# So: plant a lot of records, open and close TWICE, and count.  The fixture is
+# validated by the app's own model on the first open — if the app does not
+# report loading all N, the fixture is wrong and this fails loudly rather than
+# passing vacuously.
+N_RECORDS = 260          # comfortably past the 200-record cap that used to exist
+
+
+def _rec_academics(n):
+    return {"classes": [{"label": "Chem", "color": "#4A5E73", "room": "",
+                         "instructor": "", "meets": []}],
+            "lectures": [], "active": -1,
+            "homework": [{"title": "Assignment %03d" % i, "cls": 0,
+                          "due": "", "done": False, "note": ""}
+                         for i in range(n)]}
+
+
+def _rec_journal(n):
+    return {"active": 0,
+            "entries": [{"title": "Day %03d" % i, "text": "entry %d" % i}
+                        for i in range(n)]}
+
+
+def _rec_tasks(n):
+    return {"projects": [],
+            "tasks": [{"title": "Task %03d" % i, "done": False}
+                      for i in range(n)]}
+
+
+def _rec_accounting(n):
+    return {"opening": 0,
+            "tx": [{"date": "1 Jan", "desc": "Item %03d" % i, "amt": -1.0}
+                   for i in range(n)]}
+
+
+def _rec_cookbook(n):
+    return {"cats": ["All"], "active_cat": 0, "sel": 0,
+            "recipes": [{"title": "Recipe %03d" % i, "cat": None, "desc": "",
+                         "time": "", "makes": "", "effort": "", "ing": "",
+                         "steps": "", "photo": ""} for i in range(n)]}
+
+
+def _rec_contacts(n):
+    return {"people": [{"name": "Person %03d" % i, "role": "", "phone": "",
+                        "email": "", "address": "", "bday": "", "notes": ""}
+                       for i in range(n)]}
+
+
+def _rec_calendar(n):
+    return [{"id": "e%d" % i, "date": "2026-08-%02d" % ((i % 28) + 1),
+             "start": 9.0, "end": 10.0, "title": "Event %03d" % i,
+             "cal": "Personal"} for i in range(n)]
+
+
+def _rec_workout(n):
+    return {"goal": 0, "days": {}, "goals": {},
+            "exercises": [{"id": i, "name": "Lift %03d" % i, "sets": 3,
+                           "reps": 10} for i in range(n)]}
+
+
+# app -> (store file, fixture builder, how to count records in the app's model,
+#         how to count them in the parsed file)
+RECORD_STORES = {
+    "academics":  ("academics.json",  _rec_academics,
+                   lambda w: len(w.homework),  lambda d: len(d["homework"])),
+    "journal":    ("journal.json",    _rec_journal,
+                   lambda w: len(w.entries),   lambda d: len(d["entries"])),
+    "tasks":      ("tasks-app.json",  _rec_tasks,
+                   lambda w: len(w.tasks),     lambda d: len(d["tasks"])),
+    "accounting": ("accounting.json", _rec_accounting,
+                   lambda w: len(w.tx),        lambda d: len(d["tx"])),
+    "cookbook":   ("cookbook.json",   _rec_cookbook,
+                   lambda w: len(w.recipes),   lambda d: len(d["recipes"])),
+    "contacts":   ("contacts.json",   _rec_contacts,
+                   lambda w: len(w.people),    lambda d: len(d["people"])),
+    "calendar":   ("calendar.json",   _rec_calendar,
+                   lambda w: len(w.events),    lambda d: len(d)),
+    "workout":    ("workout.json",    _rec_workout,
+                   lambda w: len(w.data["exercises"]),
+                   lambda d: len(d["exercises"])),
+}
+
+
+def _worker_records(app, home, cfgname):
+    """--worker-records body. Open the app the way the Finder does, report how
+    many records its own model actually holds, then close it the way Esc does
+    (which is what triggers the save that used to do the damage)."""
+    os.environ["NB_HOME"] = home
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+    import inspect
+
+    mod = __import__(app)
+    cls = None
+    for _n, c in inspect.getmembers(mod, inspect.isclass):
+        if c.__module__ == mod.__name__ and issubclass(c, Gtk.Window):
+            cls = c
+            break
+    if cls is None:
+        print("NOCLASS")
+        return 2
+
+    def pump():
+        for _ in range(6):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+
+    win = cls()
+    pump()
+    loaded = RECORD_STORES[app][2](win)
+    win.destroy()
+    pump()
+    print("LOADED:%d" % loaded)
+    return 0
+
+
+def section_record_loss():
+    note("--- 5. a healthy store must not lose records -------------------")
+    root = tempfile.mkdtemp(prefix="ds_rec_")
+    try:
+        for app in sorted(RECORD_STORES):
+            cfgname, build, _model, count = RECORD_STORES[app]
+            home = os.path.join(root, app)
+            cfgdir = os.path.join(home, ".config", "notebook")
+            os.makedirs(cfgdir, exist_ok=True)
+            path = os.path.join(cfgdir, cfgname)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(build(N_RECORDS), fh)
+
+            loaded = []
+            failed = None
+            for _cycle in (1, 2):
+                r = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__),
+                     "--worker-records", app, home, cfgname],
+                    capture_output=True, text=True, timeout=180,
+                    env=dict(os.environ, NB_HOME=home))
+                out = [l for l in (r.stdout or "").splitlines()
+                       if l.startswith("LOADED:")]
+                if r.returncode != 0 or not out:
+                    err = (r.stderr or "").strip().splitlines()
+                    failed = "app did not launch: " + (err[-1][:90] if err else "?")
+                    break
+                loaded.append(int(out[0].split(":", 1)[1]))
+
+            nm = "records: %s keeps all %d on open+close" % (app, N_RECORDS)
+            if failed:
+                check(nm, False, failed)
+                continue
+            # The fixture has to actually reach the app, or this proves nothing.
+            if loaded[0] != N_RECORDS:
+                check(nm, False,
+                      "the app loaded %d of %d — records dropped AT LOAD"
+                      % (loaded[0], N_RECORDS))
+                continue
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    on_disk = count(json.load(fh))
+            except Exception as exc:
+                check(nm, False, "store unreadable after close: %s" % exc)
+                continue
+            check(nm, on_disk == N_RECORDS,
+                  "%d of %d left on disk after two open/close cycles"
+                  % (on_disk, N_RECORDS))
+
+            # ...and the one recovery copy must never be refreshed with less
+            # than it already holds. This is what actually turned Academics'
+            # truncation from recoverable into permanent.
+            bak = path + ".bak"
+            nmb = "records: %s's .bak is never refreshed with fewer" % app
+            if not os.path.exists(bak):
+                check(nmb, True, "no .bak written")
+                continue
+            try:
+                with open(bak, encoding="utf-8") as fh:
+                    in_bak = count(json.load(fh))
+            except Exception as exc:
+                check(nmb, False, ".bak unreadable: %s" % exc)
+                continue
+            check(nmb, in_bak >= N_RECORDS,
+                  ".bak holds %d, the user had %d" % (in_bak, N_RECORDS))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+# ==========================================================================
 SECTIONS = {1: section_atomic, 2: section_write_paths,
-            3: section_corrupt_store, 4: section_shared_stores}
+            3: section_corrupt_store, 4: section_shared_stores,
+            5: section_record_loss}
 
 
 def main():
     global _quiet
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("--section", default="1,2,3,4")
+    ap.add_argument("--section", default="1,2,3,4,5")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
     _quiet = args.quiet
@@ -547,4 +836,6 @@ def main():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--worker-store":
         raise SystemExit(_worker_open_close(*sys.argv[2:6]))
+    if len(sys.argv) > 1 and sys.argv[1] == "--worker-records":
+        raise SystemExit(_worker_records(*sys.argv[2:5]))
     raise SystemExit(main())

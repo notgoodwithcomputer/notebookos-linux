@@ -35,6 +35,8 @@ gi.require_version("PangoCairo", "1.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, Pango, PangoCairo, GdkPixbuf, GLib  # noqa: E402
 
+import base64
+import errno
 import os
 import sys
 import json
@@ -78,6 +80,159 @@ LEGACY_FAMILIES = {"Helvetica": "Nimbus Sans", "Helvetica Neue": "Nimbus Sans"}
 FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64]
 DEFAULT_FAMILY = "Liberation Serif"
 DEFAULT_SIZE = 12
+
+
+# ---- failure messages --------------------------------------------------------
+# A message about a failed save is read at the worst moment there is: the user
+# has just been told their work did not go where they put it, and the only
+# question they actually have is WHETHER THE WORK STILL EXISTS. So none of
+# these lead with the failure — they lead with what is still true, and they
+# never contain an errno, a Python repr or an absolute path. The status bar used
+# to read
+#     Save failed: [Errno 28] No space left on device: '/root/Documents/Letter.txt'
+# which answers nothing and reads as the machine breaking.
+#
+# The saving itself goes through nbapp.atomic_write_text / atomic_write_json —
+# temp file, fsync, rename — so "nothing on disk was changed" is a promise the
+# code actually keeps: a save that cannot finish leaves the previous file
+# exactly as it was, and the live document is still in the window.
+def _save_problem(exc):
+    """One calm sentence for a save that did not happen."""
+    err = getattr(exc, "errno", None)
+    if err == errno.ENOSPC:
+        return _t("Not enough space to save. Free up some space and try "
+                  "again. The document is still open.")
+    if err in (errno.EACCES, errno.EPERM):
+        return _t("This document could not be saved to that location. Try "
+                  "the Documents folder.")
+    if err == errno.EROFS:
+        return _t("That location cannot be written to. Try the Documents "
+                  "folder.")
+    return _t("The document could not be saved. The file on disk is "
+              "unchanged.")
+
+
+# ---- reading a document we did not write -------------------------------------
+# EVERY dict that reaches _deserialize / _apply_page_geometry goes through here
+# first. Two of them are not ours to trust: the session-recovery autosave and
+# any .writer file the writer picks in File > Open. Both are plain JSON under
+# the user's own home, so a half-finished write, a hand edit, a file copied off
+# a failing USB stick or another app's document can hand us valid JSON whose
+# FIELDS are the wrong type.
+#
+# THE BUG THIS EXISTS FOR (release blocker, found by driving the real window):
+# none of that was checked. `for s_off, e_off, name in doc["runs"]` raised
+# ValueError on a runs field that was a string or a dict; a body that was a
+# number raised TypeError inside set_text; a "page" that was a string raised
+# AttributeError inside _apply_page_geometry; an image record with no "off"
+# raised KeyError. All four ran inside Writer.__init__ with no guard, so the
+# WINDOW NEVER FINISHED BUILDING: eight of nine damaged writer.json shapes left
+# Writer dead on every launch, for good, on a machine with no shell to repair
+# it with. Down the same path, File > Open on a damaged .writer blanked the
+# buffer (set_text("") is the first thing _deserialize does) and then raised,
+# so the document that was on screen was gone and the autosave timer wrote the
+# blank over the recovery file.
+#
+# The rule here is SALVAGE, not reject: the body text is the user's actual
+# writing, so it is always recovered (coerced to text if it has to be), and only
+# the individual formatting records that make no sense are dropped.
+def _sane_page(page):
+    """A page dict with a usable size, orientation and four numeric margins."""
+    out = {"size": "Letter", "orientation": "portrait",
+           "margins": list(DEFAULT_MARGINS_IN)}
+    if not isinstance(page, dict):
+        return out
+    size = page.get("size")
+    if isinstance(size, str) and size in PAGE_SIZES:
+        out["size"] = size
+    if page.get("orientation") == "landscape":
+        out["orientation"] = "landscape"
+    m = page.get("margins")
+    if isinstance(m, (list, tuple)) and len(m) == 4:
+        vals = []
+        for v in m:
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                vals = None
+                break
+            # A negative or absurd margin is not a crash, but it does put the
+            # text off the sheet; keep it inside the paper.
+            vals.append(min(4.0, max(0.0, float(v))))
+        if vals:
+            out["margins"] = vals
+    return out
+
+
+def _sane_text(v):
+    """`v` as display text. A non-string field is shown rather than silently
+    dropped — it is still whatever the user (or a broken writer) put there."""
+    if isinstance(v, str):
+        return v
+    if v is None:
+        return ""
+    return str(v)
+
+
+def _sane_doc(doc):
+    """Normalise a decoded document so nothing downstream can raise on it.
+
+    Always returns a dict with a string body, a list of well-formed
+    [start, end, tag-name] runs, image/table records that carry an integer
+    offset, a usable page dict and string header/footer. Unknown extra keys are
+    passed through untouched (v1 back-compat reads `title`/`subtitle`)."""
+    if not isinstance(doc, dict):
+        doc = {}
+    out = dict(doc)
+    out["body"] = _sane_text(doc.get("body", ""))
+    runs = []
+    raw_runs = doc.get("runs")
+    if isinstance(raw_runs, (list, tuple)):
+        for r in raw_runs:
+            if isinstance(r, str) or not isinstance(r, (list, tuple)):
+                continue
+            if len(r) < 3 or not isinstance(r[2], str) or not r[2]:
+                continue
+            try:
+                s, e = int(r[0]), int(r[1])
+            except (TypeError, ValueError):
+                continue
+            runs.append([s, e, r[2]])
+    out["runs"] = runs
+    for key in ("images", "tables"):
+        recs = []
+        raw = doc.get(key)
+        if isinstance(raw, (list, tuple)):
+            for rec in raw:
+                if not isinstance(rec, dict):
+                    continue
+                try:
+                    off = int(rec.get("off"))
+                except (TypeError, ValueError):
+                    continue
+                rec = dict(rec, off=off)
+                if key == "images":
+                    rec["path"] = _sane_text(rec.get("path", ""))
+                recs.append(rec)
+        out[key] = recs
+    out["page"] = _sane_page(doc.get("page"))
+    out["header"] = _sane_text(doc.get("header", ""))
+    out["footer"] = _sane_text(doc.get("footer", ""))
+    out["page_numbers"] = bool(doc.get("page_numbers", False))
+    p = doc.get("path")
+    out["path"] = p if isinstance(p, str) and p else None
+    return out
+
+
+def _export_problem(exc):
+    """One calm sentence for a PDF export that did not happen. An export is a
+    copy, so the document itself is never at risk — say so."""
+    err = getattr(exc, "errno", None)
+    if err == errno.ENOSPC:
+        return _t("Not enough space to write the PDF. Free up some space "
+                  "and try again.")
+    if err in (errno.EACCES, errno.EPERM, errno.EROFS):
+        return _t("The PDF could not be written to that location. Try the "
+                  "Documents folder.")
+    return _t("The PDF could not be written. The document is unchanged.")
 
 # paragraph-style gallery: name -> (size_pt, weight_bold, italic, space_above,
 # space_below, is_quote)
@@ -133,6 +288,34 @@ def smart_replacement(prev_char, text):
 
 def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
+
+
+# ---- embedded pictures -------------------------------------------------------
+# A .writer document carries the picture ITSELF, base64 in the JSON, not a path
+# to it. A path is a promise about someone else's disk: delete the original, or
+# pull out the USB stick it came from, and the document silently came back with
+# an invisible object character where the photograph had been — including in
+# every autosave and every undo step, so nothing could get it back.
+def _b64_of(raw):
+    try:
+        return base64.b64encode(raw).decode("ascii")
+    except Exception:
+        return ""
+
+
+def _pixbuf_from_b64(b64):
+    """Decode an embedded picture. None (never an exception) if the data is
+    missing or damaged, so one bad image can never fail a whole document."""
+    if not b64:
+        return None
+    try:
+        raw = base64.b64decode(b64)
+        loader = GdkPixbuf.PixbufLoader()
+        loader.write(raw)
+        loader.close()
+        return loader.get_pixbuf()
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -357,13 +540,15 @@ class Writer(nbapp.AppWindow):
         self._history = []
         self._hi = -1
 
+        # _load_doc returns a _sane_doc, so every field below is already the
+        # type it claims to be (see _sane_doc: an unchecked one used to kill the
+        # constructor outright and leave Writer unlaunchable).
         doc = self._load_doc()
-        self._page = doc.get("page", {"size": "Letter", "orientation": "portrait",
-                                      "margins": list(DEFAULT_MARGINS_IN)})
-        self._header = doc.get("header", "")
-        self._footer = doc.get("footer", "")
-        self._page_numbers = bool(doc.get("page_numbers", False))
-        self._path = doc.get("path")
+        self._page = doc["page"]
+        self._header = doc["header"]
+        self._footer = doc["footer"]
+        self._page_numbers = doc["page_numbers"]
+        self._path = doc["path"]
 
         # ---- chrome: two toolbar rows, ruler, sheet, find bar, status --------
         self.content.pack_start(self._build_toolbar(), False, False, 0)
@@ -389,8 +574,7 @@ class Writer(nbapp.AppWindow):
         # say so, so Ctrl+S is an obvious thing to do.
         if self._path and doc.get("dirty"):
             self._file_dirty = True
-            self.save_chip.set_text(_t("Not saved to file"))
-            self.save_chip.get_style_context().add_class("dirty")
+            self._set_save_chip(_t("Not saved to file"), ok=False)
         self.connect("destroy", self._on_destroy)
 
         if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
@@ -698,6 +882,7 @@ class Writer(nbapp.AppWindow):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         bar.get_style_context().add_class("findbar")
         self.find_entry = Gtk.SearchEntry()
+        nbicons.style_search_entry(self.find_entry)
         self.find_entry.set_placeholder_text(_t("Find"))
         self.find_entry.set_width_chars(24)
         self.find_entry.connect("search-changed", lambda *_: self._do_find())
@@ -733,6 +918,7 @@ class Writer(nbapp.AppWindow):
         bar.pack_start(ra, False, False, 0)
         close = Gtk.Button()
         close.get_style_context().add_class("tbbtn")
+        close.set_tooltip_text(_t("Close Find"))
         # a drawn close glyph, not a font "✕" (U+2715 is absent from the shipped
         # Nimbus Sans and would render as a tofu box)
         close.set_image(Gtk.Image.new_from_pixbuf(
@@ -1192,7 +1378,7 @@ class Writer(nbapp.AppWindow):
             fd.set_style(Pango.Style.ITALIC)
             fd.set_size(int(DEFAULT_SIZE * Pango.SCALE))
             lay.set_font_description(fd)
-            lay.set_text(_t("Start typing — your document is kept as you write."),
+            lay.set_text(_t("Empty document"),
                          -1)
             cr.save()
             cr.set_source_rgb(0xA3 / 255.0, 0x9D / 255.0, 0x8F / 255.0)
@@ -1225,11 +1411,12 @@ class Writer(nbapp.AppWindow):
                 cr.stroke()
                 cr.set_dash([])
                 cr.set_source_rgba(0x6E / 255, 0x69 / 255, 0x5E / 255, 0.85)
-                cr.select_font_face("Liberation Sans", cairo.FONT_SLANT_NORMAL,
-                                    cairo.FONT_WEIGHT_NORMAL)
-                cr.set_font_size(9)
-                cr.move_to(alloc_w - 62, wy - 4)
-                cr.show_text("Page %d" % (page + 1))
+                # translated AND drawn through Pango: as a raw literal on the
+                # toy API this read "Page 2" in English in all seventeen
+                # languages, and would have been invisible in the five whose
+                # script Liberation Sans does not carry
+                self._page_label(cr, alloc_w - 62, wy - 4,
+                                 _t("Page %d") % (page + 1))
                 cr.restore()
             page += 1
             y += content_h
@@ -1237,6 +1424,17 @@ class Writer(nbapp.AppWindow):
         # list markers in the gutter
         self._draw_list_markers(view, cr, vy0, vy1)
         return False
+
+    @staticmethod
+    def _page_label(cr, x, y, text, size=9):
+        """One small label on the page canvas, drawn with its BASELINE at y."""
+        lay = PangoCairo.create_layout(cr)
+        fd = Pango.FontDescription("Liberation Sans")
+        fd.set_absolute_size(size * Pango.SCALE)
+        lay.set_font_description(fd)
+        lay.set_text(text, -1)
+        cr.move_to(x, y - lay.get_baseline() / Pango.SCALE)
+        PangoCairo.show_layout(cr, lay)
 
     def _draw_list_markers(self, view, cr, vy0, vy1):
         bt = self.buf.get_tag_table().lookup("list:bullet")
@@ -1369,7 +1567,8 @@ class Writer(nbapp.AppWindow):
             box.pack_start(entry, False, False, 0)
         dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
         ok = dlg.add_button("Insert", Gtk.ResponseType.OK)
-        ok.get_style_context().add_class("tbbtn")
+        # The action, not a toolbar control — same fix as Page setup's Apply.
+        ok.get_style_context().add_class("suggested-action")
         ue.connect("activate", lambda *_: dlg.response(Gtk.ResponseType.OK))
         dlg.show_all()
         r = dlg.run()
@@ -1383,7 +1582,13 @@ class Writer(nbapp.AppWindow):
             patterns=("*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp"))
         if not path:
             return
+        # Read the FILE, not just a pixbuf: the bytes are what gets embedded in
+        # the document (see _serialize). A .writer that only remembered a path
+        # lost every picture the moment the original moved — and inserting from
+        # a USB stick, which this OS invites, guarantees the original goes away.
         try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
             pb = GdkPixbuf.Pixbuf.new_from_file(path)
         except Exception:
             self._flash("Couldn't load that image.")
@@ -1396,7 +1601,8 @@ class Writer(nbapp.AppWindow):
         self._checkpoint()
         it = self.buf.get_iter_at_mark(self.buf.get_insert())
         self.buf.insert_pixbuf(it, pb)
-        self._img_meta[pb] = {"path": path, "ow": ow}
+        self._img_meta[pb] = {"path": path, "ow": ow,
+                              "b64": _b64_of(raw)}
         self._mark_dirty()
 
     def _insert_table(self, data=None):
@@ -1512,6 +1718,17 @@ class Writer(nbapp.AppWindow):
         if not needle:
             return
         repl = self.repl_entry.get_text()
+        # Recompute against the LIVE buffer before touching anything.
+        # _find_matches is a list of character offsets captured when the find
+        # last ran, and NOTHING re-runs it when the document changes: with the
+        # find bar open, typing a word into the page (or one press of Replace)
+        # moves every offset after the edit, and replacing at the stale ones cut
+        # the prose apart mid-word in places the writer had not searched for.
+        # It is also what makes the button work on the first press —
+        # SearchEntry's "search-changed" is delayed, so a needle typed and
+        # immediately replaced had no matches yet and this reported
+        # "Replaced 0." while doing nothing at all.
+        self._do_find()
         self._checkpoint()
         # work back-to-front so offsets stay valid
         matches = list(self._find_matches)
@@ -1640,8 +1857,13 @@ class Writer(nbapp.AppWindow):
                 pb = it.get_pixbuf()
                 if pb is not None and pb in self._img_meta:
                     meta = self._img_meta[pb]
-                    images.append({"off": i, "path": meta["path"],
-                                   "ow": meta["ow"]})
+                    # "data" carries the picture itself. It is the SAME cached
+                    # string object every time, so an undo snapshot costs a
+                    # pointer rather than another copy of the image.
+                    rec = {"off": i, "path": meta["path"], "ow": meta["ow"]}
+                    if meta.get("b64"):
+                        rec["data"] = meta["b64"]
+                    images.append(rec)
                 anch = it.get_child_anchor()
                 if anch is not None and anch in self._tables:
                     tables.append({"off": i,
@@ -1653,34 +1875,64 @@ class Writer(nbapp.AppWindow):
                 "path": self._path, "dirty": self._file_dirty}
 
     def _deserialize(self, doc):
+        """Rebuild the buffer from a document dict.
+
+        THE ONE CHOKE POINT for every document that reaches the buffer — the
+        autosave read at launch, File > Open, and an undo snapshot — so the
+        normalising happens HERE and nowhere else. It must never raise: the
+        first thing it does is empty the buffer, so a mid-way exception leaves
+        the writer looking at a blank page with the real text nowhere on screen,
+        and the autosave then writes that blank page to disk."""
+        doc = _sane_doc(doc)
         was_loading = self._loading
         self._loading = True
         try:
             self.buf.set_text("")
             self._img_meta.clear()
             self._tables.clear()
-            # v1 back-compat (title/subtitle/body plain)
-            if doc.get("version") != 2 and "body" in doc and "runs" not in doc:
+            # v1 back-compat (title/subtitle/body plain). Tested on the CONTENT
+            # rather than on `"runs" not in doc`, which _sane_doc always fills
+            # in; a v1 document has no runs and carries its heading separately.
+            if doc.get("version") != 2 and not doc["runs"] and (
+                    doc.get("title") or doc.get("subtitle")):
                 head = ""
                 if doc.get("title"):
-                    head += doc["title"] + "\n"
+                    head += _sane_text(doc["title"]) + "\n"
                 if doc.get("subtitle"):
-                    head += doc["subtitle"] + "\n"
-                self.buf.set_text(head + doc.get("body", ""))
+                    head += _sane_text(doc["subtitle"]) + "\n"
+                self.buf.set_text(head + doc["body"])
                 return
-            body = doc.get("body", "")
-            self.buf.set_text(body)
-            for s_off, e_off, name in doc.get("runs", []):
-                s = self.buf.get_iter_at_offset(s_off)
-                e = self.buf.get_iter_at_offset(e_off)
-                self.buf.apply_tag(self._tag(name)
-                                   if self.buf.get_tag_table().lookup(name) is None
-                                   else self.buf.get_tag_table().lookup(name), s, e)
+            self.buf.set_text(doc["body"])
+            n = self.buf.get_char_count()
+            table = self.buf.get_tag_table()
+            for s_off, e_off, name in doc["runs"]:
+                # Offsets from a file are clamped to the text: get_iter_at_offset
+                # already pins them, but a reversed pair would apply the tag
+                # backwards, and a tag NAME we cannot build (say "size:abc")
+                # must cost only itself.
+                s_off = _clamp(s_off, 0, n)
+                e_off = _clamp(e_off, 0, n)
+                if e_off <= s_off:
+                    continue
+                try:
+                    tag = table.lookup(name) or self._tag(name)
+                except Exception:
+                    continue
+                if tag is None:
+                    continue
+                self.buf.apply_tag(tag, self.buf.get_iter_at_offset(s_off),
+                                   self.buf.get_iter_at_offset(e_off))
             # replace ￼ placeholders (ascending; length-neutral)
-            for img in sorted(doc.get("images", []), key=lambda d: d["off"]):
-                self._reinsert_image(img)
-            for tb in sorted(doc.get("tables", []), key=lambda d: d["off"]):
-                self._reinsert_table(tb)
+            for img in sorted(doc["images"], key=lambda d: d["off"]):
+                try:
+                    self._reinsert_image(img)
+                except Exception:
+                    continue
+            for tb in sorted(doc["tables"], key=lambda d: d["off"]):
+                try:
+                    self._reinsert_table(tb)
+                except Exception:
+                    continue
         finally:
             self._loading = was_loading
         self._update_wordcount()
@@ -1690,9 +1942,24 @@ class Writer(nbapp.AppWindow):
         it = self.buf.get_iter_at_offset(off)
         if it.get_char() != OBJ:
             return
-        try:
-            pb = GdkPixbuf.Pixbuf.new_from_file(img["path"])
-        except Exception:
+        # The embedded bytes come first; the path is only the fallback that
+        # keeps documents written by the old path-only format readable.
+        b64 = img.get("data") or ""
+        pb = _pixbuf_from_b64(b64) if b64 else None
+        if pb is None:
+            b64 = ""
+            try:
+                with open(img["path"], "rb") as fh:
+                    raw = fh.read()
+                pb = GdkPixbuf.Pixbuf.new_from_file(img["path"])
+                b64 = _b64_of(raw)     # embed it from now on
+            except Exception:
+                pb = None
+        if pb is None:
+            # Neither the bytes nor the original file: leave a visible
+            # placeholder instead of an invisible ￼ nobody can select or
+            # delete, and say so once.
+            self._img_placeholder(off)
             return
         ow = img.get("ow", pb.get_width())
         if pb.get_width() > IMG_MAX_W:
@@ -1703,7 +1970,25 @@ class Writer(nbapp.AppWindow):
         self.buf.delete(it, e)
         it = self.buf.get_iter_at_offset(off)
         self.buf.insert_pixbuf(it, pb)
-        self._img_meta[pb] = {"path": img["path"], "ow": ow}
+        self._img_meta[pb] = {"path": img.get("path", ""), "ow": ow,
+                              "b64": b64}
+
+    def _img_placeholder(self, off):
+        """Replace the object character at `off` with a small grey card, so a
+        picture that could not be restored is something the writer can see and
+        delete rather than an invisible character."""
+        try:
+            pb = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8,
+                                      160, 96)
+            pb.fill(0xE4DFD2FF)
+            it = self.buf.get_iter_at_offset(off)
+            e = it.copy(); e.forward_char()
+            self.buf.delete(it, e)
+            it = self.buf.get_iter_at_offset(off)
+            self.buf.insert_pixbuf(it, pb)
+            self._img_meta[pb] = {"path": "", "ow": 160, "b64": ""}
+        except Exception:
+            pass
 
     def _reinsert_table(self, tb):
         off = tb["off"]
@@ -1820,10 +2105,20 @@ class Writer(nbapp.AppWindow):
         grid = Gtk.Grid(row_spacing=10, column_spacing=10)
         box.pack_start(grid, False, False, 0)
 
+        # The rows are appended in PAGE_SIZES order and read back by INDEX
+        # through this list — never by get_active_text(). nbi18n translates
+        # what a ComboBoxText shows ("Letter" is "Carta" in Spanish), so the
+        # visible text came back translated and was stored as the page size:
+        # the geometry silently fell back to Letter, and the NEXT open of this
+        # dialog died on list(PAGE_SIZES).index("Carta"). Same defect class as
+        # the style/spacing combos above.
+        size_keys = list(PAGE_SIZES)
         size_c = Gtk.ComboBoxText()
-        for s in PAGE_SIZES:
+        for s in size_keys:
             size_c.append_text(s)
-        size_c.set_active(list(PAGE_SIZES).index(self._page.get("size", "Letter")))
+        cur_size = self._page.get("size", "Letter")
+        size_c.set_active(size_keys.index(cur_size) if cur_size in size_keys
+                          else size_keys.index("Letter"))
         orient_c = Gtk.ComboBoxText()
         orient_c.append_text("Portrait"); orient_c.append_text("Landscape")
         orient_c.set_active(1 if self._page.get("orientation") == "landscape" else 0)
@@ -1870,12 +2165,15 @@ class Writer(nbapp.AppWindow):
 
         dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
         ok = dlg.add_button("Apply", Gtk.ResponseType.OK)
-        ok.get_style_context().add_class("tbbtn")
+        # The action, not a toolbar control: .tbbtn made Apply identical to
+        # Cancel. suggested-action is the shared primary treatment.
+        ok.get_style_context().add_class("suggested-action")
         dlg.show_all()
         r = dlg.run()
         if r == Gtk.ResponseType.OK:
+            si = size_c.get_active()
             self._page = {
-                "size": size_c.get_active_text(),
+                "size": size_keys[si] if 0 <= si < len(size_keys) else cur_size,
                 "orientation": "landscape" if orient_c.get_active() else "portrait",
                 "margins": [round(sp.get_value(), 2) for sp in spins]}
             self._header = he.get_text()
@@ -1888,15 +2186,39 @@ class Writer(nbapp.AppWindow):
     # =====================================================================
     #  Persistence + files
     # =====================================================================
+    @staticmethod
+    def _is_writer_store(d):
+        """Whether `d` is recognisably the file this app writes.
+
+        _serialize ALWAYS emits a string "body" and a list "runs" — a document
+        with no text at all still emits "" and [] — so this cannot misfire on
+        our own store, including a brand-new empty one. Anything else is a file
+        we did not write (or one a failed write left half-formed), and
+        _load_doc moves it aside rather than saving over it."""
+        return (isinstance(d, dict) and isinstance(d.get("body"), str)
+                and isinstance(d.get("runs"), list))
+
     def _load_doc(self):
+        """The session-recovery document, normalised by _sane_doc so no field can
+        raise on the way into the constructor.
+
+        A store that parses but is not this app's shape is QUARANTINED here,
+        before the first autosave can replace it. See
+        nbapp.quarantine_unrecognized for why the .bak alone loses that file on
+        the second open."""
         try:
             with open(DOC_FILE) as fh:
                 d = json.load(fh)
+            if self._is_writer_store(d):
+                return _sane_doc(d)
+            # Not ours. Salvage whatever text is in there onto the page anyway —
+            # it is still the user's writing — but keep the original bytes.
+            nbapp.quarantine_unrecognized(DOC_FILE)
             if isinstance(d, dict):
-                return d
+                return _sane_doc(d)
         except (OSError, ValueError):
             pass
-        return {"version": 2, "body": "", "runs": []}
+        return _sane_doc({"version": 2, "body": "", "runs": []})
 
     def _save_autosave(self):
         try:
@@ -1908,8 +2230,7 @@ class Writer(nbapp.AppWindow):
         if self._loading:
             return
         self._file_dirty = True
-        self.save_chip.set_text(_t("Editing"))
-        self.save_chip.get_style_context().add_class("dirty")
+        self._set_save_chip(_t("Editing"), ok=False)
         if self._save_timer:
             GLib.source_remove(self._save_timer)
         self._save_timer = GLib.timeout_add(900, self._autosave_fire)
@@ -1932,13 +2253,36 @@ class Writer(nbapp.AppWindow):
         text = self.buf.get_text(self.buf.get_start_iter(),
                                  self.buf.get_end_iter(), False)
         words = len(text.split())
-        chars = len(text)
-        self.wc_label.set_text("%d word%s · %d chars" %
-                               (words, "" if words == 1 else "s", chars))
+        # Words only. The character half read "1 chars" on a one-letter
+        # document, and "chars" is an abbreviation that appears nowhere else in
+        # the OS — Academics, Novel and Screenplay all show a word count and
+        # stop there.
+        self.wc_label.set_text(_t("%d word%s") %
+                               (words, "" if words == 1 else "s"))
 
-    def _flash(self, msg):
+    # The save indicator, in the one form the rest of the OS already uses: a
+    # coloured dot and a time (Journal, Novel, Cookbook, Screenplay all read
+    # "● Saved 14:32"). Writer alone showed a bare word with no dot and no time,
+    # so "Saved" gave no clue whether it meant a moment ago or an hour ago —
+    # which is the only thing that word is there to tell you.
+    _CHIP_OK = "#7FA98C"
+    _CHIP_BAD = "#C8341E"
+
+    def _set_save_chip(self, text, ok):
+        self.save_chip.set_markup(
+            '<span foreground="%s">● </span>%s'
+            % (self._CHIP_OK if ok else self._CHIP_BAD,
+               GLib.markup_escape_text(text)))
+        ctx = self.save_chip.get_style_context()
+        (ctx.remove_class if ok else ctx.add_class)("dirty")
+
+    def _clear_save_chip(self):
+        self.save_chip.set_text("")
+        self.save_chip.get_style_context().remove_class("dirty")
+
+    def _flash(self, msg, secs=2.6):
         self.status.set_text(msg)
-        GLib.timeout_add(2600, self._update_status_return)
+        GLib.timeout_add(int(secs * 1000), self._update_status_return)
 
     def _update_status_return(self):
         self._update_status()
@@ -1964,8 +2308,8 @@ class Writer(nbapp.AppWindow):
         head.get_style_context().add_class("swatchtitle")
         box.pack_start(head, False, False, 0)
         msg = Gtk.Label(
-            label=(_t("“%s” has changes you have not saved. They will be "
-                      "lost.") % name) if name else
+            label=(_t("“%s” has unsaved changes. They will be lost.")
+                   % name) if name else
             _t("This document has never been saved. Its text will be lost."),
             xalign=0)
         msg.set_line_wrap(True)
@@ -1996,7 +2340,7 @@ class Writer(nbapp.AppWindow):
         self._file_dirty = False
         self._history = []; self._hi = -1
         self._push_history()
-        self.save_chip.set_text("")
+        self._clear_save_chip()
         self._update_status(); self._update_wordcount()
 
     def _file_open(self):
@@ -2027,17 +2371,25 @@ class Writer(nbapp.AppWindow):
                 doc = {"version": 2, "body": raw, "runs": []}
         else:
             doc = {"version": 2, "body": raw, "runs": []}
-        self._page = doc.get("page", self._page)
-        self._header = doc.get("header", "")
-        self._footer = doc.get("footer", "")
-        self._page_numbers = bool(doc.get("page_numbers", False))
+        # Normalised BEFORE anything on screen changes: a .writer whose fields
+        # are the wrong type used to blank the buffer and then raise, losing the
+        # open document as well as failing to load the chosen one.
+        had_page = isinstance(doc.get("page"), dict)
+        doc = _sane_doc(doc)
+        # A plain .txt/.md carries no page setup, so the sheet the writer has
+        # already set up is left alone rather than reset to the default.
+        if had_page:
+            self._page = doc["page"]
+        self._header = doc["header"]
+        self._footer = doc["footer"]
+        self._page_numbers = doc["page_numbers"]
         self._deserialize(doc)
         self._apply_page_geometry()
         self._path = path
         self._file_dirty = False
         self._history = []; self._hi = -1
         self._push_history()
-        self.save_chip.set_text("")
+        self._clear_save_chip()
         self._update_status(); self._update_wordcount(); self._sync_toolbar()
 
     def _file_save(self):
@@ -2053,7 +2405,71 @@ class Writer(nbapp.AppWindow):
         if path:
             self._write_file(path)
 
+    def _plain_text_losses(self):
+        """What a .txt/.md write would throw away, as a list of counted phrases
+        ("3 pictures"). Empty when the document is already plain text."""
+        doc = self._serialize()
+        bits = []
+        n = len(doc.get("runs") or [])
+        if n:
+            bits.append(_t("%d formatting run%s") % (n, "" if n == 1 else "s"))
+        n = len(doc.get("tables") or [])
+        if n:
+            bits.append(_t("%d table%s") % (n, "" if n == 1 else "s"))
+        n = len(doc.get("images") or [])
+        if n:
+            bits.append(_t("%d picture%s") % (n, "" if n == 1 else "s"))
+        return bits
+
+    def _confirm_plain_text(self, path):
+        """Ask before writing this document to a plain-text file that cannot
+        hold its formatting.
+
+        .txt and .md sit in the Save As picker as equal choices, so a writer
+        could pick one, read the same "Saved 19:43" a lossless save gives, and
+        only discover months later that the bold, the tables and the pictures
+        had been dropped on the way to disk. Novel and Screenplay both guard
+        this; Writer said nothing. Returns True when it is safe to write."""
+        losses = self._plain_text_losses()
+        if not losses:
+            return True                # nothing to lose: no card, no friction
+        name = os.path.basename(path)
+        if len(losses) == 1:
+            what = losses[0]
+        else:
+            what = _t(", ").join(losses[:-1]) + _t(" and ") + losses[-1]
+        dlg = Gtk.Dialog(title="Save as plain text?", transient_for=self,
+                         modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("nbapp")
+        box = dlg.get_content_area()
+        box.get_style_context().add_class("swatchbox")
+        head = Gtk.Label(label=_t("Save as plain text?"), xalign=0)
+        head.get_style_context().add_class("swatchtitle")
+        box.pack_start(head, False, False, 0)
+        msg = Gtk.Label(
+            label=_t("“%s” is a plain text file. The %s in this document "
+                     "will not be saved. Save as a Writer document to keep "
+                     "them.") % (name, what),
+            xalign=0)
+        msg.set_line_wrap(True)
+        msg.set_width_chars(38)
+        msg.set_max_width_chars(40)
+        msg.get_style_context().add_class("dlgmsg")
+        box.pack_start(msg, False, False, 0)
+        cancel = dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        cancel.get_style_context().add_class("tbbtn")
+        ok = dlg.add_button(_t("Save as Text"), Gtk.ResponseType.OK)
+        ok.get_style_context().add_class("dangerbtn")
+        dlg.show_all()
+        cancel.grab_focus()      # a stray Return must never drop the formatting
+        r = dlg.run()
+        dlg.destroy()
+        return r == Gtk.ResponseType.OK
+
     def _write_file(self, path):
+        if not path.endswith(".writer") and not self._confirm_plain_text(path):
+            return
         try:
             if path.endswith(".writer"):
                 doc = self._serialize()
@@ -2072,12 +2488,20 @@ class Writer(nbapp.AppWindow):
                 # one, never a ruined one.
                 nbapp.atomic_write_text(path, text)
         except OSError as e:
-            self._flash("Save failed: %s" % e)
+            self._flash(_save_problem(e), secs=9)
+            self._set_save_chip(_t("Not saved"), ok=False)
             return
         self._path = path
         self._file_dirty = False
-        self.save_chip.set_text(_t("Saved"))
-        self.save_chip.get_style_context().remove_class("dirty")
+        # Name the shape that reached the disk. "Saved 19:43" on a .txt read
+        # exactly like a lossless save, which is how the dropped formatting
+        # stayed invisible.
+        if path.endswith(".writer"):
+            self._set_save_chip(_t("Saved %s") % time.strftime("%H:%M"),
+                                ok=True)
+        else:
+            self._set_save_chip(_t("Saved as text %s") % time.strftime("%H:%M"),
+                                ok=True)
         self._update_status()
         self._save_autosave()
 
@@ -2267,15 +2691,24 @@ class Writer(nbapp.AppWindow):
             x = left + (indent * PT_PER_IN / PX_PER_IN)
             avail_w = content_w - (indent * PT_PER_IN / PX_PER_IN)
             if obj is not None:
+                # Objects used to be drawn at the current y and only THEN
+                # checked against the page bottom, so anything crossing the
+                # boundary was cut off by the edge of the paper and the rest
+                # of it never appeared anywhere. Text has always broken
+                # correctly (below); now objects do too — a picture moves
+                # whole to the next sheet, a table continues row by row.
+                bottom = top + content_h
                 kind, ref = obj
                 if kind == "image":
-                    h = self._pdf_image(cr, ref, x, state["y"], avail_w)
+                    h = self._pdf_image_h(ref, avail_w, content_h)
+                    if state["y"] + h > bottom and state["y"] > top:
+                        new_page()
+                    self._pdf_image(cr, ref, x, state["y"], avail_w, content_h)
                     state["y"] += h + 6
                 else:
-                    h = self._pdf_table(cr, ref, x, state["y"], avail_w)
-                    state["y"] += h + 6
-                if state["y"] > top + content_h:
-                    new_page()
+                    self._pdf_table(cr, ref, x, avail_w, state, top, bottom,
+                                    new_page)
+                    state["y"] += 6
                 continue
             layout = PangoCairo.create_layout(cr)
             layout.set_width(int(avail_w * Pango.SCALE))
@@ -2325,30 +2758,64 @@ class Writer(nbapp.AppWindow):
         attrs.filter(keep)
         return out
 
+    def _pdf_show(self, cr, x, y, text, size=9):
+        """Draw one line of PDF furniture with its BASELINE at y.
+
+        Through Pango, never cr.show_text: the header and the footer are text
+        the AUTHOR typed, and cairo's toy API binds one face with no
+        per-character fallback. Liberation Sans carries no CJK, no Devanagari
+        and no Hebrew, so a header typed in any of those printed as .notdef —
+        invisible, not even a box, with the rest of the page correct. PDF user
+        units are points, so Pango's resolution is pinned to 72dpi and a size
+        of N here means the same N cr.set_font_size(N) meant."""
+        lay = PangoCairo.create_layout(cr)
+        PangoCairo.context_set_resolution(lay.get_context(), 72.0)
+        fd = Pango.FontDescription()
+        fd.set_family("Liberation Sans")
+        fd.set_size(int(size * Pango.SCALE))
+        lay.set_font_description(fd)
+        lay.set_text(text, -1)
+        cr.move_to(x, y - lay.get_baseline() / Pango.SCALE)
+        PangoCairo.show_layout(cr, lay)
+
     def _pdf_furniture(self, cr, page, PW, PH, left, top, content_w, mb_pt):
         cr.save()
         cr.set_source_rgb(0x6E / 255, 0x69 / 255, 0x5E / 255)
-        cr.select_font_face("Liberation Sans", cairo.FONT_SLANT_NORMAL,
-                            cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(9)
         if self._header:
-            cr.move_to(left, top - 14)
-            cr.show_text(self._expand_tokens(self._header, page))
+            self._pdf_show(cr, left, top - 14,
+                           self._expand_tokens(self._header, page))
         foot = self._footer or ""
         if self._page_numbers:
-            foot = (foot + "     Page {page}").strip()
+            # "Page %d" is already carried by every catalogue, and as a whole
+            # string it puts the number where each language puts it; the old
+            # raw "Page {page}" printed English into all seventeen.
+            foot = (foot + "     " + (_t("Page %d") % page)).strip()
         if foot:
-            cr.move_to(left, PH - mb_pt + 22)
-            cr.show_text(self._expand_tokens(foot, page))
+            self._pdf_show(cr, left, PH - mb_pt + 22,
+                           self._expand_tokens(foot, page))
         cr.restore()
 
     def _expand_tokens(self, s, page):
         return (s.replace("{page}", str(page)).replace("{pages}", str(page))
                 .replace("{title}", self._doc_title()))
 
-    def _pdf_image(self, cr, pb, x, y, avail_w):
+    @staticmethod
+    def _pdf_image_scale(pb, avail_w, max_h=None):
+        """Print scale for a picture: never wider than the text column and,
+        when a page height is given, never taller than one whole page — an
+        image taller than the sheet can never be shown by paginating."""
         w = pb.get_width(); h = pb.get_height()
         scale = min(1.0, avail_w / float(w)) if w else 1.0
+        if max_h and h and h * scale > max_h:
+            scale = max_h / float(h)
+        return scale
+
+    def _pdf_image_h(self, pb, avail_w, max_h=None):
+        return pb.get_height() * self._pdf_image_scale(pb, avail_w, max_h)
+
+    def _pdf_image(self, cr, pb, x, y, avail_w, max_h=None):
+        w = pb.get_width(); h = pb.get_height()
+        scale = self._pdf_image_scale(pb, avail_w, max_h)
         dw, dh = w * scale, h * scale
         cr.save()
         cr.translate(x, y)
@@ -2358,16 +2825,18 @@ class Writer(nbapp.AppWindow):
         cr.restore()
         return dh
 
-    def _pdf_table(self, cr, tbl, x, y, avail_w):
+    def _pdf_table(self, cr, tbl, x, avail_w, state, top, bottom, new_page):
+        """Draw a table, breaking BETWEEN rows whenever the next one would not
+        fit on the sheet. state["y"] is left just below the last row drawn.
+
+        A table used to be drawn in one go from wherever the cursor happened
+        to be, so a 12-row table starting near the foot of a page simply lost
+        rows 8-12 off the bottom of the paper."""
         data = tbl.serialize()
         if not data:
-            return 0
+            return
         cols = max(len(r) for r in data)
         cw = avail_w / cols
-        cr.save()
-        cr.set_source_rgb(0x26 / 255, 0x24 / 255, 0x1F / 255)
-        cr.set_line_width(0.6)
-        ry = y
         for row in data:
             rh = 18
             layouts = []
@@ -2379,6 +2848,12 @@ class Writer(nbapp.AppWindow):
                 lay.set_text(txt, -1)
                 layouts.append(lay)
                 rh = max(rh, lay.get_pixel_size()[1] + 8)
+            if state["y"] + rh > bottom and state["y"] > top:
+                new_page()
+            ry = state["y"]
+            cr.save()
+            cr.set_source_rgb(0x26 / 255, 0x24 / 255, 0x1F / 255)
+            cr.set_line_width(0.6)
             for c in range(cols):
                 cx = x + c * cw
                 cr.rectangle(cx, ry, cw, rh)
@@ -2387,9 +2862,8 @@ class Writer(nbapp.AppWindow):
                 cr.move_to(cx + 4, ry + 4)
                 PangoCairo.show_layout(cr, layouts[c])
                 cr.restore()
-            ry += rh
-        cr.restore()
-        return ry - y
+            cr.restore()
+            state["y"] = ry + rh
 
     def _export_pdf(self):
         path = nbpicker.save_file(
@@ -2400,16 +2874,23 @@ class Writer(nbapp.AppWindow):
             return
         try:
             self._render_pdf(path)
-            self._flash("Exported %s" % os.path.basename(path))
+            self._flash(_t("Exported %s") % os.path.basename(path))
         except Exception as e:
-            self._flash("Export failed: %s" % e)
+            self._flash(_export_problem(e), secs=9)
 
     def _print_document(self):
         try:
+            # Spool at the size Page Setup chose. Without this every job went
+            # out as Letter, so an A4 or Legal document was scaled by CUPS to
+            # fit letter paper and none of its margins survived.
             nbprint.print_document(self, self._render_pdf,
-                                   job_name=self._doc_title() or "Document")
-        except Exception as e:
-            self._flash("Print failed: %s" % e)
+                                   job_name=self._doc_title() or "Document",
+                                   media=self._page.get("size", "Letter"))
+        except Exception:
+            # Nothing has left the machine and nothing has been altered — the
+            # only useful thing to say is that, not the exception's text.
+            self._flash(_t("The document could not be sent to the printer."),
+                        secs=9)
 
     # =====================================================================
     #  Menus + keys
@@ -2430,15 +2911,27 @@ class Writer(nbapp.AppWindow):
                 ("Close    Esc", self.close),
             ]
         if name == "Edit":
+            # Undo/Redo grey out with nothing to take back, as they do in every
+            # other editor in the OS — they used to stay live and silently do
+            # nothing, which teaches the reader the command is broken rather
+            # than that the history is empty. A pending typing checkpoint still
+            # counts as undoable: _undo flushes it before stepping back, so the
+            # first sentence typed into a fresh document IS reversible.
+            can_undo = self._hi > 0 or bool(self._undo_timer)
+            can_redo = self._hi < len(self._history) - 1
             return [
-                ("Undo    Ctrl+Z", self._undo),
-                ("Redo    Ctrl+Shift+Z", self._redo),
+                ("Undo    Ctrl+Z", self._undo if can_undo else None),
+                ("Redo    Ctrl+Shift+Z", self._redo if can_redo else None),
                 nbapp.SEP,
                 ("Cut    Ctrl+X", lambda: self._clip("cut")),
                 ("Copy    Ctrl+C", lambda: self._clip("copy")),
                 ("Paste    Ctrl+V", lambda: self._clip("paste")),
                 nbapp.SEP,
-                ("Find & Replace…    Ctrl+F", lambda: self._toggle_find(True)),
+                # Find & Replace is NOT listed here. It used to be in both Edit
+                # and View, under two different labels, one of them carrying an
+                # ellipsis for what is an inline bar rather than a dialog. No
+                # other app in the OS puts Find in two menus, and the two apps
+                # closest to this one (Novel, Screenplay) both keep it in View.
                 ("Select All    Ctrl+A", self._select_all),
             ]
         if name == "Format":
@@ -2475,8 +2968,12 @@ class Writer(nbapp.AppWindow):
                 ("Delete Column", lambda: self._table_op("del_col")),
             ]
         if name == "View":
+            # Same shape as Novel's and Screenplay's View menus: find first,
+            # then a rule, then Focus Editor. No ellipsis — the find bar slides
+            # in under the toolbar, it is not a window.
             return [
                 ("Find & Replace    Ctrl+F", lambda: self._toggle_find(True)),
+                nbapp.SEP,
                 ("Focus Editor", lambda: self.body.grab_focus()),
             ]
         return super().menu_items(name)
@@ -2586,15 +3083,21 @@ class Writer(nbapp.AppWindow):
         .findbar entry, .findinput { background: #FCFBF8; border: 1px solid #C9C4B6;
                    border-radius: 2px; box-shadow: none; color: #1A1916; }
         .findcount { color: #6E695E; font-size: 12px; }
-        .statusbar { background: #F4F2EC; border-top: 1px solid #D8D2C4;
-                     padding: 5px 16px; }
-        .statuslabel { color: #6E695E; font-size: 12.5px;
+        /* .statusbar is Papertone's - see the theme. This app had its own
+           background, hairline and text size; there is nothing about a word
+           count that justifies a different strip from every other app. */
+        .statuslabel { color: #6E695E; font-size: 12px;
                        font-family: "Nimbus Sans",sans-serif; }
         .savechip { color: #6E695E; font-size: 12.5px; }
         .savechip.dirty { color: #C8341E; }
         .swatchbox { background: #F8F7F2; padding: 16px 18px; }
         .swatchbox label { color: #2A2620; }
-        .swatchtitle { font-weight: 700; margin-bottom: 8px; }
+        /* Dialog headings share the OS-wide .dlghead size/weight (Papertone); this
+           only adds the spacing below them. Before, these were bold but at the
+           body size, so Writer's dialogs were the only ones whose heading did
+           not read as a heading. */
+        .swatchtitle { font-size: 17px; font-weight: 700; color: #1A1916;
+                       margin-bottom: 8px; }
         .fieldcaption { color: #6E695E; font-size: 12px; }
         .swatch { border: 1px solid #C9C4B6; border-radius: 2px; margin: 3px;
                   box-shadow: none; min-width: 34px; min-height: 26px; }

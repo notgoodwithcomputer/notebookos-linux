@@ -166,8 +166,18 @@ endif
 # enable test
 ifeq ($(BR2_PACKAGE_BLUEZ5_UTILS_TEST),y)
 BLUEZ5_UTILS_CONF_OPTS += --enable-test
+# NotebookOS local change: also pass --enable-testing.
+# These are two DIFFERENT bluez options and upstream Buildroot only exposes the
+# first. --enable-test installs the Python test scripts; emulator/btvirt and the
+# *-tester binaries sit behind bluez's separate `if TESTING` conditional, which
+# only --enable-testing turns on. btvirt is a virtual HCI controller: it is the
+# only way to exercise the BLE stack on a machine with no Bluetooth radio, which
+# includes both the build host and QEMU. The extra binaries are noinst_PROGRAMS,
+# so `make install` ignores them and nothing extra reaches the image —
+# board/notebookos/post-build.sh copies just btvirt and btmgmt onto the target.
+BLUEZ5_UTILS_CONF_OPTS += --enable-testing
 else
-BLUEZ5_UTILS_CONF_OPTS += --disable-test
+BLUEZ5_UTILS_CONF_OPTS += --disable-test --disable-testing
 endif
 
 # enable hid2hci tool

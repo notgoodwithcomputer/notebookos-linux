@@ -58,7 +58,7 @@ PALETTE = [
 
 class Terminal(nbapp.AppWindow):
     app_name = "Terminal"
-    menus = ("Shell", "Edit", "View")
+    menus = ("Session", "Edit", "View")
 
     def __init__(self):
         # self.term stays None until (and unless) a real VTE widget is built, so
@@ -66,10 +66,10 @@ class Terminal(nbapp.AppWindow):
         self.term = None
         self._child_pid = None
         self._pending_spawn = False
-        # Without the VTE backend there is no shell to run: the Shell/Edit/View
-        # menus would be dead controls, so drop them (instance attr shadows the
-        # class attr) BEFORE the base builds the menu bar. Only the app menu
-        # (About / Close) remains.
+        # Without the VTE backend there is nothing to run: the
+        # Session/Edit/View menus would be dead controls, so drop them
+        # (instance attr shadows the class attr) BEFORE the base builds the
+        # menu bar. Only the app menu (About / Close) remains.
         if not VTE_OK:
             self.menus = ()
 
@@ -99,17 +99,14 @@ class Terminal(nbapp.AppWindow):
         # mockup-driven apps (calculator's SCIENTIFIC / DEGREES).
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         head.get_style_context().add_class("termhead")
-        kick = Gtk.Label(label=_t("SHELL"), xalign=0)
+        # The kicker names the APP, the way Journal's says JOURNAL — not the
+        # program behind it. It used to read SHELL, with the shell binary's own
+        # file name shouted beside it ("ASH", "BASH"), which told a person the
+        # one thing about this window they have no use for and no way to
+        # change, in the app that already asks the most of them.
+        kick = Gtk.Label(label=_t("TERMINAL"), xalign=0)
         kick.get_style_context().add_class("term-kicker")
         head.pack_start(kick, False, False, 0)
-        # Name the running shell on the right of the header — but only when a
-        # real shell is actually running. Naming a shell next to the "backend
-        # not available" notice would read as a contradiction.
-        if VTE_OK:
-            shell_lbl = Gtk.Label(
-                label=os.path.basename(self._find_shell()).upper(), xalign=1)
-            shell_lbl.get_style_context().add_class("term-shell")
-            head.pack_end(shell_lbl, False, False, 0)
         frame.pack_start(head, False, False, 0)
 
         field = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -123,7 +120,8 @@ class Terminal(nbapp.AppWindow):
             frame.pack_start(self._hintbar(), False, False, 0)
         else:
             # Honest empty state: no fabricated output, just a neutral notice.
-            notice = Gtk.Label(label=_t("No shell is available on this system."))
+            notice = Gtk.Label(
+                label=_t("The terminal is not available on this system."))
             notice.get_style_context().add_class("term-notice")
             notice.set_line_wrap(True)
             notice.set_halign(Gtk.Align.CENTER)
@@ -133,23 +131,18 @@ class Terminal(nbapp.AppWindow):
     def _hintbar(self):
         """A permanent one-line footer under the terminal.
 
-        This is the one app in the suite that opens on a blank prompt and
-        explains nothing: a person who is not a Linux user gets "~ $" and no
-        way to tell what to type, what would be safe, or how to get out again —
-        and unlike every other screen here there is no empty state to teach
-        from, because the shell owns the whole field. So the guidance lives
-        outside it, where the shell cannot clear it, scroll it away or overwrite
-        it, and where it is still there on the hundredth launch as well as the
-        first. Three things, in the order someone needs them: how to run
-        something, one command worth knowing, and the way back."""
+        The shell owns the whole field, so the one fact a reader cannot get from
+        the prompt itself -- the way back out -- lives outside it, where the
+        shell cannot clear it, scroll it away or overwrite it. It used to carry
+        two more clauses teaching what to type and one command worth knowing;
+        that is a tutorial, not a label, and it is gone."""
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         bar.get_style_context().add_class("termhint")
         # GTK3 propagates vexpand UP from descendants; pin the bar so it can
         # never become an expanding child and float off the bottom edge.
         bar.set_vexpand(False)
         lbl = Gtk.Label(
-            label=_t("Type a command and press Enter  ·  ls lists what is "
-                     "here  ·  exit returns to the Finder"),
+            label=_t("Type exit to return to the Finder"),
             xalign=0)
         lbl.get_style_context().add_class("term-hint")
         lbl.set_line_wrap(True)       # degrade to two lines on a narrow panel
@@ -242,8 +235,22 @@ class Terminal(nbapp.AppWindow):
             self.term.spawn_async(
                 Vte.PtyFlags.DEFAULT, home, [shell], envv,
                 GLib.SpawnFlags.DEFAULT, None, None, -1, None, self._spawned)
-        except (GLib.Error, OSError, TypeError) as e:
-            self._feed_notice(_t("Could not start the shell: %s") % e)
+        except (GLib.Error, OSError, TypeError):
+            self._feed_notice(self._start_problem(shell))
+
+    @staticmethod
+    def _start_problem(shell):
+        """A plain sentence for a terminal that would not start.
+
+        The GLib.Error behind this used to be written straight into the
+        terminal body — 'Could not start the shell: gi.repository.GLib.GError(
+        ...)'. A person reading that learns nothing they can act on, in the one
+        window that has no other content to fall back on. Nothing here is
+        destructive, so the message says what is true and what to try."""
+        if not (shell and os.path.exists(shell)):
+            return _t("No shell is installed on this system.")
+        return _t("The terminal could not be started. Close this window and "
+                  "open the Terminal again.")
 
     def _feed_notice(self, text):
         # Write a neutral one-line notice into the terminal without pretending
@@ -256,7 +263,7 @@ class Terminal(nbapp.AppWindow):
     def _spawned(self, _term, pid, error):
         if error is not None:
             self._pending_spawn = False
-            self._feed_notice(_t("Could not start the shell: %s") % error)
+            self._feed_notice(self._start_problem(self._find_shell()))
             return
         # A fresh shell is now the live child: record its pid and clear the
         # restart guard, so this shell's own exit (user typing `exit`) closes
@@ -275,17 +282,17 @@ class Terminal(nbapp.AppWindow):
         return False  # one-shot
 
     # -- menus --
-    # Terminal declares Shell/Edit/View but the base menu_items() only knows
-    # File/Edit/app-name, so Shell and View would return [] (dead controls that
-    # open nothing) and the base Edit's Cut/Copy/Paste route through _edit(),
-    # which only handles Gtk.Editable/TextView and no-ops on a Vte.Terminal.
-    # Override menu_items() to give Shell/View real actions and to wire Edit to
+    # Terminal declares Session/Edit/View but the base menu_items() only knows
+    # File/Edit/app-name, so Session and View would return [] (dead controls
+    # that open nothing) and the base Edit's Cut/Copy/Paste route through
+    # _edit(), which only handles Gtk.Editable/TextView and no-ops on a
+    # Vte.Terminal. Override menu_items() to give them real actions and wire
     # VTE's own clipboard. The app-name ("Terminal") menu is also overridden
     # with a live terminal so its Close drops the now-inaccurate "Esc" hint
     # (Esc reaches the shell); with no backend it falls through to super() and
     # keeps the base About/Close (Esc). (When the VTE backend is missing the
-    # Shell/Edit/View menus are dropped entirely in __init__, so those branches
-    # only run with a live terminal.)
+    # Session/Edit/View menus are dropped entirely in __init__, so those
+    # branches only run with a live terminal.)
     def menu_items(self, name):
         # With a live shell, Esc is a terminal key (it reaches the shell — see
         # _on_key), so the app menu's Close carries no misleading "Esc" hint.
@@ -293,19 +300,27 @@ class Terminal(nbapp.AppWindow):
         if name == self.app_name and VTE_OK:
             return [(_t("About %s") % _t(self.app_name), self._about),
                     nbapp.SEP, (_t("Close"), self.close)]
-        if name == "Shell":
-            return [(_t("New Session"), self._new_session), nbapp.SEP,
-                    (_t("Reset"), self._shell_reset),
-                    (_t("Clear"), self._shell_clear), nbapp.SEP,
-                    (_t("Close"), self.close)]
+        # Menu labels below are BARE literals: nbapp._open_menu() already runs
+        # every label through _t(), and a label built by a call (or by an
+        # inline conditional) is invisible to tools/i18n_check's chrome scan —
+        # which is how a whole app's menu bar once shipped half-English in all
+        # 17 languages without the tool noticing.
+        # "Session", not "Shell": this window already calls itself Terminal,
+        # and the menu names what the entries under it act on — the session you
+        # are typing in. The kicker dropped SHELL for the same reason.
+        if name == "Session":
+            return [("New Session", self._new_session), nbapp.SEP,
+                    ("Reset", self._shell_reset),
+                    ("Clear", self._shell_clear), nbapp.SEP,
+                    ("Close", self.close)]
         if name == "Edit":
             # A terminal cannot Cut (its output is not editable), so Edit offers
             # Copy / Paste / Select All. The accelerators are the terminal
             # standard — Ctrl+Shift, leaving plain Ctrl+C free to signal the
             # foreground program.
-            return [(_t("Copy    Ctrl+Shift+C"), self._term_copy),
-                    (_t("Paste    Ctrl+Shift+V"), self._term_paste), nbapp.SEP,
-                    (_t("Select All    Ctrl+Shift+A"), self._term_select_all)]
+            return [("Copy    Ctrl+Shift+C", self._term_copy),
+                    ("Paste    Ctrl+Shift+V", self._term_paste), nbapp.SEP,
+                    ("Select All    Ctrl+Shift+A", self._term_select_all)]
         if name == "View":
             blink = False
             try:
@@ -313,12 +328,18 @@ class Terminal(nbapp.AppWindow):
                          == Vte.CursorBlinkMode.ON)
             except Exception:
                 pass
-            return [(_t("Zoom In    Ctrl +"), lambda: self._zoom(1.1)),
-                    (_t("Zoom Out    Ctrl −"), lambda: self._zoom(0.9)),
-                    (_t("Actual Size    Ctrl 0"), lambda: self._zoom(None)),
-                    nbapp.SEP,
-                    (_t("Stop Cursor Blink") if blink else _t("Blink Cursor"),
-                     self._toggle_blink)]
+            # "Ctrl+Plus", not "Ctrl +": every other shortcut in the OS is
+            # written Ctrl+Key with no spaces, and the old form also used a
+            # MINUS SIGN (U+2212) where the key on the keyboard is a hyphen.
+            items = [("Zoom In    Ctrl+Plus", lambda: self._zoom(1.1)),
+                     ("Zoom Out    Ctrl+Minus", lambda: self._zoom(0.9)),
+                     ("Actual Size    Ctrl+0", lambda: self._zoom(None)),
+                     nbapp.SEP]
+            if blink:
+                items.append(("Stop Cursor Blink", self._toggle_blink))
+            else:
+                items.append(("Blink Cursor", self._toggle_blink))
+            return items
         return super().menu_items(name)
 
     # -- keyboard --
@@ -415,13 +436,13 @@ class Terminal(nbapp.AppWindow):
         except OSError:
             return False
 
-    # -- Shell actions --
+    # -- Session actions --
     def _new_session(self):
         # Replacing the shell in place terminates whatever is running in it and
         # wipes the scrollback, so confirm first (no undo). Default is Cancel.
         if not self._confirm(
                 _t("New Session"),
-                _t("Start a new shell? Anything running now will stop, and "
+                _t("Start a new session? Anything running now will stop, and "
                    "everything on screen will be cleared."),
                 _t("New Session")):
             return
@@ -572,13 +593,27 @@ class Terminal(nbapp.AppWindow):
         stray Return never terminates the shell (crash-safe)."""
         try:
             dlg = Gtk.Dialog(title=title, transient_for=self, modal=True)
+            # Undecorated: a window-manager title bar makes a dialog look like it
+            # belongs to another computer. The card already builds its own
+            # .dlghead heading, so nothing is lost by dropping the bar.
+            dlg.set_decorated(False)
             dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
-            dlg.add_button(ok_label, Gtk.ResponseType.OK)
+            ok = dlg.add_button(ok_label, Gtk.ResponseType.OK)
+            # Name the action that ends the shell, so it is not one of two
+            # identical buttons. Cancel stays the default (a stray Return must
+            # never kill a running command).
+            ok.get_style_context().add_class("destructive-action")
             dlg.set_default_response(Gtk.ResponseType.CANCEL)
             area = dlg.get_content_area()
             area.set_spacing(10)
             area.set_margin_top(18); area.set_margin_bottom(14)
             area.set_margin_start(20); area.set_margin_end(20)
+            # The title only reaches the window manager's frame; every other
+            # confirmation in the OS states it inside the dialog too, so the
+            # question is legible on its own.
+            head = Gtk.Label(label=title, xalign=0)
+            head.get_style_context().add_class("dlghead")
+            area.add(head)
             msg = Gtk.Label(label=body, xalign=0)
             msg.set_line_wrap(True); msg.set_max_width_chars(46)
             area.add(msg)
@@ -604,8 +639,6 @@ class Terminal(nbapp.AppWindow):
                     padding: 11px 16px; }
         .term-kicker { font-size: 11px; letter-spacing: 0.18em;
                        font-weight: 700; color: #6E695E; }
-        .term-shell  { font-size: 11px; letter-spacing: 0.18em;
-                       font-weight: 700; color: #9A9484; }
 
         .termfield { background: #FCFBF8; padding: 12px 14px; }
         .termscroll, .termscroll viewport { background: #FCFBF8; }

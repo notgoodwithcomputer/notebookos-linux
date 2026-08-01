@@ -1,28 +1,59 @@
 #!/usr/bin/env python3
 """
-widgets.py — the desktop-home widget column (right side of the Finder).
+widgets.py -- the desktop board: what the desktop shows when nothing is open.
 
-Per the imported design (assets/designs/screenshots/finder2.png), the desktop
-home is the floating Finder on the left and a column of two cards on the right:
+The board fills the desktop under the floating Finder as a TWO-ROW grid that
+covers the whole area, with nothing clustered in a corner and no hole in it:
 
-  • Tasks   — a checklist with an "N/M done" progress read-out
-  • Calendar — the current month grid (today circled in signage red) plus a
-               TODAY agenda of the day's events
+    +--------+--------+--------+----------+----------+
+    | Classes|Homework|  Meals |          |          |
+    +--------+--------+--------+ Calendar |  Tasks   |
+    | Workout|Journal |Accounts|          |          |
+    +--------+--------+--------+----------+----------+
 
-Both cards show REAL data read from the shared stores the Tasks and Calendar
-apps write — nothing is seeded or fabricated. Tasks come from
-$NB_HOME/.config/notebook/tasks.json (the flat {"text","done"} list shared with
-tasks.py, so ticking one here writes back and sticks); today's agenda and the
-month's event dots come from $NB_HOME/.config/notebook/calendar.json (the flat
-[{date,start,end,title,cal}] list Calendar writes). Empty or missing stores
-render a concise technical empty-state ("No tasks", "No events"). The stores are
-re-read whenever the desktop home returns after a fullscreen app closes, so
-edits made in those apps appear here.
+  * SIX app tiles, all exactly the same size, in a 3x2 grid on the left.
+  * Tasks -- a checklist with an "N/M done" read-out -- pinned to the last
+    column over the area of TWO tiles (one column wide, two rows tall).
+  * Calendar -- the month grid (today circled in signage red) plus a TODAY
+    agenda -- pinned beside it, over the same two-tile area.
+
+Why the calendar is two cells and not one: six tiles plus Tasks (two cells)
+plus a one-cell calendar is NINE cells, and nine cells cannot tile a two-row
+grid -- one cell would be left empty, and a hole in the board reads as the
+desktop being broken. Giving the calendar the column above it costs nothing
+(the month grid and the agenda both want the height) and leaves the grid
+completely filled. See tools/board_selftest.py, which pins this geometry.
+
+EVERY card on this board -- the six tiles and the two pinned cards alike --
+is the same object: a `.card` with a `.chead` header (a `.ctitle` on the left,
+a `.cmeta` summary on the right) over a body of CONTENT ROWS. A row is
+[lead][name..........][value]: the lead is a time, a meal name or a drawn
+checkbox, the value a figure, a due date or -- in Workout -- a run of drawn
+dots. That one shape is what makes six unrelated apps read as one board.
+
+Which tiles are on lives in ONE place -- Widget Settings, opened from the
+board's own right-click menu (see widgetsettings.py, the only writer of
+widgets.json) -- not in a switch buried in each app.
+
+NOTHING HERE SCROLLS. Anything that does not fit is off the screen for good, so
+every card caps its rows against the REAL panel height (measured `_*_PX`
+constants, see tools/measure_widget_rows.py and board_selftest's calibration
+section) and never lays out a row it has no room for.
+
+Every card shows REAL data read from the store its app writes -- nothing is
+seeded or fabricated, and a store that is missing, truncated or the wrong shape
+costs a card its CONTENT (it falls back to written empty-state copy), never its
+place on the board. A tile reader must be checked against the app that OWNS the
+store, not against what the tile wishes were in it: three of them were once
+written to invented keys ("transactions"/"amount", an ISO "date", a course
+name) and every one of them showed its empty state forever on a real machine
+while every test passed.
 
 Design language: Nimbus Sans for the interface and card titles, a warm serif
-(Newsreader / Liberation Serif) for the agenda's event titles — the one
-editorial moment — signage red #C8341E only for today and alerts, papertone
-surfaces, near-black hairline frames (matching the Finder).
+(Newsreader / Liberation Serif) for the agenda's event titles -- the one
+editorial moment -- signage red #C8341E for exactly one thing on this screen
+(today's date in the month grid), papertone surfaces, near-black hairline
+frames (matching the Finder).
 """
 import gi
 gi.require_version("Gtk", "3.0")
@@ -37,11 +68,12 @@ import subprocess
 
 import nbapp  # shared base: nbapp.screen_size() gives the REAL primary-monitor
 from nbi18n import _t  # noqa: E402
-              # size (never a hardcoded 1920x1080) for sizing this column.
+              # size (never a hardcoded 1920x1080) for sizing this board.
 
-# cairo is used to draw the task checkbox as a flat vector box (see _Check).
-# Guarded so a construction on a stripped image can never hard-fail on the
-# import; the checkbox degrades to a plain box drawn without round caps.
+# cairo draws the task checkbox and the Workout set dots as flat vectors (see
+# _Check / _Dots). Guarded so a construction on a stripped image can never
+# hard-fail on the import; the checkbox degrades to a plain box drawn without
+# round caps and the dots simply do not paint.
 try:
     import cairo
     _CAP_ROUND = cairo.LINE_CAP_ROUND
@@ -55,23 +87,81 @@ except Exception:      # pragma: no cover - cairo is present on the real image
 _PAPER = (0xF8 / 255.0, 0xF7 / 255.0, 0xF2 / 255.0)
 _INK = (0x1A / 255.0, 0x19 / 255.0, 0x16 / 255.0)
 _GREY = (0x9A / 255.0, 0x95 / 255.0, 0x8A / 255.0)
+# the muted green a met goal is marked in (matching language.py's streak line).
+# NOT signage red: red means exactly one thing on this screen, today's date.
+_GOOD = (0x4F / 255.0, 0x7A / 255.0, 0x3A / 255.0)
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 # the DE scripts live beside this file; the Calendar app is launched the same
-# way the rest of the desktop spawns apps — python3 <DE_DIR>/calendar.py with
+# way the rest of the desktop spawns apps -- python3 <DE_DIR>/calendar.py with
 # PYTHONPATH pinned to DE_DIR (see music.py / contacts.py).
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 TASKS_FILE = os.path.join(CFG_DIR, "tasks.json")        # shared flat task list
+WORKOUT_FILE = os.path.join(CFG_DIR, "workout.json")    # Workout app
 CAL_FILE = os.path.join(CFG_DIR, "calendar.json")       # Calendar app's events
-# the desktop-home column belongs to the desktop, not on top of a running app.
+BOARD_FILE = os.path.join(CFG_DIR, "widgets.json")      # which tiles are on
+ACADEMICS_FILE = os.path.join(CFG_DIR, "academics.json")  # classes + homework
+# The same store under the name it had when the app was called Academic Notes.
+# The app itself reads this as a fallback (academics.LEGACY_FILE); the board has
+# to as well, or on a machine that upgraded, the Classes and Homework tiles sit
+# there showing "No classes" over a term the user can plainly see in the app.
+ACADEMICS_LEGACY = os.path.join(CFG_DIR, "academic.json")
+JOURNAL_FILE = os.path.join(CFG_DIR, "journal.json")
+ACCOUNTING_FILE = os.path.join(CFG_DIR, "accounting.json")
+MEALS_FILE = os.path.join(CFG_DIR, "mealplanner.json")
+
+# The six app tiles, in the order they are laid out (left to right, top to
+# bottom) and the order Widget Settings lists them. `mod` is the app a click
+# opens. Tasks and the calendar are NOT here: they are pinned to the board and
+# cannot be switched off, because they are the two things the desktop is for.
+TILE_ORDER = ("academics", "homework", "meals",
+              "workout", "journal", "accounting")
+TILE_APP = {"academics": "academics", "homework": "academics",
+            "meals": "mealplanner", "workout": "workout",
+            "journal": "journal", "accounting": "accounting"}
+# The view the app should open ON, so clicking the Homework tile lands on
+# Homework instead of dropping you in the app to go and find it.
+TILE_ARG = {"academics": "schedule", "homework": "homework"}
+# The app a tile belongs to, for its tooltip. NOT the tile's own title: a tile
+# called "Classes" opens Academics, and "Open Classes" names something that is
+# not a thing you can open.
+TILE_APP_NAME = {"academics": "Academics", "homework": "Academics",
+                 "meals": "Meal Planner", "workout": "Workout",
+                 "journal": "Journal", "accounting": "Accounting"}
+# English source strings; nbi18n translates them at _t() like any other label.
+TILE_TITLE = {"academics": "Classes", "homework": "Homework",
+              "meals": "Meals", "workout": "Workout",
+              "journal": "Journal", "accounting": "Accounting"}
+# Every tile is on by default: the grid has exactly six slots for exactly six
+# tiles, so switching one off leaves a gap rather than tightening the board.
+# Widget Settings is for the person who wants that gap, not the default.
+TILE_DEFAULT_ON = {tid: True for tid in TILE_ORDER}
+# Cards with a FIXED, small number of rows (today's three meals; today's
+# classes). Their rows expand to share the card, and are set a size larger,
+# instead of huddling at the top under a block of blank paper.
+FILL_TILES = ("meals",)
+# What a card says when its reader has nothing to report. Two lines in the same
+# shape as a card with data -- the state, then where the data is entered, naming
+# the app the tile opens (clicking the tile opens it). They live together here,
+# rather than one per reader, so the empty board can be read at once; a reader
+# with nothing to say returns None and gets these.
+TILE_EMPTY = {
+    "academics": ("No classes", "Add classes in Academics"),
+    "homework": ("No assignments", "Add assignments in Academics"),
+    "meals": ("No meals planned", "Plan meals in Meal Planner"),
+    "workout": ("No exercises", "Add exercises in Workout"),
+    "journal": ("No entries", "Write entries in Journal"),
+    "accounting": ("No entries", "Add entries in Accounting"),
+}
+# the desktop-home board belongs to the desktop, not on top of a running app.
 # A launcher drops this flag file while a fullscreen app owns the screen; we
 # hide while it exists and reappear when the desktop home returns.
-APP_FLAG = "/tmp/nb-app-active"
+APP_FLAG = nbapp.APP_FLAG
 # The ref-count dir nbapp writes one file per live app pid into. Checking it
 # directly (is any pid still in /proc) is more reliable than trusting the flag
 # file, which can be left stale by a crashed app or briefly missing.
-APP_DIR = "/tmp/nb-apps"
+APP_DIR = nbapp.APP_DIR
 
 PANEL_H = 46
 MONTHS = ("January", "February", "March", "April", "May", "June", "July",
@@ -81,55 +171,136 @@ WEEKDAYS = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
 # never touch strftime("%-d") (a glibc-only flag) or the stdlib-shadowed
 # calendar module.
 WD_ABBR = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+# Monday-first, matching academics.DAY_NAMES (and the same source strings, so
+# the translations the catalogs already carry for the Academics app are the
+# ones the Classes tile uses).
+DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+             "Saturday", "Sunday")
+# mealplanner.MEALS / MEAL_NAMES, restated so a tile can name a meal without
+# importing the app just to read a label (the plan itself IS read through
+# mealplanner.read_plan, which owns the parsing).
+MEAL_KEYS = ("breakfast", "lunch", "dinner")
+MEAL_NAMES = {"breakfast": "Breakfast", "lunch": "Lunch", "dinner": "Dinner"}
 
-# This is a summary card on a FIXED-height column, not the full app. Cap how many
-# rows each card renders so a long task list or a packed day can never push the
-# other card off the bottom of the column (it can't scroll). When a list is
-# longer than the cap the final row is a muted "+N more" read-out; the complete
-# list stays available in the Tasks / Calendar apps. The cap counts that
-# read-out row, so the rendered height is bounded either way.
-MAX_TASK_ROWS = 6
-MAX_AGENDA_ROWS = 6
+# -- the board ---------------------------------------------------------------
+BOARD_MARGIN = 18     # board inset from the screen edges
+BOARD_GAP = 22        # between every card on the board
+# FOUR columns, not five: Tasks and the calendar now share ONE column, stacked
+# (Tasks on top, calendar beneath it), instead of standing side by side. That
+# hands a whole column back to the six tiles, so every card on the board is
+# wider, and the extra gap above has room to breathe.
+GRID_COLS = 4         # 3 tile columns + one column holding Tasks + calendar
+GRID_ROWS = 2
+TILE_COLS = 3         # the tile grid is 3 wide...
+TILE_ROWS = 2         # ...and 2 tall, which is exactly TILE_ORDER
 
-# The column is a FIXED-height, NON-scrolling stack of two cards. On a real
-# panel (which is NOT 1920x1080 — often 1366x768) the column is much shorter, so
-# the MAX_* caps above — tuned for a tall screen — would push the calendar's
-# agenda off the bottom of the display. _row_caps() trims the rows to what
-# actually FITS the live column height using these per-element pixel figures.
-# They are applied before anything is laid out (nothing is measurable when a
-# card is built), but they are MEASURED values, not guesses: an earlier set was
-# generous by up to a third, and combined with budgeting for the maximum number
-# of rows rather than the real one it left a 768px panel showing a single task
-# above 120px of empty desktop.
-_HEAD_PX = 51         # a card header (.chead: 16+16 padding + 17px title + rule)
-_TASK_ROW_PX = 55     # a .taskrow (17+17 padding + the 21px checkbox)
+# These cards are summaries on a FIXED-height board, not the full apps. Cap how
+# many rows each renders so a long list can never push a card off the bottom of
+# the screen (nothing here scrolls). When a list is longer than the cap the
+# final row becomes a muted "+N more" read-out; the complete list stays in the
+# app. The cap counts that read-out row, so the rendered height is bounded
+# either way.
+MAX_TASK_ROWS = 14
+MAX_AGENDA_ROWS = 8
+MAX_TILE_ROWS = 10
+
+# EVERY figure below is MEASURED, not estimated. Two tools keep them honest:
+#
+#   DISPLAY=:0 PYTHONPATH=tools:<de> python3 tools/measure_widget_rows.py
+#       measures the pinned pair's parts against the live column and must
+#       print "all constants track the real widgets";
+#   DISPLAY=:0 PYTHONPATH=<de>       python3 tools/board_selftest.py
+#       measures the TILE card's parts (head, row, tail, empty block) against
+#       a real rendered tile, which the first tool does not see.
+#
+# Both directions of drift are bugs. Under-counting hands the budget space the
+# cards are really using and clips the bottom of a card off the screen;
+# over-counting is what once left a 768px panel refusing to grant rows it had
+# 100px of room for.
+_HEAD_PX = 42         # a card header (.chead: 11+11 padding + title + rule)
+_TASK_ROW_PX = 31     # a .taskrow (5+5 padding + the 21px checkbox)
 _MORE_ROW_PX = 34     # the quieter "+N more" tail row (.moretail)
 _AGENDA_ROW_PX = 33   # an .agrow (6+6 padding + the 18px serif title)
-# A card with nothing in it still shows a line ("No tasks" / "No events"), so an
-# EMPTY card costs height too. Counting it as zero let a long task list next to
-# an empty agenda take one row more than fits.
-_TASK_EMPTY_PX = 40   # the .emptyrow "No tasks" line
+_CROW_PX = 29         # one content row of a tile (.crow)
+_CTA_PX = 56          # the two-line call-to-action block (.emptyrow)
+# A card with nothing in it still shows its empty state, so an EMPTY card costs
+# height too -- and costs MORE than a row, because it is two lines (the state
+# plus the line telling you what to do about it).
+_TASK_EMPTY_PX = 56   # the .emptyrow "Nothing to do yet" block
 _AGENDA_EMPTY_PX = 30  # the .agempty "No events" line
-_GRID_WD_PX = 15      # the weekday header row of the month grid
-_GRID_ROW_PX = 45     # one week of the month grid (32px day cell + dot + gap)
-_GRID_PAD_PX = 18     # .calgrid vertical padding
+_GRID_WD_PX = 12      # the weekday header row of the month grid
+_GRID_ROW_PX = 22     # one week of the grid (the 22px day cell)
+_GRID_PAD_PX = 10     # .calgrid vertical padding
 _AGSEC_PX = 29        # the "TODAY" section label (+ its rule and padding)
-_COL_CHROME_PX = 48   # column margin/spacing + tasklist padding + card borders
+_BODY_PAD_PX = 10     # .cbody / .tasklist vertical padding
+_CARD_BORDER_PX = 2   # the card's own 1px hairline, top and bottom
+# The gap between the calendar and Tasks. It is the pinned pair's Box spacing,
+# so measure_widget_rows can read it back off the live widget; it is BOARD_GAP
+# because every gap on this board is the same gap.
+_COL_SPACING_PX = BOARD_GAP
+
+# A row is stretched to fill its card, but never past this: a card holding
+# three meals must not render them as three 150px bands. Above it the leftover
+# collects as blank paper at the foot of the card, which is what a card with
+# little to say should look like.
+_ROW_TARGET_PX = 46
+# ...and the month grid is stretched the same way, up to a comfortable week
+# row. Beyond that the calendar card would be one enormous month and nothing
+# else, which is not what the card is for.
+_GRID_TARGET_PX = 46
+
 
 WIDGETS_CSS = b"""
-/* fill the whole column window with the desktop papertone: with no compositor
+/* fill the whole board window with the desktop papertone: with no compositor
    a transparent window paints black in the gaps between/below the cards. */
 .wcol { background: #DED4C2; }
 /* the flat-Swiss card: warm paper on a near-black hairline frame, matching the
    Finder window's frame (de/finder.py). The near-black is a structural frame,
-   never a decorative accent; signage red is reserved for today + alerts. */
+   never a decorative accent; signage red is reserved for today + alerts.
+   EVERY card on this board is this card -- the six tiles and the pinned pair
+   alike -- which is the whole reason the board reads as one thing. */
 .card { background: #F8F7F2; border: 1px solid #1A1916; }
-.card .chead { padding: 16px 20px; border-bottom: 1px solid #1A1916; }
-.ctitle { font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 17px;
+.card .chead { padding: 11px 14px; border-bottom: 1px solid #1A1916; }
+.ctitle { font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 15px;
           font-weight: 700; letter-spacing: 0.02em; color: #1A1916; }
 .cmeta  { font-family: "Nimbus Sans","Helvetica",sans-serif;
-          font-size: 13px; color: #6E695E; }
-.tasklist { padding: 4px 20px 14px 20px; }
+          font-size: 12px; color: #6E695E; }
+/* the one card whose summary IS the fact (Accounting's cash balance) states it
+   in ink rather than in the quiet grey the other summaries use. */
+.cmeta.strong { color: #1A1916; font-weight: 700; font-size: 13px; }
+/* the body of content rows every card shares. */
+.cbody { padding: 3px 14px 7px 14px; }
+/* one content row: [lead][name..........][value], on a hairline so a card of
+   them reads as a chart rather than as a paragraph of scraps. */
+.crow  { padding: 6px 0; border-bottom: 1px solid #E7E2D6; }
+.crow:last-child { border-bottom: 0; }
+.clead { font-family: "Nimbus Sans","Helvetica",sans-serif;
+         font-size: 12px; font-weight: 600; color: #1A1916; }
+.cname { font-family: "Nimbus Sans","Helvetica",sans-serif;
+         font-size: 13px; color: #2A2620; }
+/* a goal that has been met -- every set logged, an assignment handed in. A
+   muted green, NOT the signage red, which means today's date and nothing
+   else anywhere on this screen. */
+.cname.hit { color: #4F7A3A; }
+.cval  { font-family: "Nimbus Sans","Helvetica",sans-serif;
+         font-size: 12px; color: #6E695E; }
+.cval.hit { color: #4F7A3A; }
+/* the Journal card's single answer */
+.jmark { font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 15px; }
+.jmark.done { color: #4F7A3A; }
+.jmark.todo { color: #C8341E; }
+.jdate { font-family: "Nimbus Sans","Helvetica",sans-serif;
+         font-size: 12px; color: #6E695E; }
+/* A fill card (today's three meals) has only a few rows and the whole tile to
+   put them in, so it is set larger -- at the shared 13px those three lines sat
+   in the top third of the card and the rest read as a tile that failed to
+   draw. The lead is wider too: at the shared 46px "Breakfast" came out as
+   "Brea...", which is a strange thing for a card to call a meal. */
+.crow.fill { padding: 10px 0; }
+.crow.fill .clead { font-size: 14px; }
+.crow.fill .cname { font-size: 16px; }
+.crow.fill .cval  { font-size: 13px; }
+.tasklist { padding: 3px 14px 7px 14px; }
 /* each row is a whole-width clickable surface (a GtkEventBox). It carries an
    OPAQUE papertone background: a windowed EventBox left transparent can paint
    black on the no-compositor framebuffer, so we paint the paper explicitly.
@@ -138,45 +309,50 @@ WIDGETS_CSS = b"""
    to its size request, so setting it here gave a 21px row squeezed against its
    own hairline while the "+N more" line below (a Box, which does honour it)
    stood a full 48px tall. */
-.taskrow  { border-bottom: 1px solid #D7D2C5; background: #F8F7F2; }
+.taskrow  { border-bottom: 1px solid #E7E2D6; background: #F8F7F2; }
 .taskrow:last-child { border-bottom: 0; }
-.taskrowbody { padding: 17px 0; }
+.taskrowbody { padding: 5px 0; }
 /* the "+N more" tail: a quieter line than a task row, not a full-height one */
 .moretail { padding: 10px 0; }
 .emptyrow { padding: 12px 0; }
+/* 13px matches .cname and .calday: the cards sit on one board and a one-pixel
+   difference between their list text reads as a mistake. */
 .tasktext { font-family: "Nimbus Sans","Helvetica",sans-serif;
-            font-size: 15px; color: #2A2620; }
+            font-size: 13px; color: #2A2620; }
 .tasktext.done { color: #A8A296; }
 .emptytext { font-family: "Nimbus Sans","Helvetica",sans-serif;
-             font-size: 15px; color: #6E695E; }
+             font-size: 14px; color: #6E695E; }
 /* the one line under an empty card's heading that says what to do about it:
    quieter than the state above it, so it reads as guidance, not as content. */
 .emptyhint { font-family: "Nimbus Sans","Helvetica",sans-serif;
-             font-size: 13px; color: #9A9484; }
+             font-size: 12px; color: #9A9484; }
 /* the "+N more" overflow read-out shown when a card is longer than its cap. */
 .moretext { font-family: "Nimbus Sans","Helvetica",sans-serif;
-            font-size: 13px; color: #6E695E; }
-.calgrid { padding: 8px 20px 10px 20px; }
+            font-size: 12px; color: #6E695E; }
+.calgrid { padding: 4px 12px 6px 12px; }
 .calwd  { font-family: "Nimbus Sans","Helvetica",sans-serif;
-          font-size: 11px; font-weight: 600; color: #6E695E; letter-spacing: 0.06em; }
+          font-size: 9px; font-weight: 600; color: #6E695E; letter-spacing: 0.06em; }
+/* min-width and min-height must stay EQUAL: today's marker is a 50% radius on
+   this box, so an uneven pair turns the circle into an ellipse. */
 .calday { font-family: "Nimbus Sans","Helvetica",sans-serif;
-          font-size: 14px; color: #2A2620; min-width: 32px; min-height: 32px; }
+          font-size: 12px; color: #2A2620; min-width: 22px; min-height: 22px; }
+/* a day that carries an event is bold ink, NOT signage red -- red is reserved
+   for today (see the docstring). This matches the Tasks app's mini-calendar,
+   where a day with an event is bold ink, and unlike a dot underneath the
+   number it costs the week row no height at all. */
+.calday.hasev { font-weight: 700; color: #1A1916; }
 .calday.today { background: #C8341E; color: #FFFFFF; border-radius: 50%;
                 font-weight: 700; }
-/* a day that carries an event is marked with a neutral ink dot, NOT signage
-   red -- red is reserved for today + alerts (see the docstring). This matches
-   the Tasks app's mini-calendar, where a day with an event is bold ink. */
-.caldot { color: #2A2620; font-size: 10px; }
 .agsec  { font-family: "Nimbus Sans","Helvetica",sans-serif;
           font-size: 11px; color: #6E695E; letter-spacing: 0.14em;
-          padding: 12px 20px 4px 20px; border-top: 1px solid #D7D2C5; }
-.agrow  { padding: 6px 20px; }
+          padding: 12px 14px 4px 14px; border-top: 1px solid #E7E2D6; }
+.agrow  { padding: 6px 14px; }
 .agtime { font-family: "Nimbus Sans","Helvetica",sans-serif;
-          font-size: 13px; font-weight: 600; color: #1A1916; }
+          font-size: 12px; font-weight: 600; color: #1A1916; }
 .agtext { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-          font-size: 18px; color: #2A2620; }
+          font-size: 17px; color: #2A2620; }
 .agempty { font-family: "Nimbus Sans","Helvetica",sans-serif;
-           font-size: 15px; color: #6E695E; padding: 6px 20px 8px 20px; }
+           font-size: 14px; color: #6E695E; padding: 6px 14px 8px 14px; }
 """
 
 
@@ -188,6 +364,38 @@ def _css():
         Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 
+def _minutes(hhmm):
+    """"HH:MM" -> minutes since midnight, or None if it is not a time."""
+    try:
+        h, m = str(hhmm).split(":")
+        h, m = int(h), int(m)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return h * 60 + m if 0 <= h < 24 and 0 <= m < 60 else None
+
+
+def _fmt_time(hhmm):
+    mins = _minutes(hhmm)
+    return "" if mins is None else "%02d:%02d" % (mins // 60, mins % 60)
+
+
+def _fmt_money(total):
+    """A balance formatted the way the Accounting app itself formats one:
+    thousands separated, a real Unicode minus, and the currency sign. The two
+    are read side by side on the same screen, so they must not disagree about
+    what money looks like. See accounting._money."""
+    try:
+        if total != total or total in (float("inf"), float("-inf")):
+            total = 0.0
+        cents = round(abs(total), 2)
+    except (TypeError, ValueError, OverflowError):
+        total, cents = 0.0, 0.0
+    # The sign comes from the ROUNDED magnitude, so a sub-cent negative
+    # remainder reads "$0.00" and never "-$0.00".
+    sign = "−" if (total < 0 and cents != 0) else ""
+    return "%s$%s" % (sign, format(cents, ",.2f"))
+
+
 def _month_weeks(year, month):
     """Weeks (Mon-first) of `month` as lists of 7 ints/None."""
     try:
@@ -197,8 +405,8 @@ def _month_weeks(year, month):
     except Exception:
         # A wildly out-of-range system clock (e.g. a dead RTC reporting
         # year 9999, which pushes date() past MAXYEAR) must never blank the
-        # desktop widget column; fall back to a plain 30-day, Monday-start
-        # grid — mirrors tasks.py's mini-calendar hardening.
+        # desktop board; fall back to a plain 30-day, Monday-start grid --
+        # mirrors tasks.py's mini-calendar hardening.
         lead, ndays = 0, 30
     cells = [None] * lead + list(range(1, ndays + 1))
     while len(cells) % 7:
@@ -207,29 +415,34 @@ def _month_weeks(year, month):
 
 
 class _Check(Gtk.DrawingArea):
-    """The task checkbox, drawn with cairo instead of a native Gtk.CheckButton.
+    """A checkbox, drawn with cairo instead of a native Gtk.CheckButton.
 
     On the GPU-less software framebuffer a themed check indicator can paint
     blank, garbage or at the wrong size when a theme's assets are missing; a
-    cairo box is deterministic and matches the flat-Swiss design exactly — a
+    cairo box is deterministic and matches the flat-Swiss design exactly -- a
     21px square: a grey hairline outline when open, ink-filled (#1A1916) with a
     white tick when done. It draws from the LIVE allocation (never a hardcoded
     size), no-ops on a not-yet-allocated 0x0 area, paints an opaque paper base
     so no stray pixel shows through on the framebuffer, and only repaints when
-    its state actually flips (queue_draw is never called on a timer)."""
+    its state actually flips (queue_draw is never called on a timer).
+
+    Used by the Tasks card, where a click toggles it, and by the Homework tile,
+    where it is a read-only mark -- the two lists are the same list of things
+    to get done, so they are drawn with the same object."""
 
     SIZE = 21
 
-    def __init__(self, done):
+    def __init__(self, done, size=None):
         super().__init__()
         self._done = bool(done)
-        self.set_size_request(self.SIZE, self.SIZE)
+        self._size = int(size or self.SIZE)
+        self.set_size_request(self._size, self._size)
         self.set_halign(Gtk.Align.CENTER)
         self.set_valign(Gtk.Align.CENTER)
         self.connect("draw", self._draw)
 
     def set_done(self, done):
-        """Flip the tick in place, repainting only this 21px box (not the row)."""
+        """Flip the tick in place, repainting only this box (not the row)."""
         done = bool(done)
         if done != self._done:
             self._done = done
@@ -239,14 +452,14 @@ class _Check(Gtk.DrawingArea):
         try:
             w = self.get_allocated_width()
             h = self.get_allocated_height()
-            if w <= 0 or h <= 0:            # not yet allocated — nothing to paint
+            if w <= 0 or h <= 0:            # not yet allocated -- nothing to paint
                 return False
             # opaque base first, so the corners outside the square never show a
             # black/garbage pixel on the compositor-less framebuffer.
             cr.set_source_rgb(*_PAPER)
             cr.paint()
             # a tight square centred in whatever the row actually allocated us.
-            side = min(w, h)
+            side = min(w, h, self._size)
             inset = 1.0                     # keep the 1.5px stroke inside the box
             bx = (w - side) / 2.0 + inset
             by = (h - side) / 2.0 + inset
@@ -259,7 +472,7 @@ class _Check(Gtk.DrawingArea):
                 cr.set_source_rgb(*_INK)
                 cr.fill_preserve()
                 cr.stroke()
-                # white tick — the design's check path (M5 12.5 L10 17.5 L19 7 on
+                # white tick -- the design's check path (M5 12.5 L10 17.5 L19 7 on
                 # a 24 grid) scaled into a centred sub-region so it sits inside
                 # the box at any allocation.
                 tsz = bs * 0.62
@@ -285,6 +498,59 @@ class _Check(Gtk.DrawingArea):
         return False
 
 
+class _Dots(Gtk.DrawingArea):
+    """A run of set dots for one Workout exercise: one dot per set in the day's
+    goal, INK-FILLED for each set actually logged and hollow for the rest.
+
+    This is the Workout tile's whole point -- a glance says both how much is
+    done and how much is left, which no "3 of 5" can. Drawn rather than
+    composed from labels because a row of GtkLabels carrying a bullet character
+    depends on a font having that glyph (the shipped face has no emoji at all,
+    and a missing glyph is a tofu box), and because the dots have to line up
+    exactly under each other down the card."""
+
+    DOT = 9          # dot diameter
+    GAP = 5          # between dots
+    MAX = 8          # beyond this the run is wider than a tile; see _dots_cell
+
+    def __init__(self, done, goal):
+        super().__init__()
+        self._goal = max(0, min(self.MAX, int(goal)))
+        self._done = max(0, min(self._goal, int(done)))
+        w = self._goal * self.DOT + max(0, self._goal - 1) * self.GAP
+        self.set_size_request(max(1, w), self.DOT)
+        self.set_halign(Gtk.Align.END)
+        self.set_valign(Gtk.Align.CENTER)
+        self.connect("draw", self._draw)
+
+    def _draw(self, _area, cr):
+        try:
+            if cairo is None or self._goal <= 0:
+                return False
+            h = self.get_allocated_height()
+            w = self.get_allocated_width()
+            if h <= 0 or w <= 0:
+                return False
+            run = self._goal * self.DOT + max(0, self._goal - 1) * self.GAP
+            x0 = w - run                     # right-aligned inside the cell
+            cy = h / 2.0
+            r = self.DOT / 2.0 - 0.75        # keep the 1.5px stroke inside
+            cr.set_line_width(1.5)
+            for i in range(self._goal):
+                cx = x0 + i * (self.DOT + self.GAP) + self.DOT / 2.0
+                cr.arc(cx, cy, max(1.0, r), 0, 6.2831853)
+                if i < self._done:
+                    cr.set_source_rgb(*_GOOD if self._done >= self._goal
+                                      else _INK)
+                    cr.fill()
+                else:
+                    cr.set_source_rgb(*_GREY)
+                    cr.stroke()
+        except Exception:
+            pass
+        return False
+
+
 class Widgets(Gtk.Window):
     def __init__(self):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
@@ -293,72 +559,107 @@ class Widgets(Gtk.Window):
         # WM_NAME the window manager keys on: the matchbox patch
         # (0004-desktop-widget-column-below-windows) pins any DIALOG with this
         # title to the very bottom of the stack, just above the wallpaper and
-        # below every app and the Finder — so the cards can NEVER render in
-        # front of a window. The keep-below / re-lower / hide-when-active code
-        # below is now only a best-effort backstop, not the guarantee.
+        # below every app and the Finder -- so the cards can NEVER render in
+        # front of a window.
         # NOT translated: this is the name the WM patch matches on, not a
         # label anyone reads. A translated title would silently stop matching
         # and let the cards float above real windows.
         self.set_title("nb-desktop-widgets")
         nbapp.force_opaque_visual(self)   # see nbapp: no RGBA visual
-        # DIALOG so matchbox floats this column at its requested size/position
-        # (620 x band, pinned to the right edge) instead of stretching it to
-        # fill the screen like a DESKTOP-hint background. Layering ("widgets
-        # don't cover apps") is handled by _poll_home hiding the column while a
-        # fullscreen app owns the screen.
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         self.set_accept_focus(False)
         self.set_focus_on_map(False)
         # ...but PINNED TO THE DESKTOP LAYER. The hide-while-an-app-is-active
-        # rule above only covers apps that set the app-active flag; the Finder
-        # is desktop furniture like this column and never sets it. Both are
-        # DIALOGs, so clicking the widget column made the window manager raise
-        # it — and the Tasks/Calendar cards then sat ON TOP of the Finder (and
-        # of any window that had not claimed the flag). This column is part of
+        # rule only covers apps that set the app-active flag; the Finder is
+        # desktop furniture like this board and never sets it. Both are
+        # DIALOGs, so clicking the board made the window manager raise it --
+        # and the cards then sat ON TOP of the Finder. This board is part of
         # the desktop home and must never come forward, so it is kept below and
         # re-lowered whenever something tries to raise it.
         self.set_keep_below(True)
         self.connect("map-event", self._stay_down)
         self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.connect("button-press-event", self._stay_down)
-        # Right column, below the menu bar, mirroring the Finder's vertical band.
-        # Size + position it against the ACTUAL screen size — real hardware panels
-        # are not 1920x1080, and a hardcoded x/height pushed the whole column off
-        # the right edge (and off the bottom) of a smaller display. nbapp.screen_size()
-        # returns the real primary-monitor pixels (never a literal 1920x1080).
+        # Right-click anywhere on the board is how the board is configured --
+        # the desktop is the thing being changed, so it is where the setting
+        # lives. Connected after _stay_down so the board still re-lowers.
+        self.connect("button-press-event", self._on_board_press)
+        # The board covers the whole desktop below the menu bar. Size + position
+        # it against the ACTUAL screen size -- real hardware panels are not
+        # 1920x1080, and a hardcoded geometry pushed the whole thing off the
+        # right edge (and off the bottom) of a smaller display.
         sw, sh = nbapp.screen_size()
-        w = min(620, max(320, sw // 3))
-        h = max(360, sh - PANEL_H - 40)
-        # The live column height caps how many rows each card renders so the
-        # pair always fits this non-scrolling column on the real panel.
+        board_w = max(360, sw - 2 * BOARD_MARGIN)
+        h = max(320, sh - PANEL_H - 2 * BOARD_MARGIN)
         self._avail_h = h
-        self.set_default_size(w, h)
-        self.move(max(0, sw - w - 40), PANEL_H + 16)
+        self._board_w = board_w
+        # ONE cell size for the whole board: five equal columns across the full
+        # width, two equal rows down the full height. Everything else on the
+        # board is derived from these two numbers, which is what keeps the six
+        # tiles identical and the pinned pair exactly two tiles tall.
+        self._tile_w = max(120, (board_w - (GRID_COLS - 1) * BOARD_GAP)
+                           // GRID_COLS)
+        self._tile_h = max(140, (h - BOARD_GAP) // GRID_ROWS)
+        # The pinned pair take the last two columns and the FULL height, so
+        # each is exactly two tiles plus the gap between them.
+        # The pinned pair share ONE column now, so it is one tile wide, not two.
+        self._col_w = self._tile_w
+        self.set_default_size(board_w, h)
+        self.move(BOARD_MARGIN, PANEL_H + BOARD_MARGIN)
         self.get_style_context().add_class("wcol")
 
         self.tasks = self._load_tasks()
+        self.workout = self._load_workout()
         # Both stores are read up front: the tasks card is built first but its
-        # row budget depends on how many events today actually holds (see
-        # _row_caps), so the calendar's data cannot wait for its own card.
+        # row budget depends on how many events today actually holds, so the
+        # calendar's data cannot wait for its own card.
         self.events = self._load_events()
+        self.board = self._load_board()
 
-        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=22)
-        col.set_margin_top(4)
-        self.add(col)
+        # board = [ 3x2 tile grid ][ Tasks over calendar ]
+        board = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                        spacing=BOARD_GAP)
+        self.add(board)
+        self._board = board
+
+        self._tilegrid = Gtk.Grid(row_spacing=BOARD_GAP,
+                                  column_spacing=BOARD_GAP,
+                                  row_homogeneous=True,
+                                  column_homogeneous=True)
+        # Pinned to exactly three tile columns wide so the rounding left over
+        # from dividing the panel into four is absorbed by the pinned column,
+        # never by the tiles -- six tiles that differ by a pixel read as a
+        # broken grid.
+        self._tilegrid.set_size_request(
+            TILE_COLS * self._tile_w + (TILE_COLS - 1) * BOARD_GAP, -1)
+        board.pack_start(self._tilegrid, False, False, 0)
+
+        # The pinned pair, STACKED: Tasks on top, the calendar beneath it. A
+        # HOMOGENEOUS vertical box, so each takes exactly half the board height
+        # whatever its content asks for -- the calendar's month grid would
+        # otherwise claim more than its share and leave Tasks squeezed.
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                      spacing=_COL_SPACING_PX, homogeneous=True)
+        board.pack_end(col, True, True, 0)
         self._col = col
-        col.pack_start(self._tasks_card(), False, False, 0)
         self._cal_card = self._calendar_card()
+        # Fill the column. Both pinned cards are packed into a HORIZONTAL box,
+        # so pack_start's expand/fill governs their WIDTH only — without an
+        # explicit vexpand the calendar card stops where its content stops and
+        # leaves a white gap down to the bottom of the screen, which reads as a
+        # tile that failed to draw rather than as a deliberate edge.
+        self._cal_card.set_vexpand(True)
         self._cal_day = time.localtime()[:3]   # (year, mon, mday) it was built for
-        col.pack_start(self._cal_card, False, False, 0)
+        _tasks = self._tasks_card()
+        _tasks.set_vexpand(True)
+        col.pack_start(_tasks, True, True, 0)      # Tasks on top ...
+        col.pack_start(self._cal_card, True, True, 0)   # ... calendar beneath
+        self._rebuild_tiles()
 
         GLib.timeout_add(2000, self._ensure_mapped)
         GLib.timeout_add(6000, self._ensure_mapped)
         # Watch the app-active flag with an inotify-backed file monitor instead
-        # of stat-polling it ~2.5x a second forever. The flag only flips when an
-        # app opens or closes, so a poll spends the entire session waking the CPU
-        # to learn nothing — and this desktop may be rendering every pixel in
-        # software, where those wakes compete with actual drawing. finder.py
-        # already made exactly this change; this mirrors it.
+        # of stat-polling it ~2.5x a second forever.
         self._app_flag_monitor = None
         try:
             _flag = Gio.File.new_for_path(APP_FLAG)
@@ -368,15 +669,27 @@ class Widgets(Gtk.Window):
                 "changed", lambda *_a: (self._poll_home(), False)[1])
         except Exception:
             pass
+        # Watch the stores the CARDS read, the same way. Without this the board
+        # only re-reads on the app-closed transition, so switching a tile on in
+        # Widget Settings -- or logging a set, or ticking off an assignment --
+        # appears to do nothing until something else happens to open and close.
+        # That reads exactly like the feature being broken, and did.
+        self._store_monitors = []
+        for path in (BOARD_FILE, WORKOUT_FILE, ACADEMICS_FILE, ACADEMICS_LEGACY,
+                     JOURNAL_FILE, ACCOUNTING_FILE, MEALS_FILE, TASKS_FILE,
+                     CAL_FILE):
+            try:
+                mon = Gio.File.new_for_path(path).monitor_file(
+                    Gio.FileMonitorFlags.NONE, None)
+                mon.connect("changed", lambda *_a: (self._reload(), False)[1])
+                self._store_monitors.append(mon)
+            except Exception:
+                pass
         # Reconcile once after start: covers a flag already present when the
-        # widget column (re)launches, which produces no future monitor event.
+        # board (re)launches, which produces no future monitor event.
         GLib.timeout_add(500, lambda: (self._poll_home(), False)[1])
-        # Periodic backstop (every 2s, ~0.5 Hz — negligible, not the old 2.5 Hz
-        # wake): the Gio monitor can MISS a flag create/delete, and the app-flag
-        # itself is best-effort, so without this the column can be left showing
-        # over a running app OR sitting above a window. _poll_home also
-        # re-asserts keep-below each tick, so the column can never drift on top
-        # of a real window even if a raise slipped past _stay_down.
+        # Periodic backstop (every 2s): the Gio monitor can MISS a flag
+        # create/delete, and the app-flag itself is best-effort.
         GLib.timeout_add_seconds(2, self._poll_home)
         # rebuild the calendar when the day rolls over so the circled day, date
         # header and TODAY agenda stay correct if the OS runs across midnight.
@@ -395,10 +708,9 @@ class Widgets(Gtk.Window):
         return False
 
     def _app_active(self):
-        """True if a real app process is alive — read the ref-count dir and
+        """True if a real app process is alive -- read the ref-count dir and
         confirm at least one pid is still in /proc, rather than trusting the
-        (best-effort, sometimes-stale) flag file. Falls back to the flag if the
-        dir is unreadable."""
+        (best-effort, sometimes-stale) flag file."""
         try:
             live = False
             for name in os.listdir(APP_DIR):
@@ -411,25 +723,20 @@ class Widgets(Gtk.Window):
 
     def _poll_home(self):
         # follow the desktop home: hide while a fullscreen app owns the screen,
-        # and — crucially — keep the column BELOW every real window whenever it
+        # and -- crucially -- keep the board BELOW every real window whenever it
         # is shown, so a window is never rendered beneath it.
         try:
             active = self._app_active()
             if active and self.get_visible():
                 self.hide()
             elif not active and not self.get_visible():
-                # desktop home is returning (a fullscreen app closed) — re-read
-                # the shared stores so a task/event added or edited in the Tasks
-                # or Calendar app shows here, then show, then LOWER (show_all
-                # maps the window fresh and matchbox stacks it on top; we must
-                # not depend on map-event alone to re-lower it).
+                # desktop home is returning (a fullscreen app closed) -- re-read
+                # the shared stores, then show, then LOWER (show_all maps the
+                # window fresh and matchbox stacks it on top).
                 self._reload()
                 self.show_all()
                 self._stay_down()
             elif not active and self.get_visible():
-                # already desktop home — re-assert the desktop layer so the
-                # column stays under the Finder even if a raise slipped past
-                # _stay_down (a window must never end up beneath it).
                 self._stay_down()
         except Exception:
             pass
@@ -443,16 +750,31 @@ class Widgets(Gtk.Window):
             self._stay_down()      # re-lower: show_all remaps on top
         return False
 
-    def _reload(self):
-        # Re-read tasks.json + calendar.json and rebuild both cards from the
-        # live stores. Crash-safe — a bad store must never break the desktop.
+    @staticmethod
+    def _safe(step):
+        """Run one rebuild step, swallowing anything it raises.
+
+        Per STEP, not per reload: a single try/except around the whole reload
+        meant a store that had gone bad cost not only its own card but every
+        card rebuilt after it."""
         try:
-            self.tasks = self._load_tasks()
-            self.events = self._load_events()
-            self._rebuild_tasks()
-            self._rebuild_calendar()
+            step()
         except Exception:
             pass
+
+    def _load_stores(self):
+        self.tasks = self._load_tasks()
+        self.events = self._load_events()
+        self.workout = self._load_workout()
+        self.board = self._load_board()
+
+    def _reload(self):
+        # Re-read every shared store and rebuild from it, so a task, an event, a
+        # logged set or an assignment added in an app shows up on the board.
+        self._safe(self._load_stores)
+        self._safe(self._rebuild_tasks)
+        self._safe(self._rebuild_calendar)
+        self._safe(self._rebuild_tiles)
 
     def _rebuild_calendar(self):
         # Swap the calendar card for a freshly built one (current circled day,
@@ -463,7 +785,12 @@ class Widgets(Gtk.Window):
         except Exception:
             pass
         self._cal_card = self._calendar_card()
-        self._col.pack_start(self._cal_card, False, False, 0)
+        self._cal_card.set_vexpand(True)
+        self._col.pack_start(self._cal_card, True, True, 0)
+        # The calendar is rebuilt on a day rollover; put it back BENEATH Tasks
+        # rather than at position 0, or the daily rebuild silently swaps the
+        # two cards over.
+        self._col.reorder_child(self._cal_card, -1)
         self._cal_card.show_all()
 
     def _check_day_rollover(self):
@@ -473,14 +800,796 @@ class Widgets(Gtk.Window):
         try:
             if time.localtime()[:3] != self._cal_day:
                 self._rebuild_calendar()
+                # The tiles date from the same moment: "due in 2 days", "next
+                # class tomorrow", "written today" are all measured against the
+                # day the tile was built on, so a machine left on overnight
+                # spent the next day quoting yesterday's arithmetic.
+                self._safe(self._rebuild_tiles)
         except Exception:
             pass
         return True   # keep checking every minute
 
     # -- stores --
+    def _load_workout(self):
+        """Read the Workout app's store (workout.json). Returns
+        {"on": bool, "rows": [(name, done, goal)], "done": n, "goal": n}.
+
+        Never raises: a bad store must not break the desktop, so every field is
+        re-validated rather than trusted."""
+        blank = {"on": False, "rows": [], "done": 0, "goal": 0, "streak": 0}
+        try:
+            with open(WORKOUT_FILE) as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                return blank
+            today = time.strftime("%Y-%m-%d")
+            log = data.get("log")
+            entry = log.get(today, {}) if isinstance(log, dict) else {}
+            if not isinstance(entry, dict):
+                entry = {}
+            rows, done, goal = [], 0, 0
+            for ex in (data.get("exercises") or []):
+                if not isinstance(ex, dict):
+                    continue
+                name = ex.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                try:
+                    want = max(1, min(20, int(ex.get("sets", 3))))
+                except (TypeError, ValueError):
+                    want = 3
+                sets = entry.get(ex.get("id"))
+                have = len(sets) if isinstance(sets, list) else 0
+                rows.append((name.strip(), have, want))
+                done += have
+                goal += want
+            return {"on": True, "rows": rows, "done": done, "goal": goal,
+                    "streak": self._wo_streak(data, goal)}
+        except Exception:
+            return blank
+
+    @staticmethod
+    def _wo_streak(data, live_goal):
+        """Consecutive days the WHOLE goal was completed, ending today -- or
+        yesterday, while today is still in progress.
+
+        The rule belongs to the Workout app (workout.Workout._streak); this
+        reads the same file by the same rule, off the same shared date
+        arithmetic, so the desktop and the app can never quote two different
+        numbers at the same moment. A past day is measured against the goal it
+        was LOGGED against (data["goals"]), not today's."""
+        log = data.get("log")
+        if not isinstance(log, dict):
+            return 0
+        goals = data.get("goals")
+        goals = goals if isinstance(goals, dict) else {}
+        today = time.strftime("%Y-%m-%d")
+        done_days = set()
+        for day, entry in log.items():
+            o = nbapp.day_ordinal(day)
+            if o is None or not isinstance(entry, dict):
+                continue
+            n = sum(len(v) for v in entry.values() if isinstance(v, list))
+            goal = live_goal if day == today else goals.get(day, live_goal)
+            if isinstance(goal, int) and goal > 0 and n >= goal:
+                done_days.add(o)
+        at = nbapp.day_ordinal(today)
+        if at not in done_days:
+            at -= 1                 # today is unfinished, not yet a miss
+        cur = 0
+        while at in done_days:
+            cur += 1
+            at -= 1
+        return cur
+
+    # -- the tile board ------------------------------------------------------
+
+    def _load_board(self):
+        """Which tiles are switched on. Written only by Widget Settings, so
+        there is one place that owns the desktop's layout instead of a switch
+        buried in each app's menus. Never raises: a bad store falls back to the
+        defaults rather than leaving the desktop empty."""
+        on = dict(TILE_DEFAULT_ON)
+        try:
+            with open(BOARD_FILE) as fh:
+                data = json.load(fh)
+            tiles = data.get("tiles") if isinstance(data, dict) else None
+            if isinstance(tiles, dict):
+                for tid in TILE_ORDER:
+                    if tid in tiles:
+                        on[tid] = bool(tiles[tid])
+        except Exception:
+            pass
+        return on
+
+    @staticmethod
+    def _tile_columns():
+        """How many tiles sit side by side. Fixed: the board is a grid of a
+        known shape, not a pack that reflows with the panel."""
+        return TILE_COLS
+
+    def _rebuild_tiles(self):
+        """Lay the switched-on tiles into the 3x2 grid, in reading order."""
+        for child in self._tilegrid.get_children():
+            self._tilegrid.remove(child)
+        on = [tid for tid in TILE_ORDER
+              if self.board.get(tid)][:TILE_COLS * TILE_ROWS]
+        for slot, tid in enumerate(on):
+            try:
+                tile = self._tile(tid)
+            except Exception:
+                continue        # never a hole AND never a crash: see _tile_card
+            self._tilegrid.attach(tile, slot % TILE_COLS, slot // TILE_COLS,
+                                  1, 1)
+        self._tilegrid.show_all()
+
+    # -- one tile ------------------------------------------------------------
+    #
+    # A reader returns (meta, rows, cta) -- or None when it has nothing to
+    # report, or raises, or hands back something that is not that shape -- and
+    # the tile falls back to its written empty state. It is NEVER dropped: a
+    # hole in the grid reads as the board being broken rather than as one app
+    # having nothing to say.
+    #
+    #   meta : the one-line summary in the header, right-aligned
+    #   rows : [(lead, name, value, hit)], where
+    #            lead  = None | str | ("check", done)
+    #            name  = str, ellipsized, .hit when `hit`
+    #            value = None | str | ("dots", done, goal)
+    #   cta  : None, or (line, hint) -- a two-line call to action shown ABOVE
+    #          the rows. Only Journal uses it, and only when today is unwritten:
+    #          that tile's job is to get an entry written, not to report.
+
+    def _tile_content(self, tid):
+        """(meta, rows, cta, is_empty) for one tile, whatever its reader did."""
+        try:
+            got = getattr(self, "_read_" + tid)()
+        except Exception:
+            got = None
+        meta, rows, cta, chart, mark = "", [], None, None, None
+        if isinstance(got, (tuple, list)) and len(got) >= 5 \
+                and isinstance(got[4], dict):
+            mark = got[4]
+        if isinstance(got, (tuple, list)) and len(got) >= 4 \
+                and isinstance(got[3], (tuple, list)):
+            chart = [v for v in got[3]
+                     if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        if isinstance(got, (tuple, list)) and len(got) >= 2:
+            meta = str(got[0] or "")
+            rows = [r for r in (got[1] or [])
+                    if isinstance(r, (tuple, list)) and len(r) >= 4]
+            if len(got) >= 3 and isinstance(got[2], (tuple, list)) \
+                    and len(got[2]) >= 2:
+                cta = (str(got[2][0] or ""), str(got[2][1] or ""))
+        self._chart = chart
+        self._mark = mark
+        if mark is not None:
+            return meta, rows, cta, False
+        if rows or cta or (chart and len(chart) >= 2):
+            return meta, rows, cta, False
+        state, action = TILE_EMPTY.get(
+            tid, ("No data", "Open %s" % TILE_APP_NAME.get(tid, "")))
+        return "", [], (_t(state), _t(action)), True
+
+    def _tile(self, tid):
+        """One app tile: the same card as Tasks and the calendar, with the app's
+        name in the header, its summary on the right, and its content rows
+        beneath."""
+        meta, rows, cta, empty = self._tile_content(tid)
+        card, body = self._card_shell(_t(TILE_TITLE[tid]), meta)
+        card.set_size_request(self._tile_w, -1)
+
+        # Height budget: the card is exactly one grid cell tall and cannot
+        # scroll, so work out what fits BEFORE laying anything out.
+        chart = getattr(self, "_chart", None)
+        # A card that carries ONE answer (the Journal's written-today mark)
+        # draws it centred and is done -- no rows, no height budget, nothing
+        # else competing with the single thing it is there to say.
+        mark = getattr(self, "_mark", None)
+        if mark is not None:
+            body.pack_start(self._mark_block(mark), True, True, 0)
+            return self._clickable(card, TILE_APP[tid], TILE_ARG.get(tid),
+                                   _t("Open %s") % _t(TILE_APP_NAME[tid]))
+        avail = (self._tile_h - _HEAD_PX - _BODY_PAD_PX - _CARD_BORDER_PX
+                 - (_CTA_PX if cta else 0))
+        fit = max(0, min(MAX_TILE_ROWS, avail // _CROW_PX))
+        if cta:
+            # With rows beneath it the prompt heads the card. With NOTHING
+            # beneath it -- the Journal's reminder, an empty state -- it is the
+            # card's entire contents, so it sits in the middle of the paper
+            # rather than clinging to the top edge over a blank half.
+            alone = not rows and not (chart and len(chart) >= 2)
+            blk = self._cta_block(cta[0], cta[1])
+            if alone:
+                blk.set_valign(Gtk.Align.CENTER)
+            body.pack_start(blk, alone, alone, 0)
+        # Over the cap the LAST slot becomes the "+N more" read-out rather than
+        # a row -- except when only one row fits at all, where a card whose
+        # entire body is "+6 more" tells you nothing; then it shows the row.
+        if fit <= 0:
+            shown, hidden = [], 0
+        elif len(rows) <= fit:
+            shown, hidden = rows, 0
+        elif fit == 1:
+            shown, hidden = rows[:1], 0
+        else:
+            shown = rows[:fit - 1]
+            hidden = len(rows) - len(shown)
+        fill = tid in FILL_TILES
+        for spec in shown:
+            body.pack_start(self._content_row(spec, fill), True, True, 0)
+        if hidden:
+            body.pack_start(self._more_row(hidden), True, True, 0)
+        if chart and len(chart) >= 2:
+            # The card's whole body IS the curve. It expands, so it fills
+            # whatever the rows left rather than sitting in a fixed strip.
+            area = Gtk.DrawingArea()
+            area.set_vexpand(True)
+            area.connect("draw", self._chart_draw, list(chart))
+            body.pack_start(area, True, True, 0)
+        elif tid in FILL_TILES:
+            # These cards say everything they have to say in a few rows, so the
+            # rows SHARE the card instead of stacking at the top over a block of
+            # blank paper -- which read as a half-drawn tile.
+            pass
+        else:
+            # ...stretch what there is towards a comfortable row height, with
+            # the leftover collecting as blank paper at the foot of the card.
+            self._pad_rows(body, len(shown) + (1 if hidden else 0),
+                           avail, _CROW_PX, fit)
+
+        return self._clickable(card, TILE_APP[tid], TILE_ARG.get(tid),
+                               _t("Open %s") % _t(TILE_APP_NAME[tid]))
+
+    def _card_shell(self, title, meta, strong=False):
+        """(card, body) -- the header row every card on this board shares."""
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        card.get_style_context().add_class("card")
+        head = Gtk.Box(spacing=8)
+        head.get_style_context().add_class("chead")
+        tl = Gtk.Label(label=title, xalign=0)
+        tl.get_style_context().add_class("ctitle")
+        tl.set_ellipsize(Pango.EllipsizeMode.END)
+        # max_width_chars pins the NATURAL width: an ellipsizing GtkLabel still
+        # reports its whole string as its natural size, and a homogeneous grid
+        # hands spare width out in proportion to that -- one long title used to
+        # stretch its own column and shrink its neighbour.
+        tl.set_max_width_chars(1)
+        head.pack_start(tl, True, True, 0)
+        ml = Gtk.Label(label=meta or "", xalign=1)
+        mctx = ml.get_style_context()
+        mctx.add_class("cmeta")
+        if strong:
+            mctx.add_class("strong")
+        # The summary keeps its NATURAL width -- it is the fact the header is
+        # for, and a summary rendered as a bare ellipsis is worse than none.
+        # max_width_chars caps how far a runaway one can push the title, but it
+        # must never be 1: on a pack_end child that IS the width it gets, and
+        # every summary on the board came out as a single "..." once.
+        ml.set_ellipsize(Pango.EllipsizeMode.END)
+        ml.set_max_width_chars(18)
+        head.pack_end(ml, False, False, 0)
+        card.pack_start(head, False, False, 0)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        body.get_style_context().add_class("cbody")
+        card.pack_start(body, True, True, 0)
+        return card, body
+
+    def _content_row(self, spec, fill=False):
+        """[lead][name..........][value] -- the one row shape on this board.
+
+        `fill` is the variant used by cards with only a handful of rows and a
+        whole tile to put them in (see FILL_TILES): larger type, more room to
+        breathe, and a wider lead column."""
+        lead, name, value, hit = spec[0], spec[1], spec[2], spec[3]
+        row = Gtk.Box(spacing=9)
+        row.get_style_context().add_class("crow")
+        if fill:
+            row.get_style_context().add_class("fill")
+        if isinstance(lead, (tuple, list)) and lead and lead[0] == "check":
+            chk = _Check(bool(lead[1]), 15)
+            row.pack_start(chk, False, False, 0)
+        elif lead:
+            ll = Gtk.Label(label=str(lead), xalign=0)
+            ll.get_style_context().add_class("clead")
+            ll.set_ellipsize(Pango.EllipsizeMode.END)
+            ll.set_max_width_chars(1)
+            ll.set_size_request(74 if fill else 46, -1)
+            row.pack_start(ll, False, False, 0)
+        nl = Gtk.Label(label=str(name), xalign=0)
+        nctx = nl.get_style_context()
+        nctx.add_class("cname")
+        if hit:
+            nctx.add_class("hit")
+        nl.set_ellipsize(Pango.EllipsizeMode.END)
+        nl.set_max_width_chars(1)
+        row.pack_start(nl, True, True, 0)
+        if isinstance(value, (tuple, list)) and value and value[0] == "dots":
+            row.pack_end(self._dots_cell(value[1], value[2], hit),
+                         False, False, 0)
+        elif value:
+            vl = Gtk.Label(label=str(value), xalign=1)
+            vctx = vl.get_style_context()
+            vctx.add_class("cval")
+            if hit:
+                vctx.add_class("hit")
+            vl.set_ellipsize(Pango.EllipsizeMode.END)
+            vl.set_max_width_chars(1)
+            row.pack_end(vl, False, False, 0)
+        return row
+
+    def _mark_block(self, mark):
+        """A single answer, centred: a tick or a cross, the word, the date.
+
+        Drawn rather than typed: the shipped interface font has no check or
+        cross glyph, so a literal one would come out as an empty box on the
+        real machine (the same trap the whole OS pays for with nbicons).
+        """
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_halign(Gtk.Align.CENTER)
+        area = Gtk.DrawingArea()
+        area.set_size_request(56, 56)
+        area.set_halign(Gtk.Align.CENTER)
+        area.connect("draw", self._mark_draw, bool(mark.get("done")))
+        box.pack_start(area, False, False, 0)
+        lb = Gtk.Label(label=mark.get("label", ""), xalign=0.5)
+        lb.get_style_context().add_class("jmark")
+        lb.get_style_context().add_class("done" if mark.get("done") else "todo")
+        box.pack_start(lb, False, False, 0)
+        dt = Gtk.Label(label=mark.get("date", ""), xalign=0.5)
+        dt.get_style_context().add_class("jdate")
+        dt.set_ellipsize(Pango.EllipsizeMode.END)
+        dt.set_max_width_chars(24)
+        box.pack_start(dt, False, False, 0)
+        return box
+
+    @staticmethod
+    def _mark_draw(area, cr, done):
+        w = area.get_allocated_width()
+        h = area.get_allocated_height()
+        cx, cy = w / 2.0, h / 2.0
+        r = min(w, h) / 2.0 - 3
+        if done:
+            cr.set_source_rgb(0.310, 0.478, 0.227)      # the OS's green
+        else:
+            cr.set_source_rgb(0.784, 0.204, 0.118)      # signage red
+        cr.set_line_width(3.4)
+        cr.set_line_cap(1)                              # ROUND
+        if done:
+            cr.move_to(cx - r * 0.55, cy + r * 0.02)
+            cr.line_to(cx - r * 0.14, cy + r * 0.44)
+            cr.line_to(cx + r * 0.58, cy - r * 0.44)
+        else:
+            cr.move_to(cx - r * 0.45, cy - r * 0.45)
+            cr.line_to(cx + r * 0.45, cy + r * 0.45)
+            cr.move_to(cx + r * 0.45, cy - r * 0.45)
+            cr.line_to(cx - r * 0.45, cy + r * 0.45)
+        cr.stroke()
+        return False
+
+    @staticmethod
+    def _chart_draw(area, cr, series):
+        """The running cash balance as a filled curve.
+
+        Deliberately unlabelled: the exact figure is already in the card's
+        header, so this only has to answer "which way is it going". A flat
+        ledger still draws a line through the middle rather than nothing."""
+        w = area.get_allocated_width()
+        h = area.get_allocated_height()
+        if w < 8 or h < 8 or len(series) < 2:
+            return False
+        pad_t, pad_b = 10.0, 8.0
+        lo, hi = min(series), max(series)
+        span = (hi - lo) or 1.0
+        usable = max(1.0, h - pad_t - pad_b)
+        n = len(series) - 1
+        pts = [(w * i / float(n), pad_t + usable * (1.0 - (v - lo) / span))
+               for i, v in enumerate(series)]
+
+        # Zero line, when the ledger crosses it -- the one gridline that means
+        # something on a cash balance.
+        if lo < 0 < hi:
+            zy = pad_t + usable * (1.0 - (0 - lo) / span)
+            cr.set_source_rgb(0.788, 0.769, 0.722)
+            cr.set_line_width(1)
+            cr.move_to(0, zy + 0.5)
+            cr.line_to(w, zy + 0.5)
+            cr.stroke()
+
+        cr.move_to(pts[0][0], h)
+        for x, y in pts:
+            cr.line_to(x, y)
+        cr.line_to(pts[-1][0], h)
+        cr.close_path()
+        up = series[-1] >= series[0]
+        if up:
+            cr.set_source_rgba(0.310, 0.478, 0.227, 0.16)   # the OS's green
+        else:
+            cr.set_source_rgba(0.784, 0.204, 0.118, 0.14)   # signage red
+        cr.fill()
+
+        cr.move_to(*pts[0])
+        for x, y in pts[1:]:
+            cr.line_to(x, y)
+        if up:
+            cr.set_source_rgb(0.310, 0.478, 0.227)
+        else:
+            cr.set_source_rgb(0.784, 0.204, 0.118)
+        cr.set_line_width(1.6)
+        cr.stroke()
+        return False
+
+    @staticmethod
+    def _dots_cell(done, goal, hit):
+        """The set-dot run, or -- for a goal too long to draw at tile width --
+        the same fact as a plain "4 / 12"."""
+        try:
+            done, goal = int(done), int(goal)
+        except (TypeError, ValueError):
+            done, goal = 0, 0
+        if goal > _Dots.MAX:
+            lbl = Gtk.Label(label="%d / %d" % (done, goal), xalign=1)
+            ctx = lbl.get_style_context()
+            ctx.add_class("cval")
+            if hit:
+                ctx.add_class("hit")
+            return lbl
+        return _Dots(done, goal)
+
+    @staticmethod
+    def _cta_block(line, hint):
+        """The two-line "here is what to do" block -- an empty card's state and
+        its invitation, and the Journal tile's whole reason to exist on a day
+        nothing has been written."""
+        row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        row.get_style_context().add_class("emptyrow")
+        top = Gtk.Label(label=line, xalign=0)
+        top.get_style_context().add_class("emptytext")
+        top.set_ellipsize(Pango.EllipsizeMode.END)
+        top.set_max_width_chars(1)
+        row.pack_start(top, False, False, 0)
+        sub = Gtk.Label(label=hint, xalign=0)
+        sub.get_style_context().add_class("emptyhint")
+        sub.set_ellipsize(Pango.EllipsizeMode.END)
+        sub.set_max_width_chars(1)
+        row.pack_start(sub, False, False, 0)
+        return row
+
+    @staticmethod
+    def _more_row(count):
+        row = Gtk.Box()
+        row.get_style_context().add_class("moretail")
+        more = Gtk.Label(label=_t("+%d more") % count, xalign=0)
+        more.get_style_context().add_class("moretext")
+        more.set_ellipsize(Pango.EllipsizeMode.END)
+        more.set_max_width_chars(1)
+        row.pack_start(more, True, True, 0)
+        return row
+
+    @staticmethod
+    def _pad_rows(body, n, avail, row_px, fit):
+        """Stretch `n` rows towards _ROW_TARGET_PX and park the rest as blank.
+
+        Every row in a card is packed to expand, so a card with a lot to say
+        fills itself. A card with three meals in it would otherwise render them
+        as three enormous bands, so invisible spacers of one row's height are
+        added until the share works out at a comfortable row -- the leftover
+        then collects at the FOOT of the card, where blank paper belongs."""
+        if n <= 0 or avail <= 0 or row_px <= 0:
+            return
+        want = max(1, min(fit if fit > 0 else n, avail // _ROW_TARGET_PX))
+        for _ in range(max(0, want - n)):
+            pad = Gtk.Box()
+            pad.set_size_request(-1, row_px)
+            body.pack_start(pad, True, True, 0)
+
+    @staticmethod
+    def _academics_store():
+        """Where the Academics store actually is, resolved on every read.
+
+        Resolved at READ time rather than once at import because the board is
+        long-running: it starts before the app has ever been opened, and the
+        moment Academics first saves, the store appears under the new name.
+        """
+        try:
+            if not os.path.exists(ACADEMICS_FILE) \
+                    and os.path.exists(ACADEMICS_LEGACY):
+                return ACADEMICS_LEGACY
+        except OSError:
+            pass
+        return ACADEMICS_FILE
+
+    @staticmethod
+    def _read_store(path):
+        """An app's store as a dict, or an empty one.
+
+        Never raises. Every reader goes through here, so a store that is
+        missing, truncated or simply not a dict costs that card its CONTENT --
+        it falls back to its empty state -- rather than costing it its place on
+        the board."""
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _as_list(value):
+        """`value` if it is a list, else an empty one. A store field that
+        should hold a list can hold anything at all once it has been
+        hand-edited, and `for x in 7` raises."""
+        return value if isinstance(value, list) else []
+
+    @staticmethod
+    def _when(days):
+        """A due/starts-on date, as few words as a value column can carry."""
+        if days < 0:
+            return _t("overdue")
+        if days == 0:
+            return _t("today")
+        if days == 1:
+            return _t("tomorrow")
+        return _t("in %d days") % days
+
+    # -- readers -------------------------------------------------------------
+
+    def _read_academics(self):
+        """TODAY'S TIMETABLE, one row per class: when it starts, what it is and
+        where. A day with nothing on falls forward to the next day that has
+        something, because a blank card on a Sunday is a card that answers the
+        wrong question -- what someone wants then is what Monday holds.
+
+        academics.json holds classes as {"name"|"label", "room", "meets":
+        [{"day": 0-6 Monday-first, "start": "HH:MM", "room"}]} -- a WEEKLY
+        pattern, not dated occurrences."""
+        data = self._read_store(self._academics_store())
+        classes = [c for c in self._as_list(data.get("classes"))
+                   if isinstance(c, dict) and (c.get("name") or c.get("label"))]
+        if not classes:
+            return None
+        now = time.localtime()
+        byday = {}
+        for c in classes:
+            for m in self._as_list(c.get("meets")):
+                if not isinstance(m, dict):
+                    continue
+                day, start = m.get("day"), _minutes(m.get("start"))
+                if start is None or not isinstance(day, int) \
+                        or not 0 <= day <= 6:
+                    continue
+                byday.setdefault(day, []).append(
+                    (start, str(c.get("name") or c.get("label")),
+                     str(m.get("room") or c.get("room") or ""),
+                     _fmt_time(m.get("start"))))
+        if not byday:
+            return None
+        # today first, then forward through the week to the next day that has
+        # anything at all.
+        for ahead in range(0, 8):
+            day = (now.tm_wday + ahead) % 7
+            if byday.get(day):
+                break
+        else:                                   # pragma: no cover - byday is set
+            return None
+        todays = sorted(byday[day])
+        if ahead == 0:
+            meta = _t("Today")
+        elif ahead == 1:
+            meta = _t("Tomorrow")
+        else:
+            meta = _t(DAY_NAMES[day])
+        mins_now = now.tm_hour * 60 + now.tm_min
+        rows = [(at, name, room, ahead == 0 and start < mins_now)
+                for start, name, room, at in todays]
+        return meta, rows, None
+
+    def _read_homework(self):
+        """The assignment list, read like the Tasks list beside it: a checkbox
+        mark, the title, and when it is due. Unfinished first, in due order --
+        the cap must never bury a pending assignment behind handed-in ones."""
+        data = self._read_store(self._academics_store())
+        items = [h for h in self._as_list(data.get("homework"))
+                 if isinstance(h, dict) and h.get("title")]
+        if not items:
+            return None
+        today = nbapp.day_ordinal(time.strftime("%Y-%m-%d"))
+        open_, done_ = [], []
+        for h in items:
+            o = nbapp.day_ordinal(h.get("due"))
+            (done_ if h.get("done") else open_).append((o, h))
+        open_.sort(key=lambda p: (p[0] is None, p[0] or 0))
+        done_.sort(key=lambda p: (p[0] is None, p[0] or 0), reverse=True)
+        rows = []
+        for o, h in open_ + done_:
+            is_done = bool(h.get("done"))
+            if is_done:
+                when = _t("done")
+            elif o is None or today is None:
+                when = ""
+            else:
+                when = self._when(o - today)
+            rows.append((("check", is_done), str(h["title"]), when, is_done))
+        n = len(open_)
+        meta = _t("Nothing to do") if not n else _t("%d to do") % n
+        return meta, rows, None
+
+    def _read_meals(self):
+        """TODAY'S THREE MEALS as a chart -- breakfast, lunch and dinner, each
+        with what is planned or an honest blank. Not just the next one: the
+        question the card answers is "what am I eating today".
+
+        The plan is parsed by mealplanner.read_plan rather than re-read here,
+        so the tile and the app can never disagree about what is in it."""
+        try:
+            import mealplanner
+            plan = mealplanner.read_plan(MEALS_FILE)
+        except Exception:
+            return None
+        if not plan:
+            return None
+        today = time.strftime("%Y-%m-%d")
+        slots = plan.get(today) or {}
+        rows, planned = [], 0
+        for meal in MEAL_KEYS:
+            slot = slots.get(meal)
+            name = _t(MEAL_NAMES[meal])
+            if not slot:
+                rows.append((name, _t("Nothing planned"), "", False))
+                continue
+            planned += 1
+            note = _t("takeaway") if slot.get("kind") == "takeout" else ""
+            rows.append((name, str(slot.get("title") or ""), note, False))
+        if not planned:
+            # today is blank, but the plan itself is not: say when the next
+            # planned day is rather than pretending the app is empty.
+            nxt = sorted(d for d in plan if d > today)
+            if not nxt:
+                return None
+            rows = []
+            for meal in MEAL_KEYS:
+                slot = (plan.get(nxt[0]) or {}).get(meal)
+                if slot:
+                    rows.append((_t(MEAL_NAMES[meal]),
+                                 str(slot.get("title") or ""), "", False))
+            if not rows:
+                return None
+            return _t("Tomorrow") if nxt[0] == self._day_after(today) \
+                else _t("Coming up"), rows, None
+        return _t("Today"), rows, None
+
+    @staticmethod
+    def _day_after(iso):
+        """The ISO day after `iso`, or "" -- used only to decide whether the
+        next planned day can honestly be called tomorrow."""
+        try:
+            y, m, d = (int(p) for p in str(iso).split("-"))
+            nxt = datetime.date(y, m, d) + datetime.timedelta(days=1)
+            return "%04d-%02d-%02d" % (nxt.year, nxt.month, nxt.day)
+        except Exception:
+            return ""
+
+    def _read_workout(self):
+        """Today against the goal, exercise by exercise: the name, and a run of
+        dots -- one per set in the goal, filled for each set logged. The header
+        carries the day's total, or the streak once the day is complete."""
+        wo = self.workout
+        goal, done = wo.get("goal", 0), wo.get("done", 0)
+        rows = [r for r in wo.get("rows") or []
+                if isinstance(r, (tuple, list)) and len(r) == 3]
+        if not goal or not rows:
+            return None
+        streak = wo.get("streak") or 0
+        if done >= goal:
+            meta = (_t("%d day streak") % streak if streak
+                    else _t("Today is done"))
+        else:
+            meta = _t("%d of %d sets") % (done, goal)
+        out = [(None, name, ("dots", have, want), have >= want)
+               for name, have, want in rows]
+        return meta, out, None
+
+    def _read_journal(self):
+        """Written today, or not. That is the whole card.
+
+        It carries ONE fact, so it shows one mark: a green check when today has
+        been written, a red cross when it has not, with the date under it. The
+        earlier version listed past entries beneath the prompt, which buried
+        the only question the card exists to ask.
+
+        Returns (meta, rows, cta, chart, mark) -- `mark` is what _tile() draws.
+        """
+        data = self._read_store(JOURNAL_FILE)
+        entries = [e for e in self._as_list(data.get("entries"))
+                   if isinstance(e, dict)]
+        today = nbapp.day_ordinal(time.strftime("%Y-%m-%d"))
+        newest = None
+        for e in entries:
+            o = self._journal_ordinal(e)
+            if o is not None and (newest is None or o > newest):
+                newest = o
+        done = (newest is not None and today is not None and newest >= today)
+        when = time.strftime("%A %d %B")
+        return ("", [], None, None,
+                {"done": done,
+                 "label": _t("Written") if done else _t("Not written"),
+                 "date": when})
+
+    def _read_journal_history(self):
+        """Kept for the tests that walk the older shape; not used by the tile."""
+        data = self._read_store(JOURNAL_FILE)
+        entries = [e for e in self._as_list(data.get("entries"))
+                   if isinstance(e, dict)]
+        today = nbapp.day_ordinal(time.strftime("%Y-%m-%d"))
+        dated = sorted(((self._journal_ordinal(e), e) for e in entries),
+                       key=lambda p: (p[0] is None, -(p[0] or 0)))
+        rows = []
+        for o, e in dated:
+            title = str(e.get("title") or "").strip() or _t("Untitled entry")
+            if o is None or today is None:
+                when = ""
+            elif o >= today:
+                when = _t("today")
+            elif o == today - 1:
+                when = _t("yesterday")
+            else:
+                when = _t("%d days ago") % (today - o)
+            rows.append((None, title, when, o is not None and o >= today))
+        return rows
+
+    @staticmethod
+    def _journal_ordinal(entry):
+        """A journal entry's day number, from its `day` + `month_label`."""
+        try:
+            day = int(str(entry.get("day")).strip())
+            month, year = str(entry.get("month_label")).rsplit(" ", 1)
+            return nbapp.day_ordinal("%04d-%02d-%02d"
+                                     % (int(year), MONTHS.index(month) + 1, day))
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _read_accounting(self):
+        """The CASH BALANCE, and the entries it is made of.
+
+        Accounting stores {"tx": [{"date", "desc", "amt"}], "opening": ...} --
+        not a "transactions" list, and the amount key is "amt". The balance is
+        the opening figure plus every amount, formatted exactly as
+        accounting._money formats it, so the tile and the app can never show
+        two different balances for the same ledger."""
+        data = self._read_store(ACCOUNTING_FILE)
+        txns = [t for t in self._as_list(data.get("tx")) if isinstance(t, dict)]
+        try:
+            total = float(data.get("opening") or 0)
+        except (TypeError, ValueError):
+            total = 0.0
+        for t in txns:
+            try:
+                total += float(t.get("amt") or 0)
+            except (TypeError, ValueError):
+                continue
+        if not txns and not total:
+            return None
+        # The balance, and the SHAPE of how it got there -- nothing else. The
+        # list of individual entries belongs in the app; on a card it was six
+        # lines of detail answering a question ("am I alright?") that the
+        # number and the curve answer at a glance.
+        try:
+            opening = float(data.get("opening") or 0)
+        except (TypeError, ValueError):
+            opening = 0.0
+        series = [opening]
+        for t in sorted(txns, key=lambda x: str(x.get("date") or "")):
+            try:
+                series.append(series[-1] + float(t.get("amt") or 0))
+            except (TypeError, ValueError):
+                continue
+        return _fmt_money(total), [], None, series
+
     def _load_tasks(self):
         """Read the shared flat task list (tasks.json: [{text, done}, ...]) the
-        Tasks app writes. Nothing is seeded — a missing / unreadable / empty
+        Tasks app writes. Nothing is seeded -- a missing / unreadable / empty
         store yields [] and the card shows its empty-state. Never raises."""
         try:
             with open(TASKS_FILE) as fh:
@@ -504,7 +1613,7 @@ class Widgets(Gtk.Window):
         """Read the Calendar app's shared event store (calendar.json:
         [{date, start, end, title, cal}, ...]). Returns normalized events
         {ymd:(y,m,d), start_min:int|None, time:'HH:MM', title:str}. Dates are
-        parsed by plain int split — NEVER import calendar / time.strptime (the
+        parsed by plain int split -- NEVER import calendar / time.strptime (the
         DE's calendar.py shadows the stdlib module on PYTHONPATH). A missing /
         unreadable / empty store yields []. Never raises."""
         try:
@@ -561,8 +1670,7 @@ class Widgets(Gtk.Window):
 
     def _today_events(self):
         """Today's events from the cached store, ordered by start time; timeless
-        events (start_min is None) sort last. Read by BOTH the calendar card and
-        the row budget, so it must not depend on either being built."""
+        events (start_min is None) sort last."""
         now = time.localtime()
         ymd = (now.tm_year, now.tm_mon, now.tm_mday)
         agenda = [e for e in getattr(self, "events", []) if e["ymd"] == ymd]
@@ -571,66 +1679,31 @@ class Widgets(Gtk.Window):
                                    else 0))
         return agenda
 
-    @staticmethod
-    def _rows_px(n, cap, row_px, tail_px, empty_px):
-        """Height a card's row area really takes for `n` items under `cap`.
-        Over the cap the last slot becomes the shorter "+N more" line, which is
-        exactly how _rebuild_tasks / _calendar_card render it; with nothing to
-        show the card still draws its one-line empty state, not nothing."""
-        if n <= 0:
-            return empty_px
-        if n > cap:
-            return (cap - 1) * row_px + tail_px
-        return n * row_px
-
     def _row_caps(self):
-        """(task_rows, agenda_rows) the two cards may render so the pair FITS the
-        fixed, non-scrolling column on the REAL panel. The column height comes
-        from the live monitor (never 1920x1080), so on a short panel (e.g. 768px)
-        this trims rows instead of pushing the calendar's agenda off the bottom
-        of the screen; a tall panel keeps the full MAX_* caps. Called only when a
-        card is (re)built — never per frame — so it costs nothing to redraw."""
+        """(task_rows, agenda_rows) the two pinned cards may render so they FIT
+        their cells on the REAL panel.
+
+        Tasks and the calendar now SHARE one column, stacked, so each gets ONE
+        tile height -- not the whole column. Budgeting both from the full column
+        height (which is what this did when they stood side by side) let each
+        card ask for the entire board, and GTK answers an impossible request by
+        squeezing: the bottom tasks and the agenda were clipped off with no
+        scrollbar to reach them. The budget comes from the live cell height,
+        never a hardcoded 1080. Called only when a card is (re)built."""
         try:
-            avail = int(self._avail_h)
+            avail = int(self._tile_h)
         except Exception:
-            avail = 994
+            avail = 490
+        # Tasks: the whole card, less its header, padding and hairline.
+        task_room = avail - _HEAD_PX - _BODY_PAD_PX - _CARD_BORDER_PX
+        task_cap = max(1, min(MAX_TASK_ROWS, task_room // _TASK_ROW_PX))
+        # Calendar: the same, less the month grid (a SIX-week month is the worst
+        # case and the one a five-week month hides) and the TODAY label.
         now = time.localtime()
         weeks = len(_month_weeks(now.tm_year, now.tm_mon))
-        # Fixed (non-row) chrome: both headers, the month grid, the agenda label,
-        # and the column's margins/paddings. Whatever's left is the row budget.
-        fixed = (2 * _HEAD_PX + _GRID_WD_PX + weeks * _GRID_ROW_PX + _GRID_PAD_PX
-                 + _AGSEC_PX + _COL_CHROME_PX)
-        budget = avail - fixed
-        # Start from what each card actually HAS to show, never from the maxima.
-        # Budgeting for six agenda rows on a day that holds one event used to
-        # spend 165px of a 768px panel's column on nothing, which starved the
-        # task list to a single row and still left the column short of the
-        # bottom of the screen.
-        n_tasks = len(self.tasks)
-        n_events = len(self._today_events())
-        task_cap = min(MAX_TASK_ROWS, max(1, n_tasks))
-        ag_cap = min(MAX_AGENDA_ROWS, max(1, n_events))
-
-        def used(tc, ac):
-            return (self._rows_px(n_tasks, tc, _TASK_ROW_PX, _MORE_ROW_PX,
-                                  _TASK_EMPTY_PX)
-                    + self._rows_px(n_events, ac, _AGENDA_ROW_PX,
-                                    _AGENDA_ROW_PX, _AGENDA_EMPTY_PX))
-        # Trim the taller consumer first until the pair fits, flooring at 2 rows
-        # each (any real panel is >= ~720px tall, which clears that floor).
-        while used(task_cap, ag_cap) > budget:
-            t_px = self._rows_px(n_tasks, task_cap, _TASK_ROW_PX, _MORE_ROW_PX,
-                                 _TASK_EMPTY_PX)
-            a_px = self._rows_px(n_events, ag_cap, _AGENDA_ROW_PX,
-                                 _AGENDA_ROW_PX, _AGENDA_EMPTY_PX)
-            if task_cap > 2 and t_px >= a_px:
-                task_cap -= 1
-            elif ag_cap > 2:
-                ag_cap -= 1
-            elif task_cap > 2:
-                task_cap -= 1
-            else:
-                break
+        grid = _GRID_WD_PX + weeks * _GRID_ROW_PX + _GRID_PAD_PX
+        ag_room = (avail - _HEAD_PX - _CARD_BORDER_PX - grid - _AGSEC_PX)
+        ag_cap = max(0, min(MAX_AGENDA_ROWS, ag_room // _AGENDA_ROW_PX))
         return task_cap, ag_cap
 
     def _clickable(self, child, mod, arg=None, tip=None):
@@ -638,8 +1711,7 @@ class Widgets(Gtk.Window):
 
         A WINDOWLESS EventBox (visible_window False): it is an input-only layer
         over the already-painted card, so it adds no window that could scan out
-        black on the no-compositor framebuffer — the same trick the mini-month
-        day cells use."""
+        black on the no-compositor framebuffer."""
         hit = Gtk.EventBox()
         hit.set_visible_window(False)
         hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
@@ -663,22 +1735,26 @@ class Widgets(Gtk.Window):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         card.get_style_context().add_class("card")
 
-        head = Gtk.Box()
+        head = Gtk.Box(spacing=8)
         head.get_style_context().add_class("chead")
         title = Gtk.Label(label=_t("Tasks"), xalign=0)
         title.get_style_context().add_class("ctitle")
-        head.pack_start(title, False, False, 0)
+        title.set_ellipsize(Pango.EllipsizeMode.END)
+        title.set_max_width_chars(1)
+        head.pack_start(title, True, True, 0)
         self._progress = Gtk.Label(xalign=1)
         self._progress.get_style_context().add_class("cmeta")
+        self._progress.set_ellipsize(Pango.EllipsizeMode.END)
+        self._progress.set_max_width_chars(1)
         head.pack_end(self._progress, False, False, 0)
-        # The card could tick a task but never ADD one — the app that owns it
+        # The card could tick a task but never ADD one -- the app that owns it
         # was unreachable from the desktop. Its heading now opens it.
         card.pack_start(self._clickable(head, "tasks", tip=_t("Open Tasks")),
                         False, False, 0)
 
         self._tasklist = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._tasklist.get_style_context().add_class("tasklist")
-        card.pack_start(self._tasklist, False, False, 0)
+        card.pack_start(self._tasklist, True, True, 0)
         self._rebuild_tasks()
         return card
 
@@ -692,35 +1768,24 @@ class Widgets(Gtk.Window):
         # order.
         self._task_labels = {}
         self._task_checks = {}
+        avail = self._avail_h - _HEAD_PX - _BODY_PAD_PX - _CARD_BORDER_PX
         if not self.tasks:
-            # An empty card that says only "No tasks" is a wasted quarter of
-            # the desktop on the day someone first switches the machine on. Say
-            # what to do about it, and be the thing that does it.
-            row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            row.get_style_context().add_class("emptyrow")
-            empty = Gtk.Label(label=_t("Nothing to do yet"), xalign=0)
-            empty.get_style_context().add_class("emptytext")
-            row.pack_start(empty, False, False, 0)
-            hint = Gtk.Label(label=_t("Open Tasks to write your first one"),
-                             xalign=0)
-            hint.get_style_context().add_class("emptyhint")
-            row.pack_start(hint, False, False, 0)
+            # The card is also the way in: the second line names where tasks are
+            # entered, and the block itself opens Tasks.
+            row = self._cta_block(_t("No tasks"),
+                                  _t("Click to add a task"))
             self._tasklist.pack_start(
                 self._clickable(row, "tasks", tip=_t("Open Tasks")),
                 False, False, 0)
             self._tasklist.show_all()
             self._progress.set_text("")
             return
-        # Unfinished tasks first — the actionable ones a demanding user wants on
+        # Unfinished tasks first -- the actionable ones a demanding user wants on
         # the desktop, and so the cap never buries a pending task behind ticked
-        # ones. The stable sort keeps each group in its store order. Ticking a
-        # row updates it in place (never reorders under the cursor), so this only
-        # re-sorts on a full reload.
+        # ones. The stable sort keeps each group in its store order.
         order = sorted(range(len(self.tasks)),
                        key=lambda i: self.tasks[i]["done"])
-        # Cap to what FITS the real column height (see _row_caps): on a short
-        # panel show fewer so the calendar card below can never be pushed off the
-        # bottom of the screen. On a tall panel this stays at MAX_TASK_ROWS.
+        # Cap to what FITS the real cell height (see _row_caps).
         cap = self._row_caps()[0]
         hidden = 0
         if len(order) > cap:
@@ -732,11 +1797,11 @@ class Widgets(Gtk.Window):
             # target and the Tasks app). A visible-window EventBox is the styled,
             # opaque .taskrow surface: it draws the hairline + papertone reliably
             # on the framebuffer and, being the child widgets' parent window,
-            # catches a click anywhere on the row — including on the checkbox.
+            # catches a click anywhere on the row -- including on the checkbox.
             hit = Gtk.EventBox()
             hit.get_style_context().add_class("taskrow")
             hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-            row = Gtk.Box(spacing=14)
+            row = Gtk.Box(spacing=12)
             row.get_style_context().add_class("taskrowbody")
             hit.add(row)
             chk = _Check(t["done"])
@@ -746,18 +1811,20 @@ class Widgets(Gtk.Window):
             lbl.get_style_context().add_class("tasktext")
             # a long task title must ellipsize, never widen the fixed column.
             lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(1)
             self._apply_task_style(lbl, t["done"])
             self._task_labels[i] = lbl
             row.pack_start(lbl, True, True, 0)
             hit.connect("button-press-event", self._on_task_row_press, i)
-            self._tasklist.pack_start(hit, False, False, 0)
+            self._tasklist.pack_start(hit, True, True, 0)
         if hidden:
-            row = Gtk.Box()
-            row.get_style_context().add_class("moretail")
-            more = Gtk.Label(label=_t("+%d more") % hidden, xalign=0)
-            more.get_style_context().add_class("moretext")
-            row.pack_start(more, True, True, 0)
-            self._tasklist.pack_start(row, False, False, 0)
+            # "+3 more" is a promise that the rest is somewhere. Clicking it
+            # has to take you there, or it is only an apology.
+            self._tasklist.pack_start(
+                self._clickable(self._more_row(hidden), "tasks",
+                                tip=_t("Open Tasks")), True, True, 0)
+        self._pad_rows(self._tasklist, len(order) + (1 if hidden else 0),
+                       avail, _TASK_ROW_PX, cap)
         self._tasklist.show_all()
         self._update_progress()
 
@@ -790,7 +1857,7 @@ class Widgets(Gtk.Window):
         """Where the task we are showing sits in the list that is ACTUALLY on
         disk right now. Prefers the same slot (the ordinary case), then a slot
         holding the same text in the state we last saw it in, then any slot
-        with that text. None means it is not on disk at all — it was edited or
+        with that text. None means it is not on disk at all -- it was edited or
         deleted elsewhere, and must not be written back."""
         if 0 <= idx < len(disk) and disk[idx]["text"] == text:
             return idx
@@ -805,12 +1872,9 @@ class Widgets(Gtk.Window):
     def _toggle_task(self, idx):
         # READ-MODIFY-WRITE against the file, never a blind write of the list
         # this card happens to be holding. self.tasks is a snapshot taken when
-        # the desktop last came back (see _poll_home), and the Tasks app can
-        # have written newer tasks since — the app-active flag it is keyed on
-        # clears before that app has finished saving. Writing the snapshot back
-        # would silently erase everything added in between; applying the single
-        # change to what is on disk cannot. (Same pattern tasks.py uses for
-        # calendar.json.)
+        # the desktop last came back, and the Tasks app can have written newer
+        # tasks since. Writing the snapshot back would silently erase everything
+        # added in between; applying the single change to what is on disk cannot.
         if not (0 <= idx < len(self.tasks)):
             return
         shown = self.tasks
@@ -841,12 +1905,12 @@ class Widgets(Gtk.Window):
             self._apply_task_style(lbl, done)
         chk = self._task_checks.get(idx)
         if chk is not None:
-            chk.set_done(done)          # repaints just the 21px box, not the row
+            chk.set_done(done)          # repaints just the box, not the row
         self._update_progress()
 
     def _update_progress(self):
         done = sum(1 for t in self.tasks if t["done"])
-        self._progress.set_text("%d / %d done" % (done, len(self.tasks)))
+        self._progress.set_text(_t("%d / %d done") % (done, len(self.tasks)))
 
     # -- Calendar card --
     def _calendar_card(self):
@@ -856,56 +1920,55 @@ class Widgets(Gtk.Window):
         y, m, today = now.tm_year, now.tm_mon, now.tm_mday
 
         events = self.events
-        # this-month event dots + today's agenda, both from the real store.
+        # this-month event marks + today's agenda, both from the real store.
         event_days = {e["ymd"][2] for e in events
                       if e["ymd"][0] == y and e["ymd"][1] == m}
         agenda = self._today_events()
 
-        head = Gtk.Box()
+        head = Gtk.Box(spacing=8)
         head.get_style_context().add_class("chead")
-        title = Gtk.Label(label="%s %d" % (MONTHS[m - 1], y), xalign=0)
+        title = Gtk.Label(label="%s %d" % (_t(MONTHS[m - 1]), y), xalign=0)
         title.get_style_context().add_class("ctitle")
-        head.pack_start(title, False, False, 0)
-        sub = Gtk.Label(label="%s %d %s" % (WD_ABBR[now.tm_wday], today, MONTHS[m - 1]),
+        title.set_ellipsize(Pango.EllipsizeMode.END)
+        title.set_max_width_chars(1)
+        head.pack_start(title, True, True, 0)
+        sub = Gtk.Label(label="%s %d" % (_t(WD_ABBR[now.tm_wday]), today),
                         xalign=1)
         sub.get_style_context().add_class("cmeta")
-        # Ellipsize + take the leftover width so a long date ("Wed 30 September")
-        # can never force the card wider than a narrow column and off the right
-        # edge of the panel; it still right-aligns, so short dates look unchanged.
         sub.set_ellipsize(Pango.EllipsizeMode.END)
-        head.pack_end(sub, True, True, 0)
+        sub.set_max_width_chars(1)
+        head.pack_end(sub, False, False, 0)
         # the heading opens the Calendar on today, exactly as clicking a day
-        # opens it on that day — the card is a way in, not just a read-out.
+        # opens it on that day -- the card is a way in, not just a read-out.
         today_iso = "%04d-%02d-%02d" % (y, m, today)
         card.pack_start(
             self._clickable(head, "calendar", today_iso, _t("Open Calendar")),
             False, False, 0)
 
-        grid = Gtk.Grid(column_homogeneous=True, row_spacing=2, column_spacing=2)
+        # No row spacing: each day cell already carries its own height, and the
+        # gap between week rows is the cheapest vertical space on the card.
+        grid = Gtk.Grid(column_homogeneous=True, row_spacing=0, column_spacing=2)
         grid.get_style_context().add_class("calgrid")
+        weeks = _month_weeks(y, m)
         for c, wd in enumerate(WEEKDAYS):
-            l = Gtk.Label(label=wd)
+            l = Gtk.Label(label=_t(wd))
             l.get_style_context().add_class("calwd")
             grid.attach(l, c, 0, 1, 1)
-        for r, week in enumerate(_month_weeks(y, m), start=1):
+        for r, week in enumerate(weeks, start=1):
             for c, day in enumerate(week):
                 if day is None:
                     continue
-                cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-                cell.set_halign(Gtk.Align.CENTER)
                 lbl = Gtk.Label(label=str(day))
                 # CENTER (not the default FILL) so today's red border-radius:50%
                 # background is a tight circle, not a column-wide pill.
                 lbl.set_halign(Gtk.Align.CENTER)
                 lbl.set_valign(Gtk.Align.CENTER)
-                lbl.get_style_context().add_class("calday")
+                ctx = lbl.get_style_context()
+                ctx.add_class("calday")
                 if day == today:
-                    lbl.get_style_context().add_class("today")
-                cell.pack_start(lbl, False, False, 0)
-                dot = Gtk.Label(label="•" if (day in event_days and day != today) else " ")
-                dot.set_halign(Gtk.Align.CENTER)
-                dot.get_style_context().add_class("caldot")
-                cell.pack_start(dot, False, False, 0)
+                    ctx.add_class("today")
+                elif day in event_days:
+                    ctx.add_class("hasev")
                 # Clicking a day opens the Calendar app to that day. A windowless
                 # EventBox (set_visible_window False) is an input-only click
                 # target laid over the already-painted card surface, so it adds
@@ -914,49 +1977,93 @@ class Widgets(Gtk.Window):
                 hit = Gtk.EventBox()
                 hit.set_visible_window(False)
                 hit.set_halign(Gtk.Align.CENTER)
+                hit.set_vexpand(True)
                 hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-                hit.add(cell)
+                hit.add(lbl)
                 iso = "%04d-%02d-%02d" % (y, m, day)
                 hit.connect("button-press-event", self._on_day_press, iso)
                 grid.attach(hit, c, r, 1, 1)
-        card.pack_start(grid, False, False, 0)
+        # The month is the anchor of this card, so it takes the slack the card
+        # has left over -- but only up to a comfortable week row. Past that the
+        # card would be one enormous month with a footnote, so the surplus is
+        # parked as blank paper at the foot of the card by an explicit filler.
+        #
+        # The stretch is done with VEXPAND, never a size request: a request
+        # would change the grid's PREFERRED height, and that is the number
+        # measure_widget_rows reads _GRID_ROW_PX / _GRID_PAD_PX back off. The
+        # constants must keep describing the unstretched month.
+        grid.set_vexpand(True)
+        card.pack_start(grid, True, True, 0)
 
-        sec = Gtk.Label(label=_t("TODAY"), xalign=0)
-        sec.get_style_context().add_class("agsec")
-        card.pack_start(sec, False, False, 0)
-        if not agenda:
-            # "No events" is technically true and completely inert. This says
-            # the same thing in the user's words and offers the way in.
-            empty = Gtk.Label(label=_t("Nothing scheduled today"), xalign=0)
-            empty.get_style_context().add_class("agempty")
-            card.pack_start(
-                self._clickable(empty, "calendar", today_iso,
-                                _t("Open Calendar")),
-                False, False, 0)
-        else:
-            # Cap a packed day so the agenda can't run off the fixed column; the
-            # tail is summed into a "+N more" line (full day in the Calendar app).
-            cap = self._row_caps()[1]
-            hidden = 0
-            if len(agenda) > cap:
-                hidden = len(agenda) - (cap - 1)
-                agenda = agenda[:cap - 1]
-            for ev in agenda:
-                row = Gtk.Box(spacing=16)
-                row.get_style_context().add_class("agrow")
-                tl = Gtk.Label(label=ev["time"], xalign=0)
-                tl.get_style_context().add_class("agtime")
-                tl.set_size_request(48, -1)
-                row.pack_start(tl, False, False, 0)
-                xl = Gtk.Label(label=ev["title"], xalign=0)
-                xl.get_style_context().add_class("agtext")
-                xl.set_ellipsize(Pango.EllipsizeMode.END)
-                row.pack_start(xl, True, True, 0)
-                card.pack_start(row, False, False, 0)
-            if hidden:
-                more = Gtk.Label(label=_t("+%d more") % hidden, xalign=0)
-                more.get_style_context().add_class("agempty")
-                card.pack_start(more, False, False, 0)
+        cap = self._row_caps()[1]
+        n_agenda = min(cap, len(agenda)) if agenda else (1 if cap else 0)
+        natural = (_HEAD_PX + _CARD_BORDER_PX
+                   + _GRID_WD_PX + len(weeks) * _GRID_ROW_PX + _GRID_PAD_PX
+                   + (_AGSEC_PX + n_agenda * _AGENDA_ROW_PX if cap else 0))
+        # ONE tile height, not the whole column: the calendar sits UNDER Tasks
+        # now and gets half the column. Measured against _avail_h it stretched
+        # its month grid to fill the entire board, and in a homogeneous column
+        # that demand was then doubled -- the pinned pair asked for 1760px of a
+        # 998px screen, and GTK resolved it by clipping both.
+        spare = max(0, self._tile_h - natural)
+        grid_share = min(spare, len(weeks) * (_GRID_TARGET_PX - _GRID_ROW_PX))
+
+        if cap:
+            sec = Gtk.Label(label=_t("TODAY"), xalign=0)
+            sec.get_style_context().add_class("agsec")
+            card.pack_start(sec, False, False, 0)
+            if not agenda:
+                # "No events" is technically true and completely inert. This
+                # says the same thing in the user's words and offers the way in.
+                empty = Gtk.Label(label=_t("Nothing scheduled today"), xalign=0)
+                empty.get_style_context().add_class("agempty")
+                empty.set_ellipsize(Pango.EllipsizeMode.END)
+                empty.set_max_width_chars(1)
+                card.pack_start(
+                    self._clickable(empty, "calendar", today_iso,
+                                    _t("Open Calendar")),
+                    False, False, 0)
+            else:
+                # Cap a packed day so the agenda can't run off the fixed card;
+                # the tail is summed into a "+N more" line.
+                hidden = 0
+                if len(agenda) > cap:
+                    hidden = len(agenda) - (cap - 1)
+                    agenda = agenda[:cap - 1]
+                for ev in agenda:
+                    row = Gtk.Box(spacing=12)
+                    row.get_style_context().add_class("agrow")
+                    tl = Gtk.Label(label=ev["time"], xalign=0)
+                    tl.get_style_context().add_class("agtime")
+                    tl.set_size_request(42, -1)
+                    row.pack_start(tl, False, False, 0)
+                    xl = Gtk.Label(label=ev["title"], xalign=0)
+                    xl.get_style_context().add_class("agtext")
+                    xl.set_ellipsize(Pango.EllipsizeMode.END)
+                    xl.set_max_width_chars(1)
+                    row.pack_start(xl, True, True, 0)
+                    # Every part of this card opens the Calendar on the day it
+                    # is about -- the heading, a day in the grid, and an event
+                    # in the agenda. An event you cannot click is the one dead
+                    # spot.
+                    card.pack_start(
+                        self._clickable(row, "calendar", today_iso,
+                                        _t("Open Calendar")), False, False, 0)
+                if hidden:
+                    more = Gtk.Label(label=_t("+%d more") % hidden, xalign=0)
+                    more.get_style_context().add_class("agempty")
+                    more.set_ellipsize(Pango.EllipsizeMode.END)
+                    more.set_max_width_chars(1)
+                    card.pack_start(
+                        self._clickable(more, "calendar", today_iso,
+                                        _t("Open Calendar")), False, False, 0)
+        # The blank paper below the agenda. Sized rather than expanded, so the
+        # month grid above it -- the only vexpanding child -- takes exactly
+        # `grid_share` of the slack and no more.
+        if spare > grid_share:
+            foot = Gtk.Box()
+            foot.set_size_request(-1, spare - grid_share)
+            card.pack_start(foot, False, False, 0)
         return card
 
     def _on_day_press(self, _w, ev, iso):
@@ -974,11 +2081,33 @@ class Widgets(Gtk.Window):
         """Open the Calendar app on a given ISO 'YYYY-MM-DD' day."""
         self._launch("calendar", iso)
 
+    def _on_board_press(self, _w, ev):
+        """Right-click the desktop -> the board's own menu."""
+        if getattr(ev, "button", 0) != 3:
+            return False
+        try:
+            menu = Gtk.Menu()
+            menu.get_style_context().add_class("boardmenu")
+            for label, mod in ((_t("Widget Settings…"), "widgetsettings"),):
+                item = Gtk.MenuItem(label=label)
+                item.connect("activate",
+                             lambda _i, m=mod: self._launch(m))
+                menu.append(item)
+            menu.show_all()
+            # attach_to_widget so GTK tears the menu down with the board, and
+            # popup_at_pointer so it opens where the click was rather than at
+            # the top-left of a full-desktop window.
+            menu.attach_to_widget(self, None)
+            menu.popup_at_pointer(ev)
+        except Exception:
+            return False
+        return True
+
     def _launch(self, mod, arg=None):
-        """Launch a DE app the same way the desktop spawns every app —
-        python3 <DE_DIR>/<mod>.py with PYTHONPATH pinned to DE_DIR — optionally
+        """Launch a DE app the same way the desktop spawns every app --
+        python3 <DE_DIR>/<mod>.py with PYTHONPATH pinned to DE_DIR -- optionally
         handing it an argv[1]. A failed launch (missing python3 or module)
-        degrades silently, never crashing the desktop widget column."""
+        degrades silently, never crashing the desktop board."""
         argv = ["python3", os.path.join(DE_DIR, mod + ".py")]
         if arg:
             argv.append(arg)
