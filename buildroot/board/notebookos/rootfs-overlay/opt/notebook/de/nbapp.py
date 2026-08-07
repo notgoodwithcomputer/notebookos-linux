@@ -219,11 +219,19 @@ def preserve_damaged(path):
     something we could not read in the first place.
 
     Returns the quarantine path, or None when there was nothing to preserve
-    (missing, empty, or healthy — the overwhelmingly common case, which costs
-    one parse of a small file)."""
+    (missing or healthy — the overwhelmingly common case, which costs one
+    parse of a small file). A ZERO-BYTE store is damage, not absence: even an
+    empty app state serialises as two bytes, so 0 bytes can only mean a
+    truncated write or a disk-full create. It used to be waved through here
+    ("nothing to preserve"), which silently erased the one fact the person
+    could still learn — that the store was found emptied, and when. The
+    durability matrix (task 031) caught it; the empty file now takes the
+    same quarantine path as any other unreadable store."""
     try:
-        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        if not os.path.isfile(path):
             return None
+        if os.path.getsize(path) == 0:
+            raise ValueError("zero-byte store")
         with open(path, "r", encoding="utf-8") as fh:
             raw = fh.read()
         json.loads(raw)
@@ -295,8 +303,10 @@ def quarantine_unrecognized(path):
     The <name>.damaged-<timestamp> name is preserve_damaged's, so there is one
     recovery convention on the disk and not two."""
     try:
-        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        if not os.path.isfile(path):
             return None
+        if os.path.getsize(path) == 0:
+            raise ValueError("zero-byte store")
         stamp = time.strftime("%Y%m%d-%H%M%S")
         dest = "%s.damaged-%s" % (path, stamp)
         n = 2
