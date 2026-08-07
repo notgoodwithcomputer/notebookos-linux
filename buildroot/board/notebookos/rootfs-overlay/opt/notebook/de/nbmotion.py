@@ -402,6 +402,7 @@ class Scalar:
         self._done = None            # live _Completion while running
         self._running = False
         self._driver = None
+        self._trace = None           # [token_ms, t0, t1, ...] under trace
 
     # ---- state ----
     @property
@@ -443,6 +444,8 @@ class Scalar:
         self._track.retarget(target, self.clock(), eff, easing)
         self._done = _Completion(on_done)
         self._running = True
+        if _tracing():
+            self._trace = [float(eff), self.clock()]
         if not self.manual:
             self._attach()
         return self
@@ -486,6 +489,11 @@ class Scalar:
         now = self.clock() if now is None else now
         done = self._track.done_at(now)
         self._set(self._track.value_at(now))
+        if self._trace is not None:
+            self._trace.append(float(now))
+            if done:
+                TRACE.append(tuple(self._trace))
+                self._trace = None
         if done:
             self._running = False
             self._finish_pending(True)
@@ -738,3 +746,131 @@ def cancel_all(widget):
     for scalar in list(d.anims):
         scalar.cancel()
     return n
+
+
+# --------------------------------------------------------------------------
+# Article F — affordability (PAPER-PHYSICS §F1): damage-limited motion,
+# static-layer caching, and the frame trace the pacing gate reads.
+# --------------------------------------------------------------------------
+# Amendment 1 put the full motion language on the software path; this section
+# is the price. A fullscreen queue_draw() at 60 Hz on a CPU rasteriser is
+# unaffordable, so an animation invalidates the SMALLEST rectangle that
+# changed and everything that is not moving is painted from a cached surface.
+
+TRACE = []          # (token_ms, t0, frame_t1, frame_t2, ...) per finished run
+
+
+def _tracing():
+    return bool(os.environ.get("NB_MOTION_TRACE"))
+
+
+def trace_drain():
+    """Return and clear the recorded frame traces (the pacing harness's
+    read side). Empty unless NB_MOTION_TRACE was set when the animation
+    STARTED — tracing is decided per run, not per frame."""
+    out = TRACE[:]
+    del TRACE[:]
+    return out
+
+
+class Damaged(Scalar):
+    """A Scalar that invalidates only the moving layer's rectangle (§F1).
+
+    `rect_for(value) -> (x, y, w, h)` describes where the moving layer sits
+    at a value, in widget coordinates. Each frame invalidates the UNION of
+    the previous and current rectangles — the paint that erases the old
+    position and draws the new one — and never the whole widget. `pad`
+    covers anti-aliased edges and the one-pixel border pair.
+
+    The caller's own `on_frame` (model update) runs first, then the damage,
+    so the draw handler that follows sees the new value. The draw handler
+    pairs with `LayerCache` for everything that is NOT moving.
+    """
+
+    def __init__(self, widget=None, rect_for=None, pad=2, on_frame=None,
+                 **kw):
+        self._rect_for = rect_for
+        self._pad = int(pad)
+        self._prev_rect = None
+        self._user_frame = on_frame
+        super().__init__(widget=widget, on_frame=self._damage_frame, **kw)
+
+    def _damage_frame(self, value):
+        if self._user_frame is not None:
+            self._user_frame(value)
+        w, fn = self.widget, self._rect_for
+        if w is None or fn is None:
+            return
+        r = fn(value)
+        if r is None:
+            return
+        p = self._pad
+        cur = (int(r[0]) - p, int(r[1]) - p,
+               int(r[2]) + 2 * p, int(r[3]) + 2 * p)
+        x, y, wd, ht = cur
+        prev = self._prev_rect
+        if prev is not None:
+            x2, y2 = min(x, prev[0]), min(y, prev[1])
+            wd = max(x + wd, prev[0] + prev[2]) - x2
+            ht = max(y + ht, prev[1] + prev[3]) - y2
+            x, y = x2, y2
+        self._prev_rect = cur
+        try:
+            w.queue_draw_area(x, y, wd, ht)
+        except Exception:                                         # noqa: BLE001
+            pass         # a widget with no draw queue has nothing to repaint
+
+
+class LayerCache:
+    """Static content rendered once to an ImageSurface (§F1, bullet two).
+
+    The draw-handler pattern:
+
+        cache = nbmotion.LayerCache(draw_static)     # draw_static(cr, w, h)
+
+        def on_draw(widget, cr):
+            cache.paint(widget, cr)                  # cached, cheap
+            draw_moving_layer(cr, anim.value)        # the only per-frame work
+
+    Call `invalidate()` when the static content itself changes; an
+    allocation change re-renders automatically (size mismatch). The cache
+    imports cairo lazily so a host without gi/cairo can still import this
+    module (the same contract as everything else here).
+    """
+
+    def __init__(self, draw_static):
+        self._draw = draw_static
+        self._surface = None
+        self._size = (0, 0)
+        self.renders = 0             # observable by tests; costs nothing
+
+    def invalidate(self):
+        self._surface = None
+
+    def paint(self, widget, cr):
+        try:
+            aw = int(widget.get_allocated_width())
+            ah = int(widget.get_allocated_height())
+        except Exception:                                         # noqa: BLE001
+            return False
+        if aw <= 0 or ah <= 0:
+            return False
+        if self._surface is None or self._size != (aw, ah):
+            try:
+                import cairo
+                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, aw, ah)
+                ctx = cairo.Context(surface)
+            except Exception:                                     # noqa: BLE001
+                return False
+            try:
+                self._draw(ctx, aw, ah)
+            except Exception:                                     # noqa: BLE001
+                pass       # a broken static painter must not kill the frame
+            self._surface, self._size = surface, (aw, ah)
+            self.renders += 1
+        try:
+            cr.set_source_surface(self._surface, 0, 0)
+            cr.paint()
+        except Exception:                                         # noqa: BLE001
+            return False
+        return True

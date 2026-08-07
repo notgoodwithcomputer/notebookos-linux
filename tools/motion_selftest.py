@@ -81,6 +81,9 @@ class FakeWidget:
         self._hid = 0
         self.opacity = 1.0
         self.removed = []
+        self.damage = []             # queue_draw_area rectangles, in order
+        self.full_draws = 0          # bare queue_draw() calls — must stay 0
+        self.alloc = (1000, 700)     # the "window" the damage is judged against
 
     def add_tick_callback(self, cb):
         self._tid += 1
@@ -116,6 +119,21 @@ class FakeWidget:
 
     def set_opacity(self, v):
         self.opacity = v
+
+    # Article F: the suite watches HOW a widget is invalidated. A full
+    # queue_draw() from an animation is the defect §F1 exists to prevent,
+    # so both are recorded and the damage tests assert on the split.
+    def queue_draw_area(self, x, y, w, h):
+        self.damage.append((int(x), int(y), int(w), int(h)))
+
+    def queue_draw(self):
+        self.full_draws += 1
+
+    def get_allocated_width(self):
+        return self.alloc[0]
+
+    def get_allocated_height(self):
+        return self.alloc[1]
 
 
 # ------------------------------------------------------------- fixtures -----
@@ -613,6 +631,117 @@ print("OK")
     check("nbmotion byte-compiles", r.returncode == 0, r.stderr.strip())
 
 
+def test_damaged(m):
+    """Article F §F1: an animation invalidates the UNION of the moving
+    layer's previous and current rectangles — never the whole widget. This
+    is the price of Amendment 1 and the test runs on the software policy
+    path on purpose: that is where a full-window repaint is unaffordable."""
+    real_clock = m.frame_clock_available
+    m.frame_clock_available = lambda: True
+    try:
+        with_env(False, False, m)
+        w = FakeWidget()
+        moved = []
+        d = m.Damaged(widget=w, rect_for=lambda v: (v * 500.0, 100, 40, 40),
+                      pad=2, on_frame=moved.append, manual=True,
+                      duration=m.PAGE, clock=lambda: 0.0)
+        d.animate_to(1.0)
+        for t in (0.05, 0.10, 0.15, 0.20):
+            d.advance(t)
+        check("damaged: model frames ran first", len(moved) >= 3,
+              str(len(moved)))
+        check("damaged: zero full-widget invalidations", w.full_draws == 0,
+              str(w.full_draws))
+        check("damaged: one damage rect per moved frame",
+              len(w.damage) == len(moved), "%d rects / %d frames"
+              % (len(w.damage), len(moved)))
+        aw, ah = w.alloc
+        biggest = max((r[2] * r[3] for r in w.damage), default=0)
+        check("damaged: largest rect is a small fraction of the window",
+              0 < biggest < (aw * ah) // 4, "%d of %d" % (biggest, aw * ah))
+        # The union property: after the first frame, every rect must reach
+        # back far enough to erase the previous position (left edge at or
+        # before the previous rect's left edge).
+        ok_union = all(w.damage[i][0] <= w.damage[i - 1][0] + 1 or
+                       w.damage[i][0] <= w.damage[i - 1][0] + w.damage[i - 1][2]
+                       for i in range(1, len(w.damage)))
+        check("damaged: each rect covers the erase of the previous frame",
+              ok_union, str(w.damage))
+        check("damaged: lands exactly on the end state",
+              moved[-1] == 1.0, repr(moved[-1]))
+    finally:
+        m.frame_clock_available = real_clock
+
+
+def test_layer_cache(m):
+    """Article F §F1 bullet two: static content is rendered ONCE and
+    recomposited, re-rendered only on resize or explicit invalidation."""
+    import cairo  # the render toolchain requires pycairo; fail loudly if gone
+
+    class FakeCr:
+        def __init__(self):
+            self.painted = 0
+
+        def set_source_surface(self, s, x, y):
+            self.src = s
+
+        def paint(self):
+            self.painted += 1
+
+    w = FakeWidget()
+    calls = []
+    cache = m.LayerCache(lambda ctx, cw, ch: calls.append((cw, ch)))
+    cr = FakeCr()
+    check("cache: first paint renders", cache.paint(w, cr) and
+          cache.renders == 1 and calls == [(1000, 700)], str(calls))
+    cache.paint(w, cr)
+    check("cache: second paint reuses the surface", cache.renders == 1)
+    check("cache: composited every time", cr.painted == 2, str(cr.painted))
+    w.alloc = (800, 600)
+    cache.paint(w, cr)
+    check("cache: an allocation change re-renders", cache.renders == 2
+          and calls[-1] == (800, 600), str(calls))
+    cache.invalidate()
+    cache.paint(w, cr)
+    check("cache: invalidate() re-renders at the same size",
+          cache.renders == 3)
+    check("cache: cairo surface is real", isinstance(
+        getattr(cr, "src", None), cairo.ImageSurface))
+
+
+def test_trace(m):
+    """The §F5 pacing gate's read side: frame times are recorded only when
+    NB_MOTION_TRACE was set at animation start, and drain empties."""
+    real_clock = m.frame_clock_available
+    m.frame_clock_available = lambda: True
+    had = os.environ.pop("NB_MOTION_TRACE", None)
+    try:
+        with_env(False, False, m)
+        m.trace_drain()
+        s = m.Scalar(manual=True, duration=m.PAGE, clock=lambda: 0.0)
+        s.animate_to(1.0)
+        for t in (0.07, 0.14, 0.21):
+            s.advance(t)
+        check("trace: silent without the env", m.trace_drain() == [])
+        os.environ["NB_MOTION_TRACE"] = "1"
+        s2 = m.Scalar(manual=True, duration=m.PAGE, clock=lambda: 0.0)
+        s2.animate_to(1.0)
+        for t in (0.07, 0.14, 0.21):
+            s2.advance(t)
+        got = m.trace_drain()
+        check("trace: one entry per finished animation", len(got) == 1,
+              str(got))
+        check("trace: entry carries token and frame times",
+              len(got[0]) >= 4 and got[0][0] == float(m.PAGE), str(got[0]))
+        check("trace: drain empties", m.trace_drain() == [])
+    finally:
+        m.frame_clock_available = real_clock
+        if had is None:
+            os.environ.pop("NB_MOTION_TRACE", None)
+        else:
+            os.environ["NB_MOTION_TRACE"] = had
+
+
 def main():
     # An isolated NB_HOME: the machine running the suite must not decide the
     # answer, and nothing here may touch a real user's settings.
@@ -629,6 +758,9 @@ def main():
     test_manual_scalar(m)
     test_end_state_equivalence(m)
     test_driver_lifecycle(m)
+    test_damaged(m)
+    test_layer_cache(m)
+    test_trace(m)
     test_prefs_roundtrip(m)
     test_settings_page_wiring()
     test_no_timeout_per_frame()
