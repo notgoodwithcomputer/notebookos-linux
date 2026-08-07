@@ -78,8 +78,14 @@
     "SURFACE_IN"
    ],
    "transform": false,
-   "status": "unimplemented",
-   "pacing": null
+   "status": "implemented",
+   "pacing": null,
+   "binding": {
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/widgets.py",
+    "symbol_or_marker": "system.desktop-board-appearing"
+   },
+   "note": "Built 2026-08-08: one linear Scalar, per-card clamped remap staggered by column and eased on arrival, 12px paint-translate settle, per-card damage strips; runs on every board arrival (map-event)."
   },
   {
    "id": "system.panel-menu-open",

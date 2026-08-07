@@ -67,6 +67,12 @@ import datetime
 import subprocess
 
 import nbapp  # shared base: nbapp.screen_size() gives the REAL primary-monitor
+# The shared motion engine, for the board's settle-in (PAPER-PHYSICS G1).
+# Never fatal: a desktop that cannot animate still shows its cards.
+try:
+    import nbmotion
+except Exception:                                                 # noqa: BLE001
+    nbmotion = None
 from nbi18n import _t  # noqa: E402
               # size (never a hardcoded 1920x1080) for sizing this board.
 
@@ -859,6 +865,23 @@ class Widgets(Gtk.Window):
         col.pack_start(self._cal_card, True, True, 0)   # ... calendar beneath
         self._rebuild_tiles()
 
+        # nbmotion-inventory: system.desktop-board-appearing
+        # The board's arrival (G1): cards settle in, staggered along their
+        # columns. ONE linear Scalar carries the whole board; each card's own
+        # progress is a clamped remap of it, offset by its column and eased
+        # on arrival — many short damped settles from one driver, no timers.
+        # A card's PAINT is translated 12px up until its progress lands
+        # (draw-handler translate inside its clip: allocation never animates,
+        # F2), and each frame invalidates only the cards still moving.
+        self._settle_v = 1.0
+        self._settle = None
+        self._settle_cards = []      # (widget, column) for every card
+        for card, colidx in ((_tasks, TILE_COLS), (self._cal_card, TILE_COLS)):
+            card.connect("draw", self._card_settle_draw)
+            card._nb_col = colidx
+            self._settle_cards.append(card)
+        self.connect("map-event", self._on_board_map)
+
         GLib.timeout_add(2000, self._ensure_mapped)
         GLib.timeout_add(6000, self._ensure_mapped)
         # Watch the app-active flag with an inotify-backed file monitor instead
@@ -904,6 +927,71 @@ class Widgets(Gtk.Window):
         # rebuild the calendar when the day rolls over so the circled day, date
         # header and TODAY agenda stay correct if the OS runs across midnight.
         GLib.timeout_add_seconds(60, self._check_day_rollover)
+
+    # -- the settle-in (G1: system.board-settle) --------------------------
+    _SETTLE_RISE = 12                # px of travel: a short damped arrival
+    _SETTLE_STAG = 0.05              # s between column starts
+
+    def _settle_t(self, col):
+        """A card's own progress: a clamped remap of the one global value,
+        offset by its column, eased on arrival. Columns start left to right;
+        every card lands exactly on 1."""
+        v = self._settle_v
+        if v >= 1.0 or nbmotion is None:
+            return 1.0
+        dur = nbmotion.SURFACE_IN / 1000.0
+        total = dur + self._SETTLE_STAG * TILE_COLS
+        t = (v * total - col * self._SETTLE_STAG) / dur
+        if t <= 0.0:
+            return 0.0
+        if t >= 1.0:
+            return 1.0
+        return nbmotion.ease_out(t)
+
+    def _card_settle_draw(self, card, cr):
+        t = self._settle_t(getattr(card, "_nb_col", 0))
+        if t < 1.0:
+            cr.translate(0, -(1.0 - t) * self._SETTLE_RISE)
+        return False
+
+    def _on_board_map(self, *_a):
+        """The board's arrival — first map at session start, and every
+        return from a closed app (_poll_home's show_all remaps us)."""
+        self._settle_run()
+        return False
+
+    def _settle_run(self):
+        if nbmotion is None:
+            self._settle_v = 1.0
+            return
+        if self._settle is None:
+            self._settle = nbmotion.Scalar(
+                widget=self, value=1.0, on_frame=self._settle_frame,
+                duration=int((nbmotion.SURFACE_IN / 1000.0 +
+                              self._SETTLE_STAG * TILE_COLS) * 1000),
+                easing=nbmotion.LINEAR)
+        self._settle_v = 0.0
+        self._settle.jump_to(0.0)
+        self._settle.animate_to(1.0)
+
+    def _settle_frame(self, v):
+        self._settle_v = v
+        # Invalidate only the cards still travelling (F1): each one's strip,
+        # grown by the rise, in window coordinates.
+        # Every card's strip, every frame of the settle: a card that lands
+        # needs one more paint AT rest, and eight card strips are still a
+        # fraction of the window (never a full-window invalidation).
+        for card in self._settle_cards:
+            try:
+                at = card.translate_coordinates(self, 0, 0)
+                if at is None:
+                    continue
+                alloc = card.get_allocation()
+                self.queue_draw_area(
+                    at[0], at[1] - self._SETTLE_RISE - 2,
+                    alloc.width, alloc.height + self._SETTLE_RISE + 4)
+            except Exception:                                     # noqa: BLE001
+                pass
 
     def _stay_down(self, *_a):
         """Re-assert the desktop layer. keep-below is a request the WM may
@@ -1161,6 +1249,10 @@ class Widgets(Gtk.Window):
         order = getattr(self, "board_order", None) or list(TILE_ORDER)
         on = [tid for tid in order
               if self.board.get(tid)][:TILE_COLS * TILE_ROWS]
+        # Tiles are recreated on every rebuild; the two right-column cards
+        # (column index TILE_COLS) persist. Keep those, re-hook the rest.
+        self._settle_cards = [c for c in getattr(self, "_settle_cards", [])
+                              if getattr(c, "_nb_col", None) == TILE_COLS]
         for slot, tid in enumerate(on):
             try:
                 tile = self._tile(tid)
@@ -1168,6 +1260,9 @@ class Widgets(Gtk.Window):
                 continue        # never a hole AND never a crash: see _tile_card
             self._tilegrid.attach(tile, slot % TILE_COLS, slot // TILE_COLS,
                                   1, 1)
+            tile._nb_col = slot % TILE_COLS
+            tile.connect("draw", self._card_settle_draw)
+            self._settle_cards.append(tile)
         self._tilegrid.show_all()
 
     # -- one tile ------------------------------------------------------------
