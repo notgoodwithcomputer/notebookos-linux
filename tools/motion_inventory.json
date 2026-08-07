@@ -39,14 +39,14 @@
     "PAGE"
    ],
    "transform": true,
-   "status": "partial",
+   "status": "implemented",
    "pacing": null,
    "binding": {
     "binding_kind": "comment-marker",
     "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
     "symbol_or_marker": "system.app-launch"
    },
-   "note": "Continuity half landed 2026-08-08: the Finder holds until the app's first map (nbapp <pid>.mapped beacon), a crashed launch never blanks the desktop, and an unmapped-but-running app falls back at a deadline. The icon-grows-into-window transform is the remaining half."
+   "note": "Complete 2026-08-08: continuity (Finder holds until the map beacon; crashed launches never blank the desktop) + the transform (the clicked icon's rectangle grows into a paper card under PAGE/arrival, drawn over everything, holds while the app maps beneath, retracts to its icon on a dead launch)."
   },
   {
    "id": "system.app-close",

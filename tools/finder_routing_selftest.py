@@ -259,6 +259,11 @@ def launch_failures(home):
             # suite tests ROUTING, so the watcher is an inert stub here
             return False
 
+        def _zoom_begin(self, mod):
+            # likewise the launch card: geometry and wiring are
+            # finder_launch_selftest's subject
+            pass
+
     try:
         finder.DE_DIR = os.path.join(home, "no-such-de")
         p = Recorder(home)

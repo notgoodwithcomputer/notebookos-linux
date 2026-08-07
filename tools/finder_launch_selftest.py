@@ -49,10 +49,14 @@ class _Stand(object):
         self._launch_pid = pid
         self._launch_deadline = deadline
         self.stepped = 0
+        self.retracted = 0
         self.flashed = []
 
     def _step_aside(self):
         self.stepped += 1
+
+    def _zoom_retract(self):
+        self.retracted += 1
 
     def _flash_status(self, msg, restore_ms=2400):
         self.flashed.append(msg)
@@ -68,11 +72,11 @@ check("beacon present: steps aside and stops",
       st._launch_watch() is False and st.stepped == 1 and not st.flashed)
 os.remove(beacon)
 
-# 2. process died before mapping -> stay put, say so
+# 2. process died before mapping -> stay put, retract the card, say so
 st = _Stand(beacon, 99999999, time.monotonic() + 8)
-check("dead unmapped launch: never hides, says so",
+check("dead unmapped launch: never hides, retracts, says so",
       st._launch_watch() is False and st.stepped == 0
-      and len(st.flashed) == 1)
+      and st.retracted == 1 and len(st.flashed) == 1)
 
 # 3. alive, unmapped, before the deadline -> keep polling
 st = _Stand(beacon, os.getpid(), time.monotonic() + 8)
@@ -121,6 +125,22 @@ try:
     check("reaper keeps a live pid's beacon", os.path.exists(mine))
 finally:
     nbapp._APP_DIR = real_dir
+
+# 8. the launch card's geometry: exact endpoints, monotone growth
+class _Zoom(object):
+    _zoom_rect = finder.Finder._zoom_rect
+
+    def __init__(self):
+        self._zoom_from = (100.0, 200.0, 40.0, 30.0)
+        self._zoom_to = (0.0, 0.0, 1024.0, 722.0)
+
+
+z = _Zoom()
+check("card starts exactly on the icon", z._zoom_rect(0.0) == z._zoom_from)
+check("card ends exactly on the window", z._zoom_rect(1.0) == z._zoom_to)
+areas = [z._zoom_rect(t)[2] * z._zoom_rect(t)[3]
+         for t in (0.0, 0.25, 0.5, 0.75, 1.0)]
+check("the card only ever grows", all(b > a for a, b in zip(areas, areas[1:])))
 
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(len(FAILS))

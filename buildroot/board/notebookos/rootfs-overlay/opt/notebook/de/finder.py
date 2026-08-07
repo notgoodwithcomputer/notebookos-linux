@@ -846,6 +846,23 @@ class Finder(Gtk.Window):
         self.iconview.set_margin(24)          # inset the whole grid from the edges
         self.iconview.get_style_context().add_class("filegrid")
         self.iconview.connect("item-activated", self._on_open_grid)
+
+        # nbmotion-inventory: system.app-launch
+        # The transform half of the launch: the clicked icon's rectangle
+        # grows into the window as a paper card (PAGE, arrival easing) drawn
+        # OVER everything by a draw-after hook, holds while the app maps
+        # beneath it, and retracts to the icon if the launch dies unmapped.
+        # Pure paint on the toplevel — no widget moves, no allocation
+        # animates (F2); damage follows the card's rectangle (F1).
+        self._zoom = None
+        self._zoom_v = 0.0
+        self._zoom_active = False
+        self._zoom_from = self._zoom_to = (0.0, 0.0, 1.0, 1.0)
+        self._zoom_title = ""
+        self._launch_origin = None
+        self._launch_pid = None
+        self.connect_after("draw", self._zoom_draw)
+        self._zoom_ok = True
         self.iconview.connect("button-press-event", self._on_grid_button)
         grid_sw = Gtk.ScrolledWindow()
         grid_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -4028,10 +4045,38 @@ class Finder(Gtk.Window):
                 self.load(parent)
 
     def _on_open(self, tree, path, col):
+        self._launch_origin = self._cell_origin_tree(tree, path, col)
         self._open_path(path)
 
     def _on_open_grid(self, iconview, path):
+        self._launch_origin = self._cell_origin_icon(iconview, path)
         self._open_path(path)
+
+    def _cell_origin_tree(self, tree, path, col):
+        """The activated row's rectangle in TOPLEVEL coordinates, or None.
+        TreeView cell areas are bin-window coordinates; convert before
+        translating, or a scrolled list reports the wrong origin."""
+        try:
+            area = tree.get_cell_area(path, col)
+            wx, wy = tree.convert_bin_window_to_widget_coords(area.x, area.y)
+            at = tree.translate_coordinates(self, wx, wy)
+            if at is None:
+                return None
+            return (at[0], at[1], max(1, area.width), max(1, area.height))
+        except Exception:                                         # noqa: BLE001
+            return None
+
+    def _cell_origin_icon(self, iconview, path):
+        try:
+            ok, rect = iconview.get_cell_rect(path, None)
+            if not ok:
+                return None
+            at = iconview.translate_coordinates(self, rect.x, rect.y)
+            if at is None:
+                return None
+            return (at[0], at[1], max(1, rect.width), max(1, rect.height))
+        except Exception:                                         # noqa: BLE001
+            return None
 
     def _open_path(self, path):
         it = self.store.get_iter(path)
@@ -4131,6 +4176,7 @@ class Finder(Gtk.Window):
             self._launch_beacon = os.path.join(
                 nbapp.APP_DIR, "%d.mapped" % proc.pid)
             self._launch_deadline = time.monotonic() + 8.0
+            self._zoom_begin(mod)
             GLib.timeout_add(60, self._launch_watch)
             GLib.child_watch_add(proc.pid, self._app_exited)
         else:
@@ -4156,6 +4202,7 @@ class Finder(Gtk.Window):
             return False
         if not os.path.isdir("/proc/%d" % pid):
             self._launch_pid = None
+            self._zoom_retract()
             self._flash_status(_t("Could not open that app"))
             return False
         if time.monotonic() > self._launch_deadline:
@@ -4168,11 +4215,93 @@ class Finder(Gtk.Window):
         # Hidden, we can't shadow the fullscreen app or steal its focus
         # (matchbox pins dialogs above main clients); the flag file tells
         # the widget column to hide too. Return when the app exits.
+        self._zoom_clear()
         try:
             open(nbapp.APP_FLAG, "w").close()
         except Exception:
             pass
         self.hide()
+
+    # -- the launch card (transform half of system.app-launch) ------------
+    def _zoom_begin(self, mod):
+        if not getattr(self, "_zoom_ok", False) or nbmotion is None:
+            return
+        alloc = self.get_allocation()
+        frm = self._launch_origin or (alloc.width * 0.40, alloc.height * 0.40,
+                                      alloc.width * 0.20, alloc.height * 0.20)
+        self._launch_origin = None
+        self._zoom_from = tuple(float(v) for v in frm)
+        self._zoom_to = (0.0, 0.0, float(alloc.width), float(alloc.height))
+        try:
+            self._zoom_title = next(
+                (n for n, m in APP_MODULES.items() if m == mod), mod)
+        except Exception:                                         # noqa: BLE001
+            self._zoom_title = mod
+        self._zoom_v = 0.0
+        self._zoom_active = True
+        if self._zoom is None:
+            self._zoom = nbmotion.Damaged(
+                widget=self, rect_for=self._zoom_damage,
+                on_frame=self._zoom_frame,
+                duration=nbmotion.PAGE, easing=nbmotion.ARRIVE)
+        self._zoom.jump_to(0.0)
+        self._zoom.animate_to(1.0)
+
+    def _zoom_rect(self, t):
+        f, to = self._zoom_from, self._zoom_to
+        return tuple(f[i] + (to[i] - f[i]) * t for i in range(4))
+
+    def _zoom_damage(self, v):
+        return self._zoom_rect(v)
+
+    def _zoom_frame(self, v):
+        self._zoom_v = v
+
+    def _zoom_retract(self):
+        """The launch died before it mapped: the card returns to the icon
+        it grew from (departure easing), then clears — the Finder was never
+        hidden, so nothing else moves."""
+        if not self._zoom_active or self._zoom is None:
+            return
+        self._zoom.animate_to(0.0, duration=nbmotion.SURFACE_OUT,
+                              easing=nbmotion.DEPART,
+                              on_done=lambda _ok: self._zoom_clear())
+
+    def _zoom_clear(self):
+        if self._zoom is not None:
+            self._zoom.cancel()
+        if self._zoom_active:
+            last = self._zoom_rect(self._zoom_v)
+            self._zoom_active = False
+            try:
+                self.queue_draw_area(int(last[0]) - 2, int(last[1]) - 2,
+                                     int(last[2]) + 4, int(last[3]) + 4)
+            except Exception:                                     # noqa: BLE001
+                pass
+
+    def _zoom_draw(self, _w, cr):
+        if not self._zoom_active:
+            return False
+        x, y, w, h = self._zoom_rect(self._zoom_v)
+        cr.set_source_rgb(0.988, 0.984, 0.973)      # paper
+        cr.rectangle(x, y, w, h)
+        cr.fill()
+        cr.set_source_rgb(0.788, 0.769, 0.714)      # hairline
+        cr.set_line_width(1)
+        cr.rectangle(x + 0.5, y + 0.5, w - 1, h - 1)
+        cr.stroke()
+        if w > 300:
+            from gi.repository import Pango, PangoCairo
+            layout = PangoCairo.create_layout(cr)
+            desc = Pango.FontDescription("Nimbus Sans")
+            desc.set_absolute_size(16 * Pango.SCALE)
+            layout.set_font_description(desc)
+            layout.set_text(self._zoom_title, -1)
+            tw, th = layout.get_pixel_size()
+            cr.set_source_rgb(0.102, 0.098, 0.086)  # ink
+            cr.move_to(x + (w - tw) / 2.0, y + (h - th) / 2.0)
+            PangoCairo.show_layout(cr, layout)
+        return False
 
     def _flash_status(self, msg, restore_ms=2400):
         # Show a transient message in the status bar, then restore the live item
