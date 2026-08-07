@@ -147,11 +147,11 @@ GOOD_VIDEO = {
     "music": None, "size": [1280, 720]}
 
 GOOD_SEQ = {
-    "version": 2, "bpm": 132, "capture_device": None, "metronome": True,
-    "length": 60.0, "pitch": 0, "master": 80,
-    "tracks": [{"name": MARK, "input": "Synth", "armed": False, "muted": False,
+    "version": 3, "bpm": 132, "capture_device": None, "metronome": True,
+    "monitor": True, "snap": 4.0, "length": 60.0, "master": 80,
+    "tracks": [{"name": MARK, "armed": False, "muted": False,
                 "solo": False, "gain": 80, "clips": [[0.0, 4.0]]}]
-    + [{"name": "Track %d" % i, "input": "Synth", "armed": False,
+    + [{"name": "Track %d" % i, "armed": False,
         "muted": False, "solo": False, "gain": 80, "clips": []}
        for i in range(2, 9)]}
 
@@ -303,10 +303,16 @@ def test_tone_engine_retry():
 
     Gst.parse_launch = always_fail
     try:
-        e = sequencer.ToneEngine()
+        # ToneEngine was replaced by AudioOut, which streams nbsynth's render
+        # to the sink instead of synthesising a tone itself. Same contract for
+        # what this checks — RETRIES, available, failed — but start() now takes
+        # the song to play, so an empty normalised one stands in.
+        import nbsynth
+        song = nbsynth.normalize_song({})
+        e = sequencer.AudioOut()
         for _ in range(6):
-            e.start()
-        check(calls["n"] == sequencer.ToneEngine.RETRIES,
+            e.start(song)
+        check(calls["n"] == sequencer.AudioOut.RETRIES,
               "six presses of Play build at most RETRIES pipelines",
               "built %d" % calls["n"])
         check(e.failed and not e.available,
@@ -321,9 +327,9 @@ def test_tone_engine_retry():
             return real(*a, **k)
 
         Gst.parse_launch = fail_once
-        f = sequencer.ToneEngine()
-        first = f.start()
-        second = f.start()
+        f = sequencer.AudioOut()
+        first = f.start(song)
+        second = f.start(song)
         check(not first and second and f.available,
               "a device that was busy once works on the next press",
               "first=%s second=%s" % (first, second))
@@ -332,89 +338,54 @@ def test_tone_engine_retry():
         Gst.parse_launch = real
 
 
-def test_master_fader():
-    section("the Master fader is the master")
+def test_song_to_engine():
+    section("the Sequencer's stored numbers reach the engine as ratios")
+    # REWRITTEN TWICE. This drove `_fire_beat` against a spy engine, then
+    # `Audition` against a hand-built voice list. Both are gone: nothing in
+    # this app synthesises a sound to audition any more, and the MASTER FADER
+    # the function was originally named for is measured properly in
+    # tools/sequencer_mix_selftest.py, on the RMS of a rendered WAV ("halving
+    # the master halves the mix") — better evidence than a spy ever gave.
+    #
+    # What is left uncovered, and is checked here, is the one function that
+    # translates the app's stored integers (a gain of 0..150, a pan of
+    # -100..100, a send of 0..100) into the plain ratios the engine reads. It
+    # is a pure function of the app's own state, so it can be driven without a
+    # window: get one of these wrong and playback, the meters and the exported
+    # file quietly disagree about what the mix is.
     import sequencer
-
-    heard = []
-
-    class Spy:
-        available = True
-        failed = False
-
-        def note(self, f, d, a, perc=False):
-            heard.append(round(a, 4))
-
-        def silence(self):
-            pass
-
-        def start(self):
-            return True
-
-        def shutdown(self):
-            pass
-
     app = sequencer.Sequencer.__new__(sequencer.Sequencer)
-    app.engine = Spy()
-    app.metronome = True
-    app.transport = "play"
-    app.pitch = 0
-    app.pos = 0.0
-    app.tracks = []
-    app._vu_note = {}
-    for m, want in ((100, True), (0, False)):
-        heard[:] = []
-        app.master = m
-        app._fire_beat(0, 0.5)
-        louder = any(a > 0.0 for a in heard)
-        check(louder is want,
-              "master=%d %s the metronome click" % (m, "voices" if want
-                                                    else "silences"),
-              str(heard))
-
-    # and a recorded take answers to the faders
-    seen = []
-    real_popen = subprocess.Popen
-
-    class FakeProc:
-        def __init__(self, cmd, **kw):
-            import io
-            seen.append(cmd)
-            self.stdout = io.BytesIO()
-            self.returncode = 0
-
-        def poll(self):
-            return 0
-
-        def terminate(self):
-            pass
-
-        def kill(self):
-            pass
-
-        def wait(self, timeout=None):
-            return 0
-
-    subprocess.Popen = FakeProc
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            wav = os.path.join(td, "take.wav")
-            with open(wav, "wb") as fh:
-                fh.write(b"RIFF" + b"\0" * 2048)
-            p = sequencer.Player()
-            seen[:] = []
-            p.play(wav, gain=1.0)
-            check(len(seen) == 1 and seen[0][0] == "aplay",
-                  "a take at unity gain still plays in one process", str(seen))
-            seen[:] = []
-            p.play(wav, gain=0.5)
-            check(any("volume=0.500" in " ".join(c) for c in seen),
-                  "a take at half gain is played at half gain", str(seen))
-            seen[:] = []
-            p.play(wav, gain=0.0)
-            check(not seen, "a fader at zero plays nothing at all", str(seen))
-    finally:
-        subprocess.Popen = real_popen
+    app.bpm, app.length, app.master = 120, 60.0, 150
+    app.metronome, app.tape, app.fx = False, 40, True
+    app.loop_on, app.loop_s, app.loop_e = True, 4.0, 12.0
+    app.rev_size, app.rev_mix = 70, 100
+    app.dly_time, app.dly_fb, app.dly_mix = 0.75, 32, 100
+    app.tracks = [{"name": "Track 1", "gain": 75, "pan": -100, "muted": False,
+                   "solo": False, "rev": 50, "dly": 25, "low": 30, "high": 0,
+                   "comp": 60, "clips": []}]
+    song = app._song()
+    t = song["tracks"][0]
+    check(abs(song["master"] - 1.5) < 1e-9, "the master fader reaches the mix",
+          str(song["master"]))
+    check(abs(t["gain"] - 0.75) < 1e-9, "a track's gain is a ratio",
+          str(t["gain"]))
+    check(abs(t["pan"] + 1.0) < 1e-9, "hard left is -1.0, not -100",
+          str(t["pan"]))
+    check(abs(t["rev"] - 0.5) < 1e-9 and abs(t["dly"] - 0.25) < 1e-9,
+          "the sends are ratios", "%s %s" % (t["rev"], t["dly"]))
+    check(abs(t["low"] - 0.3) < 1e-9 and abs(t["comp"] - 0.6) < 1e-9,
+          "the tone and the compressor are ratios")
+    check(song["loop"] == [4.0, 12.0], "the loop reaches the engine",
+          str(song["loop"]))
+    app.loop_on = False
+    check(app._song()["loop"] is None, "...and only while it is switched on")
+    # and every one of those has to survive the engine's own clamping, or the
+    # translation is right and the sound is still wrong
+    import nbsynth
+    n = nbsynth.normalize_song(song)["tracks"][0]
+    check(abs(n["gain"] - 0.75) < 1e-9 and abs(n["pan"] + 1.0) < 1e-9
+          and abs(n["comp"] - 0.6) < 1e-9,
+          "the engine keeps what it was handed instead of clamping it away")
 
 
 def test_preview_seek():
@@ -478,7 +449,7 @@ def main():
     try:
         test_capture_devices()
         test_tone_engine_retry()
-        test_master_fader()
+        test_song_to_engine()
         test_preview_seek()
         test_open_refuses_foreign()
         test_damage(root)

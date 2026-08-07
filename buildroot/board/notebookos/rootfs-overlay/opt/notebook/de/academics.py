@@ -37,6 +37,7 @@ import cairo
 import nbapp
 import nbicons
 import nbprint
+import nbtransitions
 from nbi18n import _t  # noqa: E402
 
 CLASS_COLORS = ["#9A7B4F", "#4A5E73", "#6E7B57", "#8A6D5B", "#566E86"]
@@ -264,6 +265,9 @@ class Academics(nbapp.AppWindow):
         # unsaved keystroke or the caret.
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        self._pager = nbtransitions.PageSwitcher(
+            self.stack, order=["notes", "schedule", "homework"],
+            duration=nbtransitions.PAGE)
         self.stack.add_named(self._build_editor(), "notes")
         self.stack.add_named(self._build_schedule(), "schedule")
         self.stack.add_named(self._build_homework(), "homework")
@@ -564,11 +568,15 @@ class Academics(nbapp.AppWindow):
                 "label", "")
         if not self._confirm("Delete this class?", detail):
             return
+        # Flush the open lecture's live buffer into ITS OWN record before the
+        # model moves under it. Deleting a class is NOT the same as deleting
+        # the lecture you happen to be typing in (unlike _delete_lecture, where
+        # dropping the debounce is right), so those keystrokes are the user's
+        # work -- and the capture only lands in the right place while `active`
+        # still points at the lecture the buffer belongs to.
+        self._capture_active()
         self._may_empty = True
         self.undo.checkpoint("Delete Class")
-        if self._notes_timer:
-            GLib.source_remove(self._notes_timer)
-            self._notes_timer = None
         del self.classes[ci]
         self.lectures = [l for l in self.lectures if l.get("cls") != ci]
         for l in self.lectures:
@@ -584,12 +592,18 @@ class Academics(nbapp.AppWindow):
                 h["cls"] = c - 1
         self.active = 0 if self.lectures else -1
         self._sel_block = -1
-        self._save_to_disk()
-        self.undo.commit()
+        # Rebuild the note view BEFORE saving, the same order _delete_lecture
+        # uses. _save_to_disk opens with its own _capture_active, and until the
+        # canvas has been rebuilt for the new `active` the live buffer still
+        # holds the OUTGOING lecture's text and tag spans -- so saving first
+        # copied that text straight over lectures[0], destroying a surviving
+        # lecture of a class the user never deleted, and persisting it.
         self._refresh_schedule()
         self._refresh_homework()
         self._refresh_sidebar()
         self._refresh_canvas()
+        self._save_to_disk()
+        self.undo.commit()
 
     def _edit_meeting(self, ci, meeting):
         got = self._meeting_dialog(_t("Edit class time"), ci=ci,
@@ -800,7 +814,7 @@ class Academics(nbapp.AppWindow):
             # the switch silently did nothing when it ran before the window was
             # mapped — which is exactly when __init__ picks the opening view.
             self.stack.show_all()
-            self.stack.set_visible_child_name(key)
+            self._pager.switch(key)
         except Exception:
             return
         btn = self._view_buttons.get(key)
@@ -1189,7 +1203,7 @@ class Academics(nbapp.AppWindow):
         # today's column, tinted before anything else so every line and block
         # draws over it rather than under
         if today < ndays:
-            cr.set_source_rgb(0.937, 0.925, 0.890)          # #EFECE3
+            cr.set_source_rgb(0.937, 0.922, 0.878)          # #EFEBE0
             cr.rectangle(self._GUTTER_W + today * col_w, 0, col_w,
                          rows_h + self._HDR_H)
             cr.fill()
@@ -1210,7 +1224,7 @@ class Academics(nbapp.AppWindow):
         cr.set_line_width(1)
         for mins in range(lo, hi + 1, 60):
             y = self._HDR_H + (mins - lo) * self._MIN_PX
-            cr.set_source_rgb(0.898, 0.882, 0.839)          # #E5E1D6
+            cr.set_source_rgb(0.918, 0.890, 0.824)          # #EAE3D2
             cr.move_to(self._GUTTER_W, y + 0.5)
             cr.line_to(self._GUTTER_W + ndays * col_w, y + 0.5)
             cr.stroke()
@@ -1220,7 +1234,7 @@ class Academics(nbapp.AppWindow):
                 _show_text(cr, self._GUTTER_W - 10 - _text_w(cr, text, 11),
                            y + 4, text, 11)
         # day separators
-        cr.set_source_rgb(0.898, 0.882, 0.839)
+        cr.set_source_rgb(0.918, 0.890, 0.824)
         for d in range(ndays + 1):
             x = self._GUTTER_W + d * col_w
             cr.move_to(x + 0.5, self._HDR_H)
@@ -1660,7 +1674,7 @@ class Academics(nbapp.AppWindow):
         inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
         inner.set_halign(Gtk.Align.CENTER)
         inner.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 16, "#1A1916")),
+            nbicons.image("plus", 16, "#1A1916"),
             False, False, 0)
         self.newbtn_label = Gtk.Label(label=_t("New Lecture"))
         inner.pack_start(self.newbtn_label, False, False, 0)
@@ -2147,12 +2161,19 @@ class Academics(nbapp.AppWindow):
         # Class 1" until somebody renames it — with the only route to doing so
         # buried in the Edit menu. The class name is right here on the page, so
         # let it be clicked, exactly as the lecture title below it can be.
-        ebtn = Gtk.EventBox()
+        # A Button, not an EventBox: an EventBox has no focus, no activation and
+        # no accessible role, so "clicked" here meant "clicked with a mouse" and
+        # nothing else -- a keyboard or screen-reader user could not reach this
+        # rename at all. A button joins the Tab ring, fires on Space/Enter,
+        # announces itself as a control, and takes its accessible name from the
+        # tooltip below (nbapp's naming hook). Relief NONE plus .doctitlebtn
+        # keep it looking exactly like the bare eyebrow row it wraps.
+        ebtn = Gtk.Button()
+        ebtn.set_relief(Gtk.ReliefStyle.NONE)
         ebtn.get_style_context().add_class("doctitlebtn")
         ebtn.set_tooltip_text(_t("Rename class"))
         ebtn.add(eb)
-        ebtn.connect("button-press-event",
-                     lambda *_a: (self._rename_class(), True)[1])
+        ebtn.connect("clicked", lambda *_a: self._rename_class())
         self.column.pack_start(ebtn, False, False, 0)
 
         # Title: a read/edit pair, not a bare Gtk.Entry. An Entry cannot wrap, so
@@ -2164,12 +2185,12 @@ class Academics(nbapp.AppWindow):
         self.title_lbl.set_line_wrap(True)
         self.title_lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
         self.title_lbl.get_style_context().add_class("doctitle")
-        self.title_ev = Gtk.EventBox()
+        self.title_ev = Gtk.Button()
+        self.title_ev.set_relief(Gtk.ReliefStyle.NONE)
         self.title_ev.get_style_context().add_class("doctitlebtn")
         self.title_ev.set_tooltip_text(_t("Rename lecture"))
         self.title_ev.add(self.title_lbl)
-        self.title_ev.connect("button-press-event",
-                              lambda *_a: (self._focus_title(), True)[1])
+        self.title_ev.connect("clicked", lambda *_a: self._focus_title())
 
         self.title = Gtk.Entry()
         self.title.set_has_frame(False)
@@ -3192,6 +3213,20 @@ class Academics(nbapp.AppWindow):
             name = "homework.pdf"
         else:
             name = self._pdf_name(self.lectures[self.active])
+        # Every one of these names is deterministic — timetable.pdf and
+        # homework.pdf are fixed, and a lecture's is derived from its title — so
+        # re-exporting after taking more notes, the usual reason to export
+        # twice, lands on the earlier PDF. It used to destroy it without a word.
+        # Ask, using the same three strings as Novel's Save As -- one wording
+        # for "you are about to overwrite", already carried by all seventeen
+        # catalogs. This _confirm is the modal, boolean one; its default is
+        # Cancel, so an accidental Return keeps the existing file.
+        if os.path.exists(os.path.join(DOCS_DIR, name)) and not self._confirm(
+                _t("Replace file?"),
+                _t("“%s” already exists in Documents. Replace it?")
+                % name,
+                _t("Replace")):
+            return
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
             # Same renderer the Print dialog uses, so the exported and printed
@@ -3602,7 +3637,7 @@ class Academics(nbapp.AppWindow):
         b = Gtk.Button()
         b.set_relief(Gtk.ReliefStyle.NONE)
         b.get_style_context().add_class("fmtbtn")
-        b.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(name, 19, "#1A1916")))
+        b.add(nbicons.image(name, 19, "#1A1916"))
         return b
 
     def _short_date(self):
@@ -3627,11 +3662,11 @@ class Academics(nbapp.AppWindow):
         /* -- the three-view switcher, drawn as one segmented strip -- */
         .ac-seg { background: #F1EEE6; border-bottom: 1px solid #D7D2C5; }
         .ac-segbtn { background: transparent; border: 0;
-                     border-right: 1px solid #DDD7C8; border-radius: 0;
+                     border-right: 1px solid #D7D2C5; border-radius: 0;
                      padding: 11px 6px; font-size: 13px; color: #6E695E;
                      box-shadow: none; }
         .ac-segbtn:last-child { border-right: 0; }
-        .ac-segbtn:hover { background: #ECE8DD; }
+        .ac-segbtn:hover { background: #EAE3D2; }
         /* The selected view carries the accent as a 2px underline, not a
            filled block: it marks WHERE YOU ARE, which is the same job the
            accent edge does on the Workout app's week strip. */
@@ -3642,26 +3677,26 @@ class Academics(nbapp.AppWindow):
         /* -- schedule + homework panes -- */
         .ac-main { background: #FCFBF8; }
         .ac-main * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .ac-title { font-size: 26px; font-weight: 700; color: #1A1916; }
+        .ac-title { font-size: 24px; font-weight: 700; color: #1A1916; }
         .ac-sub { font-size: 13px; color: #6E695E; }
-        .ac-rule { background: #E4DFD2; }
+        .ac-rule { background: #D7D2C5; }
         .ac-eyebrow { font-size: 11px; letter-spacing: 0.14em;
                       font-weight: 700; color: #9A9484; }
         /* Accent means exactly ONE thing on these screens: this is late. */
         .ac-eyebrow.late { color: #C8341E; }
         .ac-hwrow { padding: 9px 0; }
         .ac-hwtitle { font-size: 15px; color: #1A1916; }
-        .ac-hwtitle.done { color: #A8A296; }
+        .ac-hwtitle.done { color: #9A9484; }
         .ac-hwmeta { font-size: 12px; color: #6E695E; }
         .ac-hwmeta.late { color: #C8341E; font-weight: 700; }
-        .ac-cta { background: #F8F7F2; border: 1px solid #C4BFB1;
-                  border-radius: 2px; padding: 7px 16px; font-size: 14px;
+        .ac-cta { background: #F8F7F2; border: 1px solid #C9C4B6;
+                  border-radius: 8px; padding: 7px 16px; font-size: 14px;
                   color: #1A1916; box-shadow: none; }
-        .ac-cta:hover { background: #ECE8DD; }
+        .ac-cta:hover { background: #F1EEE6; }
         .ac-quiet { background: transparent; border: 1px solid transparent;
-                    border-radius: 2px; padding: 5px 10px; font-size: 13px;
+                    border-radius: 8px; padding: 5px 10px; font-size: 13px;
                     color: #6E695E; box-shadow: none; }
-        .ac-quiet:hover { background: #ECE8DD; border-color: #DDD7C8; }
+        .ac-quiet:hover { background: #F1EEE6; border-color: #D7D2C5; }
         .ac-empty-title { font-size: 17px; color: #1A1916; }
         .ac-empty-body { font-size: 14px; color: #6E695E; }
         .ac-fieldlabel { font-size: 11px; letter-spacing: 0.1em;
@@ -3678,10 +3713,10 @@ class Academics(nbapp.AppWindow):
         .side-head { padding: 24px 26px 20px; border-bottom: 1px solid #D7D2C5; }
         .side-eyebrow { font-size: 11px; letter-spacing: 0.16em; color: #9A9484;
                         font-weight: 600; margin-bottom: 8px; }
-        .side-term { font-size: 21px; font-weight: 700; color: #1A1916; }
+        .side-term { font-size: 20px; font-weight: 700; color: #1A1916; }
         .acsearch { margin-top: 16px; font-size: 13px; color: #1A1916;
-                    background: #FCFBF8; border: 1px solid #C4BFB1;
-                    border-radius: 2px; box-shadow: none; min-height: 30px; }
+                    background: #FCFBF8; border: 1px solid #C9C4B6;
+                    border-radius: 8px; box-shadow: none; min-height: 30px; }
         .acsearch:focus { border: 1px solid #8A857A; }
         .side-count { font-size: 11px; letter-spacing: 0.1em; color: #9A9484;
                       font-weight: 700; padding: 0 10px; margin: 2px 0 10px; }
@@ -3692,7 +3727,7 @@ class Academics(nbapp.AppWindow):
            must not look like the OS's raised buttons -- it is a row. */
         .cls-row { padding: 8px 10px; margin: 0; border: none;
                    background: transparent; border-radius: 0; }
-        .cls-row:hover { background: #EFEBE1; }
+        .cls-row:hover { background: #EFEBE0; }
         .cls-rowname { font-size: 13px; color: #1A1916; }
         .cls-rowsub { font-size: 11px; color: #6E695E; }
         /* The colour picker in the class editor: a swatch, with the chosen one
@@ -3705,12 +3740,12 @@ class Academics(nbapp.AppWindow):
         .ac-swatchbtn:checked { border-color: #1A1916; background: transparent; }
         .cls-label { font-size: 11px; letter-spacing: 0.1em; color: #6E695E;
                      font-weight: 700; }
-        .lec-row { padding: 10px 10px; margin-bottom: 2px; border-radius: 2px;
+        .lec-row { padding: 10px 10px; margin-bottom: 2px; border-radius: 6px;
                    background: transparent; border: none; box-shadow: none; }
-        .lec-row:hover { background: #E6DFCE; }
+        .lec-row:hover { background: #F0EADC; }
         .lec-row.active { background: #EAE3D2; box-shadow: inset 3px 0 0 #C8341E; }
         .lec-num { min-width: 30px; min-height: 24px; padding: 0 6px;
-                   font-size: 12px; border-radius: 2px; color: #9A9484;
+                   font-size: 12px; border-radius: 4px; color: #9A9484;
                    border: 1px solid #D7D2C5; }
         .lec-num.active { background: #1A1916; color: #FCFBF8; font-weight: 600;
                           border: 1px solid #1A1916; }
@@ -3718,21 +3753,21 @@ class Academics(nbapp.AppWindow):
         .lec-date { font-size: 12px; color: #9A9484; margin-top: 2px; }
         .side-foot { border-top: 1px solid #D7D2C5; padding: 14px 18px; }
         .newlecture { min-height: 40px; border: 1px solid #C9C4B6;
-                      border-radius: 2px; background: #FCFBF8; color: #1A1916;
+                      border-radius: 8px; background: #FCFBF8; color: #1A1916;
                       font-size: 14px; font-weight: 500; box-shadow: none; }
-        .newlecture:hover { background: #ECE8DD; }
+        .newlecture:hover { background: #F1EEE6; }
 
         .editor { background: #FCFBF8; }
         .formatbar { background: #FCFBF8; border-bottom: 1px solid #D7D2C5;
                      padding: 10px 36px; min-height: 34px; }
         .stylebtn { min-height: 34px; padding: 0 13px; border: 1px solid #D7D2C5;
-                    border-radius: 2px; background: #FCFBF8; color: #1A1916;
+                    border-radius: 8px; background: #FCFBF8; color: #1A1916;
                     font-size: 14px; font-weight: 500; box-shadow: none; }
         .stylebtn:hover { background: #F1EEE6; }
         .stylebtn .caret { font-size: 11px; color: #9A9484; }
         .fmtbtn { min-width: 34px; min-height: 34px; padding: 0;
                   background: transparent; border: none; box-shadow: none;
-                  border-radius: 2px; color: #1A1916; font-size: 17px; }
+                  border-radius: 8px; color: #1A1916; font-size: 17px; }
         .fmtbtn:hover { background: #EFEBE0; }
         /* With no lecture open the format bar is insensitive, but Body / B / I
            still looked live: the rules above set their colour outright, and a
@@ -3741,9 +3776,9 @@ class Academics(nbapp.AppWindow):
            showed. The icon buttons greyed (GTK dims the image itself), which
            left half a greyed toolbar. Name the labels explicitly, as journal
            does for the same bar. */
-        .fmtbtn:disabled, .fmtbtn:disabled label { color: #B9B4A8; }
+        .fmtbtn:disabled, .fmtbtn:disabled label { color: #B3AD9E; }
         .stylebtn:disabled, .stylebtn:disabled label,
-        .stylebtn:disabled .caret { color: #B9B4A8; }
+        .stylebtn:disabled .caret { color: #B3AD9E; }
         .fmtbtn.bold { font-weight: 700; }
         .fmtbtn.ital { font-style: italic; }
         .fsep { color: #D7D2C5; min-width: 1px; }
@@ -3757,59 +3792,80 @@ class Academics(nbapp.AppWindow):
                     font-weight: 700; font-size: 40px; color: #1A1916;
                     background: transparent; border: none; padding: 0;
                     margin-bottom: 8px; }
-        .doctitle.ghost { color: #B9B4A8; }
-        .doctitlebtn { border-radius: 2px; }
-        .doctitlebtn:hover { background: #F1EEE6; }
+        .doctitle.ghost { color: #B3AD9E; }
+        /* The two rename hit areas on the page (class eyebrow, lecture title)
+           are real Gtk.Buttons so they are focusable and operable from the
+           keyboard -- but they must go on looking like the plain rows they
+           wrap. Papertone's `button` gives every button a fill, a 1px hair
+           border, 5px 14px padding and a 20px min-height; inherited here that
+           would box the eyebrow and shove the 40px serif heading off its
+           margin. Neutralise the whole of it, including the `background-image`
+           and `@select` fill the theme paints for :active/:checked -- a
+           selected state is drawn as an IMAGE, so a colour-only reset loses.
+           Everything is flat and 2D; only the hover tint marks the target.
+           NO `outline: none` ANYWHERE IN HERE: the global focus ring in
+           Papertone is what makes these reachable controls visible to a
+           keyboard user, and suppressing it would give back with one hand
+           exactly what the conversion won with the other. */
+        .doctitlebtn { border-radius: 8px; padding: 0; margin: 0; border: none;
+                       background: transparent; background-image: none;
+                       box-shadow: none; text-shadow: none;
+                       min-height: 0; min-width: 0; }
+        .doctitlebtn:hover { background: #F1EEE6; background-image: none;
+                             border: none; box-shadow: none; }
+        .doctitlebtn:active, .doctitlebtn:checked {
+                       background: #EAE3D2; background-image: none;
+                       border: none; box-shadow: none; }
         .canvas-meta { font-size: 13px; color: #9A9484; margin-bottom: 34px;
                        padding-bottom: 24px; border-bottom: 1px solid #D7D2C5; }
         .docbody { font-family: "Newsreader","Liberation Serif",serif;
-                   font-size: 18px; color: #1A1916; background: #FCFBF8;
+                   font-size: 17px; color: #1A1916; background: #FCFBF8;
                    margin-top: 14px; caret-color: #C8341E; }
         .docbody text { background: #FCFBF8; }
-        .docbody text selection { background-color: #F1D9D2; color: #1A1916; }
+        .docbody text selection { background-color: #EAE3D2; color: #1A1916; }
         .empty-wrap { padding: 60px 0 0; }
         .empty-title { font-family: "Newsreader","Liberation Serif",serif;
-                       font-size: 21px; color: #1A1916; margin-bottom: 6px; }
+                       font-size: 20px; color: #1A1916; margin-bottom: 6px; }
         .empty-sub { font-size: 13px; color: #9A9484; margin-bottom: 16px; }
         .emptybtn { min-height: 36px; padding: 0 18px; font-size: 14px;
                     background: #FCFBF8; border: 1px solid #C9C4B6;
-                    border-radius: 2px; box-shadow: none; color: #1A1916; }
-        .emptybtn:hover { background: #ECE8DD; }
+                    border-radius: 8px; box-shadow: none; color: #1A1916; }
+        .emptybtn:hover { background: #F1EEE6; }
 
         /* Rename / delete cards: papertone, undecorated, matching the rest of
            the OS rather than a stock GTK dialog in a window-manager frame.
            Each inverted button colours its LABEL node as well as itself: the
            theme's `* { color: ink }` matches the label directly and would
            otherwise beat the colour inherited from the button. */
-        .acdlg { background: #FCFBF8; border: 1px solid #C4BFB1; }
+        .acdlg { background: #FCFBF8; border: 1px solid #C9C4B6; }
         .acdlgbox { padding: 24px 28px 20px; }
         .acdlgbox * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .acdlgtitle { font-family: "Newsreader","Liberation Serif",serif;
-                      font-size: 19px; font-weight: 600; color: #1A1916; }
-        .acdlgmsg { font-size: 13px; color: #57534B; }
+                      font-size: 20px; font-weight: 600; color: #1A1916; }
+        .acdlgmsg { font-size: 13px; color: #6E695E; }
         .acdlgentry { min-height: 38px; padding: 0 10px; background: #FCFBF8;
-                      border: 1px solid #C4BFB1; border-radius: 2px;
+                      border: 1px solid #C9C4B6; border-radius: 8px;
                       font-size: 14px; color: #1A1916; }
         .acdlgcancel { font-size: 13px; color: #2A2620; padding: 6px 16px;
                        background: #FCFBF8; border: 1px solid #C9C4B6;
-                       border-radius: 2px; box-shadow: none; }
-        .acdlgcancel:hover { background: #ECE8DD; }
+                       border-radius: 8px; box-shadow: none; }
+        .acdlgcancel:hover { background: #F1EEE6; }
         .acdlgok { font-size: 13px; padding: 6px 16px; background: #C8341E;
-                   border: 1px solid #C8341E; border-radius: 2px;
+                   border: 1px solid #C8341E; border-radius: 8px;
                    box-shadow: none; font-weight: 600; }
         .acdlgok label { color: #FCFBF8; }
-        .acdlgok:hover { background: #A82A18; border-color: #A82A18; }
+        .acdlgok:hover { background: #B12D19; border-color: #B12D19; }
         .acdlgprimary { font-size: 13px; padding: 6px 16px; background: #1A1916;
-                        border: 1px solid #1A1916; border-radius: 2px;
+                        border: 1px solid #1A1916; border-radius: 8px;
                         box-shadow: none; font-weight: 600; }
         .acdlgprimary label { color: #FCFBF8; }
-        .acdlgprimary:hover { background: #33302A; border-color: #33302A; }
+        .acdlgprimary:hover { background: #3A362E; border-color: #3A362E; }
         /* Remove sits apart from Cancel/Save, quiet until you go for it: it is
            the way out of a wrong entry, not the thing the card is for. */
-        .acdlgremove { font-size: 13px; padding: 6px 14px; color: #8A2E1C;
+        .acdlgremove { font-size: 13px; padding: 6px 14px; color: #B12D19;
                        background: transparent; border: 1px solid transparent;
-                       border-radius: 2px; box-shadow: none; }
-        .acdlgremove:hover { background: #F6E7E3; border-color: #E2C3BB; }
+                       border-radius: 8px; box-shadow: none; }
+        .acdlgremove:hover { background: #F1EEE6; border-color: #C8341E; }
         """
         prov = Gtk.CssProvider()
         prov.load_from_data(css)

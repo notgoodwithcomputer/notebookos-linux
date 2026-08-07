@@ -66,6 +66,16 @@ class Terminal(nbapp.AppWindow):
         self.term = None
         self._child_pid = None
         self._pending_spawn = False
+        # Deferred-callback ownership. _spawned() arms a 250ms one-shot to clear
+        # VTE's startup notice; the window can be destroyed inside those 250ms,
+        # and a repeated spawn (New Session) can arm it again while an earlier
+        # one is still pending. _closed says the widgets are gone (so a callback
+        # that outlives them must do nothing), and _startup_notice_source holds
+        # the ONE timeout source this window owns, so it can be cancelled or
+        # replaced. Both are set before any signal is connected and before any
+        # shell is spawned, so every path below has a stable attribute to read.
+        self._closed = False
+        self._startup_notice_source = 0
         # Without the VTE backend there is nothing to run: the
         # Session/Edit/View menus would be dead controls, so drop them
         # (instance attr shadows the class attr) BEFORE the base builds the
@@ -75,10 +85,11 @@ class Terminal(nbapp.AppWindow):
 
         super().__init__()
         self._install_css()
-        # Persist View preferences (zoom, cursor blink) when the window closes.
-        # Guarded and a no-op when there is no live terminal, so it never writes
-        # a spurious file on a host without the VTE backend.
-        self.connect("destroy", lambda *_: self._save_prefs())
+        # Teardown: retire anything still scheduled against these widgets, then
+        # persist View preferences (zoom, cursor blink). The save is guarded and
+        # a no-op when there is no live terminal, so it never writes a spurious
+        # file on a host without the VTE backend.
+        self.connect("destroy", self._on_destroy)
 
         stage = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         stage.get_style_context().add_class("termstage")
@@ -209,7 +220,13 @@ class Terminal(nbapp.AppWindow):
         return "/bin/sh"
 
     def _spawn_shell(self):
+        # _pending_spawn is cleared by _spawned(), so EVERY path that returns
+        # without handing a spawn to VTE must clear it here: nothing else will,
+        # and a guard left standing latches on for the life of the window —
+        # _on_child_exited then returns early for ever and the window can no
+        # longer close when its shell exits.
         if self.term is None:
+            self._pending_spawn = False
             return
         home = os.environ.get("NB_HOME", "/root")
         # inherit the real session environment (PATH, DISPLAY, ...) and just
@@ -236,6 +253,9 @@ class Terminal(nbapp.AppWindow):
                 Vte.PtyFlags.DEFAULT, home, [shell], envv,
                 GLib.SpawnFlags.DEFAULT, None, None, -1, None, self._spawned)
         except (GLib.Error, OSError, TypeError):
+            # A synchronous raise means _spawned() will never run, so clear the
+            # restart guard before surfacing the notice (see above).
+            self._pending_spawn = False
             self._feed_notice(self._start_problem(shell))
 
     @staticmethod
@@ -275,11 +295,43 @@ class Terminal(nbapp.AppWindow):
         # unencrypted. It is cosmetic here (single-user offline device) but
         # reads as alarming. Once bash has printed its first prompt, send Ctrl-L
         # so the shell clears the notice and redraws a clean prompt.
-        GLib.timeout_add(250, self._clear_startup_notice)
+        #
+        # That one-shot outlives this call, so the window has to OWN it: nothing
+        # is armed once the window is gone, an earlier pending one-shot (a
+        # second New Session inside 250ms) is retired rather than left to pile
+        # up, and the live source id is kept so _on_destroy can cancel it.
+        if self._closed:
+            return
+        if self._startup_notice_source:
+            GLib.source_remove(self._startup_notice_source)
+        self._startup_notice_source = GLib.timeout_add(
+            250, self._clear_startup_notice)
 
     def _clear_startup_notice(self):
+        # Drop the claim FIRST: this source is about to end either way, and a
+        # stale id left behind would have _spawned/_on_destroy remove a source
+        # that no longer exists.
+        self._startup_notice_source = 0
+        if self._closed:
+            return False      # the terminal is gone; feeding it is not our job
         self._feed_child(b"\x0c")
         return False  # one-shot
+
+    def _on_destroy(self, *_):
+        """Window teardown, idempotent (destroy can only be honoured once).
+
+        _closed is raised BEFORE anything else, so a callback that slips past
+        the cancellation below still sees a closed window and does nothing, and
+        the preferences are written exactly once."""
+        if self._closed:
+            return False
+        self._closed = True
+        source_id = self._startup_notice_source
+        self._startup_notice_source = 0
+        if source_id:
+            GLib.source_remove(source_id)
+        self._save_prefs()
+        return False
 
     # -- menus --
     # Terminal declares Session/Edit/View but the base menu_items() only knows

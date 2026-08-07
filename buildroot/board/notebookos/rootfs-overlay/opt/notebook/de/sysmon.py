@@ -78,6 +78,22 @@ def _app_display(mod):
     return _APP_DISPLAY.get(mod, mod)
 
 
+def proc_start_time(pid):
+    """The moment a process started, from /proc/<pid>/stat (field 22).
+
+    An ID on its own only names a program while that program is alive: once it
+    finishes the kernel is free to hand the same number to something new. Pair
+    the ID with its start time and the pair names one program for good, which
+    is what the name cache keys on and what End Program re-checks before it
+    signals anything. None means the ID is not readable (usually: gone)."""
+    try:
+        with open("/proc/%s/stat" % pid) as fh:
+            data = fh.read()
+        return data[data.rfind(")") + 2:].split()[19]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def human_kb(kb):
     n = kb * 1024.0
     for u in ("B", "KB", "MB", "GB", "TB"):
@@ -93,7 +109,7 @@ class SystemMonitor(nbapp.AppWindow):
     # when the button is disabled. A pixbuf can't be recoloured by CSS, so the
     # icon is swapped to match the button's sensitivity (see _on_selection_changed).
     _END_ICON_ON = "#1A1916"
-    _END_ICON_OFF = "#A29C8E"
+    _END_ICON_OFF = "#9A9484"
 
     def __init__(self):
         super().__init__()
@@ -203,7 +219,7 @@ class SystemMonitor(nbapp.AppWindow):
         sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         sw.add(self.tree)
         sw.get_style_context().add_class("smtreewrap")
-        self.sw = sw  # keep a handle so refresh can preserve scroll position
+        self.sw = sw  # keep a handle to the scroller
         stage.pack_start(sw, True, True, 0)
 
         # footer
@@ -218,8 +234,7 @@ class SystemMonitor(nbapp.AppWindow):
         ebox = Gtk.Box(spacing=8)
         # Keep a handle to the icon so it can dim in step with the button — it
         # starts disabled, so it starts muted.
-        self._end_icon = Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("stopsq", 16, self._END_ICON_OFF))
+        self._end_icon = nbicons.image("stopsq", 16, self._END_ICON_OFF)
         ebox.pack_start(self._end_icon, False, False, 0)
         ebox.pack_start(Gtk.Label(label=_t("End Program")), False, False, 0)
         self.endbtn.add(ebox)
@@ -353,11 +368,6 @@ class SystemMonitor(nbapp.AppWindow):
                                   human_kb(total // 1024)))
 
     def _refresh_procs(self, dtot, recompute):
-        # remember selection
-        sel_pid = None
-        model, it = self.tree.get_selection().get_selected()
-        if it is not None:
-            sel_pid = model.get_value(it, 1)
         rows = []
         seen = {}
         cpu_now = {}   # pid -> CPU% shown this cycle (becomes next call's cache)
@@ -413,24 +423,7 @@ class SystemMonitor(nbapp.AppWindow):
         if len(self._name_cache) > len(names_seen):
             self._name_cache = {k: v for k, v in self._name_cache.items()
                                 if k in names_seen}
-        # remember scroll offset: clear()+append resets the vadjustment to the
-        # top, which yanked the list up every 2s while the user was reading
-        # below the fold; capture it now and restore after the rebuild.
-        vadj = self.sw.get_vadjustment()
-        scroll_y = vadj.get_value() if vadj is not None else 0.0
-        self.store.clear()
-        for r in rows:
-            self.store.append(list(r))
-        # restore selection
-        if sel_pid is not None:
-            for i in range(len(self.store)):
-                if self.store[i][1] == sel_pid:
-                    self.tree.get_selection().select_path(
-                        Gtk.TreePath.new_from_string(str(i)))
-                    break
-        # restore the pre-rebuild scroll offset (clamped by GTK to valid range)
-        if vadj is not None:
-            vadj.set_value(scroll_y)
+        self._sync_store(rows)
         # a transient footer message (e.g. an End Program result) holds for a few
         # seconds; otherwise show the live count of running programs.
         if self._status_text is not None and time.monotonic() < self._status_until:
@@ -439,6 +432,41 @@ class SystemMonitor(nbapp.AppWindow):
             self._status_text = None
             n = len(rows)
             self.stat.set_text("%d program%s" % (n, "" if n == 1 else "s"))
+
+    def _sync_store(self, rows):
+        """Fold this tick's rows into the model in place, writing only what has
+        actually changed.
+
+        The table used to be rebuilt wholesale every 2s — clear() then append —
+        which rewrote all four cells of every row whether or not a single figure
+        had moved, so GTK redrew the entire list on each tick. It also threw
+        away everything the model was anchoring: the selection and the scroll
+        offset had to be captured and put back by hand, and the keyboard cursor
+        (which nothing captured) was lost outright, so arrow-keying down the
+        list dropped you back at the top twice a second.
+
+        Rows are keyed on the program's ID (model col 1): one that is still
+        there is updated cell by cell, one that has gone is removed, one that is
+        new is appended. Nothing else is touched, so an unchanged program emits
+        no change at all, and selection, cursor and scroll simply stay put.
+
+        Gtk.ListStore iters are persistent, so the iters collected up front stay
+        valid across the removals below and across the re-sorting that writing a
+        sort-key cell triggers."""
+        fresh = {r[1]: r for r in rows}     # pid -> row tuple
+        gone = []
+        for it in [row.iter for row in self.store]:
+            row = fresh.pop(self.store.get_value(it, 1), None)
+            if row is None:
+                gone.append(it)
+                continue
+            for col, val in enumerate(row):
+                if self.store.get_value(it, col) != val:
+                    self.store.set_value(it, col, val)
+        for it in gone:
+            self.store.remove(it)
+        for pid in sorted(fresh):
+            self.store.append(list(fresh[pid]))
 
     def _end_process(self, _b=None):
         # End Program signals the program to stop — destructive, so confirm
@@ -453,12 +481,24 @@ class SystemMonitor(nbapp.AppWindow):
         # END it and the result says it is ending. The card used to ask "Ask
         # 'Writer' to close?" — a different verb from the button that had just
         # been pressed, which reads as a different action.
+        # Pin WHICH program this is, not just its number — see _do_end.
+        started = proc_start_time(pid)
         self._confirm(
             _t("End Program"),
             _t("End “%s”? Anything it has not saved will be lost.") % name,
-            _t("End Program"), lambda: self._do_end(pid, name))
+            _t("End Program"), lambda: self._do_end(pid, name, started))
 
-    def _do_end(self, pid, name):
+    def _do_end(self, pid, name, started=None):
+        # The confirmation card is modal and can sit open for as long as the
+        # user takes to read it. If the chosen program finishes in that window
+        # its ID goes back to the kernel, which may already have given it to
+        # something else — and the signal would then end a program the user
+        # never picked, quietly and with its unsaved work. So re-read the start
+        # time and only signal if this is still the same program; if it is not,
+        # the one the user chose is already gone, which is what we say.
+        if proc_start_time(pid) != started:
+            self._flash(_t("%s had already finished") % name)
+            return
         try:
             os.kill(pid, signal.SIGTERM)
             self._flash(_t("Ending %s") % name)
@@ -525,8 +565,8 @@ class SystemMonitor(nbapp.AppWindow):
         has = sel.get_selected()[1] is not None
         self.endbtn.set_sensitive(has)
         # Dim the icon in step with the button (CSS can't recolour a pixbuf).
-        self._end_icon.set_from_pixbuf(nbicons.pixbuf(
-            "stopsq", 16, self._END_ICON_ON if has else self._END_ICON_OFF))
+        nbicons.set_image(self._end_icon,
+            "stopsq", 16, self._END_ICON_ON if has else self._END_ICON_OFF)
 
     def _on_tree_button(self, tree, event):
         # Right-click selects the row under the pointer and opens a context menu
@@ -676,7 +716,7 @@ class SystemMonitor(nbapp.AppWindow):
 
         /* gauge cards: flat papertone panels, hairline border, soft lift */
         .smcard { background: #F4F2EC; border: 1px solid #C9C4B6;
-                  border-radius: 3px; padding: 18px 20px;
+                  border-radius: 12px; padding: 18px 20px;
                   box-shadow: 0 1px 3px rgba(26,25,22,0.05); }
         .smcardtitle { font-size: 11px; font-weight: 700; letter-spacing: 0.14em;
                        color: #6E695E; }
@@ -685,10 +725,10 @@ class SystemMonitor(nbapp.AppWindow):
         /* gauges read as calm, neutral data, not alerts. The fill is a warm
            muted taupe (the muted-text tone) rather than ink: a full memory bar
            in #1A1916 rendered as a heavy BLACK slab, the one thing the papertone
-           language never does. #6E695E stays legible on the #E6E1D4 trough while
+           language never does. #6E695E stays legible on the #DED4C2 trough while
            reading as quiet data. */
         .smbar { min-height: 8px; }
-        .smbar trough { min-height: 8px; background: #E6E1D4;
+        .smbar trough { min-height: 8px; background: #DED4C2;
                         border: none; border-radius: 4px; }
         .smbar progress { min-height: 8px; background: #6E695E;
                           border-radius: 4px; }
@@ -698,7 +738,7 @@ class SystemMonitor(nbapp.AppWindow):
         .smbar.nearfull progress { background: #C8341E; }
 
         /* process table: airy list inside a hairline frame */
-        .smtreewrap { border: 1px solid #C9C4B6; border-radius: 3px;
+        .smtreewrap { border: 1px solid #C9C4B6; border-radius: 12px;
                       background: #FCFBF8; }
         .smtree { background: #FCFBF8; color: #1A1916; font-size: 13px; }
         .smtree :selected { background: #EAE3D2; color: #1A1916; }
@@ -706,7 +746,7 @@ class SystemMonitor(nbapp.AppWindow):
                  font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
                  border: none; border-bottom: 1px solid #D7D2C5;
                  border-radius: 0; box-shadow: none; padding: 8px 12px; }
-        .smtree header button:hover { background: #ECE8DD; }
+        .smtree header button:hover { background: #EFEBE0; }
 
         /* footer: hairline-separated status + destructive action */
         .smfoot { border-top: 1px solid #D7D2C5; padding-top: 14px; }
@@ -715,33 +755,33 @@ class SystemMonitor(nbapp.AppWindow):
            red-bordered alert hint on hover; the real red lives on the confirm
            dialog's primary, per the design language (red = alert/selection). */
         .smend { padding: 8px 18px; background: #F1EEE6; color: #1A1916;
-                 border: 1px solid #C4BFB1; border-radius: 3px;
+                 border: 1px solid #C9C4B6; border-radius: 8px;
                  box-shadow: none; font-size: 14px; font-weight: 600; }
-        .smend:hover { background: #F3E7E3; border-color: #C8341E; }
-        .smend:disabled { background: #F4F2EC; color: #A29C8E;
-                          border-color: #DAD5C8; }
+        .smend:hover { background: #EFEBE0; border-color: #C8341E; }
+        .smend:disabled { background: #F4F2EC; color: #9A9484;
+                          border-color: #D7D2C5; }
 
         /* destructive-action confirmation -- house modal style */
-        .smdlg { background: #F8F7F2; border: 1px solid #C4BFB1; }
+        .smdlg { background: #F8F7F2; border: 1px solid #C9C4B6; }
         .smdlg * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .smdlgbox { padding: 22px 24px 18px; }
         .smdlgtitle { font-size: 17px; font-weight: 700; color: #1A1916; }
         .smdlgmsg { font-size: 13px; color: #2A2620; }
         .smdlgcancel { padding: 6px 18px; background: #FCFBF8; color: #2A2620;
-                 border: 1px solid #C4BFB1; border-radius: 2px;
+                 border: 1px solid #C9C4B6; border-radius: 8px;
                  box-shadow: none; font-size: 13px; }
-        .smdlgcancel:hover { background: #ECE8DD; }
+        .smdlgcancel:hover { background: #EFEBE0; }
         .smdlgdanger { padding: 6px 20px; background: #C8341E; color: #F8F7F2;
-                 border: 1px solid #B12D19; border-radius: 2px;
+                 border: 1px solid #B12D19; border-radius: 8px;
                  box-shadow: none; font-size: 13px; font-weight: 600; }
         .smdlgdanger:hover { background: #B12D19; }
 
         /* right-click context menu -- house dropdown style (beige, never black) */
         .smmenu, .smmenu menuitem {
                  font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .smmenu { background: #F8F7F2; border: 1px solid #C4BFB1; padding: 4px 0; }
+        .smmenu { background: #F8F7F2; border: 1px solid #C9C4B6; padding: 4px 0; }
         .smmenu menuitem { padding: 6px 22px 6px 16px; color: #1A1916;
-                           font-size: 13.5px; }
+                           font-size: 13px; }
         .smmenu menuitem:hover { background: #EAE3D2; color: #1A1916; }
         .smmenu separator { background: #D7D2C5; min-height: 1px; margin: 4px 0; }
         """

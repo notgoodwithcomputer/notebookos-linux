@@ -29,6 +29,8 @@ import time
 import nbapp
 import nbpicker
 import nbicons
+import nbvideo
+import nbtransitions
 from nbi18n import _t  # noqa: E402
 
 # ---- optional media libs (guarded) ----------------------------------------
@@ -179,7 +181,7 @@ KENBURNS_KEYS = set(KENBURNS_NAME)
 # A standalone title / credits card (Movie Maker's Title & Credits) is a clip
 # with no bin media — it renders a full-frame card from cairo at export time.
 TITLE_DUR = 4
-CARD_BG = "#16150F"      # the dark stage tone, matching the preview screen
+CARD_BG = "#1A1916"      # the dark stage tone, matching the preview screen
 
 
 def _new_clip(media_idx, kind, dur):
@@ -285,10 +287,13 @@ class VideoEditor(nbapp.AppWindow):
         self._exp_err_file = None       # ffmpeg stderr scratch file
         self._exp_errfh = None          # open handle to the stderr scratch file
         self._exp_build_gen = 0         # supersedes a pending async cmd-build
+        self._exp_preparing = False     # async cmd-build in flight ('Preparing…')
         self._exp_tmp_imgs = []         # generated caption/title-card PNGs
         # transport playback state (a GLib.timeout clock — no threads)
         self._play_id = 0               # the running playback timeout, if any
         self._play_pos = 0.0            # playback clock, seconds into the reel
+        self._live_clip = None          # index of the clip gtksink is streaming
+        self._player = None             # nbvideo.Playback, built with the preview
         self._play_last = 0             # monotonic time of the last tick
         self._playhead = None           # the timeline playhead Box (moved live)
         # asynchronous preview-decode state (ffmpeg subprocess + poll)
@@ -396,7 +401,7 @@ class VideoEditor(nbapp.AppWindow):
         imp.set_relief(Gtk.ReliefStyle.NONE)
         imp.get_style_context().add_class("importbtn")
         ih = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        ih.pack_start(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 13, INK)),
+        ih.pack_start(nbicons.image("plus", 13, INK),
                       False, False, 0)
         ih.pack_start(Gtk.Label(label=_t("Import")), False, False, 0)
         imp.add(ih)
@@ -425,21 +430,20 @@ class VideoEditor(nbapp.AppWindow):
             cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             cell.get_style_context().add_class("transcell")
             cell.set_opacity(0.55)
-            cell.set_tooltip_text(_t(name))
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 20, INK))
+            img = nbicons.image(icon, 20, INK)
             img.set_halign(Gtk.Align.CENTER)
             cell.pack_start(img, False, False, 0)
             lab = Gtk.Label(label=_t(name))
             lab.get_style_context().add_class("transname")
             cell.pack_start(lab, False, False, 0)
             self._trans_cells[icon] = cell
-            # input-only EventBox: receive clicks without altering the cell's
-            # look (a windowless Box gets no events on this stack).
-            evt = Gtk.EventBox()
-            evt.set_visible_window(False)
-            evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+            evt = Gtk.Button()
+            evt.set_relief(Gtk.ReliefStyle.NONE)
+            evt.get_style_context().add_class("videohit")
+            evt.get_style_context().add_class("transhit")
+            evt.set_tooltip_text(_t("Apply %s transition") % _t(name))
             evt.add(cell)
-            evt.connect("button-press-event", self._on_transition_click, icon)
+            evt.connect("clicked", self._on_transition_click, icon)
             grid.attach(evt, i % 3, i // 3, 1, 1)
         tr.pack_start(grid, False, False, 0)
         box.pack_start(tr, False, False, 0)
@@ -458,7 +462,7 @@ class VideoEditor(nbapp.AppWindow):
             empty.set_vexpand(True)
             empty.set_margin_start(20)
             empty.set_margin_end(20)
-            film = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("video", 40, GHOST))
+            film = nbicons.image("video", 40, GHOST)
             film.set_halign(Gtk.Align.CENTER)
             empty.pack_start(film, False, False, 0)
             e1 = Gtk.Label(label=_t("No media imported"))
@@ -474,15 +478,15 @@ class VideoEditor(nbapp.AppWindow):
         scroll.get_style_context().add_class("binscroll")
         lst = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         for i, m in enumerate(self._bin):
-            evt = Gtk.EventBox()
-            evt.set_visible_window(False)
-            evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+            evt = Gtk.Button()
+            evt.set_relief(Gtk.ReliefStyle.NONE)
+            evt.get_style_context().add_class("videohit")
+            evt.get_style_context().add_class("binhit")
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=11)
             row.get_style_context().add_class("binrow")
             if i == self.sel_media:
                 row.get_style_context().add_class("binsel")
-            ico = Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf(KIND_ICON.get(m["kind"], "video"), 19, INK))
+            ico = nbicons.image(KIND_ICON.get(m["kind"], "video"), 19, INK)
             ico.set_valign(Gtk.Align.CENTER)
             row.pack_start(ico, False, False, 0)
             txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -495,9 +499,10 @@ class VideoEditor(nbapp.AppWindow):
             meta.get_style_context().add_class("binmeta")
             txt.pack_start(meta, False, False, 0)
             row.pack_start(txt, True, True, 0)
+            evt.set_tooltip_text(_t("Select %s (%s)") %
+                                 (m["name"], _t(KIND_LABEL.get(m["kind"], "Clip"))))
             evt.add(row)
-            evt.connect("button-press-event",
-                        lambda _w, _e, idx=i: (self._on_bin_click(idx), True)[1])
+            evt.connect("clicked", lambda _w, idx=i: self._on_bin_click(idx))
             lst.pack_start(evt, False, False, 0)
         scroll.add(lst)
         self._bin_body.pack_start(scroll, True, True, 0)
@@ -551,6 +556,20 @@ class VideoEditor(nbapp.AppWindow):
         inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         inner.set_valign(Gtk.Align.CENTER)
         inner.set_vexpand(True)
+        # THE VIDEO SURFACE. gtksink's own widget, shown only while a moving
+        # clip is actually playing; the still Gtk.Image below keeps every other
+        # job (the selected-clip frame, scrubbing, stills and title cards). Both
+        # live in the same box and only one is ever visible, so the 16:9 stage
+        # never changes size when playback starts — which is why this is packed
+        # here rather than swapped in.
+        self._player = nbvideo.Playback(on_eos=self._on_clip_eos)
+        if self._player.widget is not None:
+            self._player.widget.set_no_show_all(True)
+            self._player.widget.set_size_request(self._prev_w, self._prev_h)
+            self._player.widget.set_halign(Gtk.Align.CENTER)
+            self._player.widget.set_valign(Gtk.Align.CENTER)
+            inner.pack_start(self._player.widget, False, False, 0)
+
         # the real decoded frame — hidden until the engine produces one; it
         # never fakes a frame, it only ever shows pixels ffmpeg/GStreamer gave us
         self._prev_image = Gtk.Image()
@@ -559,8 +578,7 @@ class VideoEditor(nbapp.AppWindow):
         self._prev_image.set_no_show_all(True)
         inner.pack_start(self._prev_image, False, False, 0)
         # the honest placeholder glyph + line, shown whenever there is no frame
-        self._prev_glyph = Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("play", 44, "#8A857A"))
+        self._prev_glyph = nbicons.image("play", 44, "#8A857A")
         self._prev_glyph.set_halign(Gtk.Align.CENTER)
         inner.pack_start(self._prev_glyph, False, False, 0)
         self._prev_label = Gtk.Label(label=_t("Nothing to preview"))
@@ -597,30 +615,30 @@ class VideoEditor(nbapp.AppWindow):
         return box
 
     def _round(self, icon, size, isize, cb=None, tooltip=None):
-        b = Gtk.Box()
+        b = Gtk.Box() if cb is None else Gtk.Button()
+        if cb is not None:
+            b.set_relief(Gtk.ReliefStyle.NONE)
         b.get_style_context().add_class("roundbtn")
         b.set_size_request(size, size)
         b.set_halign(Gtk.Align.CENTER)
         b.set_valign(Gtk.Align.CENTER)
-        img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, isize, FAINT))
+        img = nbicons.image(icon, isize, FAINT)
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
-        img.set_hexpand(True)
-        img.set_vexpand(True)
-        b.pack_start(img, True, True, 0)
+        if cb is None:
+            img.set_hexpand(True)
+            img.set_vexpand(True)
+            b.pack_start(img, True, True, 0)
+        else:
+            b.add(img)
         if cb is None:
             if tooltip:
                 b.set_tooltip_text(tooltip)
             return b, img
-        # input-only EventBox so the round Box actually receives clicks
-        evt = Gtk.EventBox()
-        evt.set_visible_window(False)
-        evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        evt.add(b)
-        evt.connect("button-press-event", cb)
+        b.connect("clicked", cb)
         if tooltip:
-            evt.set_tooltip_text(tooltip)
-        return evt, img
+            b.set_tooltip_text(tooltip)
+        return b, img
 
     def _update_preview(self):
         clip = self._sel_clip()
@@ -682,8 +700,14 @@ class VideoEditor(nbapp.AppWindow):
             return None
         w = w or self._prev_w
         h = h or self._prev_h
+        # w/h stay LOGICAL for the caller and the cache identity; the raster is
+        # built at device resolution below. Both consumers hand the result to
+        # Gtk.Image as a device-scaled surface, so the card occupies the same
+        # logical space and only gains detail. sf is in the key because the same
+        # card at the same logical size is a different raster on a 2x screen.
+        sf = nbicons.scale_factor()
         key = ("title", clip.get("cardtext", ""), clip.get("cardsub", ""),
-               w, h, self._out_w, self._out_h)
+               w, h, sf, self._out_w, self._out_h)
         cache = getattr(self, "_cardpv_cache", None)
         if cache is None:
             cache = self._cardpv_cache = {}
@@ -696,7 +720,8 @@ class VideoEditor(nbapp.AppWindow):
             png = self._render_card_png(clip.get("cardtext", ""),
                                         clip.get("cardsub", ""))
             del self._exp_tmp_imgs[before:]      # ours to delete, not the export's
-            pb = (GdkPixbuf.Pixbuf.new_from_file_at_scale(png, w, h, True)
+            pb = (GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                      png, w * sf, h * sf, True)
                   if png else None)
         except Exception:
             pb = None
@@ -713,7 +738,8 @@ class VideoEditor(nbapp.AppWindow):
     def _show_frame(self, pixbuf):
         """Put a real decoded frame on the stage, in place of the placeholder."""
         try:
-            self._prev_image.set_from_pixbuf(pixbuf)
+            # Device-scaled surface, not a raw pixbuf: see _decode_image.
+            nbicons.set_image_pixbuf(self._prev_image, pixbuf)
             self._prev_image.set_no_show_all(False)
             self._prev_image.show()
             self._prev_glyph.hide()
@@ -885,8 +911,9 @@ class VideoEditor(nbapp.AppWindow):
         # card telling the user the wrong thing.
         if kind == "image" and not self._has_look(clip):
             try:
+                _sf = nbicons.scale_factor()
                 pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    path, self.CARD_W, self.CARD_H, True)
+                    path, self.CARD_W * _sf, self.CARD_H * _sf, True)
             except Exception:
                 pb = None
             if pb is not None:
@@ -904,11 +931,20 @@ class VideoEditor(nbapp.AppWindow):
         return None
 
     def _scale_to_card(self, pb):
+        """Fit a frame to a storyboard card, at the SCREEN's pixel density.
+
+        CARD_W/CARD_H stay logical -- they are layout numbers -- but the pixbuf
+        is built at card size * device scale, so a 2x panel gets a real 252x142
+        thumbnail rather than a 126x71 one the compositor stretches. Every
+        consumer of this pixbuf must hand it to Gtk.Image as a device-scaled
+        SURFACE (nbicons.set_image_pixbuf); handing it over as a plain pixbuf
+        would place those extra pixels as logical ones and double the card."""
         try:
             w, h = pb.get_width(), pb.get_height()
             if w <= 0 or h <= 0:
                 return None
-            k = min(self.CARD_W / float(w), self.CARD_H / float(h))
+            sf = nbicons.scale_factor()
+            k = min((self.CARD_W * sf) / float(w), (self.CARD_H * sf) / float(h))
             return pb.scale_simple(max(1, int(w * k)), max(1, int(h * k)),
                                    GdkPixbuf.InterpType.BILINEAR)
         except Exception:
@@ -946,7 +982,11 @@ class VideoEditor(nbapp.AppWindow):
             return
         for img in self._card_imgs.get(key, ()):
             try:
-                img.set_from_pixbuf(pb)
+                # The pixbuf is at DEVICE resolution (see _scale_to_card), so it
+                # goes in as a surface carrying the scale -- set_from_pixbuf
+                # would treat those pixels as logical and draw a double-size
+                # card, pushing the storyboard past the window.
+                nbicons.set_image_pixbuf(img, pb)
                 img.show()
             except Exception:
                 pass
@@ -957,8 +997,16 @@ class VideoEditor(nbapp.AppWindow):
         cannot shrink below its pixbuf, so an oversized frame would push the
         whole window past a small panel (see _measure_panel)."""
         try:
+            # * device scale, so the stage shows the still at panel resolution.
+            # The docstring's warning above is exactly why every consumer must
+            # use nbicons.set_image_pixbuf: a Gtk.Image cannot shrink below its
+            # pixbuf, so handing this over as a plain pixbuf on a 2x screen
+            # would double the stage's minimum size and push the window off a
+            # small panel. As a device-scaled surface the LOGICAL size is
+            # unchanged and only the detail goes up.
+            _sf = nbicons.scale_factor()
             return GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                path, self._prev_w, self._prev_h, True)
+                path, self._prev_w * _sf, self._prev_h * _sf, True)
         except Exception:
             return None
 
@@ -1764,33 +1812,52 @@ class VideoEditor(nbapp.AppWindow):
         bar.pack_start(seg, False, False, 0)
 
         zooms = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        # Real buttons, not icons in an EventBox. These look identical — the
+        # squarebtn rule strips a button's padding and shadow so the 28x28
+        # request is still the whole control — but a Button is in the focus
+        # chain, so the timeline zoom is reachable by Tab and fires on Space
+        # or Enter. An EventBox only ever hears a pointer.
         for ic in ("zoomout", "zoomin"):
-            zb = Gtk.Box()
+            zb = Gtk.Button()
+            zb.set_relief(Gtk.ReliefStyle.NONE)
             zb.get_style_context().add_class("squarebtn")
             zb.set_size_request(28, 28)
-            zi = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(ic, 14, FAINT))
+            zi = nbicons.image(ic, 14, FAINT)
             zi.set_halign(Gtk.Align.CENTER)
             zi.set_valign(Gtk.Align.CENTER)
             zi.set_hexpand(True)
             zi.set_vexpand(True)
-            zb.pack_start(zi, True, True, 0)
-            evt = Gtk.EventBox()
-            evt.set_visible_window(False)
-            evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-            evt.add(zb)
+            zb.add(zi)
             delta = 0.2 if ic == "zoomin" else -0.2
-            evt.set_tooltip_text(_t("Zoom in") if ic == "zoomin" else "Zoom out")
-            evt.connect("button-press-event",
-                        lambda _w, _e, d=delta: (self._zoom_by(d), True)[1])
-            zooms.pack_start(evt, False, False, 0)
+            zb.set_tooltip_text(_t("Zoom in") if ic == "zoomin" else "Zoom out")
+            zb.connect("clicked", lambda _w, d=delta: self._zoom_by(d))
+            zooms.pack_start(zb, False, False, 0)
         bar.pack_end(zooms, False, False, 0)
         box.pack_start(bar, False, False, 0)
 
         # stack of the two views
         self.tl_stack = Gtk.Stack()
+        self.tl_stack.set_transition_type(Gtk.StackTransitionType.NONE)
         self.tl_stack.set_vexpand(True)
         self.tl_stack.add_named(self._storyboard_view(), "story")
         self.tl_stack.add_named(self._timeline_view(), "time")
+        # The pager owns the switch from here on: it sets the type and duration
+        # on EVERY call, so the order below is what gives the change a direction.
+        # It is the order of the segmented control — Storyboard then Timeline —
+        # so going to the Timeline slides forward and coming back slides back,
+        # instead of both directions looking identical. Under Reduced Motion, and
+        # on the no-compositor swrast fallback, nbmotion's policy resolves to
+        # instant — exactly the NONE set above — so only accelerated sessions
+        # animate. See de/nbtransitions.py.
+        self._timeline_pager = nbtransitions.PageSwitcher(
+            self.tl_stack, order=["story", "time"],
+            duration=nbtransitions.PAGE)
+        # The storyboard is where the editor opens: it is shown, not navigated
+        # to, so it is stated as NONE rather than left to the default crossfade.
+        # Routed through the pager anyway so the opening page is recorded —
+        # otherwise the first real trip to the Timeline has no origin to measure
+        # a direction against and would fade instead of sliding forward.
+        self._timeline_pager.switch("story", direction=nbtransitions.NONE)
         box.pack_start(self.tl_stack, True, True, 0)
         return box
 
@@ -1850,12 +1917,13 @@ class VideoEditor(nbapp.AppWindow):
             bl.set_max_width_chars(16)
             grp.pack_start(bl, False, False, 0)
         cell.pack_start(grp, True, True, 0)
-        evt = Gtk.EventBox()
-        evt.set_visible_window(False)
-        evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        evt = Gtk.Button()
+        evt.set_relief(Gtk.ReliefStyle.NONE)
+        evt.get_style_context().add_class("videohit")
+        evt.get_style_context().add_class("storyhit")
+        evt.set_tooltip_text(_t("Select clip %d: %s") % (k + 1, nm.get_text()))
         evt.add(cell)
-        evt.connect("button-press-event",
-                    lambda _w, _e, i=k: (self._select_cell(i), True)[1])
+        evt.connect("clicked", lambda _w, i=k: self._select_cell(i))
         return evt
 
     def _card_mat(self, clip):
@@ -1872,13 +1940,16 @@ class VideoEditor(nbapp.AppWindow):
             img.set_size_request(self.CARD_W, self.CARD_H)
             thumb = self._card_pixbuf(clip)
             if thumb is not None:
-                img.set_from_pixbuf(thumb)
+                # _scale_to_card returns a DEVICE-resolution pixbuf; as a plain
+                # pixbuf it would draw the card at double size on a 2x panel.
+                nbicons.set_image_pixbuf(img, thumb)
             self._card_imgs.setdefault(self._frame_key(clip), []).append(img)
             return img
         if kind == "title":
             pb = self._card_preview(clip, self.CARD_W, self.CARD_H)
             if pb is not None:
-                img = Gtk.Image.new_from_pixbuf(pb)
+                img = Gtk.Image()
+                nbicons.set_image_pixbuf(img, pb)
                 img.set_halign(Gtk.Align.CENTER)
                 img.get_style_context().add_class("storythumb")
                 img.set_size_request(self.CARD_W, self.CARD_H)
@@ -1895,8 +1966,7 @@ class VideoEditor(nbapp.AppWindow):
             lbl.set_valign(Gtk.Align.CENTER)
             mat.pack_start(lbl, True, True, 0)
         else:
-            glyph = Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf("music", 22, "#8A857A"))
+            glyph = nbicons.image("music", 22, "#8A857A")
             glyph.set_halign(Gtk.Align.CENTER)
             glyph.set_valign(Gtk.Align.CENTER)
             mat.pack_start(glyph, True, True, 0)
@@ -1939,7 +2009,7 @@ class VideoEditor(nbapp.AppWindow):
         dot.set_size_request(34, 34)
         if tr:
             dot.get_style_context().add_class("transdotset")
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(tr, 15, RED))
+            img = nbicons.image(tr, 15, RED)
             img.set_halign(Gtk.Align.CENTER)
             img.set_valign(Gtk.Align.CENTER)
             dot.set_tooltip_text(_t(TRANS_NAME.get(tr) or "Transition"))
@@ -1961,7 +2031,7 @@ class VideoEditor(nbapp.AppWindow):
         grp = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         grp.set_valign(Gtk.Align.CENTER)
         grp.set_vexpand(True)
-        plus = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 20, "#9A9484"))
+        plus = nbicons.image("plus", 20, "#9A9484")
         plus.set_halign(Gtk.Align.CENTER)
         grp.pack_start(plus, False, False, 0)
         ready = (self.sel_media is not None
@@ -1971,12 +2041,14 @@ class VideoEditor(nbapp.AppWindow):
         hint.get_style_context().add_class("storyhint")
         grp.pack_start(hint, False, False, 0)
         cell.pack_start(grp, True, True, 0)
-        evt = Gtk.EventBox()
-        evt.set_visible_window(False)
-        evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        evt = Gtk.Button()
+        evt.set_relief(Gtk.ReliefStyle.NONE)
+        evt.get_style_context().add_class("videohit")
+        evt.get_style_context().add_class("storyhit")
+        evt.set_tooltip_text(_t("Add selected media") if ready else
+                             _t("Select media before adding a clip"))
         evt.add(cell)
-        evt.connect("button-press-event",
-                    lambda _w, _e: (self._append_selected_media(), True)[1])
+        evt.connect("clicked", lambda _w: self._append_selected_media())
         return evt
 
     # Timeline scale: pixels per second of footage, scaled by the zoom control.
@@ -2236,7 +2308,9 @@ class VideoEditor(nbapp.AppWindow):
                                        self.music.get("name", "Music"),
                                        icon="music")
                 cell.pack_start(chip, True, True, 0)
-                mlane.pack_start(self._lane_click_wrap(cell, music=True),
+                mlane.pack_start(self._lane_click_wrap(
+                    cell, music=True, label=_t("Select background music: %s") %
+                    self.music.get("name", "Music")),
                                  False, False, 0)
             mlane.show_all()
         # playhead
@@ -2259,17 +2333,18 @@ class VideoEditor(nbapp.AppWindow):
             sc.add_class("lanesel")
         return cell
 
-    def _lane_click_wrap(self, cell, k=None, music=False):
-        evt = Gtk.EventBox()
-        evt.set_visible_window(False)
-        evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+    def _lane_click_wrap(self, cell, k=None, music=False, label=None):
+        evt = Gtk.Button()
+        evt.set_relief(Gtk.ReliefStyle.NONE)
+        evt.get_style_context().add_class("videohit")
+        evt.get_style_context().add_class("lanehit")
+        if label:
+            evt.set_tooltip_text(label)
         evt.add(cell)
         if music:
-            evt.connect("button-press-event",
-                        lambda _w, _e: (self._select_music(), True)[1])
+            evt.connect("clicked", lambda _w: self._select_music())
         elif k is not None:
-            evt.connect("button-press-event",
-                        lambda _w, _e, i=k: (self._select_cell(i), True)[1])
+            evt.connect("clicked", lambda _w, i=k: self._select_cell(i))
         return evt
 
     def _lane_cell(self, name, clip, w, k):
@@ -2301,14 +2376,18 @@ class VideoEditor(nbapp.AppWindow):
             w, sel=(k == self._sel_cell and not self._sel_music))
         if chip is not None:
             cell.pack_start(chip, True, True, 0)
-        return self._lane_click_wrap(cell, k=k)
+        desc = (clip.get("cardtext") or _t("Title card")) if kind == "title" \
+            else (media.get("name") if media else _t("Clip"))
+        return self._lane_click_wrap(
+            cell, k=k, label=_t("%s lane, clip %d: %s") %
+            (_t(name), k + 1, desc))
 
     def _lane_chip(self, cls, labelcls, text, icon=None):
         chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
         chip.get_style_context().add_class(cls)
         chip.set_valign(Gtk.Align.CENTER)
         if icon:
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 13, RED))
+            img = nbicons.image(icon, 13, RED)
             img.set_valign(Gtk.Align.CENTER)
             chip.pack_start(img, False, False, 0)
         lbl = Gtk.Label(label=text, xalign=0)
@@ -2319,7 +2398,7 @@ class VideoEditor(nbapp.AppWindow):
 
     # ================= behaviour =================
     def _set_view(self, which):
-        self.tl_stack.set_visible_child_name(which)
+        self._timeline_pager.switch(which)
         sc = self.b_story.get_style_context()
         tc = self.b_time.get_style_context()
         if which == "story":
@@ -2376,6 +2455,12 @@ class VideoEditor(nbapp.AppWindow):
             idx = len(self.clips) - 1
         if idx is not None and (force or idx != self._sel_cell):
             self._select_cell(idx)
+            # A NEW clip: drop whatever was streaming so _playback_step opens
+            # this one. Without this the player kept running the previous clip
+            # while the timeline had already moved on — picture and playhead
+            # describing different moments, which is worse than a still.
+            self._live_clip = None
+            self._playback_step(idx, layout[idx][0])
         elif idx is not None:
             # Within a clip, keep stepping the picture forward. Play used to hold
             # ONE frame per clip for the clip's whole length, so a film of four
@@ -2402,15 +2487,73 @@ class VideoEditor(nbapp.AppWindow):
     # request before it finished and the picture would never change at all.
     PLAY_STEP = 1.0
 
+    def _on_clip_eos(self):
+        """A clip's own stream ran out. The storyboard clock owns the running
+        order, so this only parks the picture: _playback_sync will open the next
+        clip when the playhead reaches it. Nothing is advanced here, or a clip
+        that ends a shade early would skip ahead of the timeline."""
+        if self._player is not None and self._player.available:
+            self._player.pause()
+
+    def _show_video_surface(self, on):
+        """Swap between gtksink's surface and the still image. Only one is ever
+        visible; both keep their size request so the stage cannot resize."""
+        w = self._player.widget if self._player is not None else None
+        if w is None:
+            return
+        try:
+            if on:
+                self._prev_image.hide()
+                self._prev_glyph.hide()
+                self._prev_label.hide()
+                w.show()
+            else:
+                w.hide()
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    def _play_clip_live(self, idx, clip, into):
+        """Start real playback of clip `idx` from `into` seconds in.
+
+        True when the player took it. Only a `video` clip with a readable file
+        goes this way: a still, a title card and an audio clip have no moving
+        picture to stream, and the existing frame path already draws them
+        correctly."""
+        if self._player is None or not self._player.available:
+            return False
+        if clip.get("kind") != "video":
+            return False
+        path = clip.get("path")
+        if not (path and os.path.isfile(path)):
+            return False
+        speed = float(clip.get("speed", 1.0) or 1.0)
+        at = self._clip_start(clip) + into * speed
+        if not self._player.open(path, at=at, rate=speed):
+            return False
+        self._player.play()
+        self._show_video_surface(True)
+        self._live_clip = idx
+        return True
+
     def _playback_step(self, idx, clip_off):
-        """Show the frame at the playhead inside clip `idx`, at most once every
-        PLAY_STEP seconds. Only for clips that have a real moving picture: a
-        still, a title card and an audio clip look the same all the way through,
-        so re-decoding them would spend a subprocess to redraw what is already
-        on screen."""
+        """Keep the picture moving inside clip `idx`.
+
+        A real moving clip is STREAMED — gtksink renders every frame with sound,
+        which is what the Play button always claimed to do. The frame-by-frame
+        path below is the fallback for a machine whose GStreamer cannot open the
+        file, and it is what this used to be for everything: one ffmpeg process
+        per second for a single frame, so a five-second shot was five stills and
+        silence."""
         clip = self.clips[idx] if 0 <= idx < len(self.clips) else None
         if clip is None or clip.get("kind") != "video":
+            self._show_video_surface(False)
             return
+        into = max(0.0, self._play_pos - clip_off)
+        if getattr(self, "_live_clip", None) == idx:
+            return                       # already streaming this one
+        if self._play_clip_live(idx, clip, into):
+            return
+        self._show_video_surface(False)
         if not (PIXBUF_OK and self._ffmpeg_ok()):
             return
         into = max(0.0, self._play_pos - clip_off)
@@ -2431,6 +2574,16 @@ class VideoEditor(nbapp.AppWindow):
         # so the next Play re-decodes the first frame instead of trusting the
         # bucket the last run stopped on
         self._play_frame_at = None
+        # Release the stream and put the still image back. Stop must silence the
+        # machine: a paused playbin holds the audio device, so a second app
+        # opening sound after Stop would find it busy.
+        self._live_clip = None
+        if getattr(self, "_player", None) is not None:
+            try:
+                self._player.stop()
+            except Exception:                                  # noqa: BLE001
+                pass
+        self._show_video_surface(False)
         if getattr(self, "_play_id", 0):
             try:
                 GLib.source_remove(self._play_id)
@@ -2453,8 +2606,7 @@ class VideoEditor(nbapp.AppWindow):
     def _set_play_glyph(self, playing):
         try:
             if self._play_img is not None:
-                self._play_img.set_from_pixbuf(
-                    nbicons.pixbuf("stopsq" if playing else "play", 18, FAINT))
+                nbicons.set_image(self._play_img, "stopsq" if playing else "play", 18, FAINT)
             if getattr(self, "_play_w", None) is not None:
                 self._play_w.set_tooltip_text(_t("Stop") if playing else "Play")
         except Exception:
@@ -2564,7 +2716,7 @@ class VideoEditor(nbapp.AppWindow):
             else:
                 cell.set_opacity(0.55); sc.remove_class("transel")
 
-    def _on_transition_click(self, _w, _ev, key):
+    def _on_transition_click(self, _w, key):
         # A transition applies to the SELECTED storyboard clip (it is that clip's
         # lead-in). With no clip selected there is nothing to apply it to, so we
         # do nothing rather than light up a cell that maps to no clip and then
@@ -2770,19 +2922,37 @@ class VideoEditor(nbapp.AppWindow):
         self._recenter_import()
 
     def _imp_build_rows(self):
+        """Draw the scan results.
+
+        The two kinds of row are not the same thing, so they are no longer built
+        the same way. A file already in the bin is a STATEMENT — it says "Added"
+        and there is nothing left to do to it — so it stays a plain box, out of
+        the focus chain, rather than offering a keyboard user a stop that does
+        nothing. A file that is not in the bin is a CONTROL, so it is a real
+        button: reachable by Tab, activated by Space, and announced with the
+        action it performs rather than only the file it names."""
+        # A toggle rebuilds this whole list, destroying the very control the
+        # user just activated. Note which row holds the keyboard focus so it can
+        # be handed to that row's replacement; without this, every Space press
+        # would throw a keyboard user back out of the list.
+        focused = None
+        for idx, btn in getattr(self, "_imp_rowbtns", {}).items():
+            try:
+                if btn.has_focus():
+                    focused = idx
+                    break
+            except Exception:                                     # noqa: BLE001
+                pass
+        self._imp_rowbtns = {}
         for c in self._imp_listbox.get_children():
             self._imp_listbox.remove(c)
         for i, (p, name, kind) in enumerate(self._imp_results):
             already = any(m["path"] == p for m in self._bin)
-            evt = Gtk.EventBox()
-            evt.set_visible_window(False)
-            evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=11)
             row.get_style_context().add_class("improw")
             if i in self._imp_selected:
                 row.get_style_context().add_class("impsel")
-            ico = Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf(KIND_ICON.get(kind, "video"), 18, INK))
+            ico = nbicons.image(KIND_ICON.get(kind, "video"), 18, INK)
             ico.set_valign(Gtk.Align.CENTER)
             row.pack_start(ico, False, False, 0)
             txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -2806,13 +2976,34 @@ class VideoEditor(nbapp.AppWindow):
                 ad.get_style_context().add_class("impadded")
                 ad.set_valign(Gtk.Align.CENTER)
                 row.pack_end(ad, False, False, 0)
+                holder = Gtk.Box()
+                holder.set_can_focus(False)
+                holder.add(row)
             else:
-                evt.connect(
-                    "button-press-event",
-                    lambda _w, _e, idx=i: (self._imp_toggle(idx), True)[1])
-            evt.add(row)
-            self._imp_listbox.pack_start(evt, False, False, 0)
+                holder = Gtk.Button()
+                holder.set_relief(Gtk.ReliefStyle.NONE)
+                holder.get_style_context().add_class("videohit")
+                holder.get_style_context().add_class("imphit")
+                # One whole string per action, not "Select" glued to a name:
+                # a language that puts the verb elsewhere cannot fix a sentence
+                # this app assembled out of fragments.
+                action = (_t("Deselect %s (%s)") if i in self._imp_selected
+                          else _t("Select %s (%s)"))
+                action = action % (name, _t(KIND_LABEL.get(kind, "Clip")))
+                holder.set_tooltip_text(action)
+                # The row's own file-name label already names this button, so
+                # nbapp's tooltip hook leaves the name alone and the action —
+                # the part that changes as the row toggles — would never be
+                # announced. Set it by hand.
+                nbapp.name_control(holder, action)
+                holder.connect("clicked", lambda _w, idx=i: self._imp_toggle(idx))
+                holder.add(row)
+                self._imp_rowbtns[i] = holder
+            self._imp_listbox.pack_start(holder, False, False, 0)
         self._imp_listbox.show_all()
+        back = self._imp_rowbtns.get(focused)
+        if back is not None:
+            back.grab_focus()
 
     def _imp_toggle(self, i):
         if i in self._imp_selected:
@@ -3685,6 +3876,7 @@ class VideoEditor(nbapp.AppWindow):
             self._exp_name.set_sensitive(False)
         except Exception:
             pass
+        self._exp_preparing = True    # an export IS in flight from here on
         self._exp_show_status(_t("Preparing…"))
         threading.Thread(
             target=self._exp_build_worker,
@@ -3705,6 +3897,8 @@ class VideoEditor(nbapp.AppWindow):
         # a newer render attempt (or teardown) superseded this one.
         if gen != getattr(self, "_exp_build_gen", 0):
             return False
+        # the prepare phase is over for this attempt, whatever happens below
+        self._exp_preparing = False
         if getattr(self, "_exp_layer", None) is None:
             return False
         if getattr(self, "_exp_proc", None) is not None:
@@ -3950,6 +4144,7 @@ class VideoEditor(nbapp.AppWindow):
         # callback is dropped instead of launching a render into a torn-down
         # (or reopened) dialog.
         self._exp_build_gen = getattr(self, "_exp_build_gen", 0) + 1
+        self._exp_preparing = False
         pid = getattr(self, "_exp_poll_id", 0)
         if pid:
             try:
@@ -3981,11 +4176,21 @@ class VideoEditor(nbapp.AppWindow):
             self._exp_errfh = None
         self._exp_cleanup_tmp()
 
+    def _exp_busy(self):
+        """True while an export the user asked for is in flight. That starts at
+        the click, not at the ffmpeg process: assembling the command probes every
+        clip with a blocking ffprobe on a worker thread, and on slow storage the
+        card can sit on 'Preparing…' for seconds. Guarding only _exp_proc let a
+        stray click or Esc in that window throw the export away without a word —
+        the very thing the guard exists to prevent."""
+        return (getattr(self, "_exp_proc", None) is not None
+                or bool(getattr(self, "_exp_preparing", False)))
+
     def _exp_scrim_press(self, *_):
         # A click outside the card dismisses the export dialog — but never mid-
         # render, where a stray click would silently kill a long render. While a
         # render is running the explicit Cancel button is the only way to abort.
-        if getattr(self, "_exp_proc", None) is not None:
+        if self._exp_busy():
             return True
         self._close_export()
         return True
@@ -4092,7 +4297,7 @@ class VideoEditor(nbapp.AppWindow):
             if getattr(self, "_exp_layer", None) is not None:
                 # Don't let a stray Esc silently kill an in-flight render; while
                 # rendering, only the explicit Cancel button aborts it.
-                if getattr(self, "_exp_proc", None) is not None:
+                if self._exp_busy():
                     return True
                 self._close_export()
                 return True
@@ -4522,6 +4727,14 @@ class VideoEditor(nbapp.AppWindow):
         # files) and halt playback before the final autosave, so a closing
         # window never leaves ffmpeg orphaned or a timeout firing.
         self._stop_playback(reset=False)
+        # Release the pipeline BEFORE the autosave: teardown drops the bus watch
+        # first, so an EOS still queued on the main loop cannot reach a handler
+        # whose window is on its way out.
+        if getattr(self, "_player", None) is not None:
+            try:
+                self._player.teardown()
+            except Exception:                                  # noqa: BLE001
+                pass
         self._pv_teardown()
         self._export_teardown()
         self._save_project()
@@ -4770,39 +4983,44 @@ class VideoEditor(nbapp.AppWindow):
         .bintitle { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
                     font-weight: 700; }
         .importbtn { min-height: 30px; padding: 0 13px; border: 1px solid #C9C4B6;
-                     background: #FCFBF8; border-radius: 2px; box-shadow: none;
-                     font-size: 12.5px; font-weight: 600; color: #1A1916; }
+                     background: #FCFBF8; border-radius: 8px; box-shadow: none;
+                     font-size: 12px; font-weight: 600; color: #1A1916; }
         .importbtn:hover { background: #F4F2EC; }
         .emptytitle { font-size: 14px; font-weight: 600; color: #6E695E; }
-        .emptysub { font-size: 12.5px; color: #9A9484; }
+        .emptysub { font-size: 12px; color: #9A9484; }
 
         .binscroll, .binscroll viewport { background: #F1EEE6; }
-        .binrow { padding: 10px 14px; border-bottom: 1px solid #E4DFD3; }
-        .binrow.binsel { background: #FBEFEC; box-shadow: inset 3px 0 0 #C8341E; }
-        .binname { font-size: 13.5px; color: #1A1916; font-weight: 600; }
-        .binmeta { font-size: 11.5px; color: #9A9484; }
+        .binrow { padding: 10px 14px; border-bottom: 1px solid #D7D2C5; }
+        .binrow.binsel { background: #EAE3D2; box-shadow: inset 3px 0 0 #C8341E; }
+        .videohit { padding: 0; border: none; background: transparent;
+                    background-image: none; box-shadow: none; }
+        .binhit:hover .binrow { background: #F8F7F2; }
+        .binname { font-size: 13px; color: #1A1916; font-weight: 600; }
+        .binmeta { font-size: 11px; color: #9A9484; }
 
         .transwrap { border-top: 1px solid #D7D2C5; padding: 18px 20px 20px; }
-        .translabel { font-size: 10.5px; letter-spacing: 0.16em; color: #9A9484;
+        .translabel { font-size: 10px; letter-spacing: 0.16em; color: #9A9484;
                       font-weight: 700; margin-bottom: 12px; }
         .transcell { border: 1px solid #D7D2C5; background: #FCFBF8;
-                     border-radius: 2px; padding: 10px 4px 8px; }
-        .transcell.transel { border-color: #C8341E; background: #FBEFEC; }
-        .transname { font-size: 10.5px; color: #6E695E; }
+                     border-radius: 8px; padding: 10px 4px 8px; }
+        .transcell.transel { border-color: #C8341E; background: #EAE3D2; }
+        .transhit:hover .transcell { border-color: #C8341E; }
+        .transname { font-size: 10px; color: #6E695E; }
 
         /* ---------- preview (centre) ---------- */
         .previewcol { background: #FCFBF8; }
-        .screen { background: #16150F; border-radius: 3px; }
+        .screen { background: #1A1916; border-radius: 8px; }
         /* The screen sits inside a scroller (see _preview), whose viewport would
            otherwise paint a paper rectangle over the black stage, and which
            clips its child - so the stage's drop shadow lives out here on the
            wrapper rather than on .screen where it would be cut off. */
-        .prevframe, .prevframe viewport { background-color: #16150F; }
-        .prevframe { border-radius: 3px;
+        .prevframe, .prevframe viewport { background-color: #1A1916; }
+        .prevframe { border-radius: 8px;
                      box-shadow: 4px 4px 0 rgba(26,25,22,0.14); }
-        .noprev { font-size: 13.5px; color: #8A857A; }
+        .noprev { font-size: 13px; color: #8A857A; }
         .prevsub { font-size: 12px; color: #8A857A; letter-spacing: 0.04em; }
         .roundbtn { border: 1px solid #C9C4B6; background: #F4F2EC;
+                    background-image: none; box-shadow: none; padding: 0;
                     border-radius: 50%; }
         .timecode { font-size: 13px; color: #6E695E; letter-spacing: 0.02em; }
 
@@ -4816,57 +5034,79 @@ class VideoEditor(nbapp.AppWindow):
            English PROPERTIES has no ascender there so it never showed. */
         .prophead { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
                     font-weight: 700; padding-top: 4px; margin-bottom: 14px; }
-        .prophint { font-size: 13.5px; color: #9A9484; }
+        .prophint { font-size: 13px; color: #9A9484; }
         .propname { font-size: 15px; color: #1A1916; font-weight: 600; }
-        .propfieldlabel { font-size: 10.5px; letter-spacing: 0.14em;
+        .propfieldlabel { font-size: 10px; letter-spacing: 0.14em;
                           color: #9A9484; font-weight: 700; }
-        .propentry { background: #FCFBF8; border: 1px solid #CFC9BA;
-                     border-radius: 2px; padding: 6px 9px; font-size: 14px;
+        .propentry { background: #FCFBF8; border: 1px solid #C9C4B6;
+                     border-radius: 8px; padding: 6px 9px; font-size: 14px;
                      color: #1A1916; box-shadow: none; }
-        .propentry:focus { border: 1px solid #B5B0A3; box-shadow: none; }
+        .propentry:focus { border: 1px solid #B3AD9E; box-shadow: none; }
         .propremove { padding: 6px 12px; border: 1px solid #C9C4B6;
-                      border-radius: 2px; background: #FCFBF8; color: #C8341E;
-                      font-size: 12.5px; font-weight: 600; box-shadow: none; }
-        .propremove:hover { background: #FBEFEC; border-color: #C8341E; }
+                      border-radius: 8px; background: #FCFBF8; color: #C8341E;
+                      font-size: 12px; font-weight: 600; box-shadow: none; }
+        .propremove:hover { background: #F1EEE6; border-color: #C8341E; }
         /* pinned to the bottom of the column, so the hairline is a footer rule
            rather than a divider inside a scrolling list */
         .proptable { border-top: 1px solid #D7D2C5; margin-top: 12px;
                      padding-top: 8px; }
         .proprow { padding: 9px 0; }
-        .propkey { font-size: 13.5px; color: #6E695E; }
-        .propval { font-size: 13.5px; color: #1A1916; font-weight: 500; }
+        .propkey { font-size: 13px; color: #6E695E; }
+        .propval { font-size: 13px; color: #1A1916; font-weight: 500; }
 
         /* ---------- timeline (bottom) ---------- */
         .timeline { background: #F1EEE6; border-top: 1px solid #C9C4B6; }
         .tlbar { padding: 12px 20px; border-bottom: 1px solid #D7D2C5; }
-        .seg { border: 1px solid #C9C4B6; border-radius: 2px; }
+        .seg { border: 1px solid #C9C4B6; border-radius: 8px; }
         .segbtn { padding: 7px 16px; font-size: 13px; font-weight: 600;
                   color: #6E695E; background: #FCFBF8; border-radius: 0;
                   border: none; box-shadow: none; }
         .segbtn:hover { color: #1A1916; background: #F4F2EC; }
-        .segbtn.active { color: #FCFBF8; background: #C8341E; }
-        .segbtn.active:hover { color: #FCFBF8; background: #B12D19; }
+        /* Active = the shared selection fill plus an accent EDGE, never a
+           field of red. Horizontal segments get the edge along the bottom,
+           which is the same signal the vertical sidebars carry down their
+           left side. Red stays reserved for "this destroys something". */
+        .segbtn.active { color: #1A1916; background: #EAE3D2;
+                         box-shadow: inset 0 -3px 0 #C8341E; }
+        .segbtn.active:hover { color: #1A1916; background: #EAE3D2;
+                               box-shadow: inset 0 -3px 0 #C8341E; }
+        /* These are real buttons, so the theme would otherwise add its own
+           padding, minimum size and pressed shadow on top of the 28x28
+           request and the control would grow. Zeroing those leaves the
+           border, fill and radius below as the entire appearance: the
+           chrome here is size-neutral. The focus ring is deliberately NOT
+           touched, as it is what shows Tab has landed on the control. */
         .squarebtn { border: 1px solid #C9C4B6; background: #F4F2EC;
-                     border-radius: 2px; }
+                     border-radius: 8px; padding: 0; margin: 0;
+                     min-width: 0; min-height: 0; box-shadow: none;
+                     background-image: none; }
+        .squarebtn:hover { background: #EAE3D2; border-color: #B3AD9E;
+                           box-shadow: none; background-image: none; }
+        .squarebtn:active, .squarebtn:checked {
+                     background: #EAE3D2; border-color: #B3AD9E;
+                     box-shadow: none; background-image: none; }
+        .squarebtn:disabled { background: #F4F2EC; border-color: #D7D2C5;
+                     box-shadow: none; background-image: none; }
 
         .storyscroll, .storyscroll viewport { background: #F1EEE6; }
         .storyrow { padding: 0 24px; }
-        .storycell { border: 1px dashed #C9C4B6; border-radius: 2px;
+        .storycell { border: 1px dashed #C9C4B6; border-radius: 12px;
                      background: #FCFBF8; }
         .storycell.storyfilled { border-style: solid; border-color: #C9C4B6;
                      background: #FCFBF8; }
         .storycell.storysel { border-style: solid; border-color: #C8341E;
-                     background: #FBEFEC; }
+                     background: #EAE3D2; }
+        .storyhit:hover .storycell { border-color: #C8341E; }
         /* the clip's own frame, on a dark mat so a letterboxed or still-
            decoding picture reads as a screen rather than a hole in the card */
-        .storythumb { background: #16150F; border: 1px solid #D7D2C5;
+        .storythumb { background: #1A1916; border: 1px solid #D7D2C5;
                       margin-bottom: 2px; }
-        .storymattext { font-size: 11.5px; color: #F1EEE6; padding: 0 6px; }
+        .storymattext { font-size: 11px; color: #F1EEE6; padding: 0 6px; }
         .storynum { font-size: 12px; color: #9A9484; font-weight: 600; }
         .storyhint { font-size: 11px; color: #9A9484; }
-        .storyname { font-size: 12.5px; color: #1A1916; font-weight: 600; }
+        .storyname { font-size: 12px; color: #1A1916; font-weight: 600; }
         .storymeta { font-size: 11px; color: #6E695E; }
-        .storytitleovl { font-size: 10.5px; color: #1A1916; }
+        .storytitleovl { font-size: 10px; color: #1A1916; }
         .transdot { border: 1px dashed #C9C4B6; border-radius: 50%; }
         /* a clip that HAS a transition: ink, like every other "this is set"
            mark here. The accent belongs to the selection alone. */
@@ -4876,7 +5116,7 @@ class VideoEditor(nbapp.AppWindow):
 
         .ruler { border-bottom: 1px solid #D7D2C5; }
         .rulergutter { border-right: 1px solid #D7D2C5; }
-        .tick { font-size: 10.5px; color: #9A9484; border-left: 1px solid #D7D2C5;
+        .tick { font-size: 10px; color: #9A9484; border-left: 1px solid #D7D2C5;
                 padding-left: 6px; }
         /* the playhead is a POSITION, not a selection: ink, so the one
            signage red on this window keeps meaning SELECTED (the chosen clip,
@@ -4888,77 +5128,79 @@ class VideoEditor(nbapp.AppWindow):
                       letter-spacing: 0.12em; color: #6E695E; font-weight: 700;
                       padding: 0 12px; }
         .tlchip { background: #FCFBF8; border: 1px solid #C9C4B6;
-                  border-radius: 2px; margin: 8px 4px; padding: 4px 8px; }
+                  border-radius: 4px; margin: 8px 4px; padding: 4px 8px; }
         .tlchipaudio { background: #EFEBE0; border: 1px solid #C9C4B6;
-                       border-radius: 2px; margin: 8px 4px; padding: 4px 8px; }
+                       border-radius: 4px; margin: 8px 4px; padding: 4px 8px; }
         .tlchiptrans { background: #F4F2EC; border: 1px solid #C9C4B6;
-                       border-radius: 2px; margin: 8px 4px; padding: 4px 6px; }
+                       border-radius: 4px; margin: 8px 4px; padding: 4px 6px; }
         .tlchiptitle { background: #F4F2EC; border: 1px solid #C9C4B6;
-                       border-radius: 2px; margin: 8px 4px; padding: 4px 8px; }
+                       border-radius: 4px; margin: 8px 4px; padding: 4px 8px; }
         .tlchipname { font-size: 11px; color: #1A1916; }
-        .tlchiptransname { font-size: 10.5px; color: #1A1916; font-weight: 600; }
+        .tlchiptransname { font-size: 10px; color: #1A1916; font-weight: 600; }
         .tlchipcap { background: #F4F2EC; border: 1px solid #C9C4B6;
-                     border-radius: 2px; margin: 8px 3px; padding: 4px 8px; }
+                     border-radius: 4px; margin: 8px 3px; padding: 4px 8px; }
         /* the music chip sits on the same warm-paper surface + taupe hairline
            as every other lane chip (it was a pale sage green, the one colour in
            this app outside the papertone / ink / signage-red palette); its own
            lane and note glyph are what identify it */
         .tlchipmusic { background: #EFEBE0; border: 1px solid #C9C4B6;
-                       border-radius: 2px; margin: 8px 3px; padding: 4px 8px; }
-        .lanecell { border-right: 1px solid #EAE5D8; }
-        .lanecell.lanesel { background: #FBEFEC; }
+                       border-radius: 4px; margin: 8px 3px; padding: 4px 8px; }
+        .lanecell { border-right: 1px solid #D7D2C5; }
+        .lanecell.lanesel { background: #EAE3D2; }
+        .lanehit:hover .lanecell { background: #F8F7F2; }
         .tlscroll, .tlscroll viewport { background: #F1EEE6; }
-        .storyadd { border: 1px dashed #C9C4B6; background: #F7F5EF; }
+        .storyadd { border: 1px dashed #C9C4B6; background: #F8F7F2; }
         .storybadge { font-size: 10px; color: #9A9484; }
 
         /* ---------- properties (extended controls) ---------- */
-        .propcombo { background: #FCFBF8; border: 1px solid #CFC9BA;
-                     border-radius: 2px; color: #1A1916; box-shadow: none;
+        .propcombo { background: #FCFBF8; border: 1px solid #C9C4B6;
+                     border-radius: 8px; color: #1A1916; box-shadow: none;
                      padding: 2px 4px; }
-        .propcheck { font-size: 12.5px; color: #3A362F; }
+        .propcheck { font-size: 12px; color: #3A362E; }
         .propcheck check { min-width: 15px; min-height: 15px; margin-right: 6px; }
         .propmove { padding: 6px 10px; border: 1px solid #C9C4B6;
-                    border-radius: 2px; background: #FCFBF8; color: #1A1916;
-                    font-size: 12.5px; box-shadow: none; }
+                    border-radius: 8px; background: #FCFBF8; color: #1A1916;
+                    font-size: 12px; box-shadow: none; }
         .propmove:hover { background: #F1EEE6; }
 
         /* ---------- import dialog ---------- */
         .impcard { background: #F8F7F2; border: 1px solid #C9C4B6;
-                   border-radius: 3px; padding: 28px 30px;
+                   border-radius: 12px; padding: 28px 30px;
                    box-shadow: 3px 3px 0 rgba(26,25,22,0.15); }
         .dlgtitle { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                     font-size: 20px; font-weight: 600; color: #1A1916;
                     margin-bottom: 6px; }
-        .impsub { font-size: 12.5px; color: #6E695E; margin-bottom: 4px; }
+        .impsub { font-size: 12px; color: #6E695E; margin-bottom: 4px; }
         .implist, .implist viewport { background: #FCFBF8;
                     border: 1px solid #D7D2C5; }
-        .improw { padding: 9px 12px; border-bottom: 1px solid #EEEADF; }
-        .improw.impsel { background: #FBEFEC; box-shadow: inset 3px 0 0 #C8341E; }
-        .impname { font-size: 13.5px; color: #1A1916; font-weight: 600; }
+        .improw { padding: 9px 12px; border-bottom: 1px solid #D7D2C5; }
+        .improw.impsel { background: #EAE3D2; box-shadow: inset 3px 0 0 #C8341E; }
+        .imphit:hover .improw { background: #F8F7F2; }
+        .impname { font-size: 13px; color: #1A1916; font-weight: 600; }
         .imppath { font-size: 11px; color: #9A9484; }
-        .impadded { font-size: 11px; color: #B0AB9D; font-style: italic; }
-        .impcount { font-size: 12.5px; color: #6E695E; }
-        .impbtn { padding: 8px 16px; border-radius: 2px; border: 1px solid #C9C4B6;
-                  background: #F1EEE6; color: #1A1916; font-size: 13.5px;
+        .impadded { font-size: 11px; color: #B3AD9E; font-style: italic; }
+        .impcount { font-size: 12px; color: #6E695E; }
+        .impbtn { padding: 8px 16px; border-radius: 8px; border: 1px solid #C9C4B6;
+                  background: #F1EEE6; color: #1A1916; font-size: 13px;
                   box-shadow: none; }
-        .impbtn:hover { background: #E6DFCE; }
-        .dlgdrop { border: 1px dashed #C9C4B6; border-radius: 2px;
+        .impbtn:hover { background: #EAE3D2; }
+        .dlgdrop { border: 1px dashed #C9C4B6; border-radius: 12px;
                    background: #FCFBF8; padding: 34px 22px; }
         .dropmain { font-size: 14px; color: #6E695E; }
-        .dropsub { font-size: 12.5px; color: #9A9484; }
+        .dropsub { font-size: 12px; color: #9A9484; }
         .dlgok { min-width: 96px; min-height: 38px; padding: 0 16px;
-                 background: #C8341E; color: #FCFBF8; border-radius: 2px;
+                 background: #C8341E; color: #FCFBF8; border-radius: 8px;
                  font-size: 14px; font-weight: 600; box-shadow: none;
                  border: none; }
         .dlgok:hover { background: #B12D19; }
-        .dlgok:disabled { background: #E4CFCB; color: #F8F0EE; }
+        .dlgok:disabled { background: #B3AD9E; color: #FCFBF8; }
 
         /* ---------- export progress ---------- */
         .expprog { min-height: 7px; }
-        .expprog trough { min-height: 7px; background: #E4DFD3; border: none;
-                          border-radius: 3px; }
+        .expprog trough { min-height: 7px; background: #DED4C2; border: none;
+                          border-radius: 100px; }
         .expprog progress { min-height: 7px; background: #C8341E; border: none;
-                            border-radius: 3px; }
+                            border-radius: 100px; }
         """
         prov = Gtk.CssProvider()
         try:

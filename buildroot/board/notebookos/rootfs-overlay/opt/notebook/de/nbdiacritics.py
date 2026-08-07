@@ -124,13 +124,13 @@ CSS = b"""
 .nbdia { background: #F8F7F2; border: 1px solid #C9C4B6; padding: 4px;
          box-shadow: 3px 3px 0 rgba(26,25,22,0.15); }
 .nbdia-key { background: transparent; border: 1px solid #F8F7F2;
-             border-radius: 2px; padding: 3px 8px 4px 8px; box-shadow: none;
+             border-radius: 8px; padding: 3px 8px 4px 8px; box-shadow: none;
              color: #1A1916; }
 .nbdia-key:hover { background: #EAE3D2; }
 /* Selection is the warm beige the dropdowns use - never black, and never the
    signage red, which this design language keeps for today/alerts only. */
 .nbdia-key.on { background: #EAE3D2; border: 1px solid #C9C4B6; }
-.nbdia-ch { font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 21px;
+.nbdia-ch { font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 20px;
             color: #1A1916; }
 .nbdia-ix { font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 10px;
             color: #9A9484; }

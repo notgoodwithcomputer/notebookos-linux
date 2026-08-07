@@ -35,20 +35,24 @@ _CSS = b"""
 .nbpicker .pickerfooter { background: #F1EEE6; border-top: 1px solid #C9C4B6;
                           padding: 10px 16px; }
 .nbpicker .pickername { background: #FCFBF8; color: #1A1916;
-                        border: 1px solid #C9C4B6; border-radius: 2px;
+                        border: 1px solid #C9C4B6; border-radius: 8px;
                         padding: 5px 8px; }
 .nbpicker .pickerok { padding: 6px 20px; background: #C8341E; color: #FCFBF8;
-                      border: 1px solid #C8341E; border-radius: 2px;
+                      border: 1px solid #C8341E; border-radius: 8px;
                       box-shadow: none; font-size: 13px; font-weight: 600; }
 .nbpicker .pickerok:hover { background: #B12D19; border-color: #B12D19; }
+/* #E0B8B0 is deliberately off-palette: it is the OS-wide "primary action, not
+   available yet" tint (settings, nbprint, usbwriter and the installer all use
+   the same value), and the palette has no desaturated accent to express it.
+   It also has to stay dark enough to carry the #FCFBF8 label below. */
 .nbpicker .pickerok:disabled { background: #E0B8B0; border-color: #E0B8B0;
                                color: #FCFBF8; }
 .nbpicker .pickercancel { padding: 6px 18px; background: #FCFBF8; color: #2A2620;
-                          border: 1px solid #C9C4B6; border-radius: 2px;
+                          border: 1px solid #C9C4B6; border-radius: 8px;
                           box-shadow: none; font-size: 13px; }
 .nbpicker .pickercancel:hover { background: #F1EEE6; }
 .nbpicker .pickerfooter .pickerwarn,
-.nbpicker .pickerwarn { color: #C8341E; font-size: 12.5px; }
+.nbpicker .pickerwarn { color: #C8341E; font-size: 12px; }
 .nbpicker .pickerempty { color: #8A857A; font-size: 14px; background: #FCFBF8; }
 /* The footer caption ("Save As:") is a bare label sitting DIRECTLY in the
    footer box. It has to be selected as such: as a plain descendant rule this
@@ -64,9 +68,9 @@ _CSS = b"""
 .nbpicker .pickerfooter .pickerok:disabled label { color: #FCFBF8; }
 .nbpicker .pickerfooter .pickercancel label,
 .nbpicker .pickercancel label { color: #2A2620; }
-.nbpicker .pickernewfolder { padding: 4px 10px; border-radius: 2px; }
-.nbpicker .pickernewfolder:hover { background: #E7E3D9; }
-.nbpicker .pickernewfolder label { color: #2A2620; font-size: 12.5px; }
+.nbpicker .pickernewfolder { padding: 4px 10px; border-radius: 8px; }
+.nbpicker .pickernewfolder:hover { background: #EAE3D2; }
+.nbpicker .pickernewfolder label { color: #2A2620; font-size: 12px; }
 .nbpicker .pickerfooter .pickerdlgtitle,
 .nbpicker .pickerdlgtitle { color: #1A1916; font-size: 16px; font-weight: 700; }
 .nbpicker .pickerfooter .pickerdlgmsg,
@@ -205,7 +209,7 @@ class _Picker:
         close.set_valign(Gtk.Align.CENTER)
         try:
             img = Gtk.Image()
-            img.set_from_pixbuf(nbicons.pixbuf("wclose", 11, "#4A463E"))
+            nbicons.set_image(img, "wclose", 11, "#3A362E")
             close.add(img)
         except Exception:
             pass
@@ -231,8 +235,7 @@ class _Picker:
         newf.get_style_context().add_class("pickernewfolder")
         newf.set_tooltip_text("Create a new folder here")
         nfb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        nfb.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("plus", 13, "#3A362E")), False, False, 0)
+        nfb.pack_start(nbicons.image("plus", 13, "#3A362E"), False, False, 0)
         nfb.pack_start(Gtk.Label(label="New Folder"), False, False, 0)
         newf.add(nfb)
         newf.connect("clicked", lambda *_: self._new_folder())
@@ -246,13 +249,11 @@ class _Picker:
         self.btn_list = Gtk.Button()
         self.btn_list.get_style_context().add_class("viewbtn")
         self.btn_list.get_style_context().add_class("active")
-        self.btn_list.add(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("viewlist", 16, "#1A1916")))
+        self.btn_list.add(nbicons.image("viewlist", 16, "#1A1916"))
         self.btn_list.connect("clicked", lambda *_: self._set_view("list"))
         self.btn_grid = Gtk.Button()
         self.btn_grid.get_style_context().add_class("viewbtn")
-        self.btn_grid.add(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("viewgrid", 16, "#3A362E")))
+        self.btn_grid.add(nbicons.image("viewgrid", 16, "#3A362E"))
         self.btn_grid.connect("clicked", lambda *_: self._set_view("grid"))
         box.pack_start(self.btn_list, False, False, 0)
         box.pack_start(self.btn_grid, False, False, 0)
@@ -274,8 +275,7 @@ class _Picker:
             row = Gtk.Button(); row.set_relief(Gtk.ReliefStyle.NONE)
             row.get_style_context().add_class("sbrow")
             hb = Gtk.Box(spacing=12)
-            hb.pack_start(Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf(icon, 18, "#3A362E")), False, False, 0)
+            hb.pack_start(nbicons.image(icon, 18, "#3A362E"), False, False, 0)
             hb.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
             row.add(hb)
             row.connect("clicked", lambda _b, p=ap: self._load(p))
@@ -285,16 +285,19 @@ class _Picker:
 
     def _filearea(self):
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        # pixbuf, name, kind, size, date, is_dir, size_bytes, mtime, gridpixbuf
-        self.store = Gtk.ListStore(GObject.TYPE_OBJECT, str, str, str, str,
+        # icon, name, kind, size, date, is_dir, size_bytes, mtime, gridicon
+        # Columns 0 and 8 hold cairo SURFACES so the icons stay sharp on a HiDPI
+        # panel -- a pixbuf carries no device scale and gets stretched. Same
+        # change, same reason, as the Finder's model; see nbicons.SURFACE_GTYPE.
+        self.store = Gtk.ListStore(nbicons.SURFACE_GTYPE, str, str, str, str,
                                    bool, GObject.TYPE_INT64,
-                                   GObject.TYPE_DOUBLE, GObject.TYPE_OBJECT)
+                                   GObject.TYPE_DOUBLE, nbicons.SURFACE_GTYPE)
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.get_style_context().add_class("filelist")
         col = Gtk.TreeViewColumn("Name")
         ic = Gtk.CellRendererPixbuf(); ic.set_property("xpad", 6)
         tx = Gtk.CellRendererText()
-        col.pack_start(ic, False); col.add_attribute(ic, "pixbuf", 0)
+        col.pack_start(ic, False); col.add_attribute(ic, "surface", 0)
         col.pack_start(tx, True); col.add_attribute(tx, "text", 1)
         col.set_expand(True)
         self.tree.append_column(col)
@@ -311,7 +314,7 @@ class _Picker:
         main.pack_start(self._list_sw, True, True, 0)
         self.iconview = Gtk.IconView(model=self.store)
         gpr = Gtk.CellRendererPixbuf(); self.iconview.pack_start(gpr, False)
-        self.iconview.add_attribute(gpr, "pixbuf", 8)
+        self.iconview.add_attribute(gpr, "surface", 8)
         gtr = Gtk.CellRendererText(); gtr.set_property("xalign", 0.5)
         self.iconview.pack_start(gtr, True); self.iconview.add_attribute(gtr, "text", 1)
         self.iconview.set_item_width(128)
@@ -518,9 +521,9 @@ class _Picker:
         rows.sort(key=lambda r: (not r["is_dir"], r["name"].lower()))
         for r in rows:
             self.store.append([
-                nbicons.pixbuf(r["icon"], LIST_ICON_PX), r["name"], r["kind"],
+                nbicons.surface(r["icon"], LIST_ICON_PX), r["name"], r["kind"],
                 r["size"], r["date"], r["is_dir"], r["size_bytes"],
-                r["mtime"], nbicons.pixbuf(r["icon"], GRID_ICON_PX)])
+                r["mtime"], nbicons.surface(r["icon"], GRID_ICON_PX)])
         self._sync_empty()
         self._sync_ok()
 

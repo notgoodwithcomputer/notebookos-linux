@@ -16,6 +16,9 @@ static Instance g_inst[NB_MAX_INSTANCES];
 static u16 g_keys, g_keys_prev;
 static s16 g_cur_room = -1;
 static s16 g_next_room = -1;
+/* Where a warp puts the traveller in the room it opens into. -1 means "wherever
+   the room places it", which is what a plain rt_room_goto does. */
+static s32 g_arrive_x = -1, g_arrive_y = -1;
 static u16 g_step_frames = 1;    /* VBlanks between game steps (room speed) */
 static const nb_Room* g_room = 0;
 static Instance* g_view = 0;     /* the camera follows this instance (0 = fixed) */
@@ -203,6 +206,12 @@ static const u16* g_tiles = 0;
 static u8 g_edge_solid = 0;
 static u8 g_has_solid = 0;
 static u8 g_solid_of[512];
+/* Creates the instance pool had no room for. rt_create returns 0 and every
+   caller in the generated code discards it, so a game that spawns past 128
+   simply stops spawning with nothing to say so. Counted here and shown on
+   the profiler overlay, which is where an author is already looking when
+   something is wrong with a busy scene. */
+static u32 g_create_refused = 0;
 static u16 g_dispcnt = MODE0 | BG0_ON | BG1_ON | BG2_ON | OBJ_ON | OBJ_1D_MAP;
 
 /* screen effects */
@@ -257,10 +266,56 @@ void rt_draw_text(int col, int row, const char* s) {
     rt_draw_text_c(col, row, s, NB_WHITE);
 }
 
-void rt_draw_text_centre(int row, const char* s, int colour) {
+/* How wide a string is in PIXELS, using each glyph's own width.
+ *
+ * Measurement is separate from drawing on purpose. Text is still drawn one
+ * glyph per 8-pixel cell, so this is not yet what rt_draw_text advances by --
+ * it is what centring, fitting and a proportional renderer all need, and
+ * having it correct before the renderer exists is what makes the renderer a
+ * small change rather than a large one.
+ *
+ * Control codes cost no width: measuring the raw characters would report a
+ * line as too long and wrap one that fits. */
+int rt_text_width(const char* s) {
+    int w = 0;
+    if (!s) return 0;
+    while (*s) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '{') {
+            const char* j = s + 1;
+            while (*j && *j != '}' && *j != ' ' && *j != '\n') j++;
+            if (*j == '}') { s = j + 1; continue; }
+        }
+        if (c >= NB_FONT_FIRST && c < NB_FONT_FIRST + NB_FONT_COUNT)
+            w += nb_font_w[c - NB_FONT_FIRST];
+        else
+            w += 8;
+        s++;
+    }
+    return w;
+}
+
+/* The same string in whole cells, which is what the fixed-cell renderer uses. */
+int rt_text_cells(const char* s) {
     int n = 0;
+    if (!s) return 0;
+    while (*s) {
+        if (*s == '{') {
+            const char* j = s + 1;
+            while (*j && *j != '}' && *j != ' ' && *j != '\n') j++;
+            if (*j == '}') { s = j + 1; continue; }
+        }
+        n++; s++;
+    }
+    return n;
+}
+
+void rt_draw_text_centre(int row, const char* s, int colour) {
+    int n;
     if (!s) return;
-    while (s[n]) n++;
+    /* Counted WITHOUT control codes: a banner carrying a colour code used to
+       be pushed left by the width of the code itself. */
+    n = rt_text_cells(s);
     rt_draw_text_c((30 - n) / 2, row, s, colour);
 }
 
@@ -489,9 +544,1163 @@ static void fx_apply(void) {
     else                  REG_BLDCNT = 0;
 }
 
+/* ---- interrupts ----------------------------------------------------------
+ * Level 3 of the three-level model (docs/GBA-SDK-SPEC.md Part 0): a game can
+ * take an interrupt directly. Levels 1 and 2 never see this — the action sheet
+ * and the script language sit on top of a runtime that is now interrupt-driven
+ * underneath them.
+ *
+ * The BIOS jumps to whatever address sits at 0x03007FFC, in ARM state, with
+ * IRQs already disabled. This build is ARM (no -mthumb), so the handler can be
+ * plain C: GCC's interrupt attribute emits the right frame and the
+ * `subs pc, lr, #4` return. */
+static rt_irq_fn g_irq[RT_IRQ_SLOTS];
+static volatile u32 g_frames;        /* VBlanks since boot */
+
+__attribute__((interrupt("IRQ")))
+static void rt_irq_entry(void) {
+    u16 pending = (u16)(REG_IE & REG_IF);
+    int i;
+    for (i = 0; i < RT_IRQ_SLOTS; i++) {
+        u16 bit = (u16)(1u << i);
+        if (!(pending & bit)) continue;
+        if (bit == IRQ_VBLANK) g_frames++;
+        if (g_irq[i]) g_irq[i]();
+    }
+    /* Acknowledge BOTH. Writing REG_IF clears the hardware flag; the BIOS keeps
+     * its own copy at 0x03007FF8 and SWI VBlankIntrWait spins for ever unless
+     * that is set too. */
+    REG_IF = pending;
+    BIOS_IF = (u16)(BIOS_IF | pending);
+}
+
+void rt_irq_set(u16 mask, rt_irq_fn fn) {
+    int i;
+    u16 ime = REG_IME;
+    REG_IME = 0;                     /* a half-installed handler must not fire */
+    for (i = 0; i < RT_IRQ_SLOTS; i++) {
+        if (mask & (1u << i)) g_irq[i] = fn;
+    }
+    if (fn) REG_IE = (u16)(REG_IE | mask);
+    else    REG_IE = (u16)(REG_IE & ~mask);
+    REG_IME = ime;
+}
+
+u32 rt_frame_count(void) { return g_frames; }
+
+static void rt_irq_init(void) {
+    int i;
+    REG_IME = 0;
+    for (i = 0; i < RT_IRQ_SLOTS; i++) g_irq[i] = 0;
+    BIOS_IRQ_VEC = (u32)rt_irq_entry;
+    REG_DISPSTAT = (u16)(REG_DISPSTAT | DSTAT_VBLANK_IRQ);
+    REG_IF = 0xFFFF;                 /* discard anything already pending */
+    REG_IE = IRQ_VBLANK;
+    REG_IME = 1;
+}
+
+/* ---- proportional text ---------------------------------------------------
+ * The dialogue panel drawn glyph-by-pixel instead of glyph-by-cell.
+ *
+ * WHY ONLY THE PANEL. Proportional text needs a RAM copy of the tiles it draws
+ * into, because a glyph lands across a tile boundary and tiles are the only
+ * thing VRAM takes. The panel is 26x4 = 104 tiles, which is 3.3 KB; the whole
+ * 30x20 text layer would be 19 KB, most of IWRAM, to make a score read-out
+ * slightly narrower. The HUD stays on cells.
+ *
+ * COLOUR IS PER TILE, not per pixel: 4bpp colour comes from the map entry's
+ * palette bank, and a tile has one. A colour change therefore takes effect at
+ * the next tile boundary. Said here because the alternative -- silently
+ * recolouring the two or three pixels of the previous letter that share the
+ * tile -- looks like a rendering fault.
+ */
+/* Where the panel sits, in cells. Shared with the dialogue engine below. */
+#define SAY_COL_C  2
+#define SAY_ROW_C  14
+#define VWF_COLS   26
+#define VWF_ROWS   4
+#define VWF_TILES  (VWF_COLS * VWF_ROWS)
+#define VWF_BASE   128            /* first tile of ours in the text charblock */
+
+static u32 g_vwf[VWF_TILES * 8];  /* 8 rows of 8 4bpp pixels per tile */
+static u8  g_vwf_bank[VWF_TILES];
+static u8  g_vwf_on;
+
+void rt_vwf(int on) { g_vwf_on = (u8)(on ? 1 : 0); }
+int  rt_vwf_enabled(void) { return g_vwf_on; }
+
+static void vwf_clear(void) {
+    int i;
+    for (i = 0; i < VWF_TILES * 8; i++) g_vwf[i] = 0;
+    for (i = 0; i < VWF_TILES; i++) g_vwf_bank[i] = nb_text_bank[0];
+}
+
+/* One glyph at pixel x on text row `row`. Returns how far to advance. */
+static int vwf_glyph(int x, int row, unsigned char ch, int colour) {
+    int gi, y, gx, w;
+    if (ch < NB_FONT_FIRST || ch >= NB_FONT_FIRST + NB_FONT_COUNT) ch = ' ';
+    gi = ch - NB_FONT_FIRST;
+    w = nb_font_w[gi];
+    if (row < 0 || row >= VWF_ROWS) return w;
+    if (colour < 0 || colour >= NB_COLOURS) colour = 0;
+    for (y = 0; y < 8; y++) {
+        u32 g = (u32)nb_font[gi * 16 + y * 2]
+              | ((u32)nb_font[gi * 16 + y * 2 + 1] << 16);
+        for (gx = 0; gx < w; gx++) {
+            int X = x + gx;
+            int tile, tx;
+            if (!((g >> (gx * 4)) & 0xF)) continue;   /* not ink */
+            if (X < 0 || X >= VWF_COLS * 8) continue;
+            tile = row * VWF_COLS + (X >> 3);
+            tx = X & 7;
+            g_vwf[tile * 8 + y] |= (u32)1 << (tx * 4);
+            g_vwf_bank[tile] = nb_text_bank[colour];
+        }
+    }
+    return w;
+}
+
+/* Push the buffer to VRAM and point the panel's map entries at it. */
+static void vwf_flush(void) {
+    volatile u16 *cb = CHARBLOCK(1) + VWF_BASE * 16;
+    volatile u16 *sb = SCREENBLOCK(BG_TEXT_SB);
+    int t;
+    dma_copy16(cb, (const u16 *)g_vwf, VWF_TILES * 16);
+    for (t = 0; t < VWF_TILES; t++) {
+        int row = t / VWF_COLS, col = t % VWF_COLS;
+        sb[(SAY_ROW_C + row) * 32 + SAY_COL_C + col] =
+            (u16)((VWF_BASE + t) | ((u16)g_vwf_bank[t] << 12));
+    }
+}
+
+/* ---- dialogue ------------------------------------------------------------
+ * A message revealed a character at a time, in a panel, advanced by A.
+ *
+ * WHY THE ENGINE OWNS THIS. Typewriter text written by hand in a Step event is
+ * a state machine with a timer, a cursor, a page counter and a wait-for-button
+ * -- five variables per speaking object, in a runtime that gives each instance
+ * twelve. Written once here it costs nothing per object and behaves the same
+ * everywhere, which is what makes a game's dialogue feel like one game.
+ *
+ * CONTROL CODES are written in the text itself, because dialogue is authored as
+ * text and anything that has to be assembled from parts stops being editable by
+ * whoever is writing the words:
+ *
+ *   \n      a new line
+ *   {p}     hold here until A; then clear and carry on
+ *   {s:N}   frames per character, 0 = the whole line at once
+ *   {c:N}   colour, one of the TXT_ values
+ *   {v:N}   the value of global N, in decimal
+ *   {w:N}   pause N frames without waiting for a button
+ *
+ * An unknown code is PRINTED AS WRITTEN rather than swallowed. A typo that
+ * silently erases the rest of a sentence is the worst thing a text engine can
+ * do to somebody writing prose. */
+#define SAY_COL   2
+#define SAY_ROW   14
+#define SAY_W     26
+#define SAY_H     4
+
+static const char *g_say;          /* the message, or 0 when nothing is said */
+static u16 g_say_at;               /* how far the reveal has got */
+static u16 g_say_wait;             /* frames left before the next character */
+static u8  g_say_speed = 2;        /* frames per character */
+static u8  g_say_hold;             /* waiting for A at a {p} or at the end */
+static u8  g_say_col, g_say_row;   /* the cursor, in cells */
+static u16 g_say_px;               /* ...or in pixels, when proportional */
+static u8  g_say_ink;
+static s16 g_say_voice = -1;       /* sound played per character, -1 for none */
+
+/* How many cells the word starting at `i` will take.
+ *
+ * Control codes inside a word cost no width, so "{c:3}Bulbasaur" measures 10
+ * and not 15 -- measuring the raw characters would wrap a line that fits and
+ * leave a ragged right edge that looks like a bug in the text rather than in
+ * the measurement. */
+static u16 say_word_len(const char *s, u16 i) {
+    u16 n = 0;
+    while (s[i] && s[i] != ' ' && s[i] != '\n') {
+        if (s[i] == '{') {
+            u16 j = i + 1;
+            while (s[j] && s[j] != '}' && s[j] != ' ' && s[j] != '\n') j++;
+            if (s[j] == '}') { i = (u16)(j + 1); continue; }
+        }
+        i++; n++;
+    }
+    return n;
+}
+
+/* The same word, measured in PIXELS from each glyph's own width. */
+static u16 say_word_px(const char *s, u16 i) {
+    u16 n = 0;
+    while (s[i] && s[i] != ' ' && s[i] != '\n') {
+        if (s[i] == '{') {
+            u16 j = i + 1;
+            while (s[j] && s[j] != '}' && s[j] != ' ' && s[j] != '\n') j++;
+            if (s[j] == '}') { i = (u16)(j + 1); continue; }
+        }
+        {
+            unsigned char c = (unsigned char)s[i];
+            n = (u16)(n + ((c >= NB_FONT_FIRST
+                            && c < NB_FONT_FIRST + NB_FONT_COUNT)
+                           ? nb_font_w[c - NB_FONT_FIRST] : 8));
+        }
+        i++;
+    }
+    return n;
+}
+
+static u16 say_num(const char *s, u16 *i, s32 *out) {
+    s32 v = 0;
+    u16 n = 0;
+    while (s[*i] >= '0' && s[*i] <= '9') {
+        v = v * 10 + (s[*i] - '0');
+        (*i)++; n++;
+    }
+    *out = v;
+    return n;
+}
+
+void rt_say_voice(s16 sound) { g_say_voice = sound; }
+
+void rt_say(const char *text) {
+    g_say = text;
+    g_say_px = 0;
+    if (g_vwf_on) { vwf_clear(); vwf_flush(); }
+    g_say_at = 0;
+    g_say_wait = 0;
+    g_say_hold = 0;
+    g_say_speed = 2;
+    g_say_ink = NB_WHITE;
+    g_say_col = 0;
+    g_say_row = 0;
+    if (!text) return;
+    rt_draw_panel(SAY_COL - 1, SAY_ROW - 1, SAY_W + 2, SAY_H + 2,
+                  NB_BLUE, NB_WHITE);
+}
+
+int rt_say_active(void) { return g_say != 0; }
+
+void rt_say_end(void) {
+    if (!g_say) return;
+    g_say = 0;
+    rt_clear_box(SAY_COL - 1, SAY_ROW - 1, SAY_W + 2, SAY_H + 2);
+}
+
+/* One frame of revealing. Returns 1 while a message is still on screen. */
+int rt_say_step(void) {
+    char one[2];
+    if (!g_say) return 0;
+    if (g_say_hold) {
+        if (rt_key_pressed(KEY_A)) {
+            g_say_hold = 0;
+            if (!g_say[g_say_at]) { rt_say_end(); return 0; }
+            /* a {p} page break: wipe the panel and carry on below it */
+            if (g_vwf_on) { vwf_clear(); vwf_flush(); }
+            else rt_clear_box(SAY_COL, SAY_ROW, SAY_W, SAY_H);
+            g_say_col = 0; g_say_row = 0; g_say_px = 0;
+        }
+        return 1;
+    }
+    if (g_say_wait) { g_say_wait--; return 1; }
+
+    for (;;) {
+        char c = g_say[g_say_at];
+        if (!c) { g_say_hold = 1; return 1; }     /* end: wait for A */
+        g_say_at++;
+        if (c == '\n') {
+            g_say_col = 0;
+            if (++g_say_row >= SAY_H) { g_say_row = SAY_H - 1; }
+            continue;
+        }
+        /* Wrap at the START of a word that will not fit, not at the column
+           it happens to reach. Breaking mid-word is the single most obvious
+           thing a text box can get wrong. */
+        if (c != ' ' && (g_vwf_on ? g_say_px : g_say_col) > 0) {
+            /* Measured in whatever unit the cursor is in. Wrapping a
+               proportional line by CELLS would break it early by however much
+               narrower the words happened to be. */
+            u16 wl = g_vwf_on
+                   ? say_word_px(g_say, (u16)(g_say_at - 1))
+                   : say_word_len(g_say, (u16)(g_say_at - 1));
+            u16 lim = g_vwf_on ? (VWF_COLS * 8) : SAY_W;
+            u16 at = g_vwf_on ? g_say_px : g_say_col;
+            if (at + wl > lim && wl <= lim) {
+                g_say_col = 0;
+                g_say_px = 0;
+                if (++g_say_row >= SAY_H) g_say_row = SAY_H - 1;
+            }
+        }
+        if (c == ' ' && g_say_col == 0) continue;   /* no leading space */
+        if (c == '{') {
+            char k = g_say[g_say_at];
+            u16 i = (u16)(g_say_at + 1);
+            s32 v = 0;
+            if (k == 'p' && g_say[i] == '}') {
+                g_say_at = (u16)(i + 1);
+                g_say_hold = 1;
+                return 1;
+            }
+            if (g_say[i] == ':' ) {
+                u16 save = i;
+                i++;
+                if (say_num(g_say, &i, &v) && g_say[i] == '}') {
+                    g_say_at = (u16)(i + 1);
+                    if (k == 's') { g_say_speed = (u8)v; continue; }
+                    if (k == 'c') { g_say_ink = (u8)v; continue; }
+                    if (k == 'w') { g_say_wait = (u16)v; return 1; }
+                    if (k == 'v') {
+                        /* the number, digit by digit, through the same cursor */
+                        s32 n = (v >= 0 && v < NB_MAX_GLOBALS)
+                                ? nb_global[v] : 0;
+                        char buf[12];
+                        int len = 0, j;
+                        if (n < 0) { buf[len++] = '-'; n = -n; }
+                        if (n == 0) buf[len++] = '0';
+                        else {
+                            char tmp[11]; int tn = 0;
+                            while (n > 0 && tn < 10) { tmp[tn++] = (char)('0' + n % 10); n /= 10; }
+                            for (j = tn - 1; j >= 0; j--) buf[len++] = tmp[j];
+                        }
+                        for (j = 0; j < len; j++) {
+                            one[0] = buf[j]; one[1] = 0;
+                            rt_draw_text_c(SAY_COL + g_say_col,
+                                           SAY_ROW + g_say_row, one, g_say_ink);
+                            if (++g_say_col >= SAY_W) { g_say_col = 0; g_say_row++; }
+                        }
+                        continue;
+                    }
+                    continue;
+                }
+                i = save;                        /* not a code after all */
+            }
+            /* An unknown code prints as written. Swallowing it would erase the
+               rest of a sentence over a typo. */
+        }
+        one[0] = c; one[1] = 0;
+        if (g_vwf_on) {
+            g_say_px = (u16)(g_say_px
+                             + vwf_glyph(g_say_px, g_say_row,
+                                         (unsigned char)c, g_say_ink));
+            vwf_flush();
+        } else {
+            rt_draw_text_c(SAY_COL + g_say_col, SAY_ROW + g_say_row, one,
+                           g_say_ink);
+        }
+        if (g_say_voice >= 0 && c != ' ') rt_play_sound(g_say_voice);
+        if (++g_say_col >= SAY_W) {
+            g_say_col = 0;
+            g_say_px = 0;
+            if (++g_say_row >= SAY_H) g_say_row = SAY_H - 1;
+        }
+        if (g_say_speed) { g_say_wait = g_say_speed; return 1; }
+        /* speed 0: keep going, the whole line lands in one frame */
+    }
+}
+
+/* ---- the profiler --------------------------------------------------------
+ * Where the frame went, in ticks of timer 2.
+ *
+ * TIMER 2 BECAUSE THE OTHERS ARE SPOKEN FOR: timer 0 is the project's (the
+ * Help's interrupt example arms it), timer 1 clocks sampled audio. Taking
+ * either would make profiling break the thing being profiled.
+ *
+ * TM_FREQ_64 because a frame is 280,896 cycles and a 16-bit counter is not:
+ * at one tick per cycle the counter wraps six times a frame and every reading
+ * is nonsense. At 64 cycles a tick a frame is 4,389 ticks, which fits with
+ * room to spare.
+ *
+ * The counter is reset once a frame rather than read as a free-running value,
+ * so a section that straddles the reset cannot report a negative cost.
+ */
+#define PROF_SLOTS   8
+#define PROF_FRAME   4389           /* ticks in one 60 Hz frame at TM_FREQ_64 */
+
+enum { PROF_STEP = 0, PROF_MOVE, PROF_DRAW, PROF_USER };
+
+static u16 g_prof_open[PROF_SLOTS];
+static u16 g_prof_acc[PROF_SLOTS];
+static u16 g_prof_last[PROF_SLOTS];
+static u8  g_prof_on;
+
+void rt_prof(int on) {
+    int i;
+    g_prof_on = (u8)(on ? 1 : 0);
+    for (i = 0; i < PROF_SLOTS; i++) {
+        g_prof_open[i] = g_prof_acc[i] = g_prof_last[i] = 0;
+    }
+    if (g_prof_on) rt_timer_start(2, 65536u, TM_FREQ_64);
+    else rt_timer_stop(2);
+}
+
+void rt_prof_begin(int slot) {
+    if (!g_prof_on || (unsigned)slot >= PROF_SLOTS) return;
+    g_prof_open[slot] = rt_timer_read(2);
+}
+
+void rt_prof_end(int slot) {
+    u16 now;
+    if (!g_prof_on || (unsigned)slot >= PROF_SLOTS) return;
+    now = rt_timer_read(2);
+    /* Unsigned subtraction is correct across a wrap, which is why these are
+       u16 and not int: a section measured across the counter's roll-over must
+       report its length, not a huge negative. */
+    g_prof_acc[slot] = (u16)(g_prof_acc[slot] + (u16)(now - g_prof_open[slot]));
+}
+
+/* Ticks the slot cost during the LAST whole frame. Reading the accumulator
+   mid-frame would give a figure that changes depending on when it was asked. */
+int rt_prof_ticks(int slot) {
+    if ((unsigned)slot >= PROF_SLOTS) return 0;
+    return g_prof_last[slot];
+}
+
+int rt_prof_percent(int slot) {
+    return rt_prof_ticks(slot) * 100 / PROF_FRAME;
+}
+
+static void prof_frame(void) {
+    int i;
+    if (!g_prof_on) return;
+    for (i = 0; i < PROF_SLOTS; i++) {
+        g_prof_last[i] = g_prof_acc[i];
+        g_prof_acc[i] = 0;
+    }
+    rt_timer_start(2, 65536u, TM_FREQ_64);      /* restart the count */
+}
+
+/* A corner read-out: the three engine phases and the total, as percentages.
+   Drawn only when asked for -- a profiler that is always on is a profiler
+   measuring itself. */
+void rt_prof_overlay(void) {
+    int total;
+    if (!g_prof_on) return;
+    total = rt_prof_percent(PROF_STEP) + rt_prof_percent(PROF_MOVE)
+          + rt_prof_percent(PROF_DRAW);
+    rt_draw_text_c(0, 0, "STP", NB_WHITE);
+    rt_draw_int_pad(4, 0, rt_prof_percent(PROF_STEP), 2, 0);
+    rt_draw_text_c(7, 0, "MOV", NB_WHITE);
+    rt_draw_int_pad(11, 0, rt_prof_percent(PROF_MOVE), 2, 0);
+    rt_draw_text_c(14, 0, "DRW", NB_WHITE);
+    rt_draw_int_pad(18, 0, rt_prof_percent(PROF_DRAW), 2, 0);
+    rt_draw_text_c(21, 0, "ALL", NB_WHITE);
+    rt_draw_int_pad(25, 0, total, 3, 0);
+    /* Second row: how full the instance pool is, and how many creates it has
+       already refused. A bullet pattern that quietly stops firing looks like a
+       logic bug until this number is seen climbing. */
+    rt_draw_text_c(0, 1, "OBJ", NB_WHITE);
+    rt_draw_int_pad(4, 1, rt_instance_count(-1), 3, 0);
+    rt_draw_text_c(8, 1, "/", NB_WHITE);
+    rt_draw_int_pad(10, 1, NB_MAX_INSTANCES, 3, 0);
+    rt_draw_text_c(14, 1, "LOST", g_create_refused ? NB_RED : NB_WHITE);
+    rt_draw_int_pad(19, 1, (s32)g_create_refused, 4, 0);
+}
+
+/* ---- cutscenes -----------------------------------------------------------
+ * Two things a scripted scene needs that a Step event cannot express without
+ * a counter and a pile of branches.
+ *
+ * GLIDE: move an instance to a point over N frames. Written by hand this is a
+ * start position, a target, a frame count and a division per axis per frame --
+ * four of the twelve variables an instance has, spent on arithmetic. Held in
+ * the engine it costs nothing per object.
+ *
+ * The remaining distance is divided by the remaining FRAMES rather than
+ * stepping by a precomputed amount, so rounding cannot leave the instance a
+ * pixel short of where the scene said it would be: the last frame always lands
+ * exactly on the target. */
+void rt_glide(Instance *in, s32 x, s32 y, s32 frames) {
+    if (!in) return;
+    if (frames <= 0) {
+        in->x = (s16)x; in->y = (s16)y;
+        in->glide = 0;
+        return;
+    }
+    in->gx = (s16)x;
+    in->gy = (s16)y;
+    in->glide = (u16)(frames > 65535 ? 65535 : frames);
+    /* A glide overrides speed: two things moving one instance is a fight
+       nobody can see the cause of. */
+    in->hspeed = 0; in->vspeed = 0;
+    in->hspd8 = 0; in->vspd8 = 0;
+}
+
+int rt_gliding(Instance *in) { return in && in->glide ? 1 : 0; }
+
+void rt_glide_stop(Instance *in) { if (in) in->glide = 0; }
+
+static void glide_step(Instance *in) {
+    s32 dx, dy;
+    if (!in->glide) return;
+    dx = (s32)in->gx - in->x;
+    dy = (s32)in->gy - in->y;
+    if (in->glide == 1) {
+        in->x = in->gx;          /* the last frame lands exactly */
+        in->y = in->gy;
+    } else {
+        in->x = (s16)(in->x + dx / (s32)in->glide);
+        in->y = (s16)(in->y + dy / (s32)in->glide);
+    }
+    in->glide--;
+}
+
+/* ---- input lock ---
+ * A cutscene that leaves the player able to walk out of it is a cutscene about
+ * an empty room. The lock is read by rt_key_held and rt_key_pressed rather
+ * than by clearing the key state, so a game can still ask what is held -- the
+ * pause menu needs that while everything else is frozen. */
+static u8 g_input_lock;
+void rt_input_lock(int on) { g_input_lock = (u8)(on ? 1 : 0); }
+int  rt_input_locked(void) { return g_input_lock; }
+
+/* ---- menus ---------------------------------------------------------------
+ * A list with a cursor: the interface a game of any size is mostly made of.
+ *
+ * NON-BLOCKING, like the dialogue engine and for the same reason: a menu that
+ * spins its own loop stops the music, the animation and the link cable while
+ * it is open. rt_menu_step is called once a frame and reports what happened.
+ *
+ * IT DRAWS ONLY WHEN SOMETHING CHANGED. Rewriting the panel every frame is
+ * about 200 tile writes a frame for a picture that is identical to the last
+ * one, and on this CPU that is a real fraction of the budget spent on nothing.
+ */
+#define MENU_MAX_ROWS 8
+
+static const char *const *g_menu_items;
+static int  g_menu_n, g_menu_at, g_menu_top, g_menu_rows;
+static u8   g_menu_col, g_menu_row, g_menu_w, g_menu_open, g_menu_dirty;
+static u8   g_menu_wrap = 1;
+
+void rt_menu_open(const char *const *items, int n, int col, int row, int w) {
+    if (!items || n <= 0) return;
+    g_menu_items = items;
+    g_menu_n = n;
+    g_menu_at = 0;
+    g_menu_top = 0;
+    g_menu_col = (u8)col;
+    g_menu_row = (u8)row;
+    g_menu_w = (u8)(w < 4 ? 4 : w);
+    g_menu_rows = n < MENU_MAX_ROWS ? n : MENU_MAX_ROWS;
+    g_menu_open = 1;
+    g_menu_dirty = 1;
+}
+
+/* Where to put the answer when the menu closes.
+ *
+ * A menu spans frames and an ACTION does not: a row of the sheet cannot wait
+ * for a choice. So the action opens the menu and names a variable, the engine
+ * writes the answer there when it closes, and the next Step event branches on
+ * it with an ordinary If Variable. That keeps the whole interaction inside the
+ * vocabulary somebody using the sheet already has. */
+static Instance *g_menu_who;
+static int g_menu_slot = -1;
+
+void rt_menu_open_var(const char *const *items, int n, int col, int row, int w,
+                      Instance *who, int slot) {
+    rt_menu_open(items, n, col, row, w);
+    if (!g_menu_open) return;
+    g_menu_who = who;
+    g_menu_slot = (slot >= 0 && slot < NB_MAX_VARS) ? slot : -1;
+    /* -1 while the menu is up, so a Step event can tell "still choosing" from
+       "chose the first item". Without this the sheet reads a stale 0 and acts
+       on a choice nobody made. */
+    if (g_menu_who && g_menu_slot >= 0)
+        g_menu_who->var[g_menu_slot] = -1;
+}
+
+static void menu_answer(int v) {
+    if (g_menu_who && g_menu_slot >= 0 && g_menu_who->active)
+        g_menu_who->var[g_menu_slot] = v;
+    g_menu_who = 0;
+    g_menu_slot = -1;
+}
+
+void rt_menu_close(void) {
+    if (!g_menu_open) return;
+    g_menu_open = 0;
+    rt_clear_box(g_menu_col - 1, g_menu_row - 1,
+                 g_menu_w + 2, (u8)(g_menu_rows + 2));
+}
+
+int  rt_menu_active(void) { return g_menu_open; }
+int  rt_menu_index(void)  { return g_menu_at; }
+void rt_menu_wrap(int on)  { g_menu_wrap = (u8)(on ? 1 : 0); }
+
+static void menu_draw(void) {
+    int i;
+    rt_draw_panel(g_menu_col - 1, g_menu_row - 1, g_menu_w + 2,
+                  g_menu_rows + 2, NB_BLUE, NB_WHITE);
+    for (i = 0; i < g_menu_rows; i++) {
+        int item = g_menu_top + i;
+        rt_clear_box(g_menu_col, g_menu_row + i, g_menu_w, 1);
+        if (item >= g_menu_n) continue;
+        /* The cursor is a character in the same cell grid as the text, so it
+           cannot drift out of line with the row it points at. */
+        rt_draw_text_c(g_menu_col, g_menu_row + i,
+                       item == g_menu_at ? ">" : " ", NB_WHITE);
+        rt_draw_text_c(g_menu_col + 1, g_menu_row + i,
+                       g_menu_items[item], NB_WHITE);
+    }
+    /* More above or below than fits: say so, or a long list looks like a
+       short one and the rest of it is never found. */
+    if (g_menu_top > 0)
+        rt_draw_text_c(g_menu_col + g_menu_w - 1, g_menu_row, "^", NB_WHITE);
+    if (g_menu_top + g_menu_rows < g_menu_n)
+        rt_draw_text_c(g_menu_col + g_menu_w - 1,
+                       g_menu_row + g_menu_rows - 1, "v", NB_WHITE);
+}
+
+/* -1 while open, the chosen index on A, -2 on B. */
+int rt_menu_step(void) {
+    int moved = 0;
+    if (!g_menu_open) return -2;
+    if (rt_key_pressed(KEY_UP)) {
+        if (g_menu_at > 0) { g_menu_at--; moved = 1; }
+        else if (g_menu_wrap) { g_menu_at = g_menu_n - 1; moved = 1; }
+    }
+    if (rt_key_pressed(KEY_DOWN)) {
+        if (g_menu_at < g_menu_n - 1) { g_menu_at++; moved = 1; }
+        else if (g_menu_wrap) { g_menu_at = 0; moved = 1; }
+    }
+    if (moved) {
+        /* Keep the cursor in view. Scrolling by a whole page instead would
+           lose the item the player was looking at. */
+        if (g_menu_at < g_menu_top) g_menu_top = g_menu_at;
+        if (g_menu_at >= g_menu_top + g_menu_rows)
+            g_menu_top = g_menu_at - g_menu_rows + 1;
+        g_menu_dirty = 1;
+    }
+    if (g_menu_dirty) { menu_draw(); g_menu_dirty = 0; }
+    if (rt_key_pressed(KEY_A)) {
+        int at = g_menu_at;
+        rt_menu_close();
+        menu_answer(at);
+        return at;
+    }
+    if (rt_key_pressed(KEY_B)) {
+        rt_menu_close();
+        menu_answer(-2);
+        return -2;
+    }
+    return -1;
+}
+
+/* ---- the cartridge clock -------------------------------------------------
+ * A Seiko S-3511A on the CARTRIDGE. The console has no clock of its own, so a
+ * game reading the date is asking the cartridge it happens to be in -- which
+ * is why every call here reports failure rather than returning a plausible
+ * date. A day-night cycle that silently believes it is midnight on the 1st of
+ * January is worse than one that knows it cannot tell the time.
+ *
+ * VERIFIED HERE: the command encoding, the BCD conversion, the field ranges,
+ * and that a cartridge with no clock is rejected rather than believed.
+ * NOT VERIFIED: the bit-banged transfer itself, which needs the chip. The
+ * protocol below follows the S-3511A's published sequence; it has not been run
+ * against hardware, and this comment is here so nobody assumes otherwise. */
+#define RTC_CMD_RESET   0
+#define RTC_CMD_STATUS  1
+#define RTC_CMD_DATE    2       /* 7 bytes: yy mm dd wd hh mm ss, all BCD */
+#define RTC_CMD_TIME    3       /* 3 bytes: hh mm ss */
+
+/* The command byte: a fixed 0110 prefix, the command, then read or write.
+   Getting the prefix wrong makes the chip ignore everything and the game reads
+   a clock that never advances. */
+static u8 rtc_cmd(u8 index, int read) {
+    return (u8)(0x60 | ((index & 7) << 1) | (read ? 1 : 0));
+}
+
+static u8 bcd_to_bin(u8 v) { return (u8)((v >> 4) * 10 + (v & 0x0F)); }
+
+static void rtc_pins(u16 dir) {
+    REG_GPIO_CTRL = GPIO_READABLE;
+    REG_GPIO_DIR = dir;
+}
+
+static void rtc_write_byte(u8 v) {
+    for (int i = 0; i < 8; i++) {
+        u16 bit = (u16)((v >> (7 - i)) & 1) << 1;   /* MSB first on SIO */
+        REG_GPIO_DATA = (u16)(GPIO_CS | bit);        /* clock low */
+        REG_GPIO_DATA = (u16)(GPIO_CS | bit | GPIO_SCK);
+    }
+}
+
+static u8 rtc_read_byte(void) {
+    u8 v = 0;
+    for (int i = 0; i < 8; i++) {
+        REG_GPIO_DATA = GPIO_CS;                     /* clock low */
+        REG_GPIO_DATA = (u16)(GPIO_CS | GPIO_SCK);
+        v = (u8)((v << 1) | ((REG_GPIO_DATA >> 1) & 1));
+    }
+    return v;
+}
+
+/* A date the chip cannot have produced. Checked because an absent clock does
+   not answer with an error -- it answers with whatever the bus floats to, and
+   0xFF everywhere is a perfectly readable "255th of the 255th". */
+static int rtc_sane(const u8 *d) {
+    if (d[1] < 1 || d[1] > 12) return 0;        /* month */
+    if (d[2] < 1 || d[2] > 31) return 0;        /* day */
+    if (d[3] > 6) return 0;                      /* weekday */
+    if (d[4] > 23 || d[5] > 59 || d[6] > 59) return 0;
+    return 1;
+}
+
+int rt_rtc_read(nb_DateTime *out) {
+    u8 raw[7];
+    if (!out) return 0;
+    rtc_pins(GPIO_SCK | GPIO_SIO | GPIO_CS);     /* all three driven by us */
+    REG_GPIO_DATA = 0;
+    REG_GPIO_DATA = GPIO_SCK;
+    REG_GPIO_DATA = (u16)(GPIO_SCK | GPIO_CS);   /* select */
+    rtc_write_byte(rtc_cmd(RTC_CMD_DATE, 1));
+    rtc_pins(GPIO_SCK | GPIO_CS);                /* SIO becomes an input */
+    for (int i = 0; i < 7; i++) raw[i] = rtc_read_byte();
+    REG_GPIO_DATA = GPIO_SCK;                    /* deselect */
+    rtc_pins(0);
+
+    for (int i = 0; i < 7; i++) raw[i] = bcd_to_bin(raw[i] & 0x7F);
+    if (!rtc_sane(raw)) return 0;
+    out->year = (u16)(2000 + raw[0]);
+    out->month = raw[1];
+    out->day = raw[2];
+    out->weekday = raw[3];
+    out->hour = raw[4];
+    out->minute = raw[5];
+    out->second = raw[6];
+    return 1;
+}
+
+int rt_rtc_present(void) {
+    nb_DateTime t;
+    return rt_rtc_read(&t);
+}
+
+/* ---- the link cable ------------------------------------------------------
+ * Multiplayer mode: two to four units, one halfword from each per transfer.
+ *
+ * THE SHAPE THAT WORKS. A frame of full game state is not transmissible -- at
+ * 9600 baud the whole session shares about 16 bytes per frame. What fits is
+ * INPUT: every unit sends its own buttons, every unit receives all four, and
+ * every unit runs the same simulation on the same inputs. That is why this is
+ * one halfword and not an API for sending objects.
+ *
+ * Nothing here blocks. A transfer takes real time and a game that waits for it
+ * drops frames on a cable that is merely slow, so rt_link_poll reports what
+ * arrived and the caller carries on. */
+static u16 g_link_in[4];
+static u8  g_link_ok;           /* a transfer has completed at least once */
+
+int rt_link_open(u16 baud) {
+    /* Both registers, in this order. RCNT first, or the port stays in whatever
+       mode it was in -- on an RTC cartridge that is GPIO, and the link then
+       does nothing at all with no error anywhere. */
+    REG_RCNT = RCNT_SIO;
+    REG_SIOCNT = (u16)(SIO_MULTI | (baud & 3));
+    g_link_ok = 0;
+    for (int i = 0; i < 4; i++) g_link_in[i] = 0;
+    /* SD reads 1 only when every unit is connected and in multiplayer mode. */
+    return (REG_SIOCNT & SIO_SD_READY) ? 1 : 0;
+}
+
+void rt_link_close(void) {
+    REG_SIOCNT = 0;
+    REG_RCNT = RCNT_SIO;
+    g_link_ok = 0;
+}
+
+int rt_link_ready(void) { return (REG_SIOCNT & SIO_SD_READY) ? 1 : 0; }
+int rt_link_parent(void) { return (REG_SIOCNT & SIO_SI_CHILD) ? 0 : 1; }
+int rt_link_id(void) { return (REG_SIOCNT & SIO_ID_MASK) >> SIO_ID_SHIFT; }
+int rt_link_busy(void) { return (REG_SIOCNT & SIO_START) ? 1 : 0; }
+
+/* What this unit will send on the next transfer. Latched, not sent: only the
+   parent starts a transfer, and a child that tried would be talking over it. */
+void rt_link_send(u16 word) { REG_SIOMLT_SEND = word; }
+
+int rt_link_start(void) {
+    if (!rt_link_parent()) return 0;       /* a child may not start one */
+    if (rt_link_busy()) return 0;          /* one is already running */
+    REG_SIOCNT |= SIO_START;
+    return 1;
+}
+
+/* Collect a finished transfer. Returns 1 when new words arrived.
+
+   The error flag is checked BEFORE the data: a failed transfer leaves the
+   previous contents in the registers, so reading without checking hands the
+   game last frame's input as though it were this frame's, and the two units
+   drift apart with nothing to show for it. */
+int rt_link_poll(void) {
+    if (rt_link_busy()) return 0;
+    if (REG_SIOCNT & SIO_ERROR) {
+        /* Left for the hardware to clear when the next transfer starts. An
+           earlier version wrote the bit back on the belief that it was
+           write-1-to-clear; that is not something this code can rely on, and a
+           wrong claim about a register is worse than no claim. What matters
+           here is only that the data is NOT read. */
+        return 0;
+    }
+    g_link_in[0] = REG_SIOMULTI0;
+    g_link_in[1] = REG_SIOMULTI1;
+    g_link_in[2] = REG_SIOMULTI2;
+    g_link_in[3] = REG_SIOMULTI3;
+    g_link_ok = 1;
+    return 1;
+}
+
+/* 0xFFFF is what an absent unit reads as, and it is also a legal word. Callers
+   that need to tell them apart use rt_link_players(). */
+u16 rt_link_recv(int unit) {
+    if (unit < 0 || unit > 3) return 0xFFFF;
+    return g_link_in[unit];
+}
+
+int rt_link_players(void) {
+    int n = 0;
+    if (!g_link_ok) return 0;
+    for (int i = 0; i < 4; i++)
+        if (g_link_in[i] != 0xFFFF) n++;
+    return n;
+}
+
+/* ---- sampled audio (Direct Sound) ---------------------------------------
+ * One PCM voice on Direct Sound A, clocked by timer 1 and fed by DMA1.
+ *
+ * TIMER 1 ON PURPOSE. Direct Sound A can take timer 0 or timer 1, and timer 0
+ * is the one the Help's interrupt example arms; taking it here would break
+ * that example the moment a project played a sample, with nothing to say why.
+ *
+ * RATE IS FIXED at 16384 Hz. The GBA has no resampler: the timer period IS the
+ * sample rate, so a per-sample rate would mean re-arming the timer on every
+ * play and re-tuning anything else sharing it. One rate, converted on import,
+ * costs a little ROM and removes a whole class of "it plays too fast".
+ *
+ * The DMA repeats forever, so playback is stopped by counting frames rather
+ * than by the hardware -- an unstopped sample loops its buffer, which sounds
+ * like a stuck note and is easy to mistake for a hung game. */
+#define PCM_RATE    16384u
+#define PCM_PERIOD  (16777216u / PCM_RATE)      /* 1024 cycles per sample */
+
+static u32 g_pcm_frames;        /* frames of playback left, 0 = silent */
+
+void rt_pcm_stop(void) {
+    REG_DMA1CNT = 0;
+    rt_timer_stop(1);
+    REG_SOUNDCNT_H &= (u16)~(DSA_VOL_FULL | DSA_RIGHT | DSA_LEFT
+                             | DSA_TIMER1 | DSA_RESET);
+    REG_SOUNDCNT_H |= PSG_VOL_FULL;
+    g_pcm_frames = 0;
+}
+
+void rt_pcm_play(const void *data, u32 nsamples) {
+    if (!data || nsamples < 16) return;
+    rt_pcm_stop();
+    REG_SOUNDCNT_H |= (u16)(PSG_VOL_FULL | DSA_VOL_FULL | DSA_RIGHT
+                            | DSA_LEFT | DSA_TIMER1 | DSA_RESET);
+    REG_DMA1CNT = 0;                       /* disable before re-pointing */
+    REG_DMA1SAD = (u32)data;
+    REG_DMA1DAD = (u32)&REG_FIFO_A;
+    REG_DMA1CNT = DMA_DST_FIX | DMA_SRC_INC | DMA_REPEAT | DMA_32
+                  | DMA_SPECIAL | DMA_ENABLE;
+    rt_timer_start(1, PCM_PERIOD, 0);
+    /* Round up: stopping a frame early clips the tail audibly, stopping a
+       frame late is inaudible. */
+    g_pcm_frames = (nsamples * 60u) / PCM_RATE + 1u;
+}
+
+int rt_pcm_playing(void) { return g_pcm_frames != 0; }
+
+/* Called once per frame from the main loop. */
+static void rt_pcm_tick(void) {
+    if (!g_pcm_frames) return;
+    if (--g_pcm_frames == 0) rt_pcm_stop();
+}
+
+/* ---- colour blending -----------------------------------------------------
+ * Alpha needs BOTH sets of layers named: what is blended, and what it is
+ * blended with. Naming only the first produces no visible change and no error,
+ * which reads as "blending does not work". */
+void rt_blend_alpha(u16 top, u16 bottom, int eva, int evb) {
+    if (eva < 0) eva = 0;
+    if (eva > 16) eva = 16;
+    if (evb < 0) evb = 0;
+    if (evb > 16) evb = 16;
+    REG_BLDCNT = (u16)((top & 0x003F) | (bottom & 0x3F00) | BLD_ALPHA);
+    REG_BLDALPHA = (u16)((evb << 8) | eva);
+}
+
+void rt_blend_brightness(u16 layers, int amount) {
+    /* amount: -16 fully black .. 0 none .. +16 fully white */
+    int mag = amount < 0 ? -amount : amount;
+    if (mag > 16) mag = 16;
+    if (mag == 0) { REG_BLDCNT = BLD_OFF; REG_BLDY = 0; return; }
+    REG_BLDCNT = (u16)((layers & 0x003F) | (amount < 0 ? BLD_BLACK : BLD_WHITE));
+    REG_BLDY = (u16)mag;
+}
+
+void rt_blend_off(void) {
+    REG_BLDCNT = BLD_OFF;
+    REG_BLDY = 0;
+}
+
+/* ---- windows -------------------------------------------------------------
+ * A window is a rectangle plus two layer masks: what is drawn inside it and
+ * what is drawn everywhere else.
+ *
+ * The clamping is not tidiness. The hardware treats a right edge of 0, or one
+ * that has wrapped past the left, as the full 240 -- so a window given a width
+ * of zero covers the WHOLE SCREEN, which is the opposite of what was asked
+ * for and looks like the window feature being broken. */
+void rt_window(int n, int x, int y, int w, int h, u16 inside, u16 outside) {
+    int x2, y2;
+    if (n != 0 && n != 1) return;
+    if (w < 0) w = 0;
+    if (h < 0) h = 0;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x > 240) x = 240;
+    if (y > 160) y = 160;
+    x2 = x + w;
+    if (x2 > 240) x2 = 240;
+    if (x2 < x) x2 = x;
+    y2 = y + h;
+    if (y2 > 160) y2 = 160;
+    if (y2 < y) y2 = y;
+    if (n == 0) {
+        REG_WIN0H = (u16)((x << 8) | x2);
+        REG_WIN0V = (u16)((y << 8) | y2);
+    } else {
+        REG_WIN1H = (u16)((x << 8) | x2);
+        REG_WIN1V = (u16)((y << 8) | y2);
+    }
+    if (n == 0)
+        REG_WININ = (u16)((REG_WININ & 0x3F00) | (inside & 0x003F));
+    else
+        REG_WININ = (u16)((REG_WININ & 0x003F) | ((inside & 0x003F) << 8));
+    REG_WINOUT = (u16)((REG_WINOUT & 0x3F00) | (outside & 0x003F));
+    REG_DISPCNT |= (u16)(n == 0 ? WIN0_ON : WIN1_ON);
+}
+
+void rt_window_off(int n) {
+    if (n == 0) REG_DISPCNT &= (u16)~WIN0_ON;
+    else if (n == 1) REG_DISPCNT &= (u16)~WIN1_ON;
+    else REG_DISPCNT &= (u16)~(WIN0_ON | WIN1_ON | WINOBJ_ON);
+}
+
+/* ---- mosaic --------------------------------------------------------------
+ * Sizes are 1..16 in the API and 0..15 in the register, because 0 there means
+ * "blocks of one", i.e. off. Passing 0 through unchanged would make the two
+ * ends of the range mean the same thing. */
+void rt_mosaic(int bg_w, int bg_h, int obj_w, int obj_h) {
+    int bw = bg_w - 1, bh = bg_h - 1, ow = obj_w - 1, oh = obj_h - 1;
+    if (bw < 0) bw = 0;
+    if (bw > 15) bw = 15;
+    if (bh < 0) bh = 0;
+    if (bh > 15) bh = 15;
+    if (ow < 0) ow = 0;
+    if (ow > 15) ow = 15;
+    if (oh < 0) oh = 0;
+    if (oh > 15) oh = 15;
+    REG_MOSAIC = (u16)(bw | (bh << 4) | (ow << 8) | (oh << 12));
+}
+
+/* ---- affine --------------------------------------------------------------
+ * The one piece of GBA arithmetic most worth having written once.
+ *
+ * The P matrix maps SCREEN space to TEXTURE space -- the INVERSE of the
+ * transform being pictured. Two consequences catch everyone: scaling up
+ * divides, and the X/Y registers hold where texture (0,0) lands rather than
+ * the centre of anything. Setting X/Y to the rotation centre makes the picture
+ * swing around the screen instead of turning on the spot.
+ *
+ * rt_bg_affine states the intent instead: put texture pixel (tx,ty) at screen
+ * pixel (sx,sy), turned by `angle` (0..255 for a full turn) and scaled by
+ * `scale` in 8.8 where 256 is life size. */
+static void affine_matrix(s32 angle, s32 scale, s32 *pa, s32 *pb,
+                          s32 *pc, s32 *pd) {
+    s32 inv, co, si;
+    if (scale <= 0) scale = 1;          /* a zero scale divides by zero */
+    inv = (256 * 256) / scale;          /* 8.8 of 1/scale */
+    co = rt_cos8(angle);
+    si = rt_sin8(angle);
+    *pa = (co * inv) >> 8;
+    *pb = (-si * inv) >> 8;
+    *pc = (si * inv) >> 8;
+    *pd = (co * inv) >> 8;
+}
+
+/* The display mode, kept where the frame loop can see it.
+ *
+ * Writing REG_DISPCNT directly does not survive: rt_flush() ends every frame
+ * with `REG_DISPCNT = g_dispcnt`, so a mode set from game code was reverted on
+ * the next VBlank -- the picture changed for one frame and then silently went
+ * back. Anything that means to change mode has to change g_dispcnt.
+ *
+ * The BG enable and mapping bits stay the runtime's; only the mode is the
+ * game's to choose. Note that BG2/BG3 being AFFINE in modes 1 and 2 is a
+ * property of the mode, but their map data is not: an affine background reads
+ * 8-bit tile indices in a layout the generator does not yet emit, so mode 1
+ * gives you an affine BG2 over whatever is in its screenblock. Authoring
+ * affine maps is Phase 7. */
+void rt_video_mode(int mode) {
+    if (mode < 0 || mode > 5) return;
+    g_dispcnt = (u16)((g_dispcnt & (u16)~7) | (u16)mode);
+    REG_DISPCNT = g_dispcnt;
+}
+
+int rt_video_mode_get(void) { return g_dispcnt & 7; }
+
+void rt_bg_affine(int bg, s32 tx, s32 ty, s32 sx, s32 sy,
+                  s32 angle, s32 scale) {
+    s32 pa, pb, pc, pd, x, y;
+    if (bg != 2 && bg != 3) return;
+    affine_matrix(angle, scale, &pa, &pb, &pc, &pd);
+    /* Texture (tx,ty) must land on screen (sx,sy):
+       X = (tx << 8) - (PA*sx + PB*sy), same for Y with PC/PD. */
+    x = (tx << 8) - (pa * sx + pb * sy);
+    y = (ty << 8) - (pc * sx + pd * sy);
+    if (bg == 2) {
+        REG_BG2PA = (s16)pa; REG_BG2PB = (s16)pb;
+        REG_BG2PC = (s16)pc; REG_BG2PD = (s16)pd;
+        REG_BG2X = x; REG_BG2Y = y;
+    } else {
+        REG_BG3PA = (s16)pa; REG_BG3PB = (s16)pb;
+        REG_BG3PC = (s16)pc; REG_BG3PD = (s16)pd;
+        REG_BG3X = x; REG_BG3Y = y;
+    }
+}
+
+void rt_obj_affine(int group, s32 angle, s32 scale) {
+    s32 pa, pb, pc, pd;
+    if (group < 0 || group > 31) return;
+    affine_matrix(angle, scale, &pa, &pb, &pc, &pd);
+    OAM_AFF_PA(group) = (s16)pa;
+    OAM_AFF_PB(group) = (s16)pb;
+    OAM_AFF_PC(group) = (s16)pc;
+    OAM_AFF_PD(group) = (s16)pd;
+}
+
+/* ---- timers --------------------------------------------------------------
+ * Four 16-bit up-counters. A timer counts UP to overflow, so the reload value
+ * is 65536 minus the ticks wanted — rt_timer_start takes the period and does
+ * that arithmetic, because getting it backwards is the classic way to get a
+ * timer that fires at the wrong rate and looks like a tuning problem.
+ *
+ * This is what DMA audio is clocked by: a timer set to the sample period
+ * requests a FIFO refill from DMA1/2 (see rt_dma_sound). Nobody writing a song
+ * ever sees this — the generator configures it. */
+static volatile u16 *const g_tm_l[4] = {
+    &REG_TM0CNT_L, &REG_TM1CNT_L, &REG_TM2CNT_L, &REG_TM3CNT_L };
+static volatile u16 *const g_tm_h[4] = {
+    &REG_TM0CNT_H, &REG_TM1CNT_H, &REG_TM2CNT_H, &REG_TM3CNT_H };
+
+void rt_timer_start(int ch, u32 ticks, u16 flags) {
+    if (ch < 0 || ch > 3) return;
+    *g_tm_h[ch] = 0;                        /* stop before re-arming */
+    if (ticks == 0 || ticks > 65536u) ticks = 65536u;
+    *g_tm_l[ch] = (u16)(65536u - ticks);    /* counts UP to overflow */
+    *g_tm_h[ch] = (u16)(flags | TM_ENABLE);
+}
+
+void rt_timer_stop(int ch) {
+    if (ch < 0 || ch > 3) return;
+    *g_tm_h[ch] = 0;
+}
+
+u16 rt_timer_read(int ch) {
+    if (ch < 0 || ch > 3) return 0;
+    return *g_tm_l[ch];
+}
+
+/* ---- DMA ------------------------------------------------------------------
+ * rt_dma is the general form; rt_hdma_start is the one that matters for
+ * effects. An HBlank DMA repeats every scanline with no CPU involvement, which
+ * is how a per-line scroll table (water, heat haze, Mode-7-ish floors) or a
+ * per-line palette is done. It must be armed during VBlank and the source
+ * table must hold one entry per visible line. */
+static volatile u32 *const g_dma_s[4] = {
+    &REG_DMA0SAD, &REG_DMA1SAD, &REG_DMA2SAD, &REG_DMA3SAD };
+static volatile u32 *const g_dma_d[4] = {
+    &REG_DMA0DAD, &REG_DMA1DAD, &REG_DMA2DAD, &REG_DMA3DAD };
+static volatile u32 *const g_dma_c[4] = {
+    &REG_DMA0CNT, &REG_DMA1CNT, &REG_DMA2CNT, &REG_DMA3CNT };
+
+void rt_dma(int ch, void *dst, const void *src, u32 count, u32 flags) {
+    if (ch < 0 || ch > 3) return;
+    *g_dma_c[ch] = 0;                       /* disable before re-pointing */
+    *g_dma_s[ch] = (u32)src;
+    *g_dma_d[ch] = (u32)dst;
+    *g_dma_c[ch] = (count & 0xFFFF) | flags | DMA_ENABLE;
+}
+
+void rt_dma_stop(int ch) {
+    if (ch < 0 || ch > 3) return;
+    *g_dma_c[ch] = 0;
+}
+
+void rt_hdma_start(int ch, void *reg, const void *table, u32 units_per_line) {
+    /* DST_RELOAD + REPEAT + HBLANK: the destination resets each frame and one
+     * unit is written per scanline. */
+    rt_dma(ch, reg, table, units_per_line,
+           DMA_16 | DMA_REPEAT | DMA_HBLANK | DMA_DST_RELOAD | DMA_SRC_INC);
+}
+
+/* ---- BIOS -----------------------------------------------------------------
+ * THE TRAP, and it is silent: in ARM state the BIOS call number sits in bits
+ * 23-16, so LZ77UnCompVram is `swi 0x120000`. Writing `swi 0x12` assembles to
+ * call 0, SoftReset, and the cartridge simply reboots — which reads as a crash
+ * with no error anywhere. Every call below is shifted.
+ *
+ * The compressed formats are what make 16 MB of graphics fit: the BIOS does
+ * LZ77, Huffman and run-length in hardware-speed code that costs no ROM. */
+void rt_lz77_vram(const void *src, void *dst) {
+    register const void *r0 __asm__("r0") = src;
+    register void *r1 __asm__("r1") = dst;
+    __asm__ volatile("swi 0x120000" :: "r"(r0), "r"(r1)
+                     : "r2", "r3", "memory");
+}
+
+void rt_lz77_wram(const void *src, void *dst) {
+    register const void *r0 __asm__("r0") = src;
+    register void *r1 __asm__("r1") = dst;
+    __asm__ volatile("swi 0x110000" :: "r"(r0), "r"(r1)
+                     : "r2", "r3", "memory");
+}
+
+void rt_huff(const void *src, void *dst) {
+    register const void *r0 __asm__("r0") = src;
+    register void *r1 __asm__("r1") = dst;
+    __asm__ volatile("swi 0x130000" :: "r"(r0), "r"(r1)
+                     : "r2", "r3", "memory");
+}
+
+void rt_rl_vram(const void *src, void *dst) {
+    register const void *r0 __asm__("r0") = src;
+    register void *r1 __asm__("r1") = dst;
+    __asm__ volatile("swi 0x150000" :: "r"(r0), "r"(r1)
+                     : "r2", "r3", "memory");
+}
+
+s32 rt_div(s32 num, s32 den) {
+    register s32 r0 __asm__("r0") = num;
+    register s32 r1 __asm__("r1") = den;
+    if (den == 0) return 0;             /* the BIOS hangs on a zero divisor */
+    __asm__ volatile("swi 0x060000" : "+r"(r0), "+r"(r1) :: "r3");
+    return r0;
+}
+
+u16 rt_sqrt(u32 v) {
+    register u32 r0 __asm__("r0") = v;
+    __asm__ volatile("swi 0x080000" : "+r"(r0) :: "r1", "r2", "r3");
+    return (u16)r0;
+}
+
 static void rt_vsync(void) {
-    while (REG_VCOUNT >= 160) {}     /* finish the current visible frame */
-    while (REG_VCOUNT < 160) {}      /* wait for VBlank */
+    /* SWI 5, VBlankIntrWait: halts the CPU until the next VBlank instead of
+     * spinning on VCOUNT through the whole frame. In ARM state the BIOS call
+     * number lives in bits 23-16, so it is 0x050000 — `swi 0x05` here would
+     * silently call SWI 0 (SoftReset) and reboot the cartridge. */
+    __asm__ volatile("swi 0x050000" ::: "r0", "r1", "r2", "r3", "memory");
 }
 
 /* ---------------- input ---------------- */
@@ -500,9 +1709,17 @@ static void rt_input_update(void) {
     g_keys = (u16)((~REG_KEYINPUT) & KEY_ANY);   /* active-high */
 }
 
-int rt_key_held(u16 key)     { return (g_keys & key) != 0; }
-int rt_key_pressed(u16 key)  { return (g_keys & key) && !(g_keys_prev & key); }
-int rt_key_released(u16 key) { return !(g_keys & key) && (g_keys_prev & key); }
+/* The lock is applied HERE rather than by clearing the key state, so
+   rt_key_raw still answers -- a pause menu has to work while everything else
+   is frozen, and a menu that reads its own keys through a lock cannot. */
+int rt_key_held(u16 key)     { return !g_input_lock && (g_keys & key) != 0; }
+int rt_key_pressed(u16 key)  { return !g_input_lock && (g_keys & key)
+                                      && !(g_keys_prev & key); }
+int rt_key_released(u16 key) { return !g_input_lock && !(g_keys & key)
+                                      && (g_keys_prev & key); }
+int rt_key_raw(u16 key)      { return (g_keys & key) != 0; }
+int rt_key_raw_pressed(u16 key) { return (g_keys & key)
+                                         && !(g_keys_prev & key); }
 
 /* ================================ sound ================================
    Square 1 and square 2 carry the music's lead and bass, the noise channel its
@@ -534,6 +1751,19 @@ static u8  g_mus_vol = 7;
 /* authored-sound-effect slot (the wave channel) */
 static s16 g_sfxt = -1;
 static u16 g_sfxt_step, g_sfxt_frame;
+/* The priority of whatever is sounding on the wave channel. The channel does
+   one thing at a time, and "last one wins" means a footstep cuts off a death
+   the frame after it starts -- the reason priority exists at all. */
+static u8 g_sfx_prio;
+
+/* Built-in effects carry their own priority: a death or an explosion should
+   not be silenced by the footstep that follows it. Indexed by NB_SFX_*. */
+static const u8 nb_fx_prio[NB_SFX_COUNT] = {
+    1,  /* BLIP    */  2,  /* JUMP    */  3,  /* COIN    */
+    2,  /* SHOOT   */  5,  /* HURT    */  6,  /* EXPLODE */
+    5,  /* POWERUP */  1,  /* LAND    */  3,  /* SELECT  */
+    4,  /* ERROR   */  4,  /* WARP    */  0,  /* STEP    */
+};
 /* built-in sound-effect slot (the little synth below) */
 static s16 g_fx = -1;
 static u8  g_fx_stage, g_fx_frame;
@@ -651,7 +1881,7 @@ static const nb_Fx nb_fx[NB_SFX_COUNT] = {
 };
 
 void rt_stop_sfx(void) {
-    g_sfxt = -1; g_fx = -1;
+    g_sfxt = -1; g_fx = -1; g_sfx_prio = 0;
     rt_wave(0, 0);
 }
 
@@ -674,28 +1904,50 @@ void rt_play_music(s16 sound) {
     g_mus = sound; g_mus_step = 0; g_mus_frame = 0;
 }
 
+/* Is the wave channel free for a sound of this priority?
+
+   Equal priority still wins, so repeating the same effect restarts it rather
+   than being swallowed -- a gun that fires twice must be heard twice. */
+static int sfx_may_start(u8 prio) {
+    if (g_sfxt < 0 && g_fx < 0) return 1;
+    return prio >= g_sfx_prio;
+}
+
 void rt_play_sfx(s16 sound) {
     if (sound < 0) { rt_stop_sfx(); return; }
     if (sound >= nb_sound_count) return;
+    u8 prio = nb_sounds[sound].prio;
+    if (!sfx_may_start(prio)) return;
     g_fx = -1;                       /* the wave channel does one thing at a time */
     g_sfxt = sound; g_sfxt_step = 0; g_sfxt_frame = 0;
+    g_sfx_prio = prio;
 }
 
 void rt_sfx(int preset) {
     if (preset < 0 || preset >= NB_SFX_COUNT) return;
     const nb_Fx* f = &nb_fx[preset];
+    u8 prio = nb_fx_prio[preset];
+    /* Only the wave-channel presets contend for it; the ones on their own
+       channel never needed to wait and must not start doing so. */
+    if (!f->ch && !sfx_may_start(prio)) return;
     g_fx = (s16)preset; g_fx_stage = 0; g_fx_frame = 0;
     g_fx_note4 = (s16)(f->n1 * 4);
-    if (!f->ch) g_sfxt = -1;         /* the wave channel does one thing at a time */
+    if (!f->ch) { g_sfxt = -1; g_sfx_prio = prio; }
 }
 
 /* The one call a game made before music and effects were separate channels:
    route it by the sound's own kind so old projects keep working and gain the
    layering for free. */
 void rt_play_sound(s16 sound) {
-    if (sound < 0) { rt_stop_music(); rt_stop_sfx(); return; }
+    if (sound < 0) { rt_stop_music(); rt_stop_sfx(); rt_pcm_stop(); return; }
     if (sound >= nb_sound_count) return;
-    if (nb_sounds[sound].kind) rt_play_sfx(sound);
+    /* Routing lives HERE, not in the generator, so that code calling
+       rt_play_sound gets the same answer as the drag-drop action. Deciding it
+       in the generator meant a sampled sound played its (empty) pattern
+       whenever it was reached from C -- one rule, two behaviours. */
+    const nb_Sound* s = &nb_sounds[sound];
+    if (s->pcm && s->pcm_len >= 16) { rt_pcm_play(s->pcm, s->pcm_len); return; }
+    if (s->kind) rt_play_sfx(sound);
     else rt_play_music(sound);
 }
 
@@ -723,6 +1975,7 @@ static void sfxtrack_update(void) {
     const nb_Sound* s = &nb_sounds[g_sfxt];
     if (g_sfxt_frame == 0) {
         if (g_sfxt_step >= s->nsteps) {
+            if (!s->loop) g_sfx_prio = 0;   /* the channel is free again */
             if (s->loop) g_sfxt_step = 0;
             else { rt_stop_sfx(); return; }
         }
@@ -820,6 +2073,7 @@ Instance* rt_create(s16 object, s32 x, s32 y) {
         if (ob->create) ob->create(in);
         return in;
     }
+    g_create_refused++;
     return 0;   /* instance pool full */
 }
 
@@ -898,10 +2152,19 @@ static void rt_bbox_at(Instance* in, s32 x, s32 y,
         const nb_Object* ob = &nb_objects[in->object];
         bl = ob->bb_l; bt = ob->bb_t; br = ob->bb_r; bb = ob->bb_b;
     }
-    *l = x - ox + bl;
-    *t = y - oy + bt;
-    *r = x - ox + w - 1 - br;
-    *b = y - oy + h - 1 - bb;
+    s32 x0 = x - ox, y0 = y - oy;
+    *l = x0 + bl;
+    *t = y0 + bt;
+    *r = x0 + w - 1 - br;
+    *b = y0 + h - 1 - bb;
+    /* The insets are per-edge and nothing checks them against the sprite's own
+       size, so a facing pair can cross. Collapse the box INSIDE the sprite:
+       clamping only `r` up to `l` leaves it sitting at the left inset, which
+       for an inset wider than the sprite is a hit box floating in space clear
+       of the thing it belongs to -- the instance would then collide with what
+       it is nowhere near and pass through what it is touching. */
+    if (*l > x0 + w - 1) *l = x0 + w - 1;
+    if (*t > y0 + h - 1) *t = y0 + h - 1;
     if (*r < *l) *r = *l;
     if (*b < *t) *b = *t;
 }
@@ -939,7 +2202,7 @@ Instance* rt_place_meeting(Instance* self, s32 x, s32 y, s16 object) {
 /* Is the room's tile layer solid at this tile cell? Outside the room counts as
    solid unless the room says its edge is open, so a game with tile collision
    cannot walk out of its own level by accident. */
-static int cell_solid(s32 tx, s32 ty) {
+IWRAM_CODE static int cell_solid(s32 tx, s32 ty) {
     if ((u32)tx >= (u32)g_room_cw || (u32)ty >= (u32)g_room_ch)
         return g_edge_solid;
     if (!g_has_solid) return 0;
@@ -950,7 +2213,7 @@ int rt_tile_solid(s32 px, s32 py) { return cell_solid(px >> 3, py >> 3); }
 
 /* Every cell a box covers. The cell range is clamped once, so the inner loop is
    a row pointer walk with no bounds test per cell. */
-static int box_free(s32 l, s32 t, s32 r, s32 b) {
+IWRAM_CODE static int box_free(s32 l, s32 t, s32 r, s32 b) {
     if (g_edge_solid && (l < 0 || t < 0 || r >= g_room_w || b >= g_room_h))
         return 0;
     if (!g_has_solid) return 1;
@@ -1139,6 +2402,32 @@ int rt_anim_done(Instance* self) { return self && (self->flags & NB_F_ANIM_DONE)
 /* ---------------- rooms ---------------- */
 void rt_room_goto(s16 room) { g_next_room = room; }
 
+void rt_room_goto_at(s16 room, s32 x, s32 y) {
+    g_next_room = room;
+    g_arrive_x = x; g_arrive_y = y;
+}
+
+/* Has the followed instance stepped into a warp?
+
+   Overlap, not containment: a warp one tile wide would otherwise be missed
+   entirely by anything moving faster than its width, which reads as a door
+   that works only sometimes. */
+static void rt_warp_check(void) {
+    const nb_Room* r = g_room;
+    s32 l, t, rr, b;
+    if (!r || !r->warps || !g_view || !g_view->active) return;
+    if (g_next_room >= 0) return;          /* a change is already pending */
+    rt_bbox_at(g_view, g_view->x, g_view->y, &l, &t, &rr, &b);
+    for (u16 i = 0; i < r->nwarps; i++) {
+        const nb_Warp* w = &r->warps[i];
+        if (rr < (s32)w->x || l >= (s32)(w->x + w->w)) continue;
+        if (b < (s32)w->y || t >= (s32)(w->y + w->h)) continue;
+        if (w->room < 0 || w->room >= nb_room_count) continue;
+        rt_room_goto_at(w->room, w->tx, w->ty);
+        return;
+    }
+}
+
 void rt_room_goto_fade(s16 room) {
     if (g_trans) return;
     g_trans = 1; g_trans_room = room;
@@ -1187,6 +2476,16 @@ static void rt_room_load(s16 room) {
     g_view = 0;
     for (int i = 0; i < NB_MAX_INSTANCES; i++)
         if (g_inst[i].active) { g_view = &g_inst[i]; break; }
+    /* A warp names where its traveller lands. Applied after the room has made
+       its instances, so the arrival overrides the placement the room would
+       otherwise have used -- and cleared immediately, or every later entry to
+       the room would inherit one warp's destination. */
+    if (g_view && g_arrive_x >= 0) {
+        g_view->x = (s16)g_arrive_x;
+        g_view->y = (s16)g_arrive_y;
+        g_view->xsub = 0; g_view->ysub = 0;
+    }
+    g_arrive_x = -1; g_arrive_y = -1;
     rt_camera_update();
     map_update();
     REG_BG0HOFS = (u16)g_scroll_x; REG_BG0VOFS = (u16)g_scroll_y;
@@ -1239,6 +2538,7 @@ static void anim_step(Instance* in) {
    thing that turns a decorative tile layer into a platform game. */
 static void inst_move(Instance* in) {
     const nb_Object* ob = &nb_objects[in->object];
+    if (in->glide) { glide_step(in); return; }
     in->vspeed += in->grav;
     if (in->grav8) {
         s32 t = in->vspd8 + in->grav8;
@@ -1428,6 +2728,7 @@ static void rt_flush(void) {
 
 void rt_run(void) {
     REG_WAITCNT = WAITCNT_FAST;   /* ROM prefetch + the SRAM timing a save needs */
+    rt_irq_init();                /* before anything waits on a VBlank */
     rt_video_init();
     rt_sound_init();
     rt_clear_instances();
@@ -1456,11 +2757,23 @@ void rt_run(void) {
                with the steps that read them. */
             stepc = 0;
             rt_input_update();
+            rt_prof_begin(PROF_STEP);
             rt_step_all();
+            rt_prof_end(PROF_STEP);
+            rt_prof_begin(PROF_MOVE);
             rt_move_all();
+            rt_prof_end(PROF_MOVE);
+            /* After movement: a warp is entered by arriving on it, and testing
+               before the move would fire a frame early, from outside it. */
+            rt_warp_check();
         }
         rt_camera_update();
+        rt_prof_begin(PROF_DRAW);
+        rt_say_step();
+        rt_pcm_tick();
         rt_render();
+        rt_prof_end(PROF_DRAW);
+        prof_frame();
         if (g_next_room >= 0 && g_next_room != g_cur_room) {
             s16 nr = g_next_room; g_next_room = -1;
             rt_room_load(nr);

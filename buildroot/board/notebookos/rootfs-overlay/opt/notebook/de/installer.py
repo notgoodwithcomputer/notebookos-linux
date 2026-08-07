@@ -197,6 +197,9 @@ class Installer(nbapp.AppWindow):
 
     def __init__(self):
         super().__init__()
+        self._closed = False
+        self._paint_source = 0
+        self._pulse_source = 0
         self._install_css()
 
         # Resolve every external tool once. Missing tools are None and every
@@ -247,7 +250,11 @@ class Installer(nbapp.AppWindow):
             # inherits the keyboard the user is demonstrably typing on.
             "kbd": self._kbd_index(nbi18n.keyboard()),
             "locale": 0,
-            "password": "", "password2": "",
+            # No "password2": the confirm field is compared against the
+            # password in _validate, straight off the two entries, so a copy
+            # here was read by nothing -- it only kept a second plaintext copy
+            # of the password alive in a dict for the length of the install.
+            "password": "",
             "root_passwordless": False,
             # OEM: prepare the machine, but leave the answers that belong to
             # the person who will USE it for their first start-up.
@@ -259,6 +266,7 @@ class Installer(nbapp.AppWindow):
         self._working = False
         self._confirm_layer = None
         self._scan_gen = 0
+        self._clash_gen = 0      # generation of the Summary's PARTUUID probe
         self._prev_disk = None   # last chosen disk, re-selected after a rescan
         self._pulse_on = False   # progress bar pulses during the long extract
 
@@ -267,6 +275,7 @@ class Installer(nbapp.AppWindow):
         # while the install worker is running, so a stray click cannot tear the
         # window down mid-write.
         self.connect("delete-event", self._on_delete)
+        self.connect("destroy", self._on_destroy)
 
         # ---- layout: rail | content, then a footer ----
         body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -344,7 +353,11 @@ class Installer(nbapp.AppWindow):
         return True
 
     def _build_footer(self):
-        foot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        # spacing=10: Back and Next were packed flush against each other, so the
+        # two buttons read as one joined control -- and the pair that must never
+        # be confused for one another is precisely "go back" and "continue" in a
+        # wizard whose last step erases a disk.
+        foot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         foot.get_style_context().add_class("inst-footer")
         self._foot_status = Gtk.Label(xalign=0)
         self._foot_status.get_style_context().add_class("inst-foot-status")
@@ -544,7 +557,8 @@ class Installer(nbapp.AppWindow):
             disks = self._list_disks()
         except Exception:
             disks = []
-        GLib.idle_add(self._populate_disks, gen, disks)
+        if not self._closed:
+            GLib.idle_add(self._populate_disks, gen, disks)
 
     def _disk_msg_row(self, card, text):
         lbl = Gtk.Label(label=text, xalign=0)
@@ -559,7 +573,7 @@ class Installer(nbapp.AppWindow):
     def _populate_disks(self, gen, disks):
         # Runs on the main thread via idle_add. Drop the result if a newer scan
         # (or a step change) has superseded it.
-        if gen != self._scan_gen:
+        if self._closed or gen != self._scan_gen:
             return False
         card = self._disk_card
         for ch in card.get_children():
@@ -595,8 +609,7 @@ class Installer(nbapp.AppWindow):
             if i != 0:
                 r.get_style_context().add_class("bordered")
             try:
-                img = Gtk.Image.new_from_pixbuf(
-                    nbicons.pixbuf("disk", 20, "#6E695E"))
+                img = nbicons.image("disk", 20, "#6E695E")
                 img.set_valign(Gtk.Align.START)
                 img.set_margin_top(3)
                 r.pack_start(img, False, False, 0)
@@ -867,7 +880,56 @@ class Installer(nbapp.AppWindow):
         need = self._min_disk_bytes(swap_mib)
         return bool(need) and int(size or 0) < need
 
-    def _partuuid_clash(self):
+    def _start_clash_probe(self):
+        """Ask, on a WORKER THREAD, whether another disk already carries the
+        fixed root PARTUUID. Never on the GTK main loop.
+
+        _partuuid_clash shells out to lsblk, which walks every block device on
+        the machine — a disk that has spun down, or a stuck USB stick, holds
+        that call for the whole run_cmd timeout. Called inline from _set_step it
+        held the MAIN LOOP for those seconds, and it ran BEFORE the stack
+        switched pages: the click on "Next" had already been taken, so the
+        wizard sat frozen on the Options step, repainting nothing, until lsblk
+        answered. The disk enumeration on the target step was moved onto a
+        worker thread for exactly this reason (see _refresh_disks); this probe
+        is the one that was left behind on the main loop.
+
+        Best-effort, as it always was. The warning it produces is reported and
+        never blocking, the Summary renders immediately without waiting for it,
+        and _confirm_install reads _clash_line() live — so an answer that lands
+        while the Summary is on screen still reaches the final confirmation. A
+        generation counter, plus the disk the question was asked about, keeps a
+        slow answer from attaching itself to a later choice."""
+        self._clash_gen += 1
+        gen = self._clash_gen
+        disk = self.cfg.get("disk") or ""
+        # Never leave the previous visit's answer standing while the new one is
+        # in flight: it was about whatever disk was chosen then.
+        self._partuuid_other = ""
+        if not disk or not self.tools.get("lsblk"):
+            return
+        threading.Thread(target=self._clash_worker, args=(gen, disk),
+                         daemon=True).start()
+
+    def _clash_worker(self, gen, disk):
+        try:
+            other = self._partuuid_clash(disk)
+        except Exception:                                      # noqa: BLE001
+            other = ""
+        if not self._closed:
+            GLib.idle_add(self._apply_clash, gen, disk, other)
+
+    def _apply_clash(self, gen, disk, other):
+        # Main thread. Drop an answer superseded by a later visit to this step,
+        # or one about a disk the user has since chosen away from.
+        if (self._closed or gen != self._clash_gen
+                or (self.cfg.get("disk") or "") != disk):
+            return False
+        self._partuuid_other = other
+        self._refresh_summary()
+        return False
+
+    def _partuuid_clash(self, target=None):
         """Another disk that ALREADY carries the fixed root PARTUUID, or "".
 
         Every install writes the same root PARTUUID, because the prebuilt GRUB
@@ -882,9 +944,14 @@ class Installer(nbapp.AppWindow):
         Reported, never blocked. The fix (unplug the other disk, or install
         over it instead) is the user's to make, and refusing to install would
         be a worse answer than telling them what is about to happen. Entirely
-        best-effort: any failure to probe returns "" and says nothing."""
+        best-effort: any failure to probe returns "" and says nothing.
+
+        `target` names the disk the question is being asked about; it is passed
+        in by _clash_worker so a probe already running cannot silently change
+        which disk it is about halfway through. It defaults to the current
+        choice for the callers that ask on the main thread."""
         lsblk = self.tools.get("lsblk")
-        target = self.cfg.get("disk") or ""
+        target = target or self.cfg.get("disk") or ""
         if not lsblk or not target:
             return ""
         rc, out = run_cmd([lsblk, "-Pn", "-o", "NAME,PARTUUID,TYPE,PKNAME"])
@@ -1505,6 +1572,7 @@ class Installer(nbapp.AppWindow):
 
     def _reset_progress(self):
         self._pulse_on = False
+        self._cancel_source("_pulse_source")
         self._log_buf.set_text("")
         self._prog_bar.set_fraction(0.0)
         self._prog_bar.set_text("0%")
@@ -1584,6 +1652,32 @@ class Installer(nbapp.AppWindow):
         # here, so the install can never be torn down mid-write.
         return bool(self._working)
 
+    def _cancel_source(self, attr):
+        source_id = getattr(self, attr, 0)
+        setattr(self, attr, 0)
+        if source_id:
+            try:
+                GLib.source_remove(source_id)
+            except Exception:
+                pass
+
+    def _on_destroy(self, *_):
+        """Invalidate every main-loop delivery owned by this window.
+
+        The delete-event guard above still prevents ordinary destruction while
+        disk writes are active. This handler only makes teardown deterministic
+        once destruction is actually allowed (or externally forced).
+        """
+        if self._closed:
+            return False
+        self._closed = True
+        self._scan_gen += 1
+        self._clash_gen += 1
+        self._pulse_on = False
+        self._cancel_source("_paint_source")
+        self._cancel_source("_pulse_source")
+        return False
+
     def menu_items(self, name):
         # The window close is already blocked mid-install; grey the app-name
         # "Close" item to match, so the control never looks live yet do nothing.
@@ -1609,6 +1703,9 @@ class Installer(nbapp.AppWindow):
         so we invalidate the whole window and process its update tree — including
         child GdkWindows — synchronously, then flush the display. Best-effort and
         fully guarded; on an accelerated stack it is a cheap no-op."""
+        self._paint_source = 0
+        if self._closed:
+            return False
         win = self.get_window()
         if win is not None:
             try:
@@ -1625,6 +1722,8 @@ class Installer(nbapp.AppWindow):
         return False   # one-shot idle
 
     def _set_step(self, i):
+        if self._closed:
+            return
         i = max(0, min(i, len(self.STEPS) - 1))
         self._step = i
         self._max_reached = max(self._max_reached, i)
@@ -1634,11 +1733,11 @@ class Installer(nbapp.AppWindow):
             self._refresh_disks()
         elif key == "summary":
             # One lsblk, on arrival, cached for the page (_refresh_summary is
-            # re-run by every _validate and must not shell out each time).
-            try:
-                self._partuuid_other = self._partuuid_clash()
-            except Exception:                                  # noqa: BLE001
-                self._partuuid_other = ""
+            # re-run by every _validate and must not shell out each time) — and
+            # on a worker thread, so a slow disk cannot freeze the wizard on the
+            # step the user is trying to leave. The page draws now; the warning
+            # is filled in by _apply_clash when the answer lands.
+            self._start_clash_probe()
             self._refresh_summary()
         elif key == "progress":
             self._reset_progress()
@@ -1653,7 +1752,8 @@ class Installer(nbapp.AppWindow):
         # Welcome/Disk pages paint during the initial window map, every later page
         # is reached by a Stack switch. Flushing the update tree here draws them
         # now. Scheduled at idle so it runs after GTK has allocated the new page.
-        GLib.idle_add(self._flush_paint)
+        self._cancel_source("_paint_source")
+        self._paint_source = GLib.idle_add(self._flush_paint)
 
         # Put the cursor where the user will type next, so the keyboard works
         # without a mouse click first. The password is the first empty field on
@@ -1740,7 +1840,6 @@ class Installer(nbapp.AppWindow):
             self.cfg["kbd"] = max(0, self._c_kbd.get_active())
             self.cfg["locale"] = max(0, self._c_locale.get_active())
             self.cfg["password"] = self._e_pw.get_text()
-            self.cfg["password2"] = self._e_pw2.get_text()
             self.cfg["root_passwordless"] = self._chk_rootless.get_active()
             self.cfg["swap"] = self._chk_swap.get_active()
             self.cfg["swap_mib"] = int(self._sp_swap.get_value())
@@ -1936,9 +2035,12 @@ class Installer(nbapp.AppWindow):
 
     # ------------------------------------------------------------ install engine
     def _post_log(self, text):
-        GLib.idle_add(self._append_log, text)
+        if not self._closed:
+            GLib.idle_add(self._append_log, text)
 
     def _append_log(self, text):
+        if self._closed:
+            return False
         buf = self._log_buf
         buf.insert(buf.get_end_iter(),
                    text if text.endswith("\n") else text + "\n")
@@ -1948,12 +2050,16 @@ class Installer(nbapp.AppWindow):
         return False
 
     def _post_progress(self, frac, status=None):
-        GLib.idle_add(self._apply_progress, frac, status)
+        if not self._closed:
+            GLib.idle_add(self._apply_progress, frac, status)
 
     def _apply_progress(self, frac, status):
+        if self._closed:
+            return False
         # Any determinate update ends an indeterminate (pulsing) phase, so the
         # bar snaps back to a real percentage for the next step.
         self._pulse_on = False
+        self._cancel_source("_pulse_source")
         frac = max(0.0, min(1.0, frac))
         self._prog_bar.set_fraction(frac)
         self._prog_bar.set_text("%d%%" % int(frac * 100))
@@ -1969,20 +2075,26 @@ class Installer(nbapp.AppWindow):
     def _phase_pulse(self, status):
         # An indeterminate phase for work with no measurable progress (the whole
         # rootfs extract): the bar pulses so it never looks frozen mid-install.
+        if self._closed:
+            return
         GLib.idle_add(self._begin_pulse, status)
         self._post_log("")
         self._post_log("== %s ==" % status)
 
     def _begin_pulse(self, status):
+        if self._closed:
+            return False
         self._prog_status.set_text(status)
         self._prog_bar.set_text(_t("Working…"))
         self._pulse_on = True
         self._prog_bar.pulse()
-        GLib.timeout_add(140, self._pulse_tick)
+        self._cancel_source("_pulse_source")
+        self._pulse_source = GLib.timeout_add(140, self._pulse_tick)
         return False
 
     def _pulse_tick(self):
-        if not self._pulse_on:
+        if self._closed or not self._pulse_on:
+            self._pulse_source = 0
             return False
         self._prog_bar.pulse()
         return True
@@ -1991,14 +2103,20 @@ class Installer(nbapp.AppWindow):
         try:
             self._do_install()
         except InstallError as e:
-            GLib.idle_add(self._install_failed, str(e))
+            if not self._closed:
+                GLib.idle_add(self._install_failed, str(e))
             return
         except Exception as e:   # never let the worker die silently
-            GLib.idle_add(self._install_failed, "unexpected error: %s" % e)
+            if not self._closed:
+                GLib.idle_add(self._install_failed,
+                              "unexpected error: %s" % e)
             return
-        GLib.idle_add(self._install_done)
+        if not self._closed:
+            GLib.idle_add(self._install_done)
 
     def _install_failed(self, msg):
+        if self._closed:
+            return False
         self._working = False
         # What WAS on that disk is now gone — the engine wipes it before it
         # does anything else. Backing up to the Summary from here would
@@ -2025,6 +2143,8 @@ class Installer(nbapp.AppWindow):
         return False
 
     def _install_done(self):
+        if self._closed:
+            return False
         self._working = False
         self._post_progress(1.0, "Complete")
         # Say which disk it went onto. After erasing one, "it worked" is not
@@ -2378,7 +2498,19 @@ class Installer(nbapp.AppWindow):
         as XkbLayout produces no keymap at all) and "ru,us" is a dual layout
         that needs a switch key or its Latin half is unreachable — which for
         Russian, Hindi, Greek and Yiddish means no way to type a password.
+
+        nbkeyboard owns these rules now, and it gets the case this body never
+        could: a VARIANT INSIDE A MULTI-GROUP CODE. "jp(kana),us" fell through
+        the regex whole and was written into the target's xorg.conf as the
+        literal layout name "jp(kana),us", which no server can resolve — an
+        installed machine with no keymap at all. The old body stays as the
+        fallback so the installer still runs off a damaged live medium.
         """
+        try:
+            import nbkeyboard                                  # noqa: PLC0415
+            return nbkeyboard.xorg_parts(code)
+        except Exception:                                      # noqa: BLE001
+            pass
         variant = ""
         m = re.match(r"^([^(]+)\((.+)\)$", code or "")
         if m:
@@ -2605,15 +2737,15 @@ class Installer(nbapp.AppWindow):
                      padding: 34px 18px 20px; }
         .inst-rail * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .inst-rail-brand { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                     font-size: 22px; font-weight: 600; color: #1A1916; }
+                     font-size: 20px; font-weight: 600; color: #1A1916; }
         .inst-rail-sub { font-size: 12px; color: #9A9484; margin-bottom: 22px; }
-        .inst-step { padding: 9px 8px; margin: 2px 0; border-radius: 3px;
+        .inst-step { padding: 9px 8px; margin: 2px 0; border-radius: 6px;
                      border-left: 3px solid transparent; }
         .inst-step-num { min-width: 24px; min-height: 24px;
-                     background: #E4DECF; color: #6E695E; border-radius: 50%;
+                     background: #EAE3D2; color: #6E695E; border-radius: 50%;
                      font-size: 12px; font-weight: 700; padding: 2px 0; }
         .inst-step-lbl { font-size: 14px; color: #6E695E; }
-        .inst-step.active { border-left: 3px solid #C8341E; background: #ECE7DA; }
+        .inst-step.active { border-left: 3px solid #C8341E; background: #EAE3D2; }
         .inst-step.active .inst-step-num { background: #C8341E; color: #FCFBF8; }
         .inst-step.active .inst-step-lbl { color: #1A1916; font-weight: 600; }
         .inst-step.done .inst-step-num { background: #1A1916; color: #FCFBF8; }
@@ -2626,20 +2758,20 @@ class Installer(nbapp.AppWindow):
                    font-size: 30px; font-weight: 600; color: #1A1916;
                    margin-bottom: 6px; }
         .inst-sub { font-size: 14px; color: #6E695E; margin-bottom: 8px; }
-        .inst-para { font-size: 14.5px; color: #2A2620; }
-        .inst-note { font-size: 12.5px; color: #9A9484; }
+        .inst-para { font-size: 14px; color: #2A2620; }
+        .inst-note { font-size: 12px; color: #9A9484; }
         .inst-hint { font-size: 13px; color: #C8341E; }
-        .inst-blocktxt { font-size: 12.5px; color: #C8341E; }
+        .inst-blocktxt { font-size: 12px; color: #C8341E; }
         .inst-group { font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
                       color: #9A9484; margin: 22px 2px 8px; }
 
         /* cards / rows */
         .inst-card { background: #F4F2EC; border: 1px solid #D7D2C5;
-                     border-radius: 6px; padding: 2px 22px;
+                     border-radius: 12px; padding: 2px 22px;
                      box-shadow: 0 1px 3px rgba(26,25,22,0.05); }
         .inst-item { padding: 15px 2px; min-height: 28px; }
         .inst-item.bordered { border-top: 1px solid #D7D2C5; }
-        .inst-label { font-size: 14.5px; color: #1A1916; }
+        .inst-label { font-size: 14px; color: #1A1916; }
         .inst-sublabel { font-size: 12px; color: #9A9484; }
         .inst-value { font-size: 14px; color: #6E695E; }
 
@@ -2647,7 +2779,7 @@ class Installer(nbapp.AppWindow):
         .inst-danger { background: #FBEEEB; border: 1px solid #E3B4AC;
                        border-left: 4px solid #C8341E; border-radius: 4px;
                        padding: 12px 16px; }
-        .inst-danger-txt { font-size: 13.5px; color: #8E2417; }
+        .inst-danger-txt { font-size: 13px; color: #8E2417; }
         /* the same panel over a disk we have read and found blank: paper and
            ink, so signage red keeps meaning "there is something here to lose" */
         .inst-danger.calm { background: #F4F2EC; border-color: #D7D2C5;
@@ -2658,43 +2790,64 @@ class Installer(nbapp.AppWindow):
            without putting a second red on a screen that already has one. */
         .inst-callout { background: #F4F2EC; border: 1px solid #D7D2C5;
                        border-left: 4px solid #9A9484; border-radius: 4px;
-                       padding: 12px 16px; font-size: 13.5px; color: #2A2620; }
+                       padding: 12px 16px; font-size: 13px; color: #2A2620; }
 
         /* buttons */
         .inst-btn { padding: 8px 22px; background: #FCFBF8; color: #1A1916;
-                    border: 1px solid #C9C4B6; border-radius: 4px;
+                    border: 1px solid #C9C4B6; border-radius: 8px;
                     box-shadow: none; font-size: 14px; }
         .inst-btn:hover { background: #F1EEE6; }
         .inst-btn:disabled { color: #B3AD9E; background: #F4F2EC; }
-        .inst-primary { padding: 10px 26px; background: #C8341E;
-                    background-image: none; color: #FCFBF8; border: 1px solid #C8341E;
-                    border-radius: 4px; box-shadow: none; font-size: 15px;
+        /* RED MEANS "THIS DESTROYS SOMETHING", AND ONLY THAT.
+           Both of these used to be the same #C8341E, so the wizard's Next
+           button was signage-red on EVERY step -- and then on the Summary step,
+           where it becomes "Erase disk and install" and genuinely does wipe a
+           disk, it looked exactly like the Next the user had already clicked
+           four times. The colour carried no information at the one moment it
+           needed to carry all of it.
+           So Next is now the ink primary the rest of the OS uses for its
+           main action (theme .suggested-action), and red appears exactly ONCE
+           in the whole flow: on the button that erases the disk. */
+        .inst-primary { padding: 10px 26px; background: #1A1916;
+                    background-image: none; color: #FCFBF8; border: 1px solid #1A1916;
+                    border-radius: 8px; box-shadow: none; font-size: 15px;
                     font-weight: 600; }
-        .inst-primary:hover { background: #B12D19; border-color: #B12D19; }
-        .inst-primary:disabled { background: #E0B8B0; border-color: #E0B8B0;
+        .inst-primary:hover { background: #2A2620; border-color: #2A2620; }
+        .inst-primary:disabled { background: #B3AD9E; border-color: #B3AD9E;
                     color: #FCFBF8; }
-        .inst-next { background: #C8341E; background-image: none; color: #FCFBF8;
-                    border-color: #C8341E; }
-        .inst-next:hover { background: #B12D19; border-color: #B12D19; }
-        .inst-next:disabled { background: #E0B8B0; border-color: #E0B8B0;
+        .inst-next { background: #1A1916; background-image: none; color: #FCFBF8;
+                    border-color: #1A1916; }
+        .inst-next:hover { background: #2A2620; border-color: #2A2620; }
+        .inst-next:disabled { background: #B3AD9E; border-color: #B3AD9E;
                     color: #FCFBF8; }
+        /* The destructive step. TWO classes, deliberately: .inst-primary is
+           added to the SAME button that already carries .inst-next, and
+           .inst-next is defined after it, so a single-class rule would lose the
+           cascade and the erase button would come out ink like every other
+           step. Matching both raises specificity above either alone. */
+        .inst-next.inst-primary { background: #C8341E; border-color: #B12D19;
+                    color: #FCFBF8; }
+        .inst-next.inst-primary:hover { background: #B12D19;
+                    border-color: #B12D19; }
+        .inst-next.inst-primary:disabled { background: #E0B8B0;
+                    border-color: #E0B8B0; color: #FCFBF8; }
 
         /* footer */
         .inst-footer { background: #F1EEE6; border-top: 1px solid #C9C4B6;
                        padding: 14px 30px; }
         .inst-footer * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .inst-foot-status { font-size: 12.5px; color: #9A9484; }
+        .inst-foot-status { font-size: 12px; color: #9A9484; }
 
         /* form controls */
         .inst-page entry { background: #FCFBF8; color: #1A1916;
-                    border: 1px solid #C9C4B6; border-radius: 4px;
+                    border: 1px solid #C9C4B6; border-radius: 8px;
                     box-shadow: none; padding: 5px 9px; }
         .inst-page entry:focus { border-color: #9A9484; }
         .inst-page combobox button.combo { background: #FCFBF8; color: #1A1916;
-                    border: 1px solid #C9C4B6; border-radius: 4px;
+                    border: 1px solid #C9C4B6; border-radius: 8px;
                     box-shadow: none; padding: 4px 10px; }
         .inst-page spinbutton { background: #FCFBF8; color: #1A1916;
-                    border: 1px solid #C9C4B6; border-radius: 4px;
+                    border: 1px solid #C9C4B6; border-radius: 8px;
                     box-shadow: none; }
         .inst-check { font-size: 14px; color: #1A1916; }
         .inst-disk { font-size: 14px; color: #1A1916; }
@@ -2702,24 +2855,24 @@ class Installer(nbapp.AppWindow):
            line stays muted — the red erase banner carries the alarm, and two
            reds on one screen is not the design language. */
         .inst-disk-name { font-size: 14px; color: #1A1916; }
-        .inst-disk-sub { font-size: 12.5px; color: #6E695E; }
+        .inst-disk-sub { font-size: 12px; color: #6E695E; }
 
         /* progress */
         .inst-progstatus { font-size: 14px; color: #1A1916; font-weight: 600; }
-        .inst-page progressbar trough { background: #DDD8CB; border: none;
-                    border-radius: 4px; min-height: 16px; }
-        .inst-page progressbar progress { background: #C8341E; border-radius: 4px;
+        .inst-page progressbar trough { background: #DED4C2; border: none;
+                    border-radius: 100px; min-height: 16px; }
+        .inst-page progressbar progress { background: #C8341E; border-radius: 100px;
                     min-height: 16px; }
         .inst-page progressbar text { color: #1A1916; font-size: 12px; }
         /* install report: a warm-paper panel with ink text — NOT a black
            terminal. On the no-compositor software stack a dark surface reads as
            an unpainted (broken) region, so the whole wizard stays papertone. */
         .inst-logframe { background: #F4F2EC; border: 1px solid #D7D2C5;
-                    border-radius: 6px; }
+                    border-radius: 12px; }
         .inst-log { background: #F4F2EC; color: #2A2620; padding: 10px 12px;
                     font-size: 12px; }
         .inst-log text { background: #F4F2EC; color: #2A2620; }
-        .inst-log text selection { background: #E4DECF; color: #1A1916; }
+        .inst-log text selection { background: #EAE3D2; color: #1A1916; }
 
         /* confirm overlay */
         .inst-scrim { background: rgba(26,25,22,0.32); }
@@ -2727,7 +2880,7 @@ class Installer(nbapp.AppWindow):
                     padding: 26px 30px; }
         .inst-confirm * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .inst-confirm-h { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                    font-size: 21px; font-weight: 600; color: #1A1916; }
+                    font-size: 20px; font-weight: 600; color: #1A1916; }
         .inst-confirm-b { font-size: 14px; color: #2A2620; }
         """).encode()
         prov = Gtk.CssProvider()

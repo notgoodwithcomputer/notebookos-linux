@@ -33,6 +33,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SESSION = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/"
@@ -70,6 +71,35 @@ printf '%s\n' "$(basename "$0") $*" >> "$NB_TRACE"
 exit 0
 """
 
+# The compositors are the one pair of stubs whose LIFETIME is the thing under
+# test: "started" and "still running a moment later" are different claims, and
+# the bug this covers is a compositor that starts and then exits. `live` sleeps
+# past the session's health check; the default is the failure — exit at once,
+# which is what a bad /etc/picom.conf or an unavailable backend does.
+STUB_COMPOSITOR = r"""#!/bin/sh
+_n=$(basename "$0")
+printf '%s\n' "$_n $*" >> "$NB_TRACE"
+eval _mode=\"\$NB_MODE_$_n\"
+case "$_mode" in
+  live) exec sleep 30 ;;
+esac
+exit 1
+"""
+
+# The accel probe is `sh /opt/notebook/accel.sh`, and that file is not in this
+# checkout's PATH world -- so without this the probe always came back empty,
+# NB_ACCEL was always 0, and the whole compositor branch was dead code as far
+# as this selftest was concerned. Answer it from the environment instead.
+STUB_SH = r"""#!/bin/sh
+case "$*" in
+  *accel.sh*)
+    printf '%s\n' "accel-probe" >> "$NB_TRACE"
+    printf '%s\n' "${NB_STUB_ACCEL:-}"
+    exit 0 ;;
+esac
+exec /bin/sh "$@"
+"""
+
 # `touch` and `rm` have to be real: the script's control flow depends on the
 # flag file existing. `kill` and `sleep` likewise.
 REAL = ("touch", "rm", "kill", "sleep", "sed", "head", "awk", "grep",
@@ -79,15 +109,28 @@ STUBBED = ("python3", "xrandr", "xset", "xsetroot", "matchbox-window-manager",
            "setxkbmap")
 
 
-def make_bin():
+def make_bin(omit=()):
     d = tempfile.mkdtemp(prefix="nbstub-")
     for name in STUBBED:
+        if name in omit:
+            continue          # a target image that ships no such binary
         p = os.path.join(d, name)
         with open(p, "w") as fh:
-            fh.write(STUB_PY if name == "python3" else STUB_GENERIC)
+            if name == "python3":
+                fh.write(STUB_PY)
+            elif name in ("picom", "xcompmgr"):
+                fh.write(STUB_COMPOSITOR)
+            else:
+                fh.write(STUB_GENERIC)
         os.chmod(p, 0o755)
     # Real coreutils, reached by absolute path from a shim so PATH stays ours.
     for name in REAL:
+        if name == "sh":
+            p = os.path.join(d, name)
+            with open(p, "w") as fh:
+                fh.write(STUB_SH)
+            os.chmod(p, 0o755)
+            continue
         src = None
         for base in ("/bin", "/usr/bin"):
             if os.path.exists(os.path.join(base, name)):
@@ -102,18 +145,34 @@ def make_bin():
     return d
 
 
-def run_session(needed, firstrun=False):
+def run_session(needed, firstrun=False, accel="", picom="die", xcompmgr="die",
+                omit=()):
     """Run the real session.sh to completion and return its trace lines."""
-    d = make_bin()
+    d = make_bin(omit)
     trace = os.path.join(d, "trace")
     open(trace, "w").close()
     env = {
         "PATH": d, "NB_TRACE": trace, "NB_NEEDED": "0" if needed else "1",
         "NB_FIRSTRUN": "0" if firstrun else "1",
+        "NB_STUB_ACCEL": accel,
+        "NB_MODE_picom": picom, "NB_MODE_xcompmgr": xcompmgr,
         "HOME": d, "SHELL": "/bin/sh",
     }
     r = subprocess.run(["/bin/sh", SESSION], env=env, capture_output=True,
                        text=True, timeout=120)
+    # subprocess.run returns when the last writer closes the pipes, and the
+    # last thing the compositor health check does is BACKGROUND a process --
+    # which writes its trace line with its own fds, after the subshell holding
+    # the pipe has gone. Reading the trace at that instant is a coin toss, so
+    # let it settle: stable size twice running, or two seconds, whichever
+    # comes first.
+    size = -1
+    for _ in range(20):
+        now = os.path.getsize(trace)
+        if now == size:
+            break
+        size = now
+        time.sleep(0.1)
     lines = [ln for ln in open(trace).read().splitlines() if ln.strip()]
     return r, lines
 
@@ -258,10 +317,97 @@ def test_flag_hygiene():
         check(audio > splash,
               "the audio routing runs behind the loading screen, not in front "
               "of the first pixel")
-        tail = " ".join(code[audio:audio + 20])
+        # Look for the line that CLOSES the block rather than peeking a fixed
+        # number of lines ahead: the audio block grew past twenty lines when
+        # the capture controls were added (a recorded take was valid WAV full
+        # of silence until it un-muted three of them), and a window that short
+        # then reported the block as un-backgrounded when nothing about it had
+        # changed. The claim being made is "this block ends in `) &`", so
+        # that is what is looked for.
+        tail = code[audio:audio + 60]
         check(") &" in tail,
               "...and inside the backgrounded block, so the boot never waits "
               "on a mixer")
+
+
+def test_compositor_fallback():
+    """A compositor that starts and then dies must not leave the desktop with
+    nothing.
+
+    picom is launched with `&` and the session never looked at it again, so
+    "picom was started" and "the desktop is composited" were being treated as
+    the same fact. They are not: a bad /etc/picom.conf, a backend the build
+    does not carry (`--backend glx` did exactly this) or an X server that
+    refuses the composite redirect all kill it within the second.
+
+    The half that makes it a defect rather than a cosmetic loss is NB_ACCEL=1:
+    the scanout-flush daemon is started ONLY when NB_ACCEL=0, so on a machine
+    the probe called accelerated a dead picom left neither a compositor nor the
+    software repaint helper -- and the probe's own limitation (a bound KMS
+    driver is not a working Mesa driver) means those are the very machines
+    where it is most likely to die.
+    """
+    print("-- the compositor, when it does not survive being started")
+
+    # 1. It stays up: nothing else may be started behind it. Two compositors,
+    #    or a compositor plus xflushd's perpetual pointer warp, is worse than
+    #    the failure being fixed here.
+    _r, lines = run_session(needed=False, accel="1", picom="live")
+    check(idx(lines, "picom ") >= 0, "picom is started on accelerated hardware")
+    check(idx(lines, "--vsync") >= 0,
+          "...with --vsync, which only accelerated hardware may have")
+    check(idx(lines, "xcompmgr") < 0,
+          "a compositor that is running is not seconded by another one")
+    check(idx(lines, "xflushd.py") < 0,
+          "the software repaint daemon does NOT run behind a live compositor")
+
+    # 2. It dies. Something must take its place.
+    _r, lines = run_session(needed=False, accel="1", picom="die",
+                            xcompmgr="live")
+    check(idx(lines, "picom ") >= 0, "picom is started")
+    check(idx(lines, "xcompmgr") >= 0,
+          "a picom that exits at start-up is NOTICED, and xcompmgr takes over")
+    check(idx(lines, "xflushd.py") < 0,
+          "...and that is enough: no repaint daemon on top of a compositor")
+
+    # 3. Nothing composites at all -- picom dies and the image carries no
+    #    xcompmgr. NB_ACCEL=1 skipped the repaint daemon on the strength of the
+    #    probe, and a compositor that will not start is the best evidence there
+    #    is that the probe was wrong.
+    _r, lines = run_session(needed=False, accel="1", picom="die",
+                            omit=("xcompmgr",))
+    check(idx(lines, "xflushd.py") >= 0,
+          "with no compositor left, the software repaint daemon is started "
+          "even though the probe said accelerated")
+
+    # 4. Both compositors die: still exactly one repaint daemon, not two.
+    _r, lines = run_session(needed=False, accel="1", picom="die",
+                            xcompmgr="die")
+    n = len([ln for ln in lines if "xflushd.py" in ln])
+    check(n == 1, "exactly one repaint daemon when both compositors die "
+                  "(saw %d)" % n)
+
+    # 5. Software rendering is untouched by any of this: no compositor, one
+    #    xflushd, and the fallback must not add a second one.
+    _r, lines = run_session(needed=False, accel="0")
+    check(idx(lines, "picom ") < 0 and idx(lines, "xcompmgr") < 0,
+          "no compositor is started under software rendering")
+    n = len([ln for ln in lines if "xflushd.py" in ln])
+    check(n == 1, "software rendering gets exactly one repaint daemon "
+                  "(saw %d)" % n)
+
+    # And on the source, because a health check that is not backgrounded would
+    # pass every check above while costing the boot its grace period on screen.
+    src = open(SESSION).read()
+    code = [ln.strip() for ln in src.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+    pid = next((i for i, ln in enumerate(code) if "NB_COMP_PID=$!" in ln), -1)
+    watch = next((i for i, ln in enumerate(code)
+                  if "kill -0" in ln and "NB_COMP_PID" in ln), -1)
+    check(pid >= 0, "the compositor's pid is remembered")
+    check(watch > pid, "...and something later asks whether it is still alive")
+    check(any(ln == ") &" for ln in code[watch:watch + 40]),
+          "the health check is backgrounded: the boot never waits on it")
 
 
 def main():
@@ -274,6 +420,7 @@ def main():
     # and there is no password yet because that is what it will set.
     test(needed=False, firstrun=True)
     test_flag_hygiene()
+    test_compositor_fallback()
     print()
     if FAILURES:
         print("SESSION BOOT SELFTEST: %d checks, %d FAILED"

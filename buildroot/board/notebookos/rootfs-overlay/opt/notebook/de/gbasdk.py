@@ -5,7 +5,7 @@ output is a real Game Boy Advance cartridge image. The things you make (Sprites,
 Tile sets, Sounds, Objects, Rooms) sit in an asset browser down the left, each
 one showing what it actually IS; the centre is one editor per kind of thing: a
 pixel canvas for a sprite, a piano roll for a sound, an events-and-actions sheet
-for an object, and a placement grid for a room. Compile & Export builds the whole
+for an object, and a placement grid for a room. Build & Export builds the whole
 project to a real .gba with the bundled arm-none-eabi toolchain (see
 de/gbabuild.py + /opt/notebook/gbaruntime) and saves it for the user to play in
 the GBA Emulator app, or on a real console or flashcart (Notebook OS runs one
@@ -36,16 +36,20 @@ gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gtk, Gdk, Pango, PangoCairo, GLib  # noqa: E402
 
 import copy
+import unicodedata
 import os
 import sys
 import json
 import shutil
+import subprocess
 import tempfile
 
 import nbapp
 import nbpicker
 import nbicons
 import gbabuild
+import gbaworkspace
+import gbahelp
 from nbi18n import _t  # noqa: E402
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -118,6 +122,18 @@ def _eyebrow(text, margin_top=0):
     return lbl
 
 
+def _pad(s, width):
+    """`s` padded to `width` COLUMNS of a monospace font, not characters.
+
+    A CJK glyph occupies two columns, so "%-22s" lines up in Latin and Cyrillic
+    and goes ragged in Japanese and Chinese — the padding counts characters and
+    the terminal draws widths. Only matters where text shares a fixed grid with
+    numbers, which in this app is the costing pane."""
+    n = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
+            for c in s)
+    return s + " " * max(0, width - n)
+
+
 def _group_label(text):
     """A caption that starts a new group of controls on an editor's tool row,
     set off by a margin rather than by padding spaces inside the string (which
@@ -176,7 +192,7 @@ def _icon_button(icon, tip, cb, cls="quietbtn", size=13, color=None):
     b = Gtk.Button()
     b.set_relief(Gtk.ReliefStyle.NONE)
     b.get_style_context().add_class(cls)
-    b.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, size, color or MUTED)))
+    b.add(nbicons.image(icon, size, color or MUTED))
     b.set_tooltip_text(tip)
     b.connect("clicked", lambda _w: cb())
     return b
@@ -247,7 +263,28 @@ KINDS = (
     ("sound", "SOUNDS", "New Sound", "Sound"),
     ("object", "OBJECTS", "New Object", "Object"),
     ("room", "ROOMS", "New Room", "Room"),
+    # File-scope C. An Execute Code action emits its text INSIDE an event
+    # function, so it cannot define a function, a lookup table or a constant --
+    # which meant an interrupt handler, the thing the runtime's own API asks
+    # for, could not be written from the tool at all. A script is where those
+    # live: emitted once, before every object, visible to all of them.
+    ("script", "SCRIPTS", "New Script", "Script"),
+    # Rows of data with named columns, emitted as a C struct array. What a game
+    # of any size is mostly MADE of -- species, moves, items, dialogue keys --
+    # and the thing that otherwise ends up as a thousand-line script nobody can
+    # edit without reading it all.
+    ("table", "TABLES", "New Table", "Table"),
 )
+
+# What a column can hold. Deliberately few: every one of these has an obvious C
+# type and an obvious cell editor, and a type that has neither becomes a column
+# nobody can fill in.
+COLUMN_TYPES = (
+    ("int", "Number", "s32"),
+    ("text", "Text", "const char*"),
+    ("bool", "Yes/No", "u8"),
+)
+COLUMN_C = {k: c for k, _lbl, c in COLUMN_TYPES}
 
 # Said on every work surface, so it is one sentence to translate rather than four.
 KEYS_HINT = "Or use the arrow keys and Space."
@@ -266,7 +303,7 @@ TOOLS = (
 # are the groups the source list was already informally commented into.
 ACTION_GROUPS = (
     ("MOTION", ("move_fixed", "set_hspeed", "set_vspeed", "move_toward",
-                "set_gravity", "jump_to", "jump_relative", "wrap")),
+                "set_gravity", "jump_to", "jump_relative", "wrap", "glide", "input_lock")),
     ("INSTANCES", ("create_instance", "destroy_self", "destroy_object",
                    "change_sprite", "set_image_speed")),
     ("VARIABLES", ("set_var", "add_var")),
@@ -275,7 +312,7 @@ ACTION_GROUPS = (
     ("SCORE", ("set_score", "add_score", "if_score", "set_lives", "add_lives",
                "if_lives", "set_health", "add_health", "if_health")),
     ("SOUND", ("play_sound", "stop_sound")),
-    ("TEXT", ("draw_text", "draw_number", "clear_text")),
+    ("TEXT", ("say", "menu", "draw_text", "draw_number", "clear_text")),
     ("ADVANCED", ("save_game", "load_game", "execute_code")),
 )
 
@@ -307,6 +344,12 @@ ACTION_DEFS = [
     ("jump_to", "Jump To", [("x", "X", "int"), ("y", "Y", "int")]),
     ("jump_relative", "Jump By", [("x", "X", "int"), ("y", "Y", "int")]),
     ("wrap", "Wrap Screen", []),
+    # Cutscene motion. By hand this is a start, a target, a frame count and a
+    # division per axis per frame -- four of an instance's twelve variables
+    # spent on arithmetic the engine can do for nothing.
+    ("glide", "Glide To", [("x", "X", "int"), ("y", "Y", "int"),
+                           ("frames", "Over frames", "int")]),
+    ("input_lock", "Lock Input", [("on", "State", ["on", "off"])]),
     ("create_instance", "Create Instance", [("object", "Object", "obj"),
                                              ("x", "X", "int"), ("y", "Y", "int")]),
     ("destroy_self", "Destroy Self", []),
@@ -348,11 +391,29 @@ ACTION_DEFS = [
     ("draw_number", "Draw Number", [("value", "Value", "int"), ("x", "X", "int"),
                                     ("y", "Y", "int")]),
     ("clear_text", "Clear Text", []),
+    # Dialogue. One row, because typewriter text written by hand is a timer, a
+    # cursor, a page counter and a wait-for-button -- five of the twelve
+    # variables an instance has.
+    ("say", "Say", [("text", "Message", "str")]),
+    # A menu spans frames and an action does not, so this one names a variable
+    # and the answer arrives in it: the chosen line's number, or -2 if the
+    # player backed out. An If Variable in the Step event does the rest.
+    ("menu", "Show Menu", [("a", "Line 1", "str"), ("b", "Line 2", "str"),
+                           ("c", "Line 3", "str"), ("d", "Line 4", "str"),
+                           ("var", "Answer in", "str")]),
     # --- save games (SRAM: score/lives/health + global.* vars) ---
     ("save_game", "Save Game", []),
     ("load_game", "Load Game", []),
-    # --- GML scripting ---
-    ("execute_code", "Execute Code", [("code", "GML", "code")]),
+    # --- scripting (a curated subset of C; see docs/GBA-SDK-SPEC.md) ---
+    # Two languages, chosen rather than guessed. Script is the small C-like
+    # subset the drag-drop actions themselves lower to, with its own friendly
+    # errors and its bare `x` / `score` names. C is the text handed to the
+    # compiler untouched, which is the only way an action can reach a hardware
+    # register, a script's own function or anything else the subset has no word
+    # for. Detecting which one was written would be a guess that is wrong
+    # silently; a chooser is wrong loudly, if at all.
+    ("execute_code", "Execute Code", [("lang", "Language", ["Script", "C"]),
+                                      ("code", "Code", "code")]),
 ]
 
 # Piano-roll pitch range for the sound composer (C3 .. B5).
@@ -367,6 +428,8 @@ ACTION_TIPS = {
     "jump_to": "Teleport to an x, y position",
     "jump_relative": "Move by an x, y offset",
     "wrap": "Wrap around the screen edges",
+    "glide": "Move smoothly to a point over a number of frames",
+    "input_lock": "Stop or restart the player's control",
     "create_instance": "Spawn an instance of an object",
     "destroy_self": "Destroy this instance",
     "set_var": "Set a custom variable", "add_var": "Add to a custom variable",
@@ -392,10 +455,27 @@ ACTION_TIPS = {
     "draw_text": "Draw text at a screen position",
     "draw_number": "Draw a number at a screen position",
     "clear_text": "Clear all on-screen text",
+    "say": "Show a message in a panel, a character at a time",
+    "menu": "Offer a list to choose from; the answer lands in a variable",
     "save_game": "Save score / lives / health + globals to the cartridge",
     "load_game": "Load the saved game from the cartridge",
-    "execute_code": "Run custom GML code",
+    "execute_code": "Run code written by hand, for anything the actions above cannot express",
 }
+# What a new script opens as. It compiles, so the first build after making one
+# succeeds, and it demonstrates the two things a script is for that an Execute
+# Code action cannot do: a file-scope table and a function.
+SCRIPT_STARTER = """\
+/* File-scope C: functions, tables and constants, emitted once and visible to
+   every object. Called from an Execute Code action or from another script. */
+
+static const s16 wobble[8] = { 0, 1, 2, 1, 0, -1, -2, -1 };
+
+s16 wobble_at(s32 frame)
+{
+    return wobble[frame & 7];
+}
+"""
+
 CONTAINER_ACTIONS = {"if_var", "if_collision", "if_chance", "repeat",
                      "if_score", "if_lives", "if_health"}  # carry nested children
 
@@ -404,9 +484,32 @@ def _u16(color):
     return int(color) & 0xFFFF
 
 
+
+def _count_if(lost, condition):
+    """Count a discarded value and return the empty replacement.
+
+    Written as a helper so the counting sits ON the line that throws data away
+    rather than three lines above it, which is where it stops being done."""
+    if condition:
+        lost[0] += 1
+    return {}
+
+
+def _count_none(lost, value):
+    if value is not None:
+        lost[0] += 1
+    return None
+
+
+def _count_str(lost, value):
+    if value is not None:
+        lost[0] += 1
+    return ""
+
+
 class GbaSdk(nbapp.AppWindow):
     app_name = "GBA SDK"
-    menus = ("File", "Edit", "Resource", "Build")
+    menus = ("File", "Edit", "View", "Resource", "Build", "Help")
 
     def __init__(self):
         super().__init__()
@@ -427,6 +530,7 @@ class GbaSdk(nbapp.AppWindow):
         self._room_tile = 1         # tileset tile index being painted (1-based)
         self._tile_pb_cache = {}    # (tuple(tile), scale) -> GdkPixbuf, for fast map draw
         self._snd_chan = "lead"     # active channel in the sound composer
+        self._snd_view = "roll"     # "roll" or "score"; one pattern, two readings
         self._snd_btns = {}
         self._snd_cur = [0, 60]     # keyboard cursor in the piano roll: step, pitch
         self._spr_cur = [0, 0]      # keyboard cursor on the pixel canvas
@@ -460,19 +564,33 @@ class GbaSdk(nbapp.AppWindow):
 
         body.pack_start(self._resource_browser(), False, False, 0)
         # centre editor stack
-        self._editor_stack = Gtk.Stack()
-        self._editor_stack.set_hexpand(True)
-        self._editor_stack.set_vexpand(True)
-        self._editor_stack.add_named(self._welcome_pane(), "welcome")
-        self._editor_stack.add_named(self._sprite_pane(), "sprite")
-        self._editor_stack.add_named(self._tileset_pane(), "tileset")
-        self._editor_stack.add_named(self._sound_pane(), "sound")
-        self._editor_stack.add_named(self._object_pane(), "object")
-        self._editor_stack.add_named(self._room_pane(), "room")
+        # The workspace, not a Stack: several editors open at once, in tabs and
+        # splits. Phase 1 of docs/GBA-SDK-SPEC.md — every later subsystem (the
+        # score editor, data tables, the emulator pane) registers here, and the
+        # panes themselves know nothing about where they sit.
+        self._editor_stack = gbaworkspace.Workspace(
+            on_change=self._save_layout_soon)
+        for pid, title, build, closable in (
+                ("welcome", "Start", self._welcome_pane, False),
+                ("sprite", "Sprite", self._sprite_pane, True),
+                ("tileset", "Tiles", self._tileset_pane, True),
+                ("sound", "Sound", self._sound_pane, True),
+                ("object", "Object", self._object_pane, True),
+                ("room", "Room", self._room_pane, True),
+                ("script", "Script", self._script_pane, True),
+                ("palette", "Palettes", self._palette_pane, True),
+                ("table", "Table", self._table_pane, True),
+                ("world", "World", self._world_pane, True),
+                # Help is a pane like any other, so it opens BESIDE the editor
+                # it describes rather than over it. A reference that covers the
+                # work it explains is one that gets closed to do the work.
+                ("help", "Help", self._help_pane, True)):
+            self._editor_stack.register(pid, _t(title), build(), closable)
         body.pack_start(self._editor_stack, True, True, 0)
 
         self._render_tree()
-        self._editor_stack.set_visible_child_name("welcome")
+        self._editor_stack.show("welcome")
+        self._restore_layout()
         # Say which tool is held from the very first frame: without this all four
         # buttons read as "not chosen" until one was clicked.
         self._set_tool(self._spr_tool)
@@ -484,10 +602,38 @@ class GbaSdk(nbapp.AppWindow):
         self.undo.reset()
 
     # ================= model =================
+    # ---- workspace layout ---------------------------------------------------
+    def _save_layout_soon(self):
+        """Keep the arrangement with the project. Guarded: the workspace fires
+        this while it is still being built, before the store exists."""
+        try:
+            self.proj["layout"] = self._editor_stack.layout()
+        except Exception:                                   # noqa: BLE001
+            pass
+        self._save_autosave()
+
+    def _restore_layout(self):
+        desc = (self.proj or {}).get("layout")
+        if isinstance(desc, dict):
+            self._editor_stack.set_layout(desc)
+
+    def _split_pane(self, orientation):
+        if not self._editor_stack.split(orientation):
+            self._flash(_t("A pane splits when its group holds two or more "
+                           "editors"))
+
+    def _close_pane(self):
+        cur = self._editor_stack._active.current
+        if cur and cur != "welcome":
+            self._editor_stack.close(cur)
+
+    def _reset_layout(self):
+        self._editor_stack.reset(keep="welcome")
+
     def _new_project(self):
         self.proj = {"name": "Game", "sprites": [], "sounds": [],
                      "tilesets": [], "objects": [], "rooms": [],
-                     "start_room": None}
+                     "scripts": [], "tables": [], "start_room": None}
 
     def _uid(self, prefix, existing):
         n = 1
@@ -521,20 +667,26 @@ class GbaSdk(nbapp.AppWindow):
         run.set_relief(Gtk.ReliefStyle.NONE)
         run.get_style_context().add_class("runbtn")
         rh = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        rh.pack_start(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("cartridge", 13, "#FCFBF8")),
+        rh.pack_start(nbicons.image("cartridge", 13, "#FCFBF8"),
                       False, False, 0)
-        rh.pack_start(Gtk.Label(label=_acc("Compile & Export", "Ctrl+B")),
+        rh.pack_start(Gtk.Label(label=_acc("Build & Export", "Ctrl+B")),
                       False, False, 0)
         run.add(rh)
-        run.set_tooltip_text(_t("Compile the project to a .gba file"))
+        run.set_tooltip_text(_t("Build the project into a .gba file"))
         run.connect("clicked", lambda *_: self._file_export())
         bar.pack_start(run, False, False, 0)
 
         bar.pack_start(Gtk.Box(), True, True, 0)
         self._status = Gtk.Label(label="", xalign=1)
         self._status.get_style_context().add_class("sdkstatus")
-        self._status.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
-        self._status.set_max_width_chars(52)
+        # END, not MIDDLE. MIDDLE is right for a path or a file name, where
+        # the head and the tail both carry meaning; on a SENTENCE it eats the
+        # verb and leaves two halves that do not join up -- Russian rendered
+        # "выб… ровать»". END keeps the sentence readable from the start.
+        # 52 chars truncated even the English message (63); the longest
+        # translation of it is 98 (Yiddish).
+        self._status.set_ellipsize(Pango.EllipsizeMode.END)
+        self._status.set_max_width_chars(64)
         bar.pack_end(self._status, False, False, 0)
         return bar
 
@@ -558,7 +710,16 @@ class GbaSdk(nbapp.AppWindow):
         self._proj_label = Gtk.Label(xalign=0)
         self._proj_label.get_style_context().add_class("browsertitle")
         self._proj_label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        # Search. A project at the scale this suite is specified for (10,000+
+        # assets, see docs/GBA-SDK-SPEC.md) cannot be navigated by scrolling,
+        # and the browser is the only way in to any of them.
+        self._search = Gtk.SearchEntry()
+        nbicons.style_search_entry(self._search)
+        self._search.set_placeholder_text(_t("Search"))
+        self._search.connect("search-changed", lambda *_: self._render_tree())
         head.pack_start(self._proj_label, False, False, 0)
+        self._search.set_margin_top(6)
+        head.pack_start(self._search, False, False, 0)
         col.pack_start(head, False, False, 0)
         col.pack_start(_rule(), False, False, 0)
 
@@ -624,17 +785,57 @@ class GbaSdk(nbapp.AppWindow):
                 self._tree_body.remove(c)
             self._proj_label.set_text(self.proj.get("name") or _t("Game"))
             selected = None
+            q = ""
+            try:
+                q = (self._search.get_text() or "").strip().lower()
+            except AttributeError:
+                q = ""          # the browser is built before the field exists
             for kind, heading, newlabel, _one in KINDS:
                 self._tree_body.add(self._group_row(kind, heading, newlabel))
-                items = self._res(kind)
+                # (index, resource) pairs, and the index is ALWAYS the one
+                # into the project's own list. Filtering must not renumber
+                # them: self._sel and _asset_row both address a resource by
+                # that index, so a filtered list numbered 0..n would open and
+                # select the wrong asset the moment anything was typed.
+                items = list(enumerate(self._res(kind)))
+                if q:
+                    # Match on the name the row shows, so what is typed and
+                    # what is matched are the same string.
+                    items = [(i, r) for i, r in items
+                             if q in str(r.get("id", "")).lower()]
                 if not items:
-                    self._tree_body.add(self._empty_row())
+                    self._tree_body.add(
+                        self._empty_row(_t("No match") if q else None))
                     continue
-                for i, r in enumerate(items):
+                # Folders. A resource carries an optional "folder" name; no
+                # folder means the top of its kind. Kept as a plain key rather
+                # than a tree so an older project loads unchanged and a folder
+                # that loses its last asset simply stops existing.
+                loose = [(i, r) for i, r in items if not r.get("folder")]
+                named = {}
+                for i, r in items:
+                    f = r.get("folder")
+                    if f:
+                        named.setdefault(str(f), []).append((i, r))
+                for i, r in loose:
                     row = self._asset_row(kind, i, r)
                     self._tree_body.add(row)
                     if self._sel == (kind, i):
                         selected = row
+                for folder in sorted(named):
+                    shut = self._folder_shut(kind, folder)
+                    self._tree_body.add(
+                        self._folder_row(kind, folder, len(named[folder]),
+                                         shut))
+                    # A search looks INSIDE closed folders — hiding a match
+                    # behind a fold is the one thing a search must not do.
+                    if shut and not q:
+                        continue
+                    for i, r in named[folder]:
+                        row = self._asset_row(kind, i, r)
+                        self._tree_body.add(row)
+                        if self._sel == (kind, i):
+                            selected = row
             self._tree_body.show_all()
             if selected is not None:
                 self._tree_body.select_row(selected)
@@ -642,6 +843,70 @@ class GbaSdk(nbapp.AppWindow):
                 self._tree_body.unselect_all()
         finally:
             self._tree_busy = False
+
+    def _folder_shut(self, kind, folder):
+        return "%s/%s" % (kind, folder) in (self.proj.get("shut_folders") or [])
+
+    def _toggle_folder(self, kind, folder):
+        key = "%s/%s" % (kind, folder)
+        shut = list(self.proj.get("shut_folders") or [])
+        if key in shut:
+            shut.remove(key)
+        else:
+            shut.append(key)
+        self.proj["shut_folders"] = shut
+        self._save_autosave()
+        self._render_tree()
+
+    def _folder_row(self, kind, folder, count, shut):
+        """A folder inside a kind: its name, how many are in it, and whether it
+        is open. Indented under the kind's heading so the two levels read as
+        levels rather than as two lists."""
+        row = Gtk.ListBoxRow()
+        row.set_selectable(False)
+        btn = Gtk.Button()
+        btn.set_relief(Gtk.ReliefStyle.NONE)
+        btn.get_style_context().add_class("folderrow")
+        box = Gtk.Box(spacing=6)
+        car = Gtk.Label(label="\u25b8" if shut else "\u25be")
+        car.get_style_context().add_class("caret")
+        box.pack_start(car, False, False, 0)
+        lab = Gtk.Label(label=folder, xalign=0)
+        lab.get_style_context().add_class("foldername")
+        lab.set_ellipsize(Pango.EllipsizeMode.END)
+        box.pack_start(lab, True, True, 0)
+        n = Gtk.Label(label=str(count))
+        n.get_style_context().add_class("foldercount")
+        box.pack_end(n, False, False, 0)
+        btn.add(box)
+        btn.set_tooltip_text(_t("Open or close this folder"))
+        btn.connect("clicked",
+                    lambda _b, k=kind, f=folder: self._toggle_folder(k, f))
+        row.add(btn)
+        return row
+
+    def _move_to_folder(self):
+        """Resource ▸ Move to Folder… — an empty name puts it back at the top
+        of its kind, which is the only way out of a folder."""
+        r = self._sel_res()
+        if not r:
+            return
+        self._prompt_text(_t("Move to folder"), r.get("folder", ""),
+                          self._commit_folder)
+
+    def _commit_folder(self, name):
+        r = self._sel_res()
+        if not r:
+            return
+        self.undo.checkpoint(_t("Move to folder"))
+        name = (name or "").strip()[:40]
+        if name:
+            r["folder"] = name
+        else:
+            r.pop("folder", None)
+        self._save_autosave()
+        self._render_tree()
+        self.undo.commit()
 
     def _group_row(self, kind, heading, newlabel):
         """A heading, its count, and the button that adds one."""
@@ -664,11 +929,15 @@ class GbaSdk(nbapp.AppWindow):
         row.add(box)
         return row
 
-    def _empty_row(self):
+    def _empty_row(self, text=None):
+        """The line under a heading with nothing in it. `text` distinguishes a
+        kind that is empty from one whose contents the search has filtered
+        out — otherwise a search that matches nothing reads as a project that
+        has lost its assets."""
         row = Gtk.ListBoxRow()
         row.set_selectable(False)
         row.set_activatable(False)
-        lbl = Gtk.Label(label=_t("Empty"), xalign=0)
+        lbl = Gtk.Label(label=text or _t("Empty"), xalign=0)
         lbl.get_style_context().add_class("emptyrow")
         row.add(lbl)
         return row
@@ -861,11 +1130,24 @@ class GbaSdk(nbapp.AppWindow):
         elif kind == "sound":
             rid = self._uid("snd", lst)
             lst.append({"id": rid, "tempo": 8, "loop": True, "steps": 16,
-                        "lead": [0] * 16, "bass": [0] * 16})
+                        "lead": [0] * 16, "bass": [0] * 16,
+                        "drum": [0] * 16, "kind": 0, "duty": 0, "vol": 0,
+                        "decay": 0, "prio": 0})
         elif kind == "object":
             rid = self._uid("obj", lst)
             lst.append({"id": rid, "sprite": None, "visible": True,
-                        "solid": False, "events": []})
+                        "solid": False, "tilecol": 1, "depth": 0,
+                        "bb_inset": 0, "events": []})
+        elif kind == "script":
+            rid = self._uid("scr", lst)
+            lst.append({"id": rid, "code": SCRIPT_STARTER})
+        elif kind == "table":
+            rid = self._uid("tbl", lst)
+            # One column and one row: an empty grid offers nothing to click,
+            # and "add a column" is a worse first step than "change this one".
+            lst.append({"id": rid,
+                        "columns": [{"name": "name", "type": "text"}],
+                        "rows": [[""]]})
         elif kind == "tileset":
             rid = self._uid("ts", lst)
             size = int(getattr(self, "_new_tileset_size", 8) or 8)
@@ -952,6 +1234,16 @@ class GbaSdk(nbapp.AppWindow):
                 for it in rm.get("instances", []) or []:
                     if isinstance(it, dict):
                         visit(it, "object", it.get("object"))
+            if kind == "room":
+                # A door names the room it leads to. Doors were added after
+                # this walker and never joined it, so renaming a room left
+                # every door into it pointing at a name that no longer existed
+                # — and the delete confirm said "used 0 times" while a door
+                # used it. Exactly the failure the comment above _REF_SPECS
+                # describes, one resource kind later.
+                for wp in rm.get("warps", []) or []:
+                    if isinstance(wp, dict):
+                        visit(wp, "room", wp.get("room"))
         if kind == "room":
             visit(self.proj, "start_room", self.proj.get("start_room"))
 
@@ -1057,6 +1349,38 @@ class GbaSdk(nbapp.AppWindow):
         if kind == "tileset":
             self._forget_tiles(rid)
 
+    def _resize_tiles(self, ts, old, new):
+        """Re-number every room's painted tiles around a tile set that is about
+        to change size.
+
+        A cell inside this set is moved to the FIRST hardware tile of whichever
+        authored tile it was showing: an 8px tile becoming 16px now spans four
+        cells rather than one, so the painted map cannot be preserved exactly,
+        and pointing at the right TILE is the honest approximation. Cells after
+        this set shift by the difference, which is exact."""
+        per_old = max(1, old // 8) ** 2
+        per_new = max(1, new // 8) ** 2
+        if per_old == per_new:
+            return
+        n = len(ts.get("tiles") or [])
+        lo, _hi = self._tileset_range(ts.get("id"))
+        count_old = n * per_old
+        delta = n * per_new - count_old
+        for rm in self.proj.get("rooms", []):
+            tm = rm.get("tiles")
+            if not isinstance(tm, list):
+                continue
+            out = []
+            for v in tm:
+                if not isinstance(v, int) or v <= lo:
+                    out.append(v if isinstance(v, int) else 0)
+                elif v <= lo + count_old:
+                    t = (v - lo - 1) // per_old
+                    out.append(lo + t * per_new + 1)
+                else:
+                    out.append(v + delta)
+            rm["tiles"] = out
+
     def _forget_tiles(self, rid):
         """Re-number every room's painted tiles around a deleted tile set.
 
@@ -1118,7 +1442,7 @@ class GbaSdk(nbapp.AppWindow):
         self._tile_pb_cache.clear()
         self._save_autosave()
         self._render_tree()
-        self._editor_stack.set_visible_child_name("welcome")
+        self._editor_stack.show("welcome")
         self.undo.commit()
 
     def _fix_start_room(self):
@@ -1140,7 +1464,7 @@ class GbaSdk(nbapp.AppWindow):
     def _refresh_editor(self):
         r = self._sel_res()
         if not r or not self._sel:
-            self._editor_stack.set_visible_child_name("welcome")
+            self._editor_stack.show("welcome")
             return
         kind = self._sel[0]
         if kind == "sprite":
@@ -1151,14 +1475,18 @@ class GbaSdk(nbapp.AppWindow):
             self._load_sound_editor()
         elif kind == "object":
             self._load_object_editor()
+        elif kind == "script":
+            self._load_script_editor()
+        elif kind == "table":
+            self._load_table_editor()
         else:
             self._load_room_editor()
         self._update_head(kind)
         self._update_colour_count()
-        self._editor_stack.set_visible_child_name(kind)
+        self._editor_stack.show(kind)
 
     # ================= the shape every editor shares =================
-    def _pane(self, kind, one):
+    def _pane(self, kind, one, resource=True):
         """The scaffold each of the five editors is built in.
 
         The panes were written months apart and each had invented its own
@@ -1190,16 +1518,22 @@ class GbaSdk(nbapp.AppWindow):
 
         # Packed so they read Rename, then Delete: pack_end fills from the right,
         # so the destructive one goes first and ends up on the outside.
-        dele = Gtk.Button(label=_t("Delete…"))
-        dele.get_style_context().add_class("quietbtn")
-        dele.set_valign(Gtk.Align.CENTER)
-        dele.connect("clicked", lambda *_: self._delete_resource())
-        head.pack_end(dele, False, False, 0)
-        ren = Gtk.Button(label=_acc("Rename", "F2"))
-        ren.get_style_context().add_class("quietbtn")
-        ren.set_valign(Gtk.Align.CENTER)
-        ren.connect("clicked", lambda *_: self._rename_resource())
-        head.pack_end(ren, False, False, 0)
+        #
+        # Only on a pane that EDITS a resource. Both act on whatever is selected
+        # in the browser, so on a pane that shows the project as a whole they
+        # would delete something the pane never mentioned -- a destructive
+        # button aimed at a target the author cannot see.
+        if resource:
+            dele = Gtk.Button(label=_t("Delete…"))
+            dele.get_style_context().add_class("quietbtn")
+            dele.set_valign(Gtk.Align.CENTER)
+            dele.connect("clicked", lambda *_: self._delete_resource())
+            head.pack_end(dele, False, False, 0)
+            ren = Gtk.Button(label=_acc("Rename", "F2"))
+            ren.get_style_context().add_class("quietbtn")
+            ren.set_valign(Gtk.Align.CENTER)
+            ren.connect("clicked", lambda *_: self._rename_resource())
+            head.pack_end(ren, False, False, 0)
         pane.pack_start(head, False, False, 0)
         pane.pack_start(_rule(top=14, bottom=12), False, False, 0)
 
@@ -1229,7 +1563,7 @@ class GbaSdk(nbapp.AppWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.set_valign(Gtk.Align.CENTER)
         box.set_halign(Gtk.Align.CENTER)
-        img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("cartridge", 56, FAINT))
+        img = nbicons.image("cartridge", 56, FAINT)
         box.pack_start(img, False, False, 0)
         t = Gtk.Label(label=_t("Make a Game Boy Advance game"))
         t.get_style_context().add_class("welcometitle")
@@ -1237,7 +1571,7 @@ class GbaSdk(nbapp.AppWindow):
         s = Gtk.Label(
             label=_t("A Sprite is a picture. An Object gives a sprite "
                      "behaviour. A Room places objects on screen. "
-                     "Compile & Export writes a .gba file."))
+                     "Build & Play runs it."))
         # wrap to a measure rather than baking "\n" into the string: hard line
         # breaks land in the wrong places the moment this is translated. halign
         # CENTER is what makes max_width_chars bind (a box child is FILL by
@@ -1255,7 +1589,7 @@ class GbaSdk(nbapp.AppWindow):
         row.set_halign(Gtk.Align.CENTER)
         ex = Gtk.Button(label=_t("Open the example game"))
         # Secondary (paper) treatment, NOT the red .runbtn: the toolbar's
-        # Compile & Export is the app's one red accent, and two red buttons on
+        # Build & Export is the app's one red accent, and two red buttons on
         # screen at once (there, and here in the empty state) fought each other.
         ex.get_style_context().add_class("exbtn")
         ex.connect("clicked", lambda *_: self._file_example())
@@ -1266,6 +1600,18 @@ class GbaSdk(nbapp.AppWindow):
         mine.connect("clicked", lambda *_: self._add_resource("sprite"))
         row.pack_start(mine, False, False, 0)
         box.pack_start(row, False, False, 6)
+
+        # A third way in, quieter than the other two. The course is the only
+        # documentation on this machine and it was reachable only from a menu
+        # nobody opens before they have a reason to.
+        learn = Gtk.Button(label=_t("Learn to make one"))
+        learn.set_relief(Gtk.ReliefStyle.NONE)
+        learn.get_style_context().add_class("quietbtn")
+        learn.set_halign(Gtk.Align.CENTER)
+        learn.set_tooltip_text(
+            _t("A course that starts at Actions and ends in C"))
+        learn.connect("clicked", lambda *_: self._open_help("c01"))
+        box.pack_start(learn, False, False, 2)
         return box
 
     # ================= sprite editor =================
@@ -1301,8 +1647,7 @@ class GbaSdk(nbapp.AppWindow):
         # wrong weight, and on a machine without that fallback, not at all.
         self._play_btn = Gtk.ToggleButton()
         self._play_btn.set_relief(Gtk.ReliefStyle.NONE)
-        self._play_btn.add(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("play", 12, MUTED)))
+        self._play_btn.add(nbicons.image("play", 12, MUTED))
         self._play_btn.set_tooltip_text(_acc("Preview the animation", "Space"))
         self._play_btn.get_style_context().add_class("iconbtn")
         self._play_btn.connect("toggled", self._on_play_toggle)
@@ -1384,8 +1729,8 @@ class GbaSdk(nbapp.AppWindow):
                 if img is not None:
                     # The pixbuf carries its own colour, so the chosen tool's
                     # icon is re-rendered in paper to sit on the ink field.
-                    img.set_from_pixbuf(nbicons.pixbuf(
-                        b.tool_icon, 14, "#FCFBF8" if on else MUTED))
+                    nbicons.set_image(img,
+                        b.tool_icon, 14, "#FCFBF8" if on else MUTED)
         finally:
             for _key, b in pairs:
                 hid = getattr(b, "_sdk_hid", None)
@@ -1410,7 +1755,7 @@ class GbaSdk(nbapp.AppWindow):
             b = Gtk.ToggleButton()
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("toolbtn")
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 14, MUTED))
+            img = nbicons.image(icon, 14, MUTED)
             b.add(img)
             b.tool_icon = icon
             b.tool_image = img
@@ -2082,6 +2427,24 @@ class GbaSdk(nbapp.AppWindow):
         self._ts_size_combo.connect("changed", self._on_tileset_size)
         tools.pack_start(self._ts_size_combo, False, False, 0)
 
+        # Which tiles are walls and floors. The runtime has read this since it
+        # was written; nothing could set it, so tile collision did nothing in
+        # any built game.
+        self._ts_solid = Gtk.CheckButton(label=_t("Solid"))
+        self._ts_solid.set_margin_start(14)
+        self._ts_solid.set_tooltip_text(
+            _t("Objects cannot pass through this tile"))
+        self._ts_solid.connect("toggled", self._on_tile_solid)
+        tools.pack_start(self._ts_solid, False, False, 0)
+
+        self._ts_auto = Gtk.CheckButton(label=_t("Auto-tile"))
+        self._ts_auto.set_margin_start(10)
+        self._ts_auto.set_tooltip_text(
+            _t("This tile and the 15 after it are one terrain, picked to fit "
+               "its neighbours"))
+        self._ts_auto.connect("toggled", self._on_tile_auto)
+        tools.pack_start(self._ts_auto, False, False, 0)
+
         hint = Gtk.Label(
             xalign=0,
             label=_t("A room places these in Tiles mode."))
@@ -2139,6 +2502,8 @@ class GbaSdk(nbapp.AppWindow):
         self._sel_tile = 0
         self._tile_cur = [0, 0]
         self._sync_tileset_size()      # the combo shows THIS set's size
+        self._sync_tile_solid()
+        self._sync_tile_auto()
         self._render_tile_list()
         self._tile_canvas.queue_draw()
 
@@ -2158,15 +2523,108 @@ class GbaSdk(nbapp.AppWindow):
             if i == self._sel_tile:
                 btn.get_style_context().add_class("on")
             btn.add(da)
-            btn.set_tooltip_text(_t("Tile %d") % (i + 1))
+            flags = self._tile_solid_flags(ts)
+            if i < len(flags) and flags[i]:
+                btn.get_style_context().add_class("solidtile")
+                btn.set_tooltip_text("%s \u00b7 %s"
+                                     % (_t("Tile %d") % (i + 1), _t("Solid")))
+            else:
+                btn.set_tooltip_text(_t("Tile %d") % (i + 1))
             btn.connect("clicked", lambda _w, ix=i: self._select_tile(ix))
             self._tile_list.add(btn)
         self._tile_list.show_all()
 
     def _select_tile(self, i):
         self._sel_tile = i
+        self._sync_tile_solid()
+        self._sync_tile_auto()
+        self._sync_tile_auto()
         self._render_tile_list()
         self._tile_canvas.queue_draw()
+
+    def _tile_solid_flags(self, ts=None):
+        """The solid list for a tile set, grown to match its tiles.
+
+        Grown here rather than assumed: a tile added after the flag existed has
+        no entry, and reading past the end would either raise or silently treat
+        a real tile as not solid."""
+        ts = ts if ts is not None else self._sel_res()
+        if not isinstance(ts, dict):
+            return []
+        n = len(ts.get("tiles") or [])
+        flags = ts.get("solid")
+        if not isinstance(flags, list):
+            flags = []
+        if len(flags) != n:
+            flags = ([bool(v) for v in flags] + [False] * n)[:n]
+            ts["solid"] = flags
+        return flags
+
+    def _sync_tile_solid(self):
+        if not self._sel or self._sel[0] != "tileset":
+            return
+        flags = self._tile_solid_flags()
+        self._suspend = True
+        try:
+            self._ts_solid.set_active(
+                bool(flags[self._sel_tile])
+                if 0 <= self._sel_tile < len(flags) else False)
+        finally:
+            self._suspend = False
+
+    def _sync_tile_auto(self):
+        if not self._sel or self._sel[0] != "tileset":
+            return
+        ts = self._sel_res() or {}
+        self._suspend = True
+        try:
+            self._ts_auto.set_active(ts.get("auto_base") == self._sel_tile)
+        finally:
+            self._suspend = False
+
+    def _on_tile_auto(self, btn):
+        if self._suspend or not self._sel or self._sel[0] != "tileset":
+            return
+        ts = self._sel_res()
+        if not ts:
+            return
+        if not btn.get_active():
+            self.undo.checkpoint(_t("Auto-tile"))
+            ts.pop("auto_base", None)
+            self._save_autosave()
+            self._render_tile_list()
+            self.undo.commit()
+            return
+        have = len(ts.get("tiles") or []) - self._sel_tile
+        if have < self.AUTO_VARIANTS:
+            # Refuse and say the number. Accepting it would declare a run that
+            # _auto_runs quietly ignores, which is a setting that reads as on
+            # and does nothing.
+            self._suspend = True
+            try:
+                btn.set_active(False)
+            finally:
+                self._suspend = False
+            self._flash(_t("An auto-tile needs %d tiles from here; there are %d")
+                        % (self.AUTO_VARIANTS, max(0, have)))
+            return
+        self.undo.checkpoint(_t("Auto-tile"))
+        ts["auto_base"] = self._sel_tile
+        self._save_autosave()
+        self._render_tile_list()
+        self.undo.commit()
+
+    def _on_tile_solid(self, btn):
+        if self._suspend or not self._sel or self._sel[0] != "tileset":
+            return
+        flags = self._tile_solid_flags()
+        if not (0 <= self._sel_tile < len(flags)):
+            return
+        self.undo.checkpoint(_t("Solid"))
+        flags[self._sel_tile] = btn.get_active()
+        self._save_autosave()
+        self._render_tile_list()
+        self.undo.commit()
 
     def _tile_done(self):
         self._save_autosave()
@@ -2216,6 +2674,13 @@ class GbaSdk(nbapp.AppWindow):
                     if k < len(px):
                         grid[j][i2] = px[k]
             out.append([c for row in grid for c in row])
+        # Rooms index ONE combined list of every set's hardware tiles, so
+        # changing this set's size changes how many entries it occupies and
+        # shifts every LATER set along — the same corruption _forget_tiles
+        # exists to prevent on delete, arriving by a different door. Renumber
+        # before the size actually changes, while the old geometry is still
+        # readable.
+        self._resize_tiles(ts, old, new)
         ts["size"] = new
         ts["tiles"] = out or [[TRANSPARENT] * (new * new)]
         self._sel_tile = min(self._sel_tile, max(0, len(ts["tiles"]) - 1))
@@ -2350,6 +2815,88 @@ class GbaSdk(nbapp.AppWindow):
                 v += per
         return out
 
+    # ---- auto-tiling ----
+    # Sixteen variants of one terrain, chosen by which of the four orthogonal
+    # neighbours are the same terrain. Bit 0 north, 1 east, 2 south, 3 west, so
+    # variant 0 is an isolated block and variant 15 is fully enclosed.
+    #
+    # This is an AUTHORING feature only: what lands in the room's tilemap is an
+    # ordinary tile index, so the cartridge pays nothing for it and the runtime
+    # never learns it happened.
+    AUTO_VARIANTS = 16
+
+    def _auto_runs(self):
+        """Every declared run, as (bases, span).
+
+        `bases` holds the sixteen hardware indices in mask order. A run is
+        declared by marking one tile and needs the fifteen after it in the same
+        set; a set with too few tiles left declares nothing rather than running
+        past its own end into the next set's tiles."""
+        runs = []
+        v = 1
+        for ts in self.proj.get("tilesets", []):
+            n = ts_size(ts)
+            per = max(1, n // 8) ** 2
+            tiles = ts.get("tiles", []) or []
+            starts = [v + i * per for i in range(len(tiles))]
+            v += per * len(tiles)
+            ab = ts.get("auto_base")
+            if not isinstance(ab, int):
+                continue
+            if not (0 <= ab and ab + self.AUTO_VARIANTS <= len(tiles)):
+                continue
+            runs.append((starts[ab:ab + self.AUTO_VARIANTS], n))
+        return runs
+
+    def _auto_run_of(self, base):
+        """The run `base` belongs to, or None."""
+        for bases, span in self._auto_runs():
+            if base in bases:
+                return bases, span
+        return None
+
+    def _auto_mask(self, tm, cw, ch, cx, cy, bases, step):
+        """Which orthogonal neighbours are the same terrain.
+
+        Outside the room counts as the SAME terrain, so a field running off the
+        edge is drawn as continuing rather than being outlined against nothing
+        -- the alternative puts a coastline around every level."""
+        mask = 0
+        for bit, (dx, dy) in enumerate(((0, -1), (1, 0), (0, 1), (-1, 0))):
+            nx, ny = cx + dx * step, cy + dy * step
+            if not (0 <= nx < cw and 0 <= ny < ch):
+                mask |= 1 << bit
+                continue
+            if tm[ny * cw + nx] in bases:
+                mask |= 1 << bit
+        return mask
+
+    def _auto_fit(self, tm, cw, ch, cx, cy, bases, span):
+        """Re-pick the variant at (cx, cy) from its neighbours. True if changed."""
+        step = max(1, span // 8)
+        if not (0 <= cx < cw and 0 <= cy < ch):
+            return False
+        if tm[cy * cw + cx] not in bases:
+            return False
+        want = bases[self._auto_mask(tm, cw, ch, cx, cy, bases, step)]
+        if tm[cy * cw + cx] == want:
+            return False
+        return self._stamp(tm, cw, ch, cx, cy, want, step)
+
+    def _stamp(self, tm, cw, ch, cx, cy, base, step):
+        """Write one authored tile, which is step x step hardware cells."""
+        changed = False
+        for by in range(step):
+            for bx in range(step):
+                x, y = cx + bx, cy + by
+                if not (0 <= x < cw and 0 <= y < ch):
+                    continue
+                v = base + by * step + bx
+                if tm[y * cw + x] != v:
+                    tm[y * cw + x] = v
+                    changed = True
+        return changed
+
     def _tile_span(self, base):
         """The pixel size of the authored tile starting at hardware index
         `base`, or 8 when the index is not a tile start (an old project, or a
@@ -2393,6 +2940,61 @@ class GbaSdk(nbapp.AppWindow):
             self._snd_steps.append(n, n)
         self._snd_steps.connect("changed", self._on_snd_steps)
         tools.pack_start(self._snd_steps, False, False, 0)
+        # Timbre. All four reach the runtime, which has read them since they
+        # were written and until now was always handed zero.
+        tools.pack_start(_group_label(_t("Sound")), False, False, 0)
+        self._snd_kind = Gtk.ComboBoxText()
+        for k, lbl in (("0", "Music"), ("1", "Effect")):
+            self._snd_kind.append(k, _t(lbl))
+        self._snd_kind.set_tooltip_text(
+            _t("An effect layers over the music; music replaces it"))
+        self._snd_kind.connect("changed", self._on_snd_setting, "kind")
+        tools.pack_start(self._snd_kind, False, False, 0)
+
+        self._snd_duty = Gtk.ComboBoxText()
+        for k, lbl in (("0", "50%"), ("1", "12.5%"), ("2", "25%"),
+                       ("3", "50%"), ("4", "75%")):
+            self._snd_duty.append(k, _t("Width") + " " + lbl)
+        self._snd_duty.set_tooltip_text(_t("Square wave width; thinner is reedier"))
+        self._snd_duty.connect("changed", self._on_snd_setting, "duty")
+        tools.pack_start(self._snd_duty, False, False, 0)
+
+        self._snd_vol = Gtk.ComboBoxText()
+        self._snd_vol.append("0", _t("Full"))
+        for v in range(1, 16):
+            self._snd_vol.append(str(v), str(v))
+        self._snd_vol.set_tooltip_text(_t("Volume of this sound"))
+        self._snd_vol.connect("changed", self._on_snd_setting, "vol")
+        tools.pack_start(self._snd_vol, False, False, 0)
+
+        self._snd_decay = Gtk.ComboBoxText()
+        self._snd_decay.append("0", _t("Hold"))
+        for v in range(1, 8):
+            self._snd_decay.append(str(v), _t("Pluck") + " " + str(v))
+        self._snd_decay.set_tooltip_text(
+            _t("Whether a note holds or fades after it is struck"))
+        self._snd_decay.connect("changed", self._on_snd_setting, "decay")
+        tools.pack_start(self._snd_decay, False, False, 0)
+
+        self._snd_prio = Gtk.ComboBoxText()
+        for v in range(8):
+            self._snd_prio.append(str(v), _t("Priority") + " " + str(v))
+        self._snd_prio.set_tooltip_text(
+            _t("A playing effect is only replaced by one of equal or higher "
+               "priority"))
+        self._snd_prio.connect("changed", self._on_snd_setting, "prio")
+        tools.pack_start(self._snd_prio, False, False, 0)
+
+        # Roll or staff. The same pattern, read two ways: the grid is for
+        # placing steps, the staff is for reading what was placed as music.
+        # Neither is a different document, so this is a view and not a mode.
+        self._snd_score = Gtk.ToggleButton(label=_t("Score"))
+        self._snd_score.set_relief(Gtk.ReliefStyle.NONE)
+        self._snd_score.get_style_context().add_class("toolbtn")
+        self._snd_score.set_tooltip_text(_t("Read the pattern as notation"))
+        self._snd_score.connect("toggled", self._on_snd_score)
+        tools.pack_end(self._snd_score, False, False, 0)
+
         self._snd_loop = Gtk.CheckButton(label=_t("Loop"))
         self._snd_loop.set_margin_start(12)
         self._snd_loop.set_tooltip_text(_t("Play the tune over and over"))
@@ -2402,7 +3004,8 @@ class GbaSdk(nbapp.AppWindow):
         # this readable only from which colour of note came out brighter.
         seg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         seg.get_style_context().add_class("toolseg")
-        for ch, lbl, key in (("lead", "Lead", "1"), ("bass", "Bass", "2")):
+        for ch, lbl, key in (("lead", "Lead", "1"), ("bass", "Bass", "2"),
+                             ("drum", "Drums", "3")):
             b = Gtk.ToggleButton(label=_t(lbl))
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("toolbtn")
@@ -2440,6 +3043,51 @@ class GbaSdk(nbapp.AppWindow):
         self._seg_apply(list(self._snd_btns.items()), ch)
         self._snd_canvas.queue_draw()
 
+    def _on_snd_score(self, btn):
+        self._snd_view = "score" if btn.get_active() else "roll"
+        s = self._cur_sound()
+        if s:
+            self._size_sound_canvas(s)
+        self._snd_canvas.queue_draw()
+
+    # ---- notation ----
+    # A pattern is one note per step, so every note is the same length: the
+    # staff shows evenly spaced notes rather than inventing durations the model
+    # does not carry. Guessing them would draw a rhythm nobody wrote.
+    STAFF_GAP = 7          # pixels between staff lines
+    STAFF_TOP = 26         # top line of the treble staff
+    STAFF_SPLIT = 82       # top line of the bass staff
+    # semitone within an octave -> (staff step 0..6, needs a sharp)
+    _PITCH_STEP = {0: (0, 0), 1: (0, 1), 2: (1, 0), 3: (1, 1), 4: (2, 0),
+                   5: (3, 0), 6: (3, 1), 7: (4, 0), 8: (4, 1), 9: (5, 0),
+                   10: (5, 1), 11: (6, 0)}
+
+    def _staff_pos(self, pitch):
+        """A diatonic staff position: seven letters per octave, not twelve
+        semitones. C sharp and D share a line, and the sharp is what tells them
+        apart; spacing by semitone makes a chromatic run look like a scale."""
+        octave, semi = divmod(int(pitch), 12)
+        return octave * 7 + self._PITCH_STEP[semi][0]
+
+    def _staff_y(self, pitch, bass):
+        """Where a pitch sits, and whether it needs a sharp.
+
+        Staff position is DIATONIC -- seven letters per octave, not twelve
+        semitones -- so C sharp and D share a line and the sharp is what tells
+        them apart. Spacing by semitone instead is the mistake that makes a
+        chromatic run look like a straight line."""
+        pos = self._staff_pos(pitch)
+        sharp = self._PITCH_STEP[int(pitch) % 12][1]
+        # Bottom line of each staff, as MIDI notes: E4 (64) on the treble,
+        # G2 (43) on the bass. Run through the SAME function rather than
+        # written out in octaves and letters -- MIDI puts C4 at 60, so
+        # divmod(64, 12) says octave 5, and hand-deriving it is an off-by-one
+        # that puts every note an octave out.
+        base_pos = self._staff_pos(43 if bass else 64)
+        top = self.STAFF_SPLIT if bass else self.STAFF_TOP
+        bottom = top + 4 * self.STAFF_GAP
+        return bottom - (pos - base_pos) * (self.STAFF_GAP / 2.0), sharp
+
     def _load_sound_editor(self):
         s = self._cur_sound()
         if not s:
@@ -2449,6 +3097,7 @@ class GbaSdk(nbapp.AppWindow):
         self._snd_loop.set_active(bool(s.get("loop", True)))
         self._snd_steps.set_active_id(str(s.get("steps", 16)))
         self._suspend = False
+        self._sync_snd_settings()
         self._pick_channel(self._snd_chan)
         self._size_sound_canvas(s)
         self._snd_canvas.queue_draw()
@@ -2458,7 +3107,9 @@ class GbaSdk(nbapp.AppWindow):
         cols = s.get("steps", 16)
         self._snd_canvas.set_size_request(
             cols * self.SND_CELLW + self.SND_GUTTER + 2,
-            rows * self.SND_CELLH + self.SND_RULER + 2)
+            (self.STAFF_SPLIT + 4 * self.STAFF_GAP + 40)
+            if getattr(self, "_snd_view", "roll") == "score"
+            else rows * self.SND_CELLH + self.SND_RULER + 2)
 
     def _on_snd_tempo(self, spin):
         if self._suspend:
@@ -2497,6 +3148,136 @@ class GbaSdk(nbapp.AppWindow):
         self._snd_canvas.queue_draw()
         self.undo.commit()
 
+    def _draw_sharp(self, cr, x, y):
+        """A sharp sign, drawn rather than typed.
+
+        U+266F is not in Nimbus Sans -- only the CJK fallback carries it, so
+        typing it renders as a box or in a face that does not match the text
+        beside it. Drawing it also lets it scale with the staff instead of with
+        the interface font."""
+        g = self.STAFF_GAP
+        cr.set_line_width(1.0)
+        for dx in (-1.6, 1.6):
+            cr.move_to(x + dx, y - g * 0.85)
+            cr.line_to(x + dx, y + g * 0.75)
+        cr.stroke()
+        cr.set_line_width(1.6)
+        for dy in (-g * 0.28, g * 0.28):
+            cr.move_to(x - 3.4, y + dy + 1.1)
+            cr.line_to(x + 3.4, y + dy - 1.1)
+        cr.stroke()
+        cr.set_line_width(1.2)
+
+    def _draw_score(self, w, cr, s):
+        """The same pattern, read as notation.
+
+        Two staves braced together: lead on the treble, bass on the bass. Drums
+        are not pitched, so they get a one-line percussion staff under the two
+        rather than being forced onto a pitch they do not have."""
+        cw = self.SND_CELLW
+        gut = self.SND_GUTTER
+        cols = s.get("steps", 16)
+        aw = w.get_allocated_width()
+        ah = w.get_allocated_height()
+        cr.set_source_rgb(0.99, 0.98, 0.97)
+        cr.rectangle(0, 0, aw, ah)
+        cr.fill()
+
+        width = gut + cols * cw
+        cr.set_line_width(1)
+        for top in (self.STAFF_TOP, self.STAFF_SPLIT):
+            cr.set_source_rgb(0.35, 0.34, 0.31)
+            for i in range(5):
+                y = top + i * self.STAFF_GAP + 0.5
+                cr.move_to(gut - 18, y)
+                cr.line_to(width, y)
+            cr.stroke()
+        # the brace joining them, and the barline at the front
+        cr.set_source_rgb(0.20, 0.19, 0.17)
+        cr.set_line_width(2)
+        cr.move_to(gut - 18, self.STAFF_TOP)
+        cr.line_to(gut - 18, self.STAFF_SPLIT + 4 * self.STAFF_GAP)
+        cr.stroke()
+        cr.set_line_width(1)
+        # gut - 18 is the brace; the labels sit clear of it, not under it
+        cr.set_source_rgb(0.42, 0.40, 0.36)
+        _show_text(cr, 2, self.STAFF_TOP + 3 * self.STAFF_GAP, _t("Lead"), 8)
+        _show_text(cr, 2, self.STAFF_SPLIT + 3 * self.STAFF_GAP, _t("Bass"), 8)
+
+        drum_y = self.STAFF_SPLIT + 4 * self.STAFF_GAP + 20
+        cr.set_source_rgb(0.35, 0.34, 0.31)
+        cr.move_to(gut - 18, drum_y + 0.5)
+        cr.line_to(width, drum_y + 0.5)
+        cr.stroke()
+        _show_text(cr, 2, drum_y + 4, _t("Drums"), 8)
+
+        # bar lines every four steps, which is what makes a pattern readable
+        cr.set_source_rgba(0, 0, 0, 0.18)
+        for c in range(0, cols + 1, 4):
+            x = gut + c * cw + 0.5
+            cr.move_to(x, self.STAFF_TOP)
+            cr.line_to(x, self.STAFF_SPLIT + 4 * self.STAFF_GAP)
+        cr.stroke()
+
+        for name, bass in (("lead", False), ("bass", True)):
+            seq = list(s.get(name) or [])
+            live = (self._snd_chan == name)
+            for c in range(min(cols, len(seq))):
+                pitch = seq[c]
+                if not pitch:
+                    continue
+                y, sharp = self._staff_y(pitch, bass)
+                x = gut + c * cw + cw / 2.0
+                top = self.STAFF_SPLIT if bass else self.STAFF_TOP
+                bottom = top + 4 * self.STAFF_GAP
+                # Ledger lines, or a note off the staff floats unreadably.
+                cr.set_source_rgba(0.35, 0.34, 0.31, 1.0 if live else 0.45)
+                yy = bottom + self.STAFF_GAP
+                while yy <= y + 0.1:
+                    cr.move_to(x - 7, yy + 0.5)
+                    cr.line_to(x + 7, yy + 0.5)
+                    yy += self.STAFF_GAP
+                yy = top - self.STAFF_GAP
+                while yy >= y - 0.1:
+                    cr.move_to(x - 7, yy + 0.5)
+                    cr.line_to(x + 7, yy + 0.5)
+                    yy -= self.STAFF_GAP
+                cr.stroke()
+                cr.set_source_rgba(0.10, 0.10, 0.09, 1.0 if live else 0.40)
+                cr.save()
+                cr.translate(x, y)
+                cr.scale(1.25, 1.0)
+                cr.arc(0, 0, self.STAFF_GAP / 2.0 - 0.4, 0, 6.2832)
+                cr.restore()
+                cr.fill()
+                # stem: down above the middle line, up below it, as written
+                mid = top + 2 * self.STAFF_GAP
+                cr.set_line_width(1.2)
+                if y < mid:
+                    cr.move_to(x - 4.2, y)
+                    cr.line_to(x - 4.2, y + 22)
+                else:
+                    cr.move_to(x + 4.2, y)
+                    cr.line_to(x + 4.2, y - 22)
+                cr.stroke()
+                if sharp:
+                    self._draw_sharp(cr, x - 13, y)
+
+        seq = list(s.get("drum") or [])
+        live = (self._snd_chan == "drum")
+        for c in range(min(cols, len(seq))):
+            if not seq[c]:
+                continue
+            x = gut + c * cw + cw / 2.0
+            cr.set_source_rgba(0.70, 0.34, 0.10, 1.0 if live else 0.40)
+            cr.move_to(x - 4, drum_y - 4)
+            cr.line_to(x + 4, drum_y + 4)
+            cr.move_to(x + 4, drum_y - 4)
+            cr.line_to(x - 4, drum_y + 4)
+            cr.set_line_width(2)
+            cr.stroke()
+        return False
+
     def _draw_sound(self, w, cr):
         """The piano roll.
 
@@ -2508,6 +3289,8 @@ class GbaSdk(nbapp.AppWindow):
         the two read apart in a photograph, in greyscale, and to anyone who does
         not separate blue from green."""
         s = self._cur_sound()
+        if s and getattr(self, "_snd_view", "roll") == "score":
+            return self._draw_score(w, cr, s)
         cw, ch = self.SND_CELLW, self.SND_CELLH
         gut, rul = self.SND_GUTTER, self.SND_RULER
         rows = PITCH_HI - PITCH_LO + 1
@@ -2591,6 +3374,27 @@ class GbaSdk(nbapp.AppWindow):
                 else:
                     cr.set_line_width(2)
                     cr.stroke()
+        # Drums, on the top four rows. Drawn in every channel so a beat laid
+        # down is visible while the melody over it is being written -- the roll
+        # is one picture of the whole sound, not three pictures of a third of it.
+        drum_live = (self._snd_chan == "drum")
+        seq = list(s.get("drum") or [])
+        for r, (which, name) in enumerate(self.DRUMS):
+            y = rul + r * ch
+            if drum_live:
+                cr.set_source_rgba(0.55, 0.30, 0.10, 0.10)
+                cr.rectangle(gut, y, cols * cw, ch)
+                cr.fill()
+                cr.set_source_rgb(0.42, 0.36, 0.30)
+                _show_text(cr, 4, y + ch - 3, _t(name), 9)
+            for c in range(min(cols, len(seq))):
+                if seq[c] != which:
+                    continue
+                cr.set_source_rgba(0.70, 0.34, 0.10,
+                                   1.0 if drum_live else 0.35)
+                cr.rectangle(gut + c * cw, y, cw - 3, ch - 3)
+                cr.fill()
+
         # the keyboard cursor
         if _focused(w):
             c = max(0, min(cols - 1, self._snd_cur[0]))
@@ -2611,11 +3415,39 @@ class GbaSdk(nbapp.AppWindow):
                        "%s%d" % (NOTE_NAMES[p % 12], p // 12 - 1), 9, bold=True)
         return False
 
+    # The four noise sounds, in the order the runtime reads them. Row 0 is the
+    # top row of the roll, which is where a drum machine puts the crash.
+    DRUMS = ((4, "Crash"), (3, "Hat"), (2, "Snare"), (1, "Kick"))
+
+    def _drum_at(self, pitch):
+        """Which drum a roll row means, or None if the row is not a drum row.
+
+        Drums are four kinds rather than a pitch range, so they occupy the top
+        four rows of the same grid; reusing the roll keeps one set of click
+        maths, one ruler and one set of keys instead of a second editor that
+        behaves almost the same."""
+        row = PITCH_HI - pitch
+        if 0 <= row < len(self.DRUMS):
+            return self.DRUMS[row][0]
+        return None
+
     def _snd_toggle(self, col, pitch):
         s = self._cur_sound()
         if not s:
             return
         cols = s.get("steps", 16)
+        if self._snd_chan == "drum":
+            which = self._drum_at(pitch)
+            if which is None or not (0 <= col < cols):
+                return
+            seq = (list(s.get("drum") or []) + [0] * cols)[:cols]
+            seq[col] = 0 if seq[col] == which else which
+            s["drum"] = seq
+            self.undo.touch()
+            self._save_autosave()
+            self._render_tree()
+            self._snd_canvas.queue_draw()
+            return
         if not (0 <= col < cols and PITCH_LO <= pitch <= PITCH_HI):
             return
         seq = list(s.get(self._snd_chan, []))
@@ -2626,6 +3458,61 @@ class GbaSdk(nbapp.AppWindow):
         self._save_autosave()
         self._render_tree()
         self._snd_canvas.queue_draw()
+
+    def _on_snd_setting(self, combo, key):
+        if self._suspend:
+            return
+        s = self._cur_sound()
+        if not s:
+            return
+        val = combo.get_active_id()
+        if val is None:
+            return
+        self.undo.checkpoint(_t("Sound"))
+        s[key] = int(val)
+        self._save_autosave()
+        self.undo.commit()
+
+    def _on_obj_setting(self, combo, key):
+        if self._suspend:
+            return
+        o = self._cur_object()
+        if not o:
+            return
+        val = combo.get_active_id()
+        if val is None:
+            return
+        self.undo.checkpoint(_t("Object"))
+        o[key] = int(val)
+        self._save_autosave()
+        self.undo.commit()
+
+    def _sync_obj_settings(self):
+        o = self._cur_object()
+        if not o:
+            return
+        self._suspend = True
+        try:
+            self._obj_tilecol.set_active_id(
+                str(gbabuild._int(o.get("tilecol"), 0)))
+            self._obj_depth.set_active_id(str(gbabuild._int(o.get("depth"), 0)))
+        finally:
+            self._suspend = False
+
+    def _sync_snd_settings(self):
+        s = self._cur_sound()
+        if not s:
+            return
+        self._suspend = True
+        try:
+            for combo, key in ((self._snd_kind, "kind"),
+                               (self._snd_duty, "duty"),
+                               (self._snd_vol, "vol"),
+                               (self._snd_decay, "decay"),
+                               (self._snd_prio, "prio")):
+                combo.set_active_id(str(gbabuild._int(s.get(key), 0)))
+        finally:
+            self._suspend = False
 
     def _on_snd_click(self, w, ev):
         w.grab_focus()
@@ -2671,6 +3558,788 @@ class GbaSdk(nbapp.AppWindow):
         return True
 
     # ================= object editor =================
+    # ================= world =================
+    WORLD_W, WORLD_H, WORLD_GAP = 108, 62, 34
+
+    def _world_pane(self):
+        """Every room, and the doors between them.
+
+        A grid, not a force-directed layout. A graph that rearranges itself
+        when a room is added is a graph nobody can navigate twice: the point
+        here is finding the room that has no way back, and that needs the
+        picture to stay where it was put."""
+        pane, tools, body = self._pane("world", "World", resource=False)
+        title, sub = self._heads["world"]
+        title.set_text(_t("World"))
+        sub.set_text(_t("Rooms and the doors between them"))
+
+        self._world_count = Gtk.Label(xalign=0.0)
+        self._world_count.get_style_context().add_class("sdkstatus")
+        tools.pack_start(self._world_count, False, False, 0)
+
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sc.set_vexpand(True)
+        self._world_canvas = Gtk.DrawingArea()
+        self._world_canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self._world_canvas.connect("draw", self._draw_world)
+        self._world_canvas.connect("button-press-event", self._on_world_click)
+        sc.add(self._world_canvas)
+        body.pack_start(sc, True, True, 0)
+        return pane
+
+    def _world_boxes(self):
+        """(index, room, x, y) for every room, in project order."""
+        rooms = self._res("room")
+        span = self.WORLD_W + self.WORLD_GAP
+        avail = self._world_canvas.get_allocated_width()
+        if avail < span:
+            avail = 600
+        per = max(1, int(avail // span))
+        out = []
+        for i, r in enumerate(rooms):
+            out.append((i, r,
+                        14 + (i % per) * (self.WORLD_W + self.WORLD_GAP),
+                        14 + (i // per) * (self.WORLD_H + self.WORLD_GAP)))
+        return out
+
+    def _load_world(self):
+        rooms = self._res("room")
+        doors = sum(len(r.get("warps") or []) for r in rooms)
+        dead = sum(1 for r in rooms for w in (r.get("warps") or [])
+                   if not self._room_by_id(w.get("room")))
+        txt = _t("%d rooms, %d doors") % (len(rooms), doors)
+        if dead == 1:
+            txt += "  \u00b7  " + _t("1 leads nowhere")
+        elif dead:
+            txt += "  \u00b7  " + (_t("%d lead nowhere") % dead)
+        self._world_count.set_text(txt)
+        rows = (len(rooms) + 3) // 4 + 1
+        self._world_canvas.set_size_request(
+            -1, 28 + rows * (self.WORLD_H + self.WORLD_GAP))
+        self._world_canvas.queue_draw()
+
+    def _room_by_id(self, rid):
+        for i, r in enumerate(self._res("room")):
+            if r.get("id") == rid:
+                return i
+        return None
+
+    def _draw_world(self, w, cr):
+        cr.set_source_rgb(0.99, 0.98, 0.97)
+        cr.rectangle(0, 0, w.get_allocated_width(), w.get_allocated_height())
+        cr.fill()
+        boxes = self._world_boxes()
+        at = {i: (x, y) for i, _r, x, y in boxes}
+        start = self.proj.get("start_room")
+
+        # Doors first, so a box always sits on top of the lines into it.
+        for i, r, x, y in boxes:
+            for wp in r.get("warps") or []:
+                j = self._room_by_id(wp.get("room"))
+                if j is None or j not in at:
+                    # A door to nothing is drawn as a stub rather than left
+                    # out: an absent line looks like a room with no exits.
+                    cr.set_source_rgb(0.78, 0.20, 0.12)
+                    cr.set_line_width(1.5)
+                    cr.move_to(x + self.WORLD_W, y + self.WORLD_H / 2)
+                    cr.line_to(x + self.WORLD_W + 14, y + self.WORLD_H / 2)
+                    cr.stroke()
+                    self._world_cross(cr, x + self.WORLD_W + 18,
+                                      y + self.WORLD_H / 2)
+                    continue
+                tx, ty = at[j]
+                cr.set_source_rgba(0.20, 0.19, 0.17, 0.45)
+                cr.set_line_width(1.4)
+                cr.move_to(x + self.WORLD_W / 2, y + self.WORLD_H / 2)
+                cr.line_to(tx + self.WORLD_W / 2, ty + self.WORLD_H / 2)
+                cr.stroke()
+
+        for i, r, x, y in boxes:
+            sel = self._sel == ("room", i)
+            cr.set_source_rgb(*self._c15(gbabuild._rgb15(r.get("bg"), 0)))
+            cr.rectangle(x, y, self.WORLD_W, self.WORLD_H)
+            cr.fill()
+            cr.set_source_rgb(0.10, 0.10, 0.09) if sel else \
+                cr.set_source_rgba(0.20, 0.19, 0.17, 0.55)
+            cr.set_line_width(2.5 if sel else 1)
+            cr.rectangle(x + 0.5, y + 0.5, self.WORLD_W - 1, self.WORLD_H - 1)
+            cr.stroke()
+            cr.set_source_rgb(0.99, 0.98, 0.97)
+            _show_text(cr, x + 7, y + 16, r.get("id") or "?", 10, bold=True)
+            if r.get("id") == start:
+                _show_text(cr, x + 7, y + self.WORLD_H - 7, _t("start"), 8)
+        return False
+
+    def _world_cross(self, cr, x, y):
+        cr.set_line_width(1.5)
+        cr.move_to(x - 4, y - 4); cr.line_to(x + 4, y + 4)
+        cr.move_to(x + 4, y - 4); cr.line_to(x - 4, y + 4)
+        cr.stroke()
+
+    def _on_world_click(self, w, ev):
+        for i, _r, x, y in self._world_boxes():
+            if x <= ev.x < x + self.WORLD_W and y <= ev.y < y + self.WORLD_H:
+                # Selecting here opens the room editor, because the reason to
+                # find a room on this map is to go and change it.
+                self._select_resource("room", i)
+                return True
+        return True
+
+    # ================= play =================
+    def _file_play(self):
+        """Build, then hand the ROM to the GBA Emulator and come back.
+
+        Notebook OS runs one app at a time, so an emulator INSIDE this window
+        is not available -- the spec says so and wishing otherwise does not
+        change it. What can be fixed is the walk: exporting, closing, finding
+        the file and opening it by hand is six steps between a change and
+        seeing it, which is the loop that decides whether a game gets finished.
+
+        The project is SAVED FIRST. This window hides while the emulator owns
+        the screen, and anything unsaved at that moment is one crash away from
+        being gone."""
+        if not self.proj.get("objects") or not self.proj.get("rooms"):
+            self._flash(_t("A game needs an object and a room before it runs"))
+            return
+        problems = gbabuild.check_project(self.proj)
+        self._save_autosave()
+        outdir = os.path.join(tempfile.gettempdir(), "nbgba-play")
+        self._flash(_t("Compiling…"))
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        try:
+            ok, rom, log = gbabuild.build_rom(copy.deepcopy(self.proj), outdir)
+        except Exception as exc:                            # noqa: BLE001
+            ok, rom, log = False, None, str(exc)
+        self._last_log = log or ""
+        if not ok or not rom:
+            # Stay visible and say so. Hiding behind an emulator that never
+            # opened is how a build failure looks like the machine freezing.
+            self._flash(_t("This game did not build. Build \u25b8 Build "
+                           "Details says why."))
+            return
+        if problems:
+            self._flash(_t("Playing, with one thing that will not work")
+                        if len(problems) == 1 else
+                        _t("Playing, with %d things that will not work")
+                        % len(problems))
+        self._launch_emulator(rom)
+
+    def _launch_emulator(self, rom):
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "gbaemu.py")
+        if not os.path.exists(script):
+            self._flash(_t("The GBA Emulator is not on this machine"))
+            return
+        env = dict(os.environ,
+                   PYTHONPATH=os.path.dirname(os.path.abspath(__file__)))
+        try:
+            proc = subprocess.Popen(["python3", script, rom], env=env)
+        except OSError:
+            self._flash(_t("The GBA Emulator would not start"))
+            return
+        # Same hand-off Finder uses: the flag file tells the desktop's widget
+        # column to stand down too, or it draws over the emulator.
+        try:
+            open(nbapp.APP_FLAG, "w").close()
+        except Exception:                                   # noqa: BLE001
+            pass
+        self.hide()
+        GLib.child_watch_add(proc.pid, self._emulator_exited)
+
+    def _emulator_exited(self, _pid, _status):
+        try:
+            os.unlink(nbapp.APP_FLAG)
+        except Exception:                                   # noqa: BLE001
+            pass
+        self.show()
+        self.present()
+
+    # ================= budget =================
+    def _show_budget(self):
+        """What this project costs against what the console has.
+
+        Shown BEFORE a build rather than after: a game that will not fit is
+        otherwise found out at link time, by an error naming a section rather
+        than an asset."""
+        try:
+            rep = gbabuild.budget_report(self.proj)
+        except Exception as exc:                            # noqa: BLE001
+            self._flash(_t("The budget could not be worked out: %s")
+                        % str(exc)[:60])
+            return
+        out = []
+        for l in rep["lines"]:
+            cap = l["cap"]
+            # A percentage of 32 MB is not a fact anybody can act on; bytes are.
+            # The line names and notes come from gbabuild as English literals
+            # and were printed raw, so this pane showed "Sprite tiles" in every
+            # language while everything around it was translated.
+            if l["unit"] == "bytes":
+                out.append("%s %s" % (_pad(_t(l["name"]), 22),
+                                      _t("%d KB") % (l["used"] // 1024)))
+            else:
+                pct = (l["used"] * 100 // cap) if cap else 0
+                out.append("%s %6d / %-6d  %3d%%%s"
+                           % (_pad(_t(l["name"]), 22), l["used"], cap, pct,
+                              "   " + _t("OVER") if l["over"] else ""))
+            if l["note"]:
+                out.append("    (%s)" % _t(l["note"]))
+            for w in l["worst"]:
+                if not w["cost"]:
+                    continue
+                out.append("    %6d  %s%s" % (w["cost"], w["name"],
+                                              "  " + w["detail"]
+                                              if w["detail"] else ""))
+            out.append("")
+        if rep["problems"]:
+            out.append(_t("Problems"))
+            out += ["    " + p for p in rep["problems"]]
+        self._show_log("\n".join(out))
+
+    # ================= tables =================
+    def _table_pane(self):
+        """Rows and columns, edited in place.
+
+        A grid rather than a form: a table is read by comparing rows, and a
+        form shows one row at a time. Rebuilt on every structural change --
+        adding a column changes every row's shape, and reusing the model across
+        that is how a grid ends up showing one table's data under another's
+        headings."""
+        pane, tools, body = self._pane("table", "Table")
+        for label, cb, tip in (
+                ("Add Row", self._table_add_row, "A new row at the end"),
+                ("Add Column", self._table_add_col, "A new column at the right"),
+                ("Delete Row", self._table_del_row, "Remove the selected row")):
+            b = Gtk.Button(label=_t(label))
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            b.get_style_context().add_class("quietbtn")
+            b.set_tooltip_text(_t(tip))
+            b.connect("clicked", lambda _w, f=cb: f())
+            tools.pack_start(b, False, False, 0)
+
+        self._tbl_count = Gtk.Label(xalign=0.0)
+        self._tbl_count.get_style_context().add_class("sdkstatus")
+        self._tbl_count.set_margin_start(10)
+        tools.pack_start(self._tbl_count, False, False, 0)
+
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sc.set_vexpand(True)
+        self._tbl_view = Gtk.TreeView()
+        self._tbl_view.set_enable_search(False)
+        sc.add(self._tbl_view)
+        body.pack_start(sc, True, True, 0)
+        self._pane_focus["table"] = self._tbl_view
+        return pane
+
+    def _load_table_editor(self):
+        t = self._sel_res()
+        if not t or not self._sel or self._sel[0] != "table":
+            return
+        cols = t.get("columns") or []
+        view = self._tbl_view
+        for c in list(view.get_columns()):
+            view.remove_column(c)
+        store = Gtk.ListStore(*([str] * len(cols)))
+        for row in t.get("rows") or []:
+            store.append([str(row[i]) if i < len(row) else ""
+                          for i in range(len(cols))])
+        view.set_model(store)
+        for i, c in enumerate(cols):
+            rend = Gtk.CellRendererText()
+            rend.set_property("editable", True)
+            rend.connect("edited", self._on_table_edit, i)
+            # The heading says the type, because a column that silently drops
+            # "45kg" from a Number cell is a column that has to be explained.
+            label = "%s  (%s)" % (c.get("name") or "?",
+                                  _t(dict((k, lbl) for k, lbl, _c
+                                          in COLUMN_TYPES).get(
+                                      c.get("type"), "Text")))
+            col = Gtk.TreeViewColumn(label, rend, text=i)
+            col.set_resizable(True)
+            col.set_min_width(90)
+            view.append_column(col)
+        self._tbl_count.set_text(
+            _t("%d rows, %d columns") % (len(t.get("rows") or []), len(cols)))
+
+    def _on_table_edit(self, _rend, path, text, col):
+        t = self._sel_res()
+        if not t:
+            return
+        try:
+            r = int(path)
+        except Exception:                                   # noqa: BLE001
+            return
+        rows = t.get("rows") or []
+        cols = t.get("columns") or []
+        if not (0 <= r < len(rows) and 0 <= col < len(cols)):
+            return
+        self.undo.checkpoint(_t("Edit Table"))
+        rows[r][col] = self._table_value(text, cols[col].get("type"))
+        self._save_autosave()
+        self.undo.commit()
+        self._load_table_editor()
+
+    @staticmethod
+    def _table_value(text, kind):
+        """A typed cell value from what was typed.
+
+        A Number column keeps a number even when the text is not one: storing
+        the text would build a C initialiser that does not compile, and the
+        error would name the generated file rather than the cell."""
+        if kind == "int":
+            return gbabuild._int(text, 0)
+        if kind == "bool":
+            return str(text).strip().lower() in ("1", "yes", "true", "y")
+        return str(text)
+
+    def _table_add_row(self):
+        t = self._sel_res()
+        if not t or not self._sel or self._sel[0] != "table":
+            return
+        cols = t.get("columns") or []
+        self.undo.checkpoint(_t("Add Row"))
+        t.setdefault("rows", []).append(
+            ["" if c.get("type") == "text" else 0 for c in cols])
+        self._save_autosave()
+        self.undo.commit()
+        self._load_table_editor()
+
+    def _table_add_col(self):
+        t = self._sel_res()
+        if not t or not self._sel or self._sel[0] != "table":
+            return
+        cols = t.setdefault("columns", [])
+        name = "col%d" % (len(cols) + 1)
+        self.undo.checkpoint(_t("Add Column"))
+        cols.append({"name": name, "type": "text"})
+        # Every existing row gains a cell. Leaving them short would make the
+        # grid and the generator disagree about the table's width.
+        for row in t.get("rows") or []:
+            row.append("")
+        self._save_autosave()
+        self.undo.commit()
+        self._load_table_editor()
+
+    def _table_del_row(self):
+        t = self._sel_res()
+        if not t or not self._sel or self._sel[0] != "table":
+            return
+        sel = self._tbl_view.get_selection()
+        model, it = sel.get_selected() if sel else (None, None)
+        if it is None:
+            self._flash(_t("Select a row first"))
+            return
+        r = int(model.get_path(it).to_string())
+        rows = t.get("rows") or []
+        if not (0 <= r < len(rows)):
+            return
+        self.undo.checkpoint(_t("Delete Row"))
+        rows.pop(r)
+        self._save_autosave()
+        self.undo.commit()
+        self._load_table_editor()
+
+    # ================= palettes =================
+    SWATCH = 15
+    SW_GAP = 2
+
+    def _palette_pane(self):
+        """What the build will do with this project's colours.
+
+        The allocator already refused to overflow and already reported it -- but
+        only in a build log, after the fact, one sprite at a time. It never said
+        how much room was left, which sprites were sharing a bank, or which one
+        was about to cost the sixteenth. That is the difference the spec names
+        between hiding the constraint well and hiding it badly."""
+        pane, tools, body = self._pane("palette", "Palettes", resource=False)
+        # Nothing selects this pane, so its head has to name itself.
+        title, sub = self._heads["palette"]
+        title.set_text(_t("Palettes"))
+        sub.set_text(_t("Sprite colour sets"))
+        self._pal_summary = Gtk.Label(xalign=0.0)
+        self._pal_summary.get_style_context().add_class("sdkstatus")
+        tools.pack_start(self._pal_summary, False, False, 0)
+        refresh = Gtk.Button(label=_t("Refresh"))
+        refresh.set_relief(Gtk.ReliefStyle.NONE)
+        refresh.get_style_context().add_class("quietbtn")
+        refresh.connect("clicked", lambda *_: self._load_palette_pane())
+        tools.pack_end(refresh, False, False, 0)
+
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sc.set_vexpand(True)
+        self._pal_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        sc.add(self._pal_body)
+        body.pack_start(sc, True, True, 0)
+        return pane
+
+    def _load_palette_pane(self):
+        for ch in self._pal_body.get_children():
+            self._pal_body.remove(ch)
+        try:
+            rep = gbabuild.palette_report(self.proj)
+        except Exception as exc:                            # noqa: BLE001
+            # A report must never be the thing that stops the app: it is read
+            # while a project is half-built, which is when it is most useful.
+            lab = Gtk.Label(label=str(exc)[:90], xalign=0.0)
+            lab.get_style_context().add_class("sdkstatus")
+            self._pal_body.pack_start(lab, False, False, 12)
+            self._pal_body.show_all()
+            return
+
+        self._pal_summary.set_text(
+            _t("%d of 16 colour sets \u00b7 %d of 240 colours")
+            % (rep["used"], rep["total"]))
+
+        if not rep["banks"]:
+            self._pal_body.pack_start(self._actions_empty(
+                _t("No sprite is painted, so no colour set is in use.")),
+                True, True, 0)
+            self._pal_body.show_all()
+            return
+
+        for prob in rep["problems"]:
+            warn = Gtk.Label(label="\u26a0  " + prob, xalign=0.0)
+            warn.get_style_context().add_class("palwarn")
+            warn.set_line_wrap(True)
+            warn.set_max_width_chars(70)
+            warn.set_margin_start(14)
+            warn.set_margin_end(14)
+            warn.set_margin_top(8)
+            self._pal_body.pack_start(warn, False, False, 0)
+
+        for b in rep["banks"]:
+            self._pal_body.pack_start(self._palette_bank_row(b), False, False, 0)
+
+        self._pal_body.pack_start(_rule(12, 6), False, False, 0)
+        self._pal_body.pack_start(_eyebrow(_t("SPRITES")), False, False, 0)
+        for sp in rep["sprites"]:
+            self._pal_body.pack_start(self._palette_sprite_row(sp),
+                                      False, False, 0)
+        self._pal_body.show_all()
+
+    def _palette_bank_row(self, b):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.set_margin_start(14)
+        row.set_margin_end(14)
+        row.set_margin_top(7)
+        num = Gtk.Label(label="%d" % b["index"], xalign=1.0)
+        num.get_style_context().add_class("palnum")
+        num.set_size_request(20, -1)
+        row.pack_start(num, False, False, 0)
+
+        da = Gtk.DrawingArea()
+        w = 16 * (self.SWATCH + self.SW_GAP)
+        da.set_size_request(w, self.SWATCH + 2)
+        da.connect("draw", self._draw_bank, b["colours"])
+        row.pack_start(da, False, False, 0)
+
+        free = Gtk.Label(label=_t("%d free") % b["free"], xalign=0.0)
+        free.get_style_context().add_class("palfree" if b["free"] > 2
+                                           else "palwarn")
+        free.set_size_request(52, -1)
+        row.pack_start(free, False, False, 0)
+
+        who = Gtk.Label(label=", ".join(b["sprites"]) or "\u2014", xalign=0.0)
+        who.get_style_context().add_class("sdkstatus")
+        who.set_ellipsize(Pango.EllipsizeMode.END)
+        who.set_max_width_chars(30)
+        row.pack_start(who, True, True, 0)
+        return row
+
+    def _draw_bank(self, _w, cr, colours):
+        """Sixteen swatches. Index 0 is not black -- it is transparent, and
+        drawing it as a colour is how an author comes to believe a bank holds
+        16 usable colours when it holds 15."""
+        step = self.SWATCH + self.SW_GAP
+        for i in range(16):
+            x = i * step
+            if i == 0:
+                cr.set_source_rgb(0.93, 0.92, 0.89)
+                cr.rectangle(x, 1, self.SWATCH, self.SWATCH)
+                cr.fill()
+                cr.set_source_rgb(0.72, 0.70, 0.66)
+                cr.set_line_width(1)
+                cr.move_to(x + 3, 4)
+                cr.line_to(x + self.SWATCH - 3, self.SWATCH - 2)
+                cr.move_to(x + self.SWATCH - 3, 4)
+                cr.line_to(x + 3, self.SWATCH - 2)
+                cr.stroke()
+                continue
+            colour = colours[i] if i < len(colours) else 0
+            if colour:
+                cr.set_source_rgb(*self._c15(colour))
+                cr.rectangle(x, 1, self.SWATCH, self.SWATCH)
+                cr.fill()
+                cr.set_source_rgb(0.79, 0.77, 0.72)
+                cr.set_line_width(1)
+                cr.rectangle(x + 0.5, 1.5, self.SWATCH - 1, self.SWATCH - 1)
+                cr.stroke()
+            else:
+                cr.set_source_rgb(0.97, 0.96, 0.94)
+                cr.rectangle(x, 1, self.SWATCH, self.SWATCH)
+                cr.fill()
+        return False
+
+    def _palette_sprite_row(self, sp):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.set_margin_start(14)
+        row.set_margin_end(14)
+        row.set_margin_top(5)
+        name = Gtk.Label(label=sp["name"], xalign=0.0)
+        name.get_style_context().add_class("palname")
+        name.set_ellipsize(Pango.EllipsizeMode.END)
+        name.set_max_width_chars(20)
+        name.set_size_request(140, -1)
+        row.pack_start(name, False, False, 0)
+
+        # nbi18n cannot pick a plural from a "%d colour(s)" key, so these are
+        # two whole strings -- the same rule the rest of the OS follows.
+        cnt = Gtk.Label(
+            label=(_t("1 colour") if sp["colours"] == 1
+                   else _t("%d colours") % sp["colours"]), xalign=0.0)
+        cnt.get_style_context().add_class("palwarn" if sp["over"]
+                                          else "sdkstatus")
+        cnt.set_size_request(78, -1)
+        row.pack_start(cnt, False, False, 0)
+
+        combo = Gtk.ComboBoxText()
+        combo.append("auto", _t("Any set"))
+        for n in range(16):
+            combo.append(str(n), _t("Set %d") % n)
+        combo.set_active_id(str(self._res("sprite")[sp["index"]].get("pal_bank"))
+                            if sp["pinned"] else "auto")
+        combo.set_tooltip_text(
+            _t("Pin this sprite to one colour set so it can share tiles with "
+               "another sprite in the same set"))
+        combo.connect("changed", self._on_pin_bank, sp["index"])
+        row.pack_start(combo, False, False, 0)
+
+        got = Gtk.Label(label=_t("now in set %d") % sp["bank"], xalign=0.0)
+        got.get_style_context().add_class("sdkstatus")
+        row.pack_start(got, False, False, 0)
+        return row
+
+    def _on_pin_bank(self, combo, index):
+        if self._suspend:
+            return
+        lst = self._res("sprite")
+        if not (0 <= index < len(lst)):
+            return
+        want = combo.get_active_id()
+        self.undo.checkpoint(_t("Pin Colour Set"))
+        if want in (None, "auto"):
+            lst[index].pop("pal_bank", None)
+        else:
+            lst[index]["pal_bank"] = int(want)
+        self._save_autosave()
+        self.undo.commit()
+        self._load_palette_pane()
+
+    # ================= script =================
+    def _script_pane(self):
+        """A plain C editor. No syntax colouring: the compiler is the authority
+        on whether the text is C, and a highlighter that disagrees with it
+        teaches the wrong thing."""
+        pane, tools, body = self._pane("script", "Script")
+        # A label, not a sentence: what this pane holds and who can see it.
+        hint = Gtk.Label(label=_t("File scope \u00b7 visible to every object"),
+                         xalign=0.0)
+        hint.get_style_context().add_class("sdkstatus")
+        tools.pack_start(hint, False, False, 0)
+
+        ref = Gtk.Button(label=_t("Engine Calls"))
+        ref.set_relief(Gtk.ReliefStyle.NONE)
+        ref.get_style_context().add_class("quietbtn")
+        ref.connect("clicked", lambda *_: self._open_help("eng_instances"))
+        tools.pack_end(ref, False, False, 0)
+
+        self._script_view = Gtk.TextView()
+        self._script_view.set_monospace(True)
+        self._script_view.set_left_margin(12)
+        self._script_view.set_right_margin(12)
+        self._script_view.set_top_margin(10)
+        self._script_view.set_bottom_margin(10)
+        self._script_view.get_buffer().connect("changed", self._on_script_edit)
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sc.set_vexpand(True)
+        sc.add(self._script_view)
+        body.pack_start(sc, True, True, 0)
+        self._pane_focus["script"] = self._script_view
+        return pane
+
+    def _load_script_editor(self):
+        r = self._sel_res()
+        if not r:
+            return
+        self._suspend = True
+        try:
+            self._script_view.get_buffer().set_text(r.get("code") or "")
+        finally:
+            self._suspend = False
+
+    def _on_script_edit(self, buf):
+        if self._suspend:
+            return
+        r = self._sel_res()
+        if not r or not self._sel or self._sel[0] != "script":
+            return
+        start, end = buf.get_bounds()
+        r["code"] = buf.get_text(start, end, False)
+        self._save_autosave()
+
+    # ================= help =================
+    def _help_pane(self):
+        """The reference and the course, built once and kept.
+
+        get_project is passed as a callable, not as the project: the pane is
+        registered at startup and has to read whatever project is open when a
+        checkpoint is drawn, including one opened later."""
+        self._help = gbahelp.HelpPane(get_project=lambda: self.proj,
+                                      on_insert=self._insert_code)
+        return self._help
+
+    def _insert_code(self, code, scope="event"):
+        """Put a Help recipe where it compiles.
+
+        A recipe that declares a function or a file-scope table only compiles
+        as a script, because an Execute Code action is emitted INSIDE an event
+        function. Routing it by scope rather than by where the cursor happens
+        to be is the difference between a working example and a brace error
+        that names none of the decision that caused it.
+
+        Returns False rather than raising when there is nowhere to put it, so
+        the Help pane can say which of the two it was: a recipe that vanishes
+        on press is indistinguishable from one that failed."""
+        if scope == "script":
+            self.undo.checkpoint(_t("New Script"))
+            lst = self._res("script")
+            lst.append({"id": self._uid("scr", lst), "code": code})
+            self._save_autosave()
+            self._render_tree()
+            self._select_resource("script", len(lst) - 1)
+            self.undo.commit()
+            try:
+                self._help.refresh()
+            except Exception:                               # noqa: BLE001
+                pass
+            return True
+        ev = self._cur_event()
+        if ev is None:
+            return False
+        self.undo.checkpoint(_t("Add Action"))
+        ev.setdefault("actions", []).append(
+            # Recipes are C. Inserting one as Script would hand C to the
+            # subset compiler, which rejects it and replaces the whole block
+            # with a comment -- a recipe that vanishes on its first build.
+            {"kind": "execute_code", "lang": "C", "code": code})
+        self._sel_action = len(ev["actions"]) - 1
+        self._save_autosave()
+        self._render_actions()
+        self.undo.commit()
+        # The course counts what is in the project, so a checkpoint satisfied
+        # by this insert has to be re-read rather than waiting for the topic to
+        # be opened again.
+        try:
+            self._help.refresh()
+        except Exception:                                   # noqa: BLE001
+            pass
+        return True
+
+    def _open_world(self):
+        self._editor_stack.show("world")
+        self._load_world()
+
+    def _open_help(self, tid=None):
+        self._editor_stack.show("help")
+        if tid:
+            self._help.show_topic(tid)
+        else:
+            self._help.refresh()
+
+    def _show_event_c(self):
+        """The C this event compiles to.
+
+        The teaching device the whole course is built on (spec Part 0): the
+        author reads their own work one level down, without leaving the level
+        they work at."""
+        o = self._sel_res()
+        ev = self._cur_event()
+        if not o or ev is None:
+            self._flash(_t("Select an event first"))
+            return
+        try:
+            code, problems = gbabuild.preview_event_c(self.proj, o, ev)
+        except Exception as exc:                            # noqa: BLE001
+            self._flash(_t("This event could not be generated: %s") % exc)
+            return
+        self._show_c_window(o, ev, code, problems)
+
+    def _show_c_window(self, obj, ev, code, problems):
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_default_size(560, 460)
+        try:
+            name = gbabuild._Gen._event_name(ev)
+        except Exception:                                   # noqa: BLE001
+            name = str(ev.get("type") or "Event")
+        dlg.set_title("%s \u00b7 %s" % (obj.get("name") or "Object", name))
+        box = dlg.get_content_area()
+        box.set_spacing(0)
+
+        head = Gtk.Label(label=_t("Generated C"), xalign=0.0)
+        head.get_style_context().add_class("dlghead")
+        head.set_margin_start(16)
+        head.set_margin_top(14)
+        head.set_margin_bottom(2)
+        box.pack_start(head, False, False, 0)
+        sub = Gtk.Label(
+            label=_t("The text handed to the compiler for this event."),
+            xalign=0.0)
+        sub.get_style_context().add_class("dlgsub")
+        sub.set_margin_start(16)
+        sub.set_margin_bottom(10)
+        box.pack_start(sub, False, False, 0)
+
+        tv = Gtk.TextView()
+        tv.set_editable(False)
+        tv.set_monospace(True)
+        tv.set_left_margin(12)
+        tv.set_top_margin(8)
+        tv.get_buffer().set_text(code)
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sc.add(tv)
+        sc.set_margin_start(16)
+        sc.set_margin_end(16)
+        box.pack_start(sc, True, True, 0)
+
+        if problems:
+            # Problems belong here rather than only in a build log: this is
+            # where the author is already looking at the code that produced them.
+            for text in problems[:4]:
+                lab = Gtk.Label(label="\u26a0  " + text, xalign=0.0)
+                lab.get_style_context().add_class("dlgwarn")
+                lab.set_line_wrap(True)
+                lab.set_max_width_chars(64)
+                lab.set_margin_start(16)
+                lab.set_margin_end(16)
+                lab.set_margin_top(8)
+                box.pack_start(lab, False, False, 0)
+
+        learn = dlg.add_button(_t("Explain This"), 1)
+        learn.get_style_context().add_class("suggested-action")
+        close = dlg.add_button(_t("Close"), Gtk.ResponseType.CLOSE)
+        close.get_style_context().add_class("default")
+        dlg.show_all()
+        resp = dlg.run()
+        dlg.destroy()
+        if resp == 1:
+            self._open_help("c01")
+
     def _object_pane(self):
         pane, tools, body = self._pane("object", "Object")
         tools.pack_start(Gtk.Label(label=_t("Sprite")), False, False, 0)
@@ -2679,6 +4348,28 @@ class GbaSdk(nbapp.AppWindow):
             _t("The picture this object wears on screen"))
         self._obj_sprite.connect("changed", self._on_obj_sprite)
         tools.pack_start(self._obj_sprite, False, False, 0)
+        # What stops this object. tilecol is the field the runtime checks
+        # BEFORE it looks at the tile layer at all -- with it 0 an instance
+        # moves straight through a solid floor, however the tiles are marked.
+        tools.pack_start(Gtk.Label(label=_t("Stopped by")), False, False, 0)
+        self._obj_tilecol = Gtk.ComboBoxText()
+        for k, lbl in (("0", "Nothing"), ("1", "Solid tiles"),
+                       ("2", "Tiles and solid objects")):
+            self._obj_tilecol.append(k, _t(lbl))
+        self._obj_tilecol.set_tooltip_text(
+            _t("Whether solid tiles and solid objects block this one"))
+        self._obj_tilecol.connect("changed", self._on_obj_setting, "tilecol")
+        tools.pack_start(self._obj_tilecol, False, False, 0)
+
+        tools.pack_start(_group_label(_t("Depth")), False, False, 0)
+        self._obj_depth = Gtk.ComboBoxText()
+        for d in range(8):
+            self._obj_depth.append(str(d), str(d))
+        self._obj_depth.set_tooltip_text(
+            _t("Drawing layer; 0 is in front of everything"))
+        self._obj_depth.connect("changed", self._on_obj_setting, "depth")
+        tools.pack_start(self._obj_depth, False, False, 0)
+
         self._obj_visible = Gtk.CheckButton(label=_t("Visible"))
         self._obj_visible.set_margin_start(12)
         self._obj_visible.set_tooltip_text(
@@ -2767,6 +4458,7 @@ class GbaSdk(nbapp.AppWindow):
         self._obj_sprite.set_active_id(o.get("sprite") or "")
         self._obj_visible.set_active(o.get("visible", True) is not False)
         self._suspend = False
+        self._sync_obj_settings()
         if self._sel_event is None and o.get("events"):
             self._sel_event = 0
         self._render_events()
@@ -2954,13 +4646,23 @@ class GbaSdk(nbapp.AppWindow):
                "spr": "sprites"}.get(spec)
         if not key:
             return []
-        return [r.get("id") for r in self.proj.get(key, [])
-                if isinstance(r, dict) and r.get("id")]
+        own = [r.get("id") for r in self.proj.get(key, [])
+               if isinstance(r, dict) and r.get("id")]
+        if spec == "snd":
+            # The project's own sounds first, then the twelve the runtime
+            # carries. Offering them here is what lets a project with no sounds
+            # in it make a noise at all.
+            return own + [k for k, _lbl, _m in gbabuild.BUILTIN_SFX]
+        return own
 
     def _add_action(self, kind):
         ev = self._cur_event()
         if ev is None:
-            self._flash(_t("Select an event first."))
+            # The same sentence as the one in _show_event_c, and it used to be
+            # a second key differing only by a full stop — two catalog entries
+            # for one situation, which German had already drifted into two
+            # different wordings.
+            self._flash(_t("Select an event first"))
             return
         act = {"kind": kind}
         for key, _lbl, spec in ACTION_PARAMS.get(kind, []):
@@ -3141,8 +4843,12 @@ class GbaSdk(nbapp.AppWindow):
             combo = Gtk.ComboBoxText()
             opts = list(spec) if isinstance(spec, list) \
                 else self._param_options(spec)
+            # A built-in effect's id is a routing token, not a name. Showing
+            # "sfx:coin" in a picker asks the reader to decode it.
+            sfx_label = {k: lbl for k, lbl, _m in gbabuild.BUILTIN_SFX}
             for opt in opts:
-                combo.append(opt, opt)
+                combo.append(opt, _t(sfx_label[opt]) if opt in sfx_label
+                             else opt)
             want = str(act.get(key) or "")
             if want not in opts:
                 # Either it was never chosen, or what it named has been deleted.
@@ -3215,7 +4921,8 @@ class GbaSdk(nbapp.AppWindow):
         seg.get_style_context().add_class("toolseg")
         self._room_mode_btns = {}
         for mode, label, key in (("objects", "Objects", "1"),
-                                 ("tiles", "Tiles", "2")):
+                                 ("tiles", "Tiles", "2"),
+                                 ("warps", "Doors", "3")):
             b = Gtk.ToggleButton(label=_t(label))
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("toolbtn")
@@ -3232,6 +4939,17 @@ class GbaSdk(nbapp.AppWindow):
         self._room_obj = Gtk.ComboBoxText()
         self._room_obj.connect("changed", self._on_room_obj)
         tools.pack_start(self._room_obj, False, False, 0)
+
+        # Where a door leads. Chosen BEFORE the door is drawn, because a door
+        # with no destination is the one thing a warp cannot be -- the
+        # generator drops it and reports it, which is a poor way to find out.
+        self._room_warp_cap = _group_label(_t("Leads to"))
+        tools.pack_start(self._room_warp_cap, False, False, 0)
+        self._room_warp_to = Gtk.ComboBoxText()
+        self._room_warp_to.set_tooltip_text(
+            _t("The room a door placed here opens into"))
+        self._room_warp_to.connect("changed", self._on_warp_dest)
+        tools.pack_start(self._room_warp_to, False, False, 0)
 
         tools.pack_start(_group_label(_t("Zoom")), False, False, 0)
         zseg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -3434,18 +5152,25 @@ class GbaSdk(nbapp.AppWindow):
         self._room_mode = mode
         self._seg_apply(list(self._room_mode_btns.items()), mode)
         tiles = (mode == "tiles")
+        warps = (mode == "warps")
         self._room_tile_head.set_visible(tiles)
         self._room_tile_scroll.set_visible(tiles)
-        self._room_place_cap.set_visible(not tiles)
-        self._room_obj.set_visible(not tiles)
+        self._room_place_cap.set_visible(not tiles and not warps)
+        self._room_obj.set_visible(not tiles and not warps)
+        self._room_warp_cap.set_visible(warps)
+        self._room_warp_to.set_visible(warps)
+        if warps:
+            self._sync_warp_dest()
         # Joined with the middot these hints already use inside themselves: the
         # first clause carries no full stop, so a plain space ran the two
         # sentences together ("...rub it out Or use the arrow keys").
-        self._room_hint.set_text("%s · %s" % (
-            _t("Click to paint the chosen tile · right-click to rub it out")
-            if tiles else
-            _t("Click to place the selected object · right-click to remove"),
-            _t(KEYS_HINT)))
+        if warps:
+            hint = _t("Click to put a door here · right-click to remove")
+        elif tiles:
+            hint = _t("Click to paint the chosen tile · right-click to rub it out")
+        else:
+            hint = _t("Click to place the selected object · right-click to remove")
+        self._room_hint.set_text("%s · %s" % (hint, _t(KEYS_HINT)))
         self._room_canvas.queue_draw()
 
     def _render_room_tile_palette(self):
@@ -3722,6 +5447,30 @@ class GbaSdk(nbapp.AppWindow):
         cr.set_line_width(2)
         cr.rectangle(1, 1, min(240, rw) * scale - 2, min(160, rh) * scale - 2)
         cr.stroke()
+        # Doors, drawn in every mode. A warp placed and then invisible is
+        # state the author has to remember, and it is the one thing in a room
+        # that has no picture of its own.
+        for wp in rm.get("warps") or []:
+            wx = gbabuild._int(wp.get("x")) * scale
+            wy = gbabuild._int(wp.get("y")) * scale
+            ww = max(1, gbabuild._int(wp.get("w"), 8)) * scale
+            wh = max(1, gbabuild._int(wp.get("h"), 8)) * scale
+            cr.set_source_rgba(0.78, 0.20, 0.12, 0.30)
+            cr.rectangle(wx, wy, ww, wh)
+            cr.fill()
+            cr.set_source_rgb(0.78, 0.20, 0.12)
+            cr.set_line_width(1.5)
+            cr.rectangle(wx + 0.75, wy + 0.75, ww - 1.5, wh - 1.5)
+            cr.stroke()
+            # A door with no destination cannot exist in a build, so it is
+            # marked here rather than left looking like the others.
+            if not wp.get("room"):
+                cr.move_to(wx + 2, wy + 2)
+                cr.line_to(wx + ww - 2, wy + wh - 2)
+                cr.move_to(wx + ww - 2, wy + 2)
+                cr.line_to(wx + 2, wy + wh - 2)
+                cr.stroke()
+
         if _focused(w):
             cx, cy = self._room_cur
             cr.set_source_rgba(1, 1, 1, 0.95)
@@ -3775,9 +5524,88 @@ class GbaSdk(nbapp.AppWindow):
                 self._room_touched()
             w.queue_draw()
             return True
+        if self._room_mode == "warps":
+            if self._place_or_remove_warp(rm, cx, cy, erase):
+                self._room_touched()
+                # The map is a view of the doors, so it cannot be stale while
+                # a door is being placed with it open beside the room.
+                try:
+                    self._load_world()
+                except Exception:                           # noqa: BLE001
+                    pass
+            w.queue_draw()
+            return True
         if self._place_or_remove(rm, cx, cy, erase):
             self._room_touched()
         w.queue_draw()
+        return True
+
+    # ---- doors ----
+    def _sync_warp_dest(self):
+        """The destination list, without the room being edited in it.
+
+        A door back into its own room is legal and useless: it fires the moment
+        the traveller arrives on it, so the room reloads forever. Leaving it out
+        of the list is cheaper than explaining that afterwards."""
+        rooms = self._res("room")
+        here = self._sel[1] if self._sel and self._sel[0] == "room" else -1
+        want = getattr(self, "_warp_dest", None)
+        self._suspend = True
+        try:
+            self._room_warp_to.remove_all()
+            first = None
+            for i, r in enumerate(rooms):
+                if i == here:
+                    continue
+                rid = r.get("id")
+                self._room_warp_to.append(rid, rid)
+                if first is None:
+                    first = rid
+            if want not in [r.get("id") for i, r in enumerate(rooms)
+                            if i != here]:
+                want = first
+            self._warp_dest = want
+            if want:
+                self._room_warp_to.set_active_id(want)
+        finally:
+            self._suspend = False
+
+    def _on_warp_dest(self, combo):
+        if self._suspend:
+            return
+        self._warp_dest = combo.get_active_id()
+
+    def _place_or_remove_warp(self, rm, cx, cy, erase):
+        """Put a one-cell door at (cx, cy), or take away the one under it."""
+        warps = rm.setdefault("warps", [])
+        x, y = cx * 8, cy * 8
+        for i, wp in enumerate(warps):
+            wx = gbabuild._int(wp.get("x"))
+            wy = gbabuild._int(wp.get("y"))
+            ww = max(1, gbabuild._int(wp.get("w"), 8))
+            wh = max(1, gbabuild._int(wp.get("h"), 8))
+            if wx <= x < wx + ww and wy <= y < wy + wh:
+                if erase:
+                    self.undo.checkpoint(_t("Remove Door"))
+                    warps.pop(i)
+                    self.undo.commit()
+                    return True
+                return False
+        if erase:
+            return False
+        dest = getattr(self, "_warp_dest", None)
+        if not dest:
+            # Every other room is gone, or this is the only one. Say so rather
+            # than placing a door the build will drop and report.
+            self._flash(_t("A door needs another room to lead to"))
+            return False
+        self.undo.checkpoint(_t("Add Door"))
+        warps.append({"x": x, "y": y, "w": 8, "h": 8, "room": dest,
+                      # The middle of the destination's bottom edge is a
+                      # defensible default; a door with no arrival point would
+                      # drop the traveller at 0,0, in the corner, inside a wall.
+                      "tx": 120, "ty": 140})
+        self.undo.commit()
         return True
 
     def _place_or_remove(self, rm, cx, cy, erase):
@@ -3819,6 +5647,9 @@ class GbaSdk(nbapp.AppWindow):
         32x32 tiles lines up instead of overlapping by a few pixels wherever the
         pointer happened to be."""
         tm, cw, ch = self._room_tilemap(rm)
+        run = None if erase else self._auto_run_of(self._room_tile)
+        if run is not None:
+            return self._paint_auto(tm, cw, ch, cx, cy, run)
         span = 1 if erase else max(1, self._tile_span(self._room_tile) // 8)
         if span > 1:
             cx -= cx % span
@@ -3833,6 +5664,30 @@ class GbaSdk(nbapp.AppWindow):
                 if tm[y * cw + x] != v:
                     tm[y * cw + x] = v
                     changed = True
+        return changed
+
+    def _paint_auto(self, tm, cw, ch, cx, cy, run):
+        """Lay a terrain and re-fit it and its neighbours.
+
+        The neighbours matter as much as the cell: a tile placed beside an
+        existing one changes what THAT one should look like, and a tool that
+        only fits the cell under the pointer leaves a seam behind every stroke
+        -- which reads as auto-tiling that half works."""
+        bases, span = run
+        step = max(1, span // 8)
+        if step > 1:
+            cx -= cx % step
+            cy -= cy % step
+        if not (0 <= cx < cw and 0 <= cy < ch):
+            return False
+        changed = self._stamp(tm, cw, ch, cx, cy, bases[0], step)
+        # Fit the new cell first, then its four neighbours against it.
+        if self._auto_fit(tm, cw, ch, cx, cy, bases, span):
+            changed = True
+        for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+            if self._auto_fit(tm, cw, ch, cx + dx * step, cy + dy * step,
+                              bases, span):
+                changed = True
         return changed
 
     def _on_room_motion(self, w, ev):
@@ -3889,7 +5744,7 @@ class GbaSdk(nbapp.AppWindow):
     # ================= build & run =================
     def _show_log(self, log):
         # "Log" is what a developer calls this. What it is, to the person
-        # who just pressed Compile, is the detail behind what happened.
+        # who just pressed Build, is the detail behind what happened.
         dlg = Gtk.Dialog(title=_t("Build Details"), transient_for=self,
                          modal=True)
         dlg.set_default_size(640, 420)
@@ -3917,8 +5772,7 @@ class GbaSdk(nbapp.AppWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.get_style_context().add_class("resultcard")
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        head.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf(icon, 26, MUTED)), False, False, 0)
+        head.pack_start(nbicons.image(icon, 26, MUTED), False, False, 0)
         ht = Gtk.Label(label=title, xalign=0)
         ht.get_style_context().add_class("resulttitle")
         head.pack_start(ht, True, True, 0)
@@ -4140,8 +5994,8 @@ class GbaSdk(nbapp.AppWindow):
         # not by one particular key: requiring "objects" threw away a whole game
         # whose only fault was a missing key.
         if not any(k in data for k in ("sprites", "tilesets", "sounds",
-                                       "objects", "rooms", "start_room",
-                                       "name")):
+                                       "objects", "rooms", "scripts",
+                                       "tables", "start_room", "name")):
             return None, 0
         out = {"name": data.get("name") if isinstance(data.get("name"), str)
                else _t("Game")}
@@ -4176,10 +6030,32 @@ class GbaSdk(nbapp.AppWindow):
             size = size if size in TILE_SIZES else 8
             tiles = [self._ints(t, size * size, TRANSPARENT)
                      for t in self._records(rec.get("tiles"))]
-            tilesets.append({
+            tiles = tiles or [[TRANSPARENT] * (size * size)]
+            # Which tiles are walls and floors. One flag per tile, padded and
+            # trimmed to the tile count -- a shorter list from an older project
+            # means "the rest are not solid", which is how they behaved before
+            # the flag existed.
+            raw_solid = rec.get("solid")
+            if raw_solid is not None and not isinstance(raw_solid, list):
+                lost[0] += 1          # solid flags were there and unreadable
+            solid = [bool(v) for v in raw_solid] if isinstance(raw_solid, list) \
+                else []
+            solid = (solid + [False] * len(tiles))[:len(tiles)]
+            # The first of sixteen variants of one terrain. Dropped rather
+            # than clamped when it no longer has fifteen tiles after it: a run
+            # that runs past the end of the set would paint another terrain's
+            # tiles, which looks like corruption.
+            ab = rec.get("auto_base")
+            entry = {
                 "id": self._safe_id(rec.get("id"), "ts", tilesets),
                 "size": size,
-                "tiles": tiles or [[TRANSPARENT] * (size * size)]})
+                "solid": solid,
+                "tiles": tiles}
+            if isinstance(ab, int) and 0 <= ab and ab + 16 <= len(tiles):
+                entry["auto_base"] = ab
+            elif ab is not None:
+                lost[0] += 1          # a run with no room left to finish
+            tilesets.append(entry)
         out["tilesets"] = tilesets
 
         sounds = []
@@ -4194,7 +6070,27 @@ class GbaSdk(nbapp.AppWindow):
                 "loop": bool(rec.get("loop", True)),
                 "steps": steps,
                 "lead": self._ints(rec.get("lead"), steps),
-                "bass": self._ints(rec.get("bass"), steps)})
+                "bass": self._ints(rec.get("bass"), steps),
+                # The noise channel and the four timbre settings. Every one of
+                # them was already read by the runtime and never written by the
+                # generator, so no built game has ever had percussion, and
+                # every sound effect stopped the music instead of layering.
+                "drum": self._ints(rec.get("drum"), steps, 0, 0, 4),
+                "kind": 1 if gbabuild._int(rec.get("kind"), 0) else 0,
+                "duty": min(4, max(0, gbabuild._int(rec.get("duty"), 0))),
+                "vol": min(15, max(0, gbabuild._int(rec.get("vol"), 0))),
+                "decay": min(7, max(0, gbabuild._int(rec.get("decay"), 0))),
+                # 0 = anything may interrupt this, which is what every sound
+                # did before priority existed.
+                "prio": min(7, max(0, gbabuild._int(rec.get("prio"), 0))),
+                # Sampled audio, signed 8-bit at 16384 Hz. Kept out of the
+                # record entirely when absent, so a pattern sound does not
+                # carry an empty list through every save.
+                **({"pcm": [min(127, max(-128, gbabuild._int(v, 0)))
+                            for v in rec["pcm"]]}
+                   if isinstance(rec.get("pcm"), list) and rec["pcm"]
+                   else _count_if(lost, rec.get("pcm") is not None
+                                  and not isinstance(rec.get("pcm"), list)))})
         out["sounds"] = sounds
 
         def sane_actions(v, depth=0):
@@ -4231,6 +6127,12 @@ class GbaSdk(nbapp.AppWindow):
                 "sprite": spr if isinstance(spr, str) and spr else None,
                 "visible": rec.get("visible") is not False,
                 "solid": bool(rec.get("solid")),
+                # 0 keeps the behaviour a project had before these existed:
+                # move freely, draw in front, use the whole sprite as the box.
+                "tilecol": min(2, max(0, gbabuild._int(rec.get("tilecol"), 0))),
+                "depth": min(7, max(0, gbabuild._int(rec.get("depth"), 0))),
+                "bb_inset": min(64, max(0,
+                                        gbabuild._int(rec.get("bb_inset"), 0))),
                 "events": events}
             if isinstance(rec.get("_was"), str) and rec.get("_was"):
                 obj["_was"] = rec["_was"]     # what its sprite USED to be
@@ -4252,6 +6154,26 @@ class GbaSdk(nbapp.AppWindow):
                 insts.append({"object": obj if isinstance(obj, str) else "",
                               "x": gbabuild._int(it.get("x"), 0),
                               "y": gbabuild._int(it.get("y"), 0)})
+            # Doorways. A warp whose target room was deleted keeps its target
+            # NAME so the reference can be repaired -- the generator reports it
+            # rather than the loader quietly discarding the door.
+            warps = []
+            if rec.get("warps") is not None and not isinstance(
+                    rec.get("warps"), (list, tuple)):
+                lost[0] += 1          # doors were there and unreadable
+            for wp in self._records(rec.get("warps")):
+                if not isinstance(wp, dict):
+                    lost[0] += 1
+                    continue
+                room_id = wp.get("room")
+                warps.append({
+                    "x": gbabuild._int(wp.get("x"), 0),
+                    "y": gbabuild._int(wp.get("y"), 0),
+                    "w": max(1, gbabuild._int(wp.get("w"), 16)),
+                    "h": max(1, gbabuild._int(wp.get("h"), 16)),
+                    "room": room_id if isinstance(room_id, str) else "",
+                    "tx": gbabuild._int(wp.get("tx"), 0),
+                    "ty": gbabuild._int(wp.get("ty"), 0)})
             cells = (w // 8) * (h // 8)
             tiles = rec.get("tiles")
             rooms.append({
@@ -4262,8 +6184,68 @@ class GbaSdk(nbapp.AppWindow):
                 else "#101820",
                 "instances": insts,
                 "tiles": self._ints(tiles, cells, 0)
-                if isinstance(tiles, list) else [0] * cells})
+                if isinstance(tiles, list) else [0] * cells,
+                # The parallax layer: a fixed 32x32 repeating map, because the
+                # hardware wraps it and a different size would not tile.
+                "far": self._ints(rec.get("far"), 1024, 0)
+                if isinstance(rec.get("far"), list)
+                else _count_none(lost, rec.get("far")),
+                "far_div": min(8, max(1, gbabuild._int(rec.get("far_div"), 2))),
+                "edge_open": bool(rec.get("edge_open")),
+                "warps": warps})
         out["rooms"] = rooms
+
+        tables = []
+        for rec in self._records(data.get("tables")):
+            if not keep(rec):
+                continue
+            cols = []
+            for c in self._records(rec.get("columns")):
+                if not isinstance(c, dict):
+                    lost[0] += 1
+                    continue
+                nm = c.get("name")
+                ty = c.get("type")
+                cols.append({
+                    "name": nm if isinstance(nm, str) and nm.strip()
+                    else "col%d" % (len(cols) + 1),
+                    "type": ty if ty in COLUMN_C else "text"})
+            if rec.get("columns") is not None and not cols:
+                lost[0] += 1          # headings were there and unreadable
+            if not cols:
+                cols = [{"name": "name", "type": "text"}]
+            # Rows are padded and trimmed to the columns. A row longer than the
+            # header means a column was deleted; a row shorter means one was
+            # added. Both are ordinary edits, and neither should cost the row.
+            rows = []
+            for r in self._records(rec.get("rows")):
+                if not isinstance(r, list):
+                    lost[0] += 1
+                    continue
+                row = list(r[:len(cols)])
+                while len(row) < len(cols):
+                    row.append("" if cols[len(row)]["type"] == "text" else 0)
+                rows.append(row)
+            tables.append({
+                "id": self._safe_id(rec.get("id"), "tbl", tables),
+                "columns": cols,
+                "rows": rows})
+        out["tables"] = tables
+
+        scripts = []
+        for rec in self._records(data.get("scripts")):
+            if not keep(rec):
+                continue
+            code = rec.get("code")
+            scripts.append({
+                "id": self._safe_id(rec.get("id"), "scr", scripts),
+                "name": rec.get("name") if isinstance(rec.get("name"), str)
+                else None,
+                "folder": rec.get("folder") if isinstance(rec.get("folder"),
+                                                          str) else None,
+                "code": code if isinstance(code, str)
+                else _count_str(lost, code)})
+        out["scripts"] = scripts
 
         start = data.get("start_room")
         ids = [r["id"] for r in rooms]
@@ -4337,7 +6319,7 @@ class GbaSdk(nbapp.AppWindow):
         else:
             self._sel = None
             self._render_tree()
-            self._editor_stack.set_visible_child_name("welcome")
+            self._editor_stack.show("welcome")
 
     # ================= keyboard =================
     # Every shortcut the app binds. The per-pane ones are printed in the tooltip
@@ -4381,15 +6363,50 @@ class GbaSdk(nbapp.AppWindow):
         return False
 
     # ================= menus =================
+    _WS_MENU = "View"
+
     def menu_items(self, name):
+        if name == self._WS_MENU:
+            ws = self._editor_stack
+            open_now = set(ws.open_ids())
+            items = []
+            for pid, label in (("sprite", "Sprite"), ("tileset", "Tiles"),
+                               ("sound", "Sound"), ("object", "Object"),
+                               ("room", "Room"), ("script", "Script"),
+                               ("table", "Table"), ("palette", "Palettes"),
+                               ("world", "World"), ("help", "Help")):
+                mark = "\u2713 " if pid in open_now else "    "
+                items.append((mark + _t(label),
+                              lambda p=pid: self._editor_stack.show(p)))
+            items += [
+                nbapp.SEP,
+                ("Split Right",
+                 (lambda: self._split_pane(Gtk.Orientation.HORIZONTAL))
+                 if ws.can_split() else None),
+                ("Split Down",
+                 (lambda: self._split_pane(Gtk.Orientation.VERTICAL))
+                 if ws.can_split() else None),
+                ("Close This Pane",
+                 self._close_pane
+                 if ws._active.current not in (None, "welcome") else None),
+                nbapp.SEP,
+                nbapp.SEP,
+                ("World Map", self._open_world),
+                nbapp.SEP,
+                ("Reset Layout", self._reset_layout),
+            ]
+            return items
         if name == "File":
             return [
                 ("New Project", self._file_new),
                 ("Open Example Game", self._file_example),
+                ("Import Sound\u2026", self._import_wav),
                 ("Open Project…", self._file_open),
                 nbapp.SEP,
                 ("Save Project As…", self._file_save_as),
-                (_acc("Compile & Export…", "Ctrl+B"), self._file_export),
+                (_acc("Build & Play", "Ctrl+R"), self._file_play),
+                (_acc("Build & Export…", "Ctrl+B"), self._file_export),
+                ("Export for a Link Cable…", self._file_export_mb),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]
@@ -4412,11 +6429,32 @@ class GbaSdk(nbapp.AppWindow):
             return items + [
                 nbapp.SEP,
                 (_acc("Rename…", "F2"), self._rename_resource if picked else None),
+                ("Move to Folder…", self._move_to_folder if picked else None),
                 (_acc("Delete…", "Del"), self._delete_resource if picked else None),
+            ]
+        if name == "Help":
+            done, total = 0, 0
+            try:
+                done, total = gbahelp.course_progress(self.proj)
+            except Exception:                               # noqa: BLE001
+                pass
+            ev = self._cur_event()
+            return [
+                (_acc("Reference", "F1"), lambda: self._open_help(None)),
+                ("Course in C  (%d/%d)" % (done, total),
+                 lambda: self._open_help("c01")),
+                nbapp.SEP,
+                ("Show C for This Event", self._show_event_c if ev else None),
+                nbapp.SEP,
+                ("Recipes", lambda: self._open_help("r_platform")),
+                ("Actions", lambda: self._open_help("act_motion")),
+                ("Engine Calls", lambda: self._open_help("eng_instances")),
+                ("Hardware", lambda: self._open_help("reg_interrupts")),
             ]
         if name == "Build":
             return [
-                (_acc("Compile & Export…", "Ctrl+B"), self._file_export),
+                (_acc("Build & Export…", "Ctrl+B"), self._file_export),
+                ("What This Game Costs…", self._show_budget),
                 ("Build Details…",
                  lambda: self._show_log(getattr(self, "_last_log", "")
                                         or _t("The build log is empty."))),
@@ -4456,7 +6494,7 @@ class GbaSdk(nbapp.AppWindow):
         self._sel = None
         self._save_autosave()
         self._render_tree()
-        self._editor_stack.set_visible_child_name("welcome")
+        self._editor_stack.show("welcome")
 
     def _example_project(self):
         """A small, complete, buildable game — a player you drive with the D-pad
@@ -4516,26 +6554,39 @@ class GbaSdk(nbapp.AppWindow):
                 {"id": "spr_coin", "w": 16, "h": 16, "ox": 8, "oy": 8,
                  "anim_speed": 0, "frames": [coin]}],
             "sounds": [],
+            # The wall tile is solid and the grass is not, which is what
+            # makes the example demonstrate tile collision rather than merely
+            # contain a picture of a wall.
             "tilesets": [{"id": "ts_world", "size": 8,
+                          "solid": [False, True],
                           "tiles": [grass, wall]}],
             "objects": [
                 {"id": "obj_player", "sprite": "spr_player", "visible": True,
-                 "solid": False, "events":
+                 "solid": False, "tilecol": 1, "depth": 0, "bb_inset": 0,
+                 "events":
                      [{"type": "step", "actions": step_actions}] + key_events},
                 {"id": "obj_coin", "sprite": "spr_coin", "visible": True,
-                 "solid": False, "events": [
+                 "solid": False, "tilecol": 0, "depth": 0, "bb_inset": 0,
+                 "events": [
                      {"type": "collision", "object": "obj_player", "actions": [
                          {"kind": "add_score", "value": "10"},
                          {"kind": "destroy_self"}]}]}],
             "rooms": [
                 {"id": "rm_world", "w": 240, "h": 160, "speed": 60,
-                 "bg": "#0C2818", "tiles": tm, "instances": [
+                 "bg": "#0C2818", "tiles": tm,
+                 "far": None, "far_div": 2, "edge_open": False, "warps": [],
+                 "instances": [
                      {"object": "obj_player", "x": 120, "y": 90},
                      {"object": "obj_coin", "x": 48, "y": 48},
                      {"object": "obj_coin", "x": 190, "y": 56},
                      {"object": "obj_coin", "x": 80, "y": 128},
                      {"object": "obj_coin", "x": 176, "y": 120}]}],
             "start_room": "rm_world",
+            # Empty, not absent. A template that omits a kind writes projects
+            # a later load has to migrate, and the migration is where an older
+            # file quietly changes shape.
+            "scripts": [],
+            "tables": [],
         }
 
     def _file_example(self):
@@ -4549,7 +6600,83 @@ class GbaSdk(nbapp.AppWindow):
         self._save_autosave()
         self._render_tree()
         self._select_resource("room", 0)
-        self._flash("Loaded the example game — Compile & Export it to a .gba to play")
+        self._flash("Loaded the example game — Build & Play to try it")
+
+    PCM_RATE = 16384          # the runtime's only rate; see rt_pcm_play
+    PCM_MAX_SECONDS = 8       # 16 KB per second of ROM
+
+    def _import_wav(self):
+        """Bring a .wav in as a sampled sound.
+
+        Converted here rather than on the cartridge: the GBA has no resampler,
+        and its timer period IS the sample rate. Doing it at import means one
+        rate everywhere and no way to get "it plays too fast"."""
+        path = nbpicker.open_file(self, title=_t("Import Sound"),
+                                  start_dir=os.path.join(HOME, "Documents"),
+                                  patterns=("*.wav",))
+        if not path:
+            return
+        try:
+            data, secs = self._read_wav(path)
+        except Exception as exc:                            # noqa: BLE001
+            self._flash(_t("This file could not be read as a sound: %s")
+                        % str(exc)[:60])
+            return
+        if not data:
+            self._flash(_t("That sound is empty"))
+            return
+        lst = self._res("sound")
+        self.undo.checkpoint(_t("Import Sound"))
+        rid = self._uid("snd", lst)
+        lst.append({"id": rid, "tempo": 8, "loop": False, "steps": 16,
+                    "lead": [0] * 16, "bass": [0] * 16, "drum": [0] * 16,
+                    "kind": 1, "duty": 0, "vol": 0, "decay": 0, "pcm": data})
+        self._save_autosave()
+        self._render_tree()
+        self._select_resource("sound", len(lst) - 1)
+        self.undo.commit()
+        self._flash(_t("Imported %d seconds, %d KB of cartridge")
+                    % (int(secs) or 1, max(1, len(data) // 1024)))
+
+    def _read_wav(self, path):
+        """(signed 8-bit samples at PCM_RATE, seconds).
+
+        Nearest-neighbour resampling and a channel average: both are audibly
+        crude and both are the right trade here, because the destination is an
+        8-bit FIFO on a handheld speaker."""
+        import wave
+        with wave.open(path, "rb") as w:
+            nch = w.getnchannels()
+            width = w.getsampwidth()
+            rate = w.getframerate() or self.PCM_RATE
+            nframes = w.getnframes()
+            cap = int(rate * self.PCM_MAX_SECONDS)
+            raw = w.readframes(min(nframes, cap))
+        if width not in (1, 2):
+            raise ValueError(_t("only 8- and 16-bit WAV files"))
+        vals = []
+        step = width * nch
+        for i in range(0, len(raw) - step + 1, step):
+            acc = 0
+            for c in range(nch):
+                o = i + c * width
+                if width == 1:
+                    acc += raw[o] - 128          # 8-bit WAV is UNSIGNED
+                else:
+                    v = raw[o] | (raw[o + 1] << 8)
+                    if v >= 0x8000:
+                        v -= 0x10000
+                    acc += v >> 8
+            vals.append(max(-128, min(127, acc // nch)))
+        if not vals:
+            return [], 0
+        # Nearest neighbour to the one rate the hardware plays.
+        n_out = max(16, int(len(vals) * self.PCM_RATE / float(rate)))
+        out = [vals[min(len(vals) - 1, int(i * rate / float(self.PCM_RATE)))]
+               for i in range(n_out)]
+        while len(out) % 4:
+            out.append(0)
+        return out, len(out) / float(self.PCM_RATE)
 
     def _file_open(self):
         try:
@@ -4558,14 +6685,32 @@ class GbaSdk(nbapp.AppWindow):
             pass
         path = nbpicker.open_file(self, title="Open Project", start_dir=PROJ_DIR,
                                   patterns=("*.gbaproj", "*.json"))
-        if not path or not os.path.isfile(path):
+        if not path:
             return
         try:
-            with open(path) as fh:
-                data = json.load(fh)
+            # Three things can be picked and all three are one project: a
+            # bundle directory, the project.json inside one, or a single-file
+            # project saved before bundles existed.
+            data = None
+            root = path
+            self._bundle_lost = 0
+            if os.path.isdir(path):
+                data = self._bundle_read(path)
+            elif os.path.basename(path) == self.BUNDLE_MARK:
+                root = os.path.dirname(path)
+                data = self._bundle_read(root)
+            if data is None:
+                if not os.path.isfile(path):
+                    raise ValueError("not a project")
+                root = path
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
             proj, lost = self._sane_project(data)
             if proj is None:
                 raise ValueError("not a GBA SDK project")
+            # A whole part file that would not read is a bigger loss than a
+            # damaged record inside one, and it has to reach the same warning.
+            lost += getattr(self, "_bundle_lost", 0)
         except Exception:
             self._flash(_t("That file was not made by GBA SDK."))
             return
@@ -4574,11 +6719,118 @@ class GbaSdk(nbapp.AppWindow):
         if lost:
             self._flash(_t("Part of this project could not be read and was left "
                            "out. The file as it was is kept beside it."))
-        self._path = path
+        self._path = root
         self._sel = None
         self._save_autosave()
         self._render_tree()
-        self._editor_stack.set_visible_child_name("welcome")
+        self._editor_stack.show("welcome")
+
+    # ---- the project bundle -------------------------------------------------
+    # A project was one JSON blob. docs/GBA-SDK-SPEC.md plans for 10,000+
+    # assets and a 16 MB ROM, and a single document at that size is slow to
+    # write, impossible to diff and all-or-nothing to lose. A bundle is a
+    # DIRECTORY: project.json for the settings, one file per kind of asset.
+    #
+    # Additive on purpose. The old single file is still read (see _file_open),
+    # every existing .gbaproj keeps working, and nothing about the in-memory
+    # project changes — this is a storage layout, not a format change.
+    BUNDLE_PARTS = ("sprites", "tilesets", "sounds", "objects",
+                    "rooms", "scripts", "tables")
+    BUNDLE_MARK = "project.json"
+
+    def _bundle_write(self, dirpath):
+        """Write the project as a bundle at `dirpath`.
+
+        Written to a sibling .part directory and renamed over the top, because
+        six files are not six atomic writes: a failure part-way through a
+        direct write leaves a project whose settings and assets disagree, which
+        is worse than a failed save."""
+        part = dirpath.rstrip(os.sep) + ".part"
+        old = dirpath.rstrip(os.sep) + ".old"
+        shutil.rmtree(part, ignore_errors=True)
+        os.makedirs(part, exist_ok=True)
+        try:
+            head = {k: v for k, v in self.proj.items()
+                    if k not in self.BUNDLE_PARTS}
+            head["_bundle"] = 1
+            nbapp.atomic_write_json(os.path.join(part, self.BUNDLE_MARK), head,
+                                    indent=2)
+            for key in self.BUNDLE_PARTS:
+                nbapp.atomic_write_json(os.path.join(part, key + ".json"),
+                                        self.proj.get(key) or [], indent=2)
+        except Exception:
+            # Nothing has touched the saved project yet, so the only repair
+            # needed is not to leave half a bundle lying beside it looking
+            # like one.
+            shutil.rmtree(part, ignore_errors=True)
+            raise
+
+        shutil.rmtree(old, ignore_errors=True)
+        moved = False
+        try:
+            if os.path.isdir(dirpath):
+                os.rename(dirpath, old)
+                moved = True
+            os.rename(part, dirpath)
+        except Exception:
+            # THE WINDOW THIS WHOLE DANCE EXISTS FOR. Between moving the saved
+            # project aside and moving the new one in, the project does not
+            # exist at its own path -- and if the second rename fails, it stays
+            # that way: the author's work is sitting in a .old directory they
+            # have no reason to look in. Put it back.
+            if moved and not os.path.isdir(dirpath):
+                try:
+                    os.rename(old, dirpath)
+                except OSError:
+                    pass                # the .old copy is still there to find
+            shutil.rmtree(part, ignore_errors=True)
+            raise
+        shutil.rmtree(old, ignore_errors=True)
+
+    def _bundle_read(self, dirpath):
+        """Reassemble a bundle into one project dict, or None if it is not one.
+        A missing part file yields an empty list for that kind rather than
+        failing the whole load — losing one kind is recoverable, losing the
+        project is not."""
+        mark = os.path.join(dirpath, self.BUNDLE_MARK)
+        if not os.path.isfile(mark):
+            return None
+        try:
+            with open(mark, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            # A damaged marker used to raise straight out of here, past a
+            # caller that had been told this returns None for "not a bundle".
+            # An unreadable directory is not a bundle; saying so lets the open
+            # fail with a sentence instead of a traceback.
+            return None
+        if not isinstance(data, dict):
+            return None
+        data.pop("_bundle", None)
+        # A part that cannot be read is an empty kind AND a loss worth
+        # reporting. It used to be only the first: an unreadable tables.json
+        # took every table in the project with it, in silence, and the next
+        # save wrote the emptiness back over the file that still had them.
+        self._bundle_lost = 0
+        for key in self.BUNDLE_PARTS:
+            path = os.path.join(dirpath, key + ".json")
+            existed = os.path.exists(path)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    got = json.load(fh)
+                if isinstance(got, list):
+                    data[key] = got
+                else:
+                    data[key] = []
+                    self._bundle_lost += 1
+            except (OSError, ValueError):
+                data[key] = []
+                # A part that is absent is a kind the project never had. A part
+                # that is THERE and unreadable is data that has gone missing,
+                # and only the second is worth alarming anybody about.
+                if existed:
+                    self._bundle_lost += 1
+        return data
 
     def _file_save_as(self):
         try:
@@ -4591,21 +6843,28 @@ class GbaSdk(nbapp.AppWindow):
                                   default_ext=".gbaproj")
         if not path:
             return
+        # The picker hands back a file path; the bundle is a directory AT that
+        # path. A project saved before this still opens — only new saves take
+        # the new shape.
         try:
-            nbapp.atomic_write_json(path, self.proj, indent=2)
+            self._bundle_write(path)
             self._path = path
             self._flash("Saved %s" % os.path.basename(path))
         except Exception:
             self._flash("Save failed.")
 
-    def _file_export(self):
-        """Compile the project to a .gba file the user chooses — no emulator.
+    def _file_export_mb(self):
+        """A link-cable image, for a console with no cartridge."""
+        return self._file_export(multiboot=True)
+
+    def _file_export(self, multiboot=False):
+        """Build the project into a .gba file the user chooses — no emulator.
 
         The ROM plays in the bundled GBA Emulator and also boots on real
         hardware: gbabuild writes the cartridge boot logo and header checksum
         the console's BIOS checks (see gbabuild.NINTENDO_LOGO)."""
         if not self.proj.get("objects") or not self.proj.get("rooms"):
-            self._card("cartridge", _t("Cannot compile"),
+            self._card("cartridge", _t("Cannot build"),
                        [_t("A game needs at least one object and one room.")],
                        bullets=[_t("Draw a sprite"),
                                 _t("Make an Object and give it that sprite."),
@@ -4616,6 +6875,27 @@ class GbaSdk(nbapp.AppWindow):
         # nothing: the game built, that action did nothing, and the author was
         # never told. Say so BEFORE asking where to save it.
         problems = gbabuild.check_project(self.proj)
+        # A project that exceeds what the console HAS is the other way a build
+        # succeeds and the game is wrong. budget_report knew about it, but only
+        # the "What This Game Costs" menu item ever asked — so a game with more
+        # sprite tiles than OBJ VRAM exported cleanly and glitched on hardware,
+        # with the one place that could have said so never consulted. The
+        # numbers go in the same gate as the code problems, because they have
+        # the same consequence: it builds, and it does not do what was meant.
+        try:
+            for ln in gbabuild.budget_report(self.proj)["lines"]:
+                if ln.get("over"):
+                    if ln.get("unit") == "bytes":
+                        used = _t("%d KB") % (ln["used"] // 1024)
+                        cap = _t("%d KB") % (ln["cap"] // 1024)
+                    else:
+                        used, cap = "%d" % ln["used"], "%d" % ln["cap"]
+                    problems.append(
+                        _t("Too big: %(what)s uses %(used)s, and the "
+                           "console has room for %(cap)s")
+                        % {"what": _t(ln["name"]), "used": used, "cap": cap})
+        except Exception:                                   # noqa: BLE001
+            pass                # a costing that fails must not block a build
         if problems:
             go_on = [False]
             # two whole keys rather than an "%d thing%s" plural slot: _t()
@@ -4636,10 +6916,12 @@ class GbaSdk(nbapp.AppWindow):
             os.makedirs(PROJ_DIR, exist_ok=True)
         except Exception:
             pass
+        ext = ".mb" if multiboot else ".gba"
         path = nbpicker.save_file(
-            self, title="Compile & Export", start_dir=PROJ_DIR,
-            suggested_name=(self.proj.get("name") or "game") + ".gba",
-            patterns=("*.gba",), default_ext=".gba")
+            self, title=_t("Send Over a Link Cable") if multiboot
+            else "Build & Export", start_dir=PROJ_DIR,
+            suggested_name=(self.proj.get("name") or "game") + ext,
+            patterns=("*" + ext,), default_ext=ext)
         if not path:
             return
         self._flash(_t("Compiling…"))
@@ -4647,7 +6929,8 @@ class GbaSdk(nbapp.AppWindow):
         # A COPY. The compiler has no business writing to the open document, and
         # the app autosaves whatever it finds there — which is how private build
         # keys ended up inside every saved .gbaproj.
-        ok, gba, log = gbabuild.build_rom(copy.deepcopy(self.proj), outdir)
+        ok, gba, log = gbabuild.build_rom(copy.deepcopy(self.proj), outdir,
+                                          multiboot=multiboot)
         self._last_log = log
         if not ok:
             self._flash(_t("Export failed"))
@@ -4676,15 +6959,39 @@ class GbaSdk(nbapp.AppWindow):
         # The whole point of the app just happened — say where the game is and
         # what to do with it, including on real hardware (gbabuild writes the
         # cartridge boot logo, so this ROM really does start on a console).
+        # A build that SUCCEEDS can still have had something to say. The
+        # generated C compiles without warnings, so a warning here comes from
+        # an Execute Code action — the author's own C — and one of them is
+        # `if (x = 3)`, which gcc catches as "suggest parentheses around
+        # assignment used as truth value". That is the classic C mistake, in an
+        # app whose Help pane teaches C, and it was going straight into the log
+        # where nobody looks.
+        warned = self._warning_count(log)
+        said = [_t("%s — %.1f kB, saved in Documents.")
+                % (name, os.path.getsize(path) / 1024.0)]
+        if warned:
+            said.append(_t("The compiler had one remark.")
+                        if warned == 1
+                        else _t("The compiler had %d remarks.")
+                        % warned)
         self._card(
-            "cartridge", _t("Build finished"),
-            [_t("%s — %.1f kB, saved in Documents.")
-             % (name, os.path.getsize(path) / 1024.0)],
+            "cartridge", _t("Build finished"), said,
+            secondary=((_t("Show the Details"), lambda: self._show_log(log))
+                       if warned else None),
             bullets=[
                 _t("The GBA Emulator app runs the file."),
                 _t("For a Game Boy Advance console, copy the file to a USB "
                    "stick, then to a flashcart."),
             ])
+
+    @staticmethod
+    def _warning_count(log):
+        """How many things the compiler remarked on, from a build that worked.
+
+        Counts `: warning:` rather than the word anywhere: a build log echoes
+        its own command line, and `-Wall` in that line is not a warning. That
+        exact confusion cost a wrong reading once already."""
+        return sum(1 for ln in (log or "").split("\n") if ": warning:" in ln)
 
     # ================= css =================
     def _install_css(self):
@@ -4693,7 +7000,7 @@ class GbaSdk(nbapp.AppWindow):
         #
         # The palette is Papertone's: paper #FCFBF8, panel #F4F2EC, ink #1A1916,
         # hairline #C9C4B6, muted #6E695E. The one signage red #C8341E is spent
-        # ONLY on the primary Compile & Export button and on alerts; every
+        # ONLY on the primary Build & Export button and on alerts; every
         # selection, hover and chosen-state in here is ink or panel, which is why
         # the red frames that used to ring the selected swatch, frame, tile and
         # tile-set thumbnail are gone.
@@ -4701,35 +7008,35 @@ class GbaSdk(nbapp.AppWindow):
         * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .sdkbar { background: #F1EEE6; border-bottom: 1px solid #C9C4B6;
                   padding: 8px 14px; }
-        .runbtn { background: #C8341E; color: #FCFBF8; border-radius: 3px;
+        .runbtn { background: #C8341E; color: #FCFBF8; border-radius: 8px;
                   padding: 6px 14px; font-weight: 600; box-shadow: none;
                   border: none; }
         .runbtn:hover { background: #B12D19; }
         .sdkstatus { font-size: 12px; color: #6E695E; }
         /* secondary empty-state CTA - inviting but paper, so the red Compile &
            Export up in the toolbar stays the single accent on screen. */
-        .exbtn { background: #FCFBF8; color: #1A1916; border: 1px solid #C4BFB1;
-                 border-radius: 3px; padding: 8px 18px; font-weight: 600;
+        .exbtn { background: #FCFBF8; color: #1A1916; border: 1px solid #C9C4B6;
+                 border-radius: 8px; padding: 8px 18px; font-weight: 600;
                  box-shadow: none; }
         .exbtn:hover { background: #F1EEE6; }
 
         /* --- shared furniture --- */
         .hairline { background: #C9C4B6; }
-        .eyebrow { font-size: 10.5px; letter-spacing: 0.13em; color: #6E695E;
+        .eyebrow { font-size: 10px; letter-spacing: 0.13em; color: #6E695E;
                    font-weight: 700; }
         .quietbtn { border: 1px solid #C9C4B6; background: #FCFBF8;
-                    color: #1A1916; border-radius: 2px; padding: 4px 10px;
-                    font-size: 12.5px; box-shadow: none; }
+                    color: #1A1916; border-radius: 8px; padding: 4px 10px;
+                    font-size: 12px; box-shadow: none; }
         .quietbtn:hover { background: #F1EEE6; }
         .iconbtn { border: 1px solid transparent; background: transparent;
-                   border-radius: 2px; padding: 3px 4px; box-shadow: none;
+                   border-radius: 8px; padding: 3px 4px; box-shadow: none;
                    min-width: 24px; min-height: 24px; }
-        .iconbtn:hover { background: #EDE9DF; border-color: #D7D2C5; }
-        .iconbtn:checked { background: #E4DFD2; border-color: #C9C4B6; }
+        .iconbtn:hover { background: #EFEBE0; border-color: #D7D2C5; }
+        .iconbtn:checked { background: #EAE3D2; border-color: #C9C4B6; }
         .addbtn { border: 1px solid transparent; background: transparent;
-                  border-radius: 2px; padding: 2px 4px; box-shadow: none;
+                  border-radius: 8px; padding: 2px 4px; box-shadow: none;
                   min-width: 24px; min-height: 24px; }
-        .addbtn:hover { background: #E4DFD2; border-color: #C9C4B6; }
+        .addbtn:hover { background: #EAE3D2; border-color: #C9C4B6; }
         /* Focus is drawn everywhere, on ink, and never removed: a keyboard user
            who cannot see where they are cannot use any of this. */
         button:focus, listbox row:focus, .swatch:focus, .framebtn:focus,
@@ -4746,40 +7053,47 @@ class GbaSdk(nbapp.AppWindow):
         /* A selected row is painted with a background IMAGE by the stock theme,
            so a colour-only rule leaves it Adwaita blue. */
         .assetlist row:selected { background-image: none;
-                                  background-color: #E4DFD2;
+                                  background-color: #EAE3D2;
                                   box-shadow: inset 3px 0 0 #1A1916; }
         .assetlist row:selected .assetname { color: #1A1916; }
         .grouphead { padding: 12px 12px 3px; }
-        .groupcount { font-size: 10.5px; font-weight: 700; color: #6E695E; }
+        .groupcount { font-size: 10px; font-weight: 700; color: #6E695E; }
         .assetrow { padding: 5px 12px 5px 12px; }
         .assetname { font-size: 13px; color: #1A1916; }
         .assetsub { font-size: 11px; color: #6E695E; }
-        .emptyrow { font-size: 11.5px; color: #6E695E; padding: 3px 12px 5px 12px; }
+        .folderrow { padding: 2px 8px 2px 16px; background: transparent;
+                     border: none; box-shadow: none; }
+        .folderrow:hover { background: #F1EEE6; }
+        .foldername { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                      font-size: 12px; color: #3A362E; }
+        .foldercount { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                       font-size: 11px; color: #9A9484; }
+        .emptyrow { font-size: 11px; color: #6E695E; padding: 3px 12px 5px 12px; }
         .startbadge { font-size: 10px; font-weight: 700; color: #1A1916;
-                      background: #E4DFD2; border: 1px solid #C9C4B6;
-                      border-radius: 2px; padding: 1px 5px; }
+                      background: #EAE3D2; border: 1px solid #C9C4B6;
+                      border-radius: 4px; padding: 1px 5px; }
 
         /* --- the shape every editor shares --- */
         .editpane { padding: 18px 22px 16px; background: #FCFBF8; }
-        .panetitle { font-size: 22px; font-weight: 700; color: #1A1916; }
-        .panesub { font-size: 12.5px; color: #6E695E; }
-        .panehint { font-size: 12.5px; color: #6E695E; }
+        .panetitle { font-size: 20px; font-weight: 700; color: #1A1916; }
+        .panesub { font-size: 12px; color: #6E695E; }
+        .panehint { font-size: 12px; color: #6E695E; }
         .toolrow { }
         .toolcap { font-size: 11px; letter-spacing: 0.08em; color: #6E695E;
                    font-weight: 700; }
         .welcometitle { font-size: 20px; font-weight: 700; color: #1A1916; }
         /* 13px #9A9484 on paper is a 2.8:1 contrast ratio - under the 4.5:1 that
            body text needs, and this class carries the app's explanations. */
-        .welcomesub { font-size: 13.5px; color: #6E695E; }
+        .welcomesub { font-size: 13px; color: #6E695E; }
 
         /* --- segmented controls (tools, sound channel, room mode, zoom) --- */
-        .toolseg { border: 1px solid #C9C4B6; border-radius: 3px;
+        .toolseg { border: 1px solid #C9C4B6; border-radius: 8px;
                    background: #FCFBF8; }
         .toolbtn { background: transparent; border: none; box-shadow: none;
-                   border-radius: 2px; padding: 3px 6px; min-width: 28px;
-                   min-height: 26px; color: #1A1916; font-size: 12.5px; }
+                   border-radius: 8px; padding: 3px 6px; min-width: 28px;
+                   min-height: 26px; color: #1A1916; font-size: 12px; }
         .toolbtn.wide { padding: 3px 10px; }
-        .toolbtn:hover { background: #EDE9DF; }
+        .toolbtn:hover { background: #EFEBE0; }
         /* The chosen one is reversed out - a difference in VALUE, not in hue. */
         /* The colour set on a GtkButton does NOT reach its internal label
            node, so the reversed-out state needs the label named explicitly --
@@ -4787,54 +7101,65 @@ class GbaSdk(nbapp.AppWindow):
            text. */
         .toolbtn.on, .toolbtn.on label { color: #FCFBF8; }
         .toolbtn.on { background: #1A1916; }
-        .toolbtn.on:hover { background: #322F29; }
+        .toolbtn.on:hover { background: #3A362E; }
 
         /* --- palette --- */
         .swatch { padding: 2px; border: 1px solid transparent; box-shadow: none;
-                  background: transparent; border-radius: 2px;
+                  background: transparent; border-radius: 4px;
                   min-width: 28px; min-height: 28px; }
         .swatch:hover { border-color: #1A1916; }
-        .colourname { font-size: 12.5px; color: #1A1916; }
+        .colourname { font-size: 12px; color: #1A1916; }
         .colourcount { font-size: 11px; color: #6E695E; }
         /* Red is the alert colour and this is an alert: the art will not come
            out of the compiler looking like the art on screen. */
         .colourcount.over { color: #C8341E; font-weight: 700; }
         .framebtn { padding: 2px; border: 1px solid transparent;
                     background: transparent; box-shadow: none;
-                    border-radius: 2px; }
+                    border-radius: 4px; }
         .framebtn:hover { border-color: #C9C4B6; background: #F1EEE6; }
-        .framebtn.on { background: #EDE9DF; }
+        .framebtn.on { background: #EFEBE0; }
 
         /* --- object editor --- */
         .evrow { padding: 6px 8px; }
         .assetlist row:selected .evrow { color: #1A1916; }
         .actcard { background: #F4F2EC; border: 1px solid #D7D2C5;
-                   border-radius: 3px; padding: 8px 10px; }
-        .actcard:focus { background: #EDE9DF; }
+                   border-radius: 12px; padding: 8px 10px; }
+        .actcard:focus { background: #EFEBE0; }
         .actchildren { border-left: 2px solid #D7D2C5; padding-left: 10px; }
         .actname { font-size: 13px; font-weight: 600; color: #1A1916; }
-        .actnum { font-size: 10.5px; font-weight: 700; color: #6E695E;
+        .actnum { font-size: 10px; font-weight: 700; color: #6E695E;
                   min-width: 14px; }
-        .paramlbl { font-size: 11.5px; color: #6E695E; }
-        .paramentry { font-size: 12.5px; padding: 2px 6px; border: 1px solid #CFC9BA;
-                      border-radius: 2px; background: #FCFBF8; box-shadow: none; }
+        .paramlbl { font-size: 11px; color: #6E695E; }
+        .paramentry { font-size: 12px; padding: 2px 6px; border: 1px solid #C9C4B6;
+                      border-radius: 8px; background: #FCFBF8; box-shadow: none; }
         .palbtn { border: 1px solid #D7D2C5; background: #FCFBF8; color: #1A1916;
-                  border-radius: 2px; padding: 4px 8px; font-size: 12px;
+                  border-radius: 8px; padding: 4px 8px; font-size: 12px;
                   box-shadow: none; }
-        .palbtn:hover { background: #EDE9DF; border-color: #1A1916; }
+        .palbtn:hover { background: #EFEBE0; border-color: #1A1916; }
 
         /* build result card (success / problems / failure) */
         .resultcard { background: #FCFBF8; border: 1px solid #C9C4B6;
                       padding: 22px 26px 18px; }
-        .resulttitle { font-size: 19px; font-weight: 700; color: #1A1916; }
+        .resulttitle { font-size: 20px; font-weight: 700; color: #1A1916; }
         .resultbody { font-size: 13px; color: #6E695E; }
         .resultnum { font-size: 11px; font-weight: 700; color: #6E695E;
                      background: #F1EEE6; border: 1px solid #D7D2C5;
-                     border-radius: 9px; min-width: 18px; min-height: 18px; }
+                     border-radius: 100px; min-width: 18px; min-height: 18px; }
+        /* Show C dialog. .dlghead is Papertone's; these two are the lines
+           under it. */
+        .dlgsub { font-size: 12px; color: #6E695E; }
+        /* A solid tile is marked in the strip: a flag with no visible effect
+           is state the author has to remember instead of read. */
+        .solidtile { border: 2px solid #1A1916; border-radius: 4px; }
+        .palnum { font-size: 11px; font-weight: 700; color: #6E695E; }
+        .palname { font-size: 12px; color: #1A1916; }
+        .palfree { font-size: 11px; color: #6E695E; }
+        .palwarn { font-size: 11px; color: #8A3A1E; }
+        .dlgwarn { font-size: 12px; color: #8A3A1E; }
         """
         prov = Gtk.CssProvider()
         try:
-            prov.load_from_data(css)
+            prov.load_from_data(css + gbaworkspace.CSS + gbahelp.CSS)
             Gtk.StyleContext.add_provider_for_screen(
                 Gdk.Screen.get_default(), prov,
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)

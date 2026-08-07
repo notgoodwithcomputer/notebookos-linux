@@ -104,6 +104,10 @@ class Panel(Gtk.Window):
 
     def __init__(self):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        # Style itself rather than relying on main() having done it, so a Panel
+        # built by anything else (a render harness, a test) looks like the real
+        # one. Idempotent; see install_css below.
+        install_css()
         self.set_decorated(False)
         nbapp.force_opaque_visual(self)   # see nbapp: no RGBA visual
         self.set_skip_taskbar_hint(True)
@@ -137,6 +141,7 @@ class Panel(Gtk.Window):
         self._menu_for = None        # which bar button opened it
         self._menu_rect = None       # (x, y, w, h) of the open menu
         self._menu_timeout = None
+        self._menu_active_at = 0      # monotonic us of the last menu interaction
         self._nudge_sources = []     # GLib timeout ids for pending paint nudges
         self._nudge_pending = False  # an open menu is awaiting its first paint
         # Does the GPU stack (virgl / real hardware) repaint a freshly-mapped
@@ -495,8 +500,9 @@ class Panel(Gtk.Window):
             menu.connect("draw", self._menu_drawn)
             self._nudge_sources.append(GLib.timeout_add(300, self._nudge_once))
         menu.connect("size-allocate", self._menu_allocated)
+        self._menu_active_at = GLib.get_monotonic_time()
         self._menu_timeout = GLib.timeout_add_seconds(
-            MENU_IDLE_TIMEOUT_S, self._menu_close)
+            MENU_IDLE_TIMEOUT_S, self._menu_idle)
 
     def _menu_allocated(self, _w, alloc):
         rect = (alloc.x, alloc.y, alloc.width, alloc.height)
@@ -505,10 +511,31 @@ class Panel(Gtk.Window):
             self._apply_shape()
 
     def _menu_activity(self, *_):
-        if self._menu_timeout is not None:
-            GLib.source_remove(self._menu_timeout)
+        # Pointer motion only STAMPS the last-interaction time; the idle source
+        # is left alone. This used to tear the GLib timeout down and build a new
+        # one on every motion-notify event, i.e. dozens of main-context source
+        # add/remove pairs per second of pointer travel across a menu — main
+        # loop work this software-rendered stack pays for out of the same budget
+        # as the panel's repaints, for a 15-second safety net that never needed
+        # that resolution. _menu_idle re-arms itself instead.
+        self._menu_active_at = GLib.get_monotonic_time()
+        return False
+
+    def _menu_idle(self):
+        # The single idle-timeout source for an open menu. Close only once the
+        # menu has really gone MENU_IDLE_TIMEOUT_S without interaction; if
+        # _menu_activity stamped it more recently, re-arm for the time that is
+        # actually left, so the close still lands within a second of the
+        # deadline (what the old per-event restart bought, at one timer instead
+        # of hundreds).
+        left = MENU_IDLE_TIMEOUT_S - (
+            GLib.get_monotonic_time() - self._menu_active_at) / 1000000.0
+        if left > 0.5:
             self._menu_timeout = GLib.timeout_add_seconds(
-                MENU_IDLE_TIMEOUT_S, self._menu_close)
+                max(1, int(round(left))), self._menu_idle)
+            return False
+        self._menu_timeout = None
+        self._menu_close()
         return False
 
     def _maybe_dismiss(self, _w, ev):
@@ -1040,7 +1067,16 @@ class Panel(Gtk.Window):
                              (self.datelbl, self._date_samples()),
                              (self.batlbl, ("100%+",))):
             try:
-                w = max(lbl.create_pango_layout(s).get_pixel_size()[0]
+                # Measure what will be SHOWN, which is the translated form.
+                # create_pango_layout is a raw Pango call and does not go
+                # through nbi18n the way set_markup does, so this measured
+                # English and displayed Spanish: "Dom 28 de mayo" is 25px
+                # wider than "Wed 28 May", and set_size_request is a MINIMUM,
+                # so the label simply grew past its reservation and the whole
+                # right cluster shifted as the date changed — the exact drift
+                # this method exists to prevent. Eight of the seventeen
+                # languages were over; only English was ever right by luck.
+                w = max(lbl.create_pango_layout(_t(s)).get_pixel_size()[0]
                         for s in samples)
                 lbl.set_size_request(w, -1)
             except Exception:
@@ -1173,7 +1209,7 @@ CSS = b"""
    explicit transparent fill each title took Papertone's default button paper
    (#F8F7F2) over the #F4F2EC bar, so the whole left cluster read as a row of
    pale chips divided by two-pixel seams. Only hover/open paint a fill. */
-.menuitem { padding: 4px 8px; margin: 0; border-radius: 2px;
+.menuitem { padding: 4px 8px; margin: 0; border-radius: 6px;
             background: #F4F2EC; background-image: none;
             border: 1px solid #F4F2EC; font-size: 15px; }
 /* hover / open-menu state: the canonical darker-beige selection swatch
@@ -1230,7 +1266,7 @@ menuitem.sysmenu-item:selected { background: #EAE3D2; }
 .pdlg { background: #FCFBF8; border: 1px solid #C9C4B6; }
 .pdlgbox { padding: 20px 22px 18px 22px; }
 .pdlgtitle { font-family: "Newsreader","Liberation Serif",serif;
-             font-size: 19px; color: #1A1916; }
+             font-size: 20px; color: #1A1916; }
 .pdlgmsg { font-size: 13px; color: #2A2620; }
 .pdlgcancel, .pdlgok { padding: 4px 16px; }
 .pdlgok { background: #1A1916; color: #FCFBF8; border: 1px solid #1A1916; }
@@ -1255,23 +1291,45 @@ menuitem.sysmenu-item:selected { background: #EAE3D2; }
 .nbabout * { font-family: "Nimbus Sans","Helvetica",sans-serif;
              color: #1A1916; }
 .nbabout-name { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                font-size: 27px; font-weight: 500; letter-spacing: 0.01em; }
+                font-size: 24px; font-weight: 500; letter-spacing: 0.01em; }
 .nbabout separator { background-color: #C9C4B6; min-height: 1px; }
 .nbabout-key { font-size: 13px; color: #6E695E; letter-spacing: 0.06em; }
 .nbabout-val { font-size: 13px; color: #2A2620; }
 .nbabout-btn { padding: 7px 26px; background: #FCFBF8; color: #1A1916;
-               border: 1px solid #C9C4B6; border-radius: 3px;
+               border: 1px solid #C9C4B6; border-radius: 8px;
                box-shadow: none; font-size: 14px; }
 .nbabout-btn:hover { background: #F1EEE6; }
 """
 
 
-def main():
+_CSS_DONE = False
+
+
+def install_css():
+    """Install the panel's stylesheet. Idempotent.
+
+    Extracted out of main() so that CONSTRUCTING a Panel is enough to style it.
+    It used to be inline here, which meant the panel was correct on the shipped
+    desktop (which always goes through main()) and completely unstyled anywhere
+    that built one directly -- an offscreen render, a UI audit, a test. The
+    Finder had the identical bug and it wasted real time: its sidebar rendered
+    as bordered theme buttons instead of flat rows, which reads as a design
+    defect rather than as a missing stylesheet. The panel is the most-seen
+    chrome in the OS, so a misleading render of it is the most expensive one to
+    have. Same shape of fix as finder.install_css / nbapp.install_css."""
+    global _CSS_DONE
+    if _CSS_DONE:
+        return
     provider = Gtk.CssProvider()
     provider.load_from_data(CSS)
     Gtk.StyleContext.add_provider_for_screen(
         Gdk.Screen.get_default(), provider,
         Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    _CSS_DONE = True
+
+
+def main():
+    install_css()
 
     panel = Panel()
     panel.connect("destroy", Gtk.main_quit)

@@ -37,6 +37,9 @@ import nbapp
 import nbpicker
 import nbicons
 from nbi18n import _t  # noqa: E402
+# _upper, not str.upper: monotonic Greek DROPS the tonos in capitals (ΥΛΙΚΑ, not
+# ΥΛΙΚΆ) and Python's upper() keeps it. Used for the short weekday headers.
+from nbi18n import _upper  # noqa: E402
 
 
 def _monthrange(y, m):
@@ -65,7 +68,7 @@ INK = "#1A1916"
 ACCENT = "#C8341E"          # signage-red: today / active caret / alerts only
 # Darker-beige used for selected-state chrome (never black, per the design
 # language) — the sole ring around the chosen color swatch.
-SELECT_RING = "#8A8372"
+SELECT_RING = "#8A857A"
 
 # Persist to $NB_HOME/.config/notebook/, matching the widgets.py / tasks.py
 # pattern. Events go to calendar.json (the flat list tasks.py/widgets.py read);
@@ -220,6 +223,16 @@ def _add_months(d, n):
     m = m % 12 + 1
     _lead, dim = _monthrange(y, m)
     return date(y, m, min(d.day, dim))
+
+
+def _whole_periods(anchor, d, rule):
+    """How many whole turns of `rule` separate `anchor` from `d`. Only the
+    calendar-month rules need it (see Calendar._extend_series), and for those
+    the answer is exact: every occurrence of a month/year series is `anchor`
+    shifted by a whole number of months, so the month difference IS the turn
+    count even when a short month clamped the day."""
+    months = (d.year - anchor.year) * 12 + (d.month - anchor.month)
+    return months // 12 if rule == "year" else months
 
 
 def _repeat_dates(start, rule):
@@ -488,6 +501,36 @@ def _day_month_year(d, m, y, base_day):
         return None
 
 
+# --------------------------------------------------------- month-grid keys
+# The month grid is ONE focus stop that moves a selection inside itself, not 42
+# tab stops — a month you have to Tab through a day at a time is a maze, not
+# navigation. These maps are the whole of what the grid claims: every other key
+# (Tab, Ctrl+N, the menu accelerators, Esc) falls through untouched, so nothing
+# here amounts to a global arrow interception.
+#
+# Keypad duplicates are listed because a keyboard with a numeric pad sends the
+# KP_ keyvals when Num Lock is off, and a grid that ignored them would look
+# broken on exactly the machines most likely to type dates.
+_MONTH_DAY_KEYS = {
+    Gdk.KEY_Left: -1,   Gdk.KEY_KP_Left: -1,
+    Gdk.KEY_Right: 1,   Gdk.KEY_KP_Right: 1,
+    Gdk.KEY_Up: -7,     Gdk.KEY_KP_Up: -7,
+    Gdk.KEY_Down: 7,    Gdk.KEY_KP_Down: 7,
+}
+_MONTH_MONTH_KEYS = {
+    Gdk.KEY_Page_Up: -1,   Gdk.KEY_KP_Page_Up: -1,
+    Gdk.KEY_Page_Down: 1,  Gdk.KEY_KP_Page_Down: 1,
+}
+# Home/End are the ends of the SELECTED WEEK (the row you are standing on),
+# which is what the row-shaped grid makes them mean — not the ends of the month.
+_MONTH_WEEKEND_KEYS = {
+    Gdk.KEY_Home: 0,     Gdk.KEY_KP_Home: 0,      # Monday of that week
+    Gdk.KEY_End: 6,      Gdk.KEY_KP_End: 6,       # Sunday of that week
+}
+_MONTH_OPEN_KEYS = (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter,
+                    Gdk.KEY_space, Gdk.KEY_KP_Space)
+
+
 class Calendar(nbapp.AppWindow):
     app_name = "Calendar"
     menus = ("File", "Edit", "View", "Go")
@@ -495,6 +538,12 @@ class Calendar(nbapp.AppWindow):
     def __init__(self, initial_date=None):
         super().__init__()
         self._install_css()
+
+        # Lifecycle flag, set the moment the window starts tearing down. Every
+        # timer this app owns checks it before touching a widget, so nothing
+        # runs against a destroyed window (see _on_destroy).
+        self._closed = False
+        self._rollover_id = 0
 
         self.today = date.today()
         # Optional launch target: the desktop Calendar widget starts us as
@@ -534,6 +583,7 @@ class Calendar(nbapp.AppWindow):
 
         self._doc_path = None          # current File-menu document (None=unsaved)
         self.seg_btns = {}
+        self.month_grid = None         # live month Gtk.Grid (see _build_month)
         self._new_event_hour = None    # slot-click seed for the New Event dialog
         self._status_tok = 0
 
@@ -554,8 +604,13 @@ class Calendar(nbapp.AppWindow):
         # self.today is computed once at launch; if the OS is left running
         # across midnight the accent-red 'today' marker would freeze to the boot
         # day. Poll the local date each minute (mirrors widgets.py) and re-render
-        # only on an actual date change, so it stays cheap.
-        GLib.timeout_add_seconds(60, self._check_date_rollover)
+        # only on an actual date change, so it stays cheap. The source id is kept
+        # so close can remove it: an anonymous timeout holds a reference to this
+        # window forever, so every Calendar the user ever closed would keep
+        # waking each minute and, on the next date change, refresh widgets that
+        # are already destroyed.
+        self._rollover_id = GLib.timeout_add_seconds(
+            60, self._check_date_rollover)
 
     @staticmethod
     def _parse_initial_date(arg):
@@ -783,7 +838,7 @@ class Calendar(nbapp.AppWindow):
         add.set_margin_top(4)
         ainner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         ainner.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 15, "#6E695E")),
+            nbicons.image("plus", 15, "#6E695E"),
             False, False, 0)
         albl = Gtk.Label(label=_t("Add Calendar"), xalign=0)
         albl.get_style_context().add_class("caladdlabel")
@@ -805,7 +860,7 @@ class Calendar(nbapp.AppWindow):
         qa = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         qa.get_style_context().add_class("quickadd")
         qa.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 15, "#8A857A")),
+            nbicons.image("plus", 15, "#8A857A"),
             False, False, 0)
         self.quick = Gtk.Entry()
         self.quick.set_has_frame(False)
@@ -832,7 +887,7 @@ class Calendar(nbapp.AppWindow):
         inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
         inner.set_halign(Gtk.Align.CENTER)
         inner.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 17, "#2A2620")),
+            nbicons.image("plus", 17, "#2A2620"),
             False, False, 0)
         # The ellipsis distinguishes the full form from the quick-add line
         # directly above it — the same convention the File menu already uses.
@@ -971,7 +1026,10 @@ class Calendar(nbapp.AppWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         row.get_style_context().add_class("calrow")
 
-        toggle = Gtk.EventBox()
+        toggle = Gtk.Button()
+        toggle.set_relief(Gtk.ReliefStyle.NONE)
+        toggle.get_style_context().add_class("caltoggle")
+        toggle.set_tooltip_text(_t("Show or hide calendar"))
         inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         inner.set_margin_top(2); inner.set_margin_bottom(2)
         swatch = Gtk.DrawingArea(); swatch.set_size_request(18, 18)
@@ -984,14 +1042,13 @@ class Calendar(nbapp.AppWindow):
         lbl.get_style_context().add_class("callabel")
         inner.pack_start(lbl, True, True, 0)
         toggle.add(inner)
-        toggle.connect("button-press-event", self._on_toggle_cal_press, name)
+        toggle.connect("clicked", self._on_toggle_cal_clicked, name)
         row.pack_start(toggle, True, True, 0)
 
         delbtn = Gtk.Button(); delbtn.set_relief(Gtk.ReliefStyle.NONE)
         delbtn.get_style_context().add_class("caldel")
         delbtn.set_valign(Gtk.Align.CENTER)
-        delbtn.add(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("trash", 14, "#9A9484")))
+        delbtn.add(nbicons.image("trash", 14, "#9A9484"))
         delbtn.set_tooltip_text(_t("Delete calendar"))
         if len(self.calendars) <= 1:
             delbtn.set_sensitive(False)
@@ -1013,7 +1070,7 @@ class Calendar(nbapp.AppWindow):
             self._round_rect(ctx, 1, 1, w - 2, h - 2, 3)
             if on:
                 ctx.set_source_rgb(r, g, b); ctx.fill()
-                ctx.set_source_rgb(*nbicons._hex("#FFFFFF"))
+                ctx.set_source_rgb(*nbicons._hex("#FCFBF8"))
                 ctx.set_line_width(2.0)
                 ctx.set_line_cap(cairo.LINE_CAP_ROUND)
                 ctx.set_line_join(cairo.LINE_JOIN_ROUND)
@@ -1028,7 +1085,7 @@ class Calendar(nbapp.AppWindow):
             pass
         return False
 
-    def _on_toggle_cal_press(self, _w, _ev, name):
+    def _on_toggle_cal_clicked(self, _w, name):
         self.cals_on[name] = not self.cals_on.get(name, True)
         area = self.cals_on.get(name + "_area")
         if area is not None:
@@ -1088,11 +1145,13 @@ class Calendar(nbapp.AppWindow):
         selected = [next((i for i, c in enumerate(PALETTE) if c not in used), 0)]
         swrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         for i, color in enumerate(PALETTE):
-            ev = Gtk.EventBox()
+            ev = Gtk.Button(); ev.set_relief(Gtk.ReliefStyle.NONE)
+            ev.get_style_context().add_class("calswatch")
+            ev.set_tooltip_text(_t("Choose color %d") % (i + 1))
             da = Gtk.DrawingArea(); da.set_size_request(26, 26)
             da.connect("draw", self._draw_swatch, i, color, selected)
             ev.add(da)
-            ev.connect("button-press-event",
+            ev.connect("clicked",
                        self._on_pick_swatch, i, selected, swrow)
             swrow.pack_start(ev, False, False, 0)
         area.pack_start(self._field("Color", swrow), False, False, 0)
@@ -1145,13 +1204,15 @@ class Calendar(nbapp.AppWindow):
             pass
         return False
 
-    def _on_pick_swatch(self, _w, _ev, idx, selected, swrow):
+    def _on_pick_swatch(self, _btn, idx, selected, swrow):
+        # `clicked`, so no event argument and nothing to return. The row's
+        # children are Gtk.Buttons now rather than EventBoxes; both are Gtk.Bin,
+        # so get_child() still reaches the DrawingArea that does the painting.
         selected[0] = idx
         for child in swrow.get_children():
-            da = child.get_child()
+            da = child.get_child() if isinstance(child, Gtk.Bin) else None
             if da is not None:
                 da.queue_draw()
-        return True
 
     def _on_delete_cal(self, _btn, name):
         """Delete a named calendar and every event filed under it (confirmed).
@@ -1219,7 +1280,17 @@ class Calendar(nbapp.AppWindow):
         # period title needs to spell itself out on a 1024-wide screen.
         head.set_margin_start(24); head.set_margin_end(24)
 
-        left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        # Spacing is set PER GAP, not uniformly. The 20px after the title is a
+        # design fact (see the ‹ › note below); the gap between ‹ › and Today is
+        # not, and it is where the ten pixels come from that let the period
+        # title spell itself out in Greek. Measured at 1024 wide with NB_LANG=el:
+        # the header has 676px, the title/nav/Today group NEEDS 436 and the view
+        # segment 250 — a 10px deficit, which the title absorbed on its own
+        # because it is the only ellipsizing widget in the row. The heading read
+        # "Αυγούστου 2…", losing the YEAR: the one token a calendar's own title
+        # cannot afford to drop, while the mini-calendar in the sidebar six
+        # inches away printed "Αυγούστου 2026" in full.
+        left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.title_lbl = Gtk.Label(label="", xalign=0)
         self.title_lbl.get_style_context().add_class("caltitle")
         # The period title takes the width its text needs (the ‹ › buttons sit
@@ -1234,11 +1305,13 @@ class Calendar(nbapp.AppWindow):
         nxt = self._nav_btn("fwd", self._on_next, "Next")
         nav.pack_start(prev, False, False, 0)
         nav.pack_start(nxt, False, False, 0)
+        nav.set_margin_start(20)         # the documented gap, unchanged
         left.pack_start(nav, False, False, 0)
 
         today = Gtk.Button(label=_t("Today")); today.set_relief(Gtk.ReliefStyle.NONE)
         today.get_style_context().add_class("todaybtn")
         today.connect("clicked", self._on_today)
+        today.set_margin_start(10)       # 20 -> 10: the ten pixels, taken here
         left.pack_start(today, False, False, 0)
         head.pack_start(left, False, False, 0)
 
@@ -1278,7 +1351,7 @@ class Calendar(nbapp.AppWindow):
         # a plain English string here still reaches the catalogs.
         if tip:
             b.set_tooltip_text(tip)
-        b.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 18, "#1A1916")))
+        b.add(nbicons.image(icon, 18, "#1A1916"))
         b.connect("clicked", handler)
         return b
 
@@ -1294,26 +1367,97 @@ class Calendar(nbapp.AppWindow):
         return lbl
 
     # ------------------------------------------------------------- month view
+    def _dow_text(self, c):
+        """Column c's heading: the full weekday name, or the short one once the
+        full ones have been measured not to fit (see _dow_fit)."""
+        if getattr(self, "_dow_short", False):
+            # WEEKDAYS holds the two-letter forms the mini-calendar already
+            # shows, and they are translated per language ("Δε", "Пн", "2ª").
+            # _t() explicitly, then nbi18n's own upper-caser: nbi18n REFUSES to
+            # translate a two-letter capital on purpose (its "FR" collided with
+            # the weekday "Fr"), so up-casing first and letting the widget walk
+            # translate it would leave "MO" in every language.
+            return _upper(_t(WEEKDAYS[c]))
+        return WEEKDAYS_FULL[c].upper()
+
+    def _dow_fit(self, _grid, _alloc):
+        """Once, per session: if the full names do not fit, switch to short.
+
+        Asked after allocation rather than computed up front, because the answer
+        depends on the panel width, the shipped face and the active language all
+        at once, and the only honest way to know a label is being cut is to ask
+        the laid-out label."""
+        if getattr(self, "_dow_short", False):
+            return
+        for lbl in getattr(self, "_dow_labels", []):
+            lay = lbl.get_layout()
+            if lay is not None and lay.is_ellipsized():
+                self._dow_short = True
+                break
+        if self._dow_short:
+            # Not inside size-allocate: setting a label's text there re-enters
+            # the layout that is already running.
+            GLib.idle_add(self._dow_shorten)
+
+    def _dow_shorten(self):
+        for c, lbl in enumerate(getattr(self, "_dow_labels", [])):
+            lbl.set_text(self._dow_text(c))
+        return False
+
     def _build_month(self):
         if not self._month_has_events():
             self.body_area.pack_start(self._empty_hint(), False, False, 0)
 
         # weekday header
         dowg = Gtk.Grid(); dowg.set_column_homogeneous(True)
+        self._dowg = dowg
         dowg.get_style_context().add_class("dowhead")
+        self._dow_labels = []
         for c, w in enumerate(WEEKDAYS_FULL):
-            lbl = Gtk.Label(label=w.upper(), xalign=0)
+            lbl = Gtk.Label(label=self._dow_text(c), xalign=0)
             # Seven homogeneous columns sized to fit WEDNESDAY used to set the
             # whole window's minimum width. The names still print in full at
             # 1024 and shorten with an ellipsis only if a column gets narrower.
             lbl.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
             lbl.get_style_context().add_class("dowcell")
             dowg.attach(lbl, c, 0, 1, 1)
+            self._dow_labels.append(lbl)
+        # ...and "only if a column gets narrower" was measured in ENGLISH. At
+        # 1024 the columns are ~103px, which fits MONDAY and ΔΕΥΤΕΡΑ and does
+        # not fit DONNERSTAG, ПОНЕДЕЛЬНИК, PONIEDZIAŁEK, DONDERDAG, PONEDELJAK
+        # or — worst — Portuguese, where SEGUNDA-FEIRA through SEXTA-FEIRA meant
+        # FIVE of the seven headers were cut. So the header falls back to the
+        # SHORT weekday names this app already uses in its own mini-calendar
+        # (WEEKDAYS, translated: Δε · Mo · Пн · 2ª, which is the correct
+        # Portuguese form), and only in the languages that need it. Nothing
+        # changes for a language whose full names fit.
+        dowg.connect("size-allocate", self._dow_fit)
         self.body_area.pack_start(dowg, False, False, 0)
 
         grid = Gtk.Grid()
         grid.set_column_homogeneous(True); grid.set_row_homogeneous(True)
         grid.set_hexpand(True); grid.set_vexpand(True)
+
+        # One focus stop for the whole month, with the keys that move the
+        # selection inside it (see _on_month_grid_key). The cells stay
+        # unfocusable: 42 tab stops per month is not keyboard access.
+        grid.get_style_context().add_class("monthgrid")
+        grid.set_can_focus(True)
+        grid.connect("key-press-event", self._on_month_grid_key)
+        # Say what the keys DO — an accessible name alone ("Month grid") tells
+        # someone they have landed on it and nothing about how to leave.
+        grid.set_tooltip_text(_t(
+            "Arrow keys move a day, Page Up and Page Down move a month, "
+            "Enter opens the selected day"))
+        try:
+            acc = grid.get_accessible()
+            acc.set_name(_t("Month grid"))
+            acc.set_description(_t(
+                "Arrow keys move a day, Page Up and Page Down move a month, "
+                "Enter opens the selected day"))
+        except Exception:
+            pass    # a11y bridge missing is never worth failing a render over
+        self.month_grid = grid
 
         lead, dim = _monthrange(self.cur_y, self.cur_m)
         total = lead + dim
@@ -1330,6 +1474,74 @@ class Calendar(nbapp.AppWindow):
             grid.attach(self._month_cell(date(self.cur_y, self.cur_m, dnum),
                                          col >= 5), col, row, 1, 1)
         self.body_area.pack_start(grid, True, True, 0)
+
+    @staticmethod
+    def month_key_target(keyval, sel):
+        """The date a month-grid key moves the selection to, or None if the key
+        is not one the grid claims.
+
+        Pure arithmetic on a plain date, deliberately separate from the widget:
+        this is the part that can be wrong (a month step has to clamp, a week
+        step has to cross a month boundary), and it is the part a headless test
+        can check without a display. See tools/calendar_grid_keys_selftest.py."""
+        step = _MONTH_DAY_KEYS.get(keyval)
+        if step is not None:
+            return sel + timedelta(days=step)
+        months = _MONTH_MONTH_KEYS.get(keyval)
+        if months is not None:
+            # 31 January + one month is 28/29 February, not 3 March: _add_months
+            # clamps, which is the same rule the repeating-series code uses.
+            return _add_months(sel, months)
+        weekday = _MONTH_WEEKEND_KEYS.get(keyval)
+        if weekday is not None:
+            return sel + timedelta(days=weekday - sel.weekday())
+        return None
+
+    def _on_month_grid_key(self, _w, ev):
+        """Keyboard navigation for the month grid, bounded to the grid itself.
+
+        Only fires while the grid holds focus, and only for the keys in the
+        maps above — anything else (including every modified key, so Ctrl+N
+        still reaches _on_key) returns False and carries on to the window."""
+        try:
+            if ev.state & (Gdk.ModifierType.CONTROL_MASK |
+                           Gdk.ModifierType.MOD1_MASK):
+                return False
+            if ev.keyval in _MONTH_OPEN_KEYS:
+                # The selected day, opened — the same destination a '+N more'
+                # chip goes to, reached without the pointer.
+                self._on_view(None, "day")
+                return True
+            target = self.month_key_target(ev.keyval, self.sel)
+            if target is None:
+                return False
+            self._select_day(target)
+            return True
+        except Exception:
+            return False
+
+    def _select_day(self, d):
+        """Move the selection to `d` and re-render. Crossing a month boundary
+        (31 Jan → 1 Feb) brings the displayed month with it, so the selected day
+        is always a day the grid is actually showing."""
+        self.sel = d
+        self.cur_y, self.cur_m = d.year, d.month
+        self._refresh()
+        self._focus_month_grid()
+
+    def _focus_month_grid(self):
+        """Put focus back on the month grid after a rebuild.
+
+        _refresh() destroys the grid that handled the key and builds a new one,
+        so without this the FIRST arrow would work and every one after it would
+        go nowhere — focus having fallen back to the window."""
+        grid = self.month_grid
+        if grid is None or self.view != "month":
+            return
+        try:
+            grid.grab_focus()
+        except Exception:
+            pass
 
     @staticmethod
     def _hhmm(value):
@@ -1378,23 +1590,32 @@ class Calendar(nbapp.AppWindow):
             chip.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
             cc = chip.get_style_context()
             cc.add_class("evchip"); cc.add_class(self._event_chip_class(e))
-            chipbox = Gtk.EventBox(); chipbox.add(chip)
+            chipbox = Gtk.Button(); chipbox.set_relief(Gtk.ReliefStyle.NONE)
+            chipbox.get_style_context().add_class("eventhit")
+            chipbox.add(chip)
             # A month cell is too narrow to print the time beside the name
             # without eating the name, so it goes on the hover instead — along
             # with the full name, which is what an ellipsis just took away.
             chipbox.set_tooltip_text(self._chip_detail(e))
-            chipbox.connect("button-press-event", self._on_event_clicked, e)
+            chipbox.connect("clicked", self._on_event_clicked, e)
             cell.pack_start(chipbox, False, False, 0)
         if len(day_events) > len(shown):
             more = Gtk.Label(label=_t("+%d more") % (len(day_events) - len(shown)),
                              xalign=0)
             more.get_style_context().add_class("evmore")
-            morebox = Gtk.EventBox(); morebox.add(more)
-            morebox.connect("button-press-event", self._on_show_more, d)
+            morebox = Gtk.Button(); morebox.set_relief(Gtk.ReliefStyle.NONE)
+            morebox.get_style_context().add_class("eventhit")
+            morebox.set_tooltip_text(_t("Show all events for this day"))
+            morebox.add(more)
+            morebox.connect("clicked", self._on_show_more, d)
             cell.pack_start(morebox, False, False, 0)
 
         ev.add(cell)
-        ev.connect("button-press-event", self._on_pick_day, d)
+        # True: a click in the grid also parks keyboard focus there, so the
+        # arrows carry on from the day just clicked. The chips above return
+        # True from their own handler, so opening an event never gets here and
+        # never silently moves the selection out from under the pointer.
+        ev.connect("button-press-event", self._on_pick_day, d, True)
         return ev
 
     # -------------------------------------------------------------- day/week
@@ -1591,11 +1812,17 @@ class Calendar(nbapp.AppWindow):
         # event read as a single block rather than a stack of small chips.
         chip.set_margin_top(2 if lead else 0)
         chip.set_margin_start(3); chip.set_margin_end(3)
-        # Wrap in an event box so the chip itself is clickable — opens the event
+        # Wrap in a native button so the chip opens the event from pointer or
+        # keyboard. Continuation rows remain clickable but stay out of the Tab
+        # chain; the event's lead row is its single keyboard stop.
         # for edit/delete and stops the click from reaching the empty-slot
         # handler (which would otherwise start a blank New Event).
-        box = Gtk.EventBox(); box.add(chip)
-        box.connect("button-press-event", self._on_event_clicked, e)
+        box = Gtk.Button(); box.set_relief(Gtk.ReliefStyle.NONE)
+        box.get_style_context().add_class("eventhit")
+        box.set_can_focus(lead)
+        box.set_tooltip_text(self._chip_detail(e))
+        box.add(chip)
+        box.connect("clicked", self._on_event_clicked, e)
         return box
 
     # ------------------------------------------------------------ persistence
@@ -1912,6 +2139,21 @@ class Calendar(nbapp.AppWindow):
                     pass
 
     def _on_destroy(self, *_):
+        # Idempotent: GTK can emit "destroy" more than once through nested
+        # teardown paths, and a second pass must not remove a source id that has
+        # since been reused by another timer, nor write the store twice.
+        if getattr(self, "_closed", False):
+            return
+        # Marked BEFORE anything else, so a rollover poll that fires during the
+        # saves below sees a closing window and stays away from the widgets.
+        self._closed = True
+        rid = getattr(self, "_rollover_id", 0)
+        self._rollover_id = 0
+        if rid:
+            try:
+                GLib.source_remove(rid)
+            except Exception:
+                pass
         self._save_events()
         self._save_calendars()
 
@@ -1999,9 +2241,7 @@ class Calendar(nbapp.AppWindow):
         self._refresh()
 
     def _on_pick_day(self, _w, _ev, d):
-        self.sel = d
-        self.cur_y, self.cur_m = d.year, d.month
-        self._refresh()
+        self._select_day(d)
         return True
 
     def _on_pick_slot(self, _w, _ev, d, h):
@@ -2022,7 +2262,7 @@ class Calendar(nbapp.AppWindow):
         """Sidebar / File-menu / empty-slot entry point — a blank event form."""
         self._event_dialog(None)
 
-    def _on_event_clicked(self, _w, _ev, e):
+    def _on_event_clicked(self, _w, e):
         """Click an event chip (month, day or week) → its detail dialog,
         prefilled, with Save (edit in place) and Delete. Returns True so the
         click doesn't also fall through to the day-pick / new-event handler on
@@ -2074,7 +2314,7 @@ class Calendar(nbapp.AppWindow):
             except (OSError, ValueError):
                 pass
 
-    def _on_show_more(self, _w, _ev, d):
+    def _on_show_more(self, _w, d):
         """The month cell's '+N more' overflow chip → that day's Day view, so
         every event is reachable even when the cell can't show them all."""
         self.sel = d
@@ -2136,12 +2376,12 @@ class Calendar(nbapp.AppWindow):
 
         prevd = Gtk.Button(); prevd.set_relief(Gtk.ReliefStyle.NONE)
         prevd.get_style_context().add_class("daystep")
-        prevd.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("back", 14, INK)))
+        prevd.add(nbicons.image("back", 14, INK))
         prevd.set_tooltip_text(_t("Previous day"))
         prevd.connect("clicked", lambda *_: _step_day(-1))
         nextd = Gtk.Button(); nextd.set_relief(Gtk.ReliefStyle.NONE)
         nextd.get_style_context().add_class("daystep")
-        nextd.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("fwd", 14, INK)))
+        nextd.add(nbicons.image("fwd", 14, INK))
         nextd.set_tooltip_text(_t("Next day"))
         nextd.connect("clicked", lambda *_: _step_day(1))
         daterow.pack_start(prevd, False, False, 0)
@@ -2317,14 +2557,31 @@ class Calendar(nbapp.AppWindow):
                       "end": seed.get("end", 10.0),
                       "title": seed.get("title", ""),
                       "cal": seed.get("cal", DEFAULT_CAL["name"])}
+            # A month / year rule is counted from the day the series STARTED,
+            # exactly as _repeat_dates wrote the original run. Stepping one turn
+            # off the LAST occurrence instead compounds the short-month clamp:
+            # once "the 31st" has been written out as a 28 February, every later
+            # turn is taken from that 28th, so a standing order on the 31st
+            # quietly becomes one on the 28th — for good, and a 29 February
+            # birthday never returns to the 29th. Day / week / fortnight carry
+            # no clamp, so they still step from the last occurrence.
+            clamped = rule in ("month", "year")
+            anchor = min(members, key=lambda m: m["date"])["date"]
+            turn = _whole_periods(anchor, last, rule) if clamped else 0
             d = last
             for _ in range(REPEAT_LIMIT.get(rule, 0)):
                 try:
-                    nxt = _next_repeat(d, rule)
+                    if clamped:
+                        turn += 1
+                        nxt = _next_repeat(anchor, rule, turn)
+                    else:
+                        nxt = _next_repeat(d, rule)
                 except (OverflowError, ValueError):
                     break
                 if nxt is None or nxt > want:
                     break
+                if nxt <= last:
+                    continue      # an occurrence that was moved off the pattern
                 self._new_event(nxt, fields, rule, sid)
                 d = nxt
                 added = True
@@ -2409,7 +2666,7 @@ class Calendar(nbapp.AppWindow):
             b = Gtk.Button()
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("daystep")
-            b.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 14, INK)))
+            b.add(nbicons.image(icon, 14, INK))
             b.set_tooltip_text(tip)
             b.connect("clicked", lambda _w, d=delta: _step(d))
             row.pack_start(b, False, False, 0)
@@ -2869,6 +3126,7 @@ class Calendar(nbapp.AppWindow):
         self._rebuild_body()
 
     def _rebuild_body(self):
+        self.month_grid = None
         for c in self.body_area.get_children():
             self.body_area.remove(c)
         if self.view == "month":
@@ -2884,6 +3142,10 @@ class Calendar(nbapp.AppWindow):
         # so across a date boundary refresh it and re-render the affected views
         # (month grid 'today' highlight, mini-month, week header). Only re-render
         # on an actual change to keep the 60s poll cheap; never crash the app.
+        # A closed window drops the poll entirely (return False): self.today is
+        # not updated and nothing is re-rendered, because its widgets are gone.
+        if getattr(self, "_closed", False):
+            return False
         try:
             now = date.today()
             if now != self.today:
@@ -2924,22 +3186,32 @@ class Calendar(nbapp.AppWindow):
                    min-width: 26px; min-height: 26px; padding: 0; }
         .calsectionhead { font-size: 11px; letter-spacing: 0.14em;
                           color: #9A9484; font-weight: 700; }
-        .calrow { padding: 6px 4px; border-radius: 2px; background: transparent; }
-        .calrow:hover { background: #ECE8DD; }
+        .calrow { padding: 6px 4px; border-radius: 6px; background: transparent; }
+        .calrow:hover { background: #EAE3D2; }
         .callabel { font-size: 14px; color: #1A1916; }
+        .caltoggle { padding: 0; border: none; background: transparent;
+                     background-image: none; box-shadow: none; }
+        .caltoggle:hover { background: #EAE3D2; border-radius: 6px; }
+        /* Palette swatch in the New Calendar dialog: same neutral treatment as
+           .caltoggle, plus a 0 minimum so the theme's shared button height
+           cannot inflate the 26px artwork. No `outline: none` -- these are now
+           keyboard-reachable and the focus ring is what says so. */
+        .calswatch { padding: 0; border: none; background: transparent;
+                     background-image: none; box-shadow: none;
+                     min-width: 0; min-height: 0; }
         .caldel { padding: 2px 6px; min-width: 22px; min-height: 22px;
                   border: none; background: transparent; box-shadow: none; }
-        .caldel:hover { background: #E4D9D2; border-radius: 2px; }
+        .caldel:hover { background: #EAE3D2; border-radius: 6px; }
         .caladd { padding: 8px 4px; border: none; background: transparent;
                   box-shadow: none; }
-        .caladd:hover { background: #ECE8DD; border-radius: 2px; }
+        .caladd:hover { background: #EAE3D2; border-radius: 6px; }
         .caladdlabel { font-size: 13px; color: #6E695E; font-weight: 600; }
         .calfoot { border-top: 1px solid #D7D2C5; }
         /* Quick add: the same dashed one-line field the Tasks app puts its
            "Add task" in, so the two daily-life apps take an entry the same
            way. */
-        .quickadd { min-height: 40px; border: 1px dashed #CFC9BA;
-                    border-radius: 2px; margin-top: 12px; padding-left: 9px; }
+        .quickadd { min-height: 40px; border: 1px dashed #C9C4B6;
+                    border-radius: 8px; margin-top: 12px; padding-left: 9px; }
         .quickentry { background: transparent; border: none; box-shadow: none;
                       font-size: 14px; color: #1A1916; }
         .quickentry:focus { border: none; box-shadow: none; }
@@ -2949,29 +3221,29 @@ class Calendar(nbapp.AppWindow):
            Lecture, Cookbook's New Recipe). It used to be a solid black slab,
            the one thing the papertone language never does, and the only create
            button in the OS that looked different. */
-        .newevent { min-height: 42px; border: 1px solid #C4BFB1;
-                    border-radius: 2px; background: #FCFBF8; box-shadow: none; }
-        .newevent:hover { background: #ECE8DD; }
+        .newevent { min-height: 42px; border: 1px solid #C9C4B6;
+                    border-radius: 8px; background: #FCFBF8; box-shadow: none; }
+        .newevent:hover { background: #F1EEE6; }
         .newevlabel { font-size: 14px; font-weight: 600; color: #2A2620; }
 
         .calmain { background: #FCFBF8; }
         .caltitle { font-size: 30px; font-weight: 700; color: #1A1916; }
         .statusmsg { font-size: 12px; color: #6E695E; }
         .navbtn { min-width: 34px; min-height: 34px; padding: 0;
-                  border: 1px solid #C9C4B6; border-radius: 2px;
+                  border: 1px solid #C9C4B6; border-radius: 8px;
                   background: #FCFBF8; box-shadow: none; }
-        .navbtn:hover { background: #ECE8DD; }
+        .navbtn:hover { background: #F1EEE6; }
         .todaybtn { min-height: 34px; padding: 0 16px; border: 1px solid #C9C4B6;
-                    border-radius: 2px; background: #FCFBF8; box-shadow: none;
+                    border-radius: 8px; background: #FCFBF8; box-shadow: none;
                     font-size: 14px; font-weight: 600; color: #1A1916; }
-        .todaybtn:hover { background: #ECE8DD; }
-        .segwrap { border: 1px solid #C9C4B6; border-radius: 2px; }
+        .todaybtn:hover { background: #F1EEE6; }
+        .segwrap { border: 1px solid #C9C4B6; border-radius: 8px; }
         .segbtn { min-height: 32px; padding: 0 16px; font-size: 14px;
                   color: #6E695E; background: #FCFBF8; box-shadow: none;
                   border: none; border-right: 1px solid #C9C4B6;
                   border-radius: 0; }
         .segbtn.seglast { border-right: none; }
-        .segbtn:hover { background: #ECE8DD; }
+        .segbtn:hover { background: #F1EEE6; }
         .segbtn.active { background: #DED4C2; font-weight: 600; }
         /* The theme sets `* { color: ink }`, which lands directly on a
            button's label node and beats the colour inherited from the button
@@ -2993,7 +3265,7 @@ class Calendar(nbapp.AppWindow):
                      padding: 6px 9px; }
         .monthcell.weekend { background: #F4F2EC; }
         .monthcell.blankcell { background: #F1EEE6; }
-        .monthcell.selcell { background: #ECE8DD; }
+        .monthcell.selcell { background: #EAE3D2; }
         .daynum { font-size: 14px; color: #1A1916; min-width: 28px;
                   min-height: 28px; }
         .daynum.today { background: #C8341E; color: #FCFBF8; font-weight: 700;
@@ -3001,7 +3273,9 @@ class Calendar(nbapp.AppWindow):
         .daynum.selnum { background: #DED4C2; color: #1A1916;
                          border-radius: 50%; }
         .evchip { font-size: 12px; color: #1A1916; padding: 2px 8px;
-                  border-radius: 2px; background: #F1EEE6; }
+                  border-radius: 4px; background: #F1EEE6; }
+        .eventhit { padding: 0; border: none; background: transparent;
+                    background-image: none; box-shadow: none; }
         /* Later rows of a multi-hour event: the same block, no repeated title. */
         .evchip.evcont { min-height: 15px; }
 
@@ -3021,33 +3295,36 @@ class Calendar(nbapp.AppWindow):
         .dlgtitle { font-size: 17px; font-weight: 700; color: #1A1916; }
         .dlgsub { font-size: 13px; color: #6E695E; }
         .daystep { min-width: 26px; min-height: 26px; padding: 0;
-                   border: 1px solid #C9C4B6; border-radius: 2px;
+                   border: 1px solid #C9C4B6; border-radius: 8px;
                    background: #FCFBF8; box-shadow: none; }
-        .daystep:hover { background: #ECE8DD; }
+        .daystep:hover { background: #F1EEE6; }
         .dlgbody { font-size: 13px; color: #1A1916; }
         .dlgfield { font-size: 11px; letter-spacing: 0.1em; color: #9A9484;
                     font-weight: 600; }
         .nbdialog entry { background: #FCFBF8; border: 1px solid #C9C4B6;
-                          border-radius: 2px; padding: 6px 9px; color: #1A1916;
+                          border-radius: 8px; padding: 6px 9px; color: #1A1916;
                           box-shadow: none; }
         .nbdialog entry:focus { border-color: #C8341E; }
         .filelist { background: #FCFBF8; border: 1px solid #C9C4B6;
-                    border-radius: 2px; }
+                    border-radius: 12px; }
         .filerow { font-size: 13px; color: #1A1916; padding: 7px 10px; }
         .emptylist { font-size: 13px; color: #9A9484; padding: 14px; }
         .suggested-action { background: #1A1916; color: #FCFBF8; border: none;
                             box-shadow: none; font-weight: 600; }
-        .suggested-action:hover { background: #2E2A24; }
+        .suggested-action:hover { background: #2A2620; }
         .destructive { background: #FCFBF8; color: #C8341E; font-weight: 600;
                        border: 1px solid #C9C4B6; box-shadow: none; }
-        .destructive:hover { background: #F4EAE7; }
+        .destructive:hover { background: #F1EEE6; }
         /* Cancel is a plain button, so when it is the dialog's focus-default
            (the confirm dialogs set no other default) the base GTK stylesheet
            ringed it in its own blue — a colour this design does not contain.
-           Name it and it keeps the taupe outline every other button has. */
+           Name it and it keeps the taupe border every other button has. The
+           keyboard focus ring is NOT suppressed here: this button is the one
+           the confirm hands focus to, so hiding its ring would leave a keyboard
+           user unable to see what Enter is about to do (Article VII §1). */
         .dlgcancel { background: #FCFBF8; color: #1A1916;
-                     border: 1px solid #C9C4B6; box-shadow: none; outline: none; }
-        .dlgcancel:hover { background: #ECE8DD; }
+                     border: 1px solid #C9C4B6; box-shadow: none; }
+        .dlgcancel:hover { background: #F1EEE6; }
         .dlgcancel label { color: #1A1916; }
         /* Name the label node too — see the .segbtn note above. Without this
            the Add Event / Save button is ink text on an ink slab. */

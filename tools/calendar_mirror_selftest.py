@@ -17,7 +17,7 @@ the timetable changes — and would survive after the class was deleted.
      no classes mirrored, never a broken Calendar.
 
 Run as:
-  DISPLAY=:0 PYTHONPATH=<overlay>/opt/notebook/de python3 calendar_mirror_selftest.py
+  DISPLAY=:0 python3 tools/calendar_mirror_selftest.py
 """
 import json
 import os
@@ -26,7 +26,12 @@ import sys
 import tempfile
 from datetime import date, timedelta
 
-import gi
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DE = os.path.join(os.path.dirname(_HERE), "buildroot", "board", "notebookos",
+                  "rootfs-overlay", "opt", "notebook", "de")
+sys.path.insert(0, DE)
+
+import gi                                                   # noqa: E402
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk                             # noqa: E402,F401
 

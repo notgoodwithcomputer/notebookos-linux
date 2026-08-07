@@ -18,9 +18,8 @@ still reads correctly; it simply stops linking.
 """
 import gi
 gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gtk, Gdk, Pango                  # noqa: E402
+from gi.repository import Gtk, Pango                      # noqa: E402
 
 import json                                                # noqa: E402
 import os                                                  # noqa: E402
@@ -172,7 +171,10 @@ def read_plan(path=STORE):
         return {}
     out = {}
     for day, meals in plan.items():
-        if not isinstance(day, str) or nbapp.day_ordinal(day) is None:
+        if not isinstance(day, str):
+            continue
+        ordinal = nbapp.day_ordinal(day)
+        if ordinal is None:
             continue
         if not isinstance(meals, dict):
             continue
@@ -187,8 +189,24 @@ def read_plan(path=STORE):
             clean[meal] = {"kind": kind if kind in
                            (KIND_RECIPE, KIND_TAKEOUT, KIND_NOTE) else KIND_NOTE,
                            "title": title.strip()[:80]}
-        if clean:
-            out[day] = clean
+        if not clean:
+            continue
+        # File the day under the CANONICAL "YYYY-MM-DD" for the date it names,
+        # never the spelling it happened to be written with. day_ordinal is
+        # deliberately lenient -- it reads "2026-8-4" and rolls "2026-02-30"
+        # forward to 2 March -- but the grid and the desktop tile only ever
+        # look a day up by _date_key(), which is zero-padded and in range. A
+        # key kept verbatim therefore passed this parser, was counted in the
+        # status line, and was written back out by every later save, while
+        # being invisible in the week and impossible to edit or clear: filling
+        # that cell in made a SECOND entry for the same date, and the first one
+        # stayed in the file for good.
+        key = _date_key(ordinal)
+        day_out = out.setdefault(key, {})
+        for meal, slot in clean.items():
+            # Two spellings of one date: the first in the file wins, so a
+            # re-read is stable and nothing already shown changes underneath.
+            day_out.setdefault(meal, slot)
     return out
 
 
@@ -308,43 +326,58 @@ class MealPlanner(nbapp.AppWindow):
         css = b"""
         .mp-main { background: #FCFBF8; }
         .mp-main * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .mp-title { font-size: 26px; font-weight: 700; color: #1A1916; }
+        .mp-title { font-size: 24px; font-weight: 700; color: #1A1916; }
         .mp-sub { font-size: 13px; color: #6E695E; }
-        .mp-rule { background: #E4DFD2; }
+        .mp-rule { background: #D7D2C5; }
         .mp-dayhead { font-size: 12px; font-weight: 700; color: #6E695E;
                       padding: 6px 0; }
         .mp-dayhead.today { color: #1A1916; }
         .mp-daydate { font-size: 11px; color: #9A9484; }
         .mp-mealname { font-size: 11px; letter-spacing: 0.12em;
                        font-weight: 700; color: #9A9484; padding: 0 8px; }
-        .mp-slot { background: #FCFBF8; border: 1px solid #E2DCCE;
-                   border-radius: 3px; padding: 8px 9px; }
-        .mp-slot:hover { background: #F1EEE6; }
+        .mp-slot { background: #FCFBF8; border: 1px solid #D7D2C5;
+                   border-radius: 8px; padding: 8px 9px; }
+        /* Every cell is a real button so the week can be tabbed through. This
+           strips the button's own chrome -- its padding, border, fill and
+           shadow -- so .mp-slot inside it still owns the whole look and the
+           grid measures exactly as it did. Deliberately NO `:focus` rule and
+           no `outline: none`: the focus ring is what makes the keyboard path
+           visible, and it is the entire reason these are buttons. */
+        .mp-slothit { padding: 0; margin: 0; border: none;
+                      background: transparent; background-image: none;
+                      box-shadow: none; min-width: 0; min-height: 0; }
+        .mp-slothit:hover, .mp-slothit:active, .mp-slothit:checked {
+                      background: transparent; background-image: none;
+                      box-shadow: none; }
+        /* Hover now belongs to the wrapper, not to .mp-slot: the pointer is
+           over the BUTTON, and a cell whose fill only answered to its own
+           :hover would light up on part of the cell and not the rest. */
+        .mp-slothit:hover .mp-slot { background: #F1EEE6; }
         /* Today's column is where the eye goes first, so it carries the one
            accent on this screen. Nothing else here is red. */
         /* Today reads as a COLUMN, the way it does on the Academics timetable:
            the whole day is tinted, not just its heading. */
         .mp-slot.today { border-color: #C9C4B6; background: #F4F2EC; }
-        .mp-slot.today:hover { background: #EFEBE1; }
+        .mp-slothit:hover .mp-slot.today { background: #EFEBE0; }
         .mp-daycol.today .mp-dayhead { box-shadow: inset 0 -2px 0 #C8341E; }
         .mp-dish { font-size: 15px; color: #1A1916; }
         /* "Add" is an invitation, not content: it stays quiet until the cell
            is hovered, so a mostly-empty week reads as a blank page to fill in
            rather than as a wall of the word "Add". */
-        .mp-empty { font-size: 14px; color: #C4BEAF; }
-        .mp-slot:hover .mp-empty { color: #6E695E; }
+        .mp-empty { font-size: 14px; color: #C9C4B6; }
+        .mp-slothit:hover .mp-empty { color: #6E695E; }
         .mp-kind { font-size: 10px; letter-spacing: 0.08em; font-weight: 700;
                    color: #9A9484; }
         .mp-status { padding: 7px 16px; font-size: 12px; color: #6E695E;
-                     border-top: 1px solid #E4DFD2; background: #F8F7F2; }
-        .mp-cta { background: #F8F7F2; border: 1px solid #C4BFB1;
-                  border-radius: 2px; padding: 7px 16px; font-size: 14px;
+                     border-top: 1px solid #D7D2C5; background: #F8F7F2; }
+        .mp-cta { background: #F8F7F2; border: 1px solid #C9C4B6;
+                  border-radius: 8px; padding: 7px 16px; font-size: 14px;
                   color: #1A1916; box-shadow: none; }
-        .mp-cta:hover { background: #ECE8DD; }
+        .mp-cta:hover { background: #EFEBE0; }
         .mp-quiet { background: transparent; border: 1px solid transparent;
-                    border-radius: 2px; padding: 5px 10px; font-size: 13px;
+                    border-radius: 8px; padding: 5px 10px; font-size: 13px;
                     color: #6E695E; box-shadow: none; }
-        .mp-quiet:hover { background: #ECE8DD; border-color: #DDD7C8; }
+        .mp-quiet:hover { background: #EFEBE0; border-color: #D7D2C5; }
         .mp-fieldlabel { font-size: 11px; letter-spacing: 0.1em;
                          font-weight: 700; color: #9A9484; }
         """
@@ -503,16 +536,22 @@ class MealPlanner(nbapp.AppWindow):
             box.pack_start(empty, False, False, 0)
 
         box.set_valign(Gtk.Align.FILL)
-        hit = Gtk.EventBox()
-        hit.set_visible_window(False)
-        hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        # A REAL BUTTON, not an EventBox. All 21 cells are actions — each one
+        # opens the edit dialog — and an EventBox answers to the pointer
+        # alone: it takes no focus, is not in the Tab ring, and reports
+        # nothing to assistive technology. There is no other route to a slot,
+        # so on the keyboard the entire week was unreachable. .mp-slothit
+        # strips the button's chrome, so the cell looks and measures as before.
+        hit = Gtk.Button()
+        hit.set_relief(Gtk.ReliefStyle.NONE)
+        hit.get_style_context().add_class("mp-slothit")
         hit.set_vexpand(True)          # the three meal rows share the window
         hit.add(box)
         hit.set_tooltip_text(
             _t("%s on %s") % (meal_name(meal),
                               _t(DAY_NAMES[(nbapp.day_ordinal(day) + 3) % 7])))
-        hit.connect("button-press-event",
-                    lambda _w, _e, d=day, m=meal: (self._edit_slot(d, m), True)[1])
+        hit.connect("clicked",
+                    lambda _w, d=day, m=meal: self._edit_slot(d, m))
         self._cells[(day, meal)] = hit
         return hit
 

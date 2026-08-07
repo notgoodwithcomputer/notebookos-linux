@@ -28,8 +28,10 @@ import nbgame
 from nbi18n import _t  # noqa: E402
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
+# CFG_DIR is still where the vbam log lives (_log_path). There is no
+# gbaemu.json any more: it held only `fullscreen` and `scale`, neither of which
+# could act on anything.
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
-CFG_FILE = os.path.join(CFG_DIR, "gbaemu.json")
 
 INK = "#1A1916"
 MUTED = "#6E695E"
@@ -118,8 +120,21 @@ class GbaEmu(nbapp.AppWindow):
         super().__init__()
         self._install_css()
 
-        self._settings = {"fullscreen": True, "scale": 3}
-        self._load_settings()
+        # Set before anything can arm an idle or touch a widget: the deferred
+        # command-line launch below reads this to decide whether the window it
+        # belongs to is still there. Same gate accounting.py and contacts.py
+        # carry.
+        self._closed = False
+        self._launch_source = 0         # the pending command-line launch idle
+
+        # No settings file. There were two keys and neither could act: a game
+        # ALWAYS runs fullscreen, because nbgame has to reparent vbam into a
+        # fullscreen app window or the single-app WM unmaps it (see
+        # nbgame._build_stage), and `scale` had no control at all — it was
+        # loaded, range-checked to 1..6, and read by nothing. A Fullscreen
+        # toggle that remembers your choice across reboots and changes nothing
+        # is the quietest way for a control to lie, so it is gone rather than
+        # unified or explained.
         self._roms = []                 # [{path, name, system, ext}]
         self._launch_time = 0.0
         self._session = None            # the running nbgame.GameSession, if any
@@ -153,17 +168,29 @@ class GbaEmu(nbapp.AppWindow):
         rompath = next((a for a in sys.argv[1:]
                         if not a.startswith("-") and os.path.isfile(a)
                         and _is_rom(a)), None)
+        # Deferred by one idle so the library window maps before the game's
+        # fullscreen stage goes over it — but OWNED: the source id is kept so a
+        # window closed inside that idle can cancel it, and the callback itself
+        # checks the gate for the dispatch GLib had already committed to.
         if rompath:
-            GLib.idle_add(lambda: (self._play(rompath), False)[1])
+            self._launch_source = GLib.idle_add(self._launch_pending, rompath)
 
         self.connect("destroy", self._on_destroy)
+
+    def _launch_pending(self, rompath):
+        """Play the command-line ROM, once, if the window is still alive."""
+        self._launch_source = 0        # clear ownership before anything can fail
+        if self._closed:
+            return False   # window torn down inside the idle — launch nothing
+        self._play(rompath)
+        return False                   # one-shot
 
     # ================= header =================
     def _header(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         bar.get_style_context().add_class("emuhead")
 
-        icon = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("gamepad", 26, INK))
+        icon = nbicons.image("gamepad", 26, INK)
         icon.set_valign(Gtk.Align.CENTER)
         bar.pack_start(icon, False, False, 0)
         titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -177,19 +204,11 @@ class GbaEmu(nbapp.AppWindow):
 
         bar.pack_start(Gtk.Box(), True, True, 0)
 
-        # fullscreen toggle
-        self._fs_btn = Gtk.ToggleButton(label=_t("Fullscreen"))
-        self._fs_btn.set_relief(Gtk.ReliefStyle.NONE)
-        self._fs_btn.get_style_context().add_class("emutoggle")
-        self._fs_btn.set_active(bool(self._settings.get("fullscreen", True)))
-        self._fs_btn.connect("toggled", self._on_fs_toggled)
-        bar.pack_start(self._fs_btn, False, False, 0)
-
         openb = Gtk.Button()
         openb.set_relief(Gtk.ReliefStyle.NONE)
         openb.get_style_context().add_class("emubtn")
         oh = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        oh.pack_start(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 13, INK)),
+        oh.pack_start(nbicons.image("plus", 13, INK),
                       False, False, 0)
         oh.pack_start(Gtk.Label(label=_t("Open Game")), False, False, 0)
         openb.add(oh)
@@ -258,7 +277,7 @@ class GbaEmu(nbapp.AppWindow):
         art = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         art.get_style_context().add_class("romart")
         art.set_size_request(120, 120)
-        img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("cartridge", 52, "#B5502F"))
+        img = nbicons.image("cartridge", 52, "#6E695E")
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
         img.set_vexpand(True)
@@ -273,14 +292,20 @@ class GbaEmu(nbapp.AppWindow):
         sysl = Gtk.Label(label=m["system"])
         sysl.get_style_context().add_class("romsys")
         card.pack_start(sysl, False, False, 0)
-        evt = Gtk.EventBox()
-        evt.set_visible_window(False)
-        evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        evt.add(card)
-        evt.set_tooltip_text(_t("Play %s") % m["name"])
-        evt.connect("button-press-event",
-                    lambda _w, _e, p=m["path"]: (self._play(p), True)[1])
-        return evt
+        # The card is wrapped in a real button, not an EventBox. An EventBox
+        # takes no focus and answers no key, so the library was reachable by
+        # pointer only: Tab skipped every game and there was no way to start
+        # one from the keyboard at all. A button focuses, activates on Space
+        # and Enter, and reports itself to assistive technology as a control.
+        # .rombutton strips the button's own chrome so the card still looks
+        # and measures exactly as it did.
+        button = Gtk.Button()
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.get_style_context().add_class("rombutton")
+        button.add(card)
+        button.set_tooltip_text(_t("Play %s") % m["name"])
+        button.connect("clicked", lambda _w, p=m["path"]: self._play(p))
+        return button
 
     def _empty_state(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -288,7 +313,7 @@ class GbaEmu(nbapp.AppWindow):
         box.set_vexpand(True)
         box.set_margin_start(40)
         box.set_margin_end(40)
-        g = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("cartridge", 52, GHOST))
+        g = nbicons.image("cartridge", 52, GHOST)
         g.set_halign(Gtk.Align.CENTER)
         box.pack_start(g, False, False, 0)
         t = Gtk.Label(label=_t("No games"))
@@ -325,7 +350,7 @@ class GbaEmu(nbapp.AppWindow):
     def _controller_bar(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         bar.get_style_context().add_class("ctrlbar")
-        ico = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("gamepad", 16, MUTED))
+        ico = nbicons.image("gamepad", 16, MUTED)
         ico.set_valign(Gtk.Align.CENTER)
         bar.pack_start(ico, False, False, 0)
         self._ctrl_label = Gtk.Label(label="", xalign=0)
@@ -444,6 +469,8 @@ class GbaEmu(nbapp.AppWindow):
         return os.path.join(CFG_DIR, "vbam.log")
 
     def _play(self, rompath):
+        if self._closed:
+            return   # the window is gone; there is nothing to flash it against
         vbam = self._vbam_path()
         if not vbam:
             self._flash("The emulator core isn’t installed.")
@@ -488,6 +515,11 @@ class GbaEmu(nbapp.AppWindow):
 
     def _on_game_end(self):
         self._session = None
+        if self._closed:
+            # The launcher went away while the game was running (teardown ends
+            # the session itself): there is no status line to write and no
+            # window to raise.
+            return
         # A game that dies within ~2s never really started — point at the log.
         quick = (time.monotonic() - self._launch_time) < 2.0
         self._flash("The game closed right away — see File ▸ Emulator Log."
@@ -514,8 +546,7 @@ class GbaEmu(nbapp.AppWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box.get_style_context().add_class("emualert")
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        head.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("cartridge", 24, MUTED)), False, False, 0)
+        head.pack_start(nbicons.image("cartridge", 24, MUTED), False, False, 0)
         ht = Gtk.Label(label=heading, xalign=0)
         ht.set_line_wrap(True)
         ht.set_max_width_chars(34)
@@ -570,30 +601,28 @@ class GbaEmu(nbapp.AppWindow):
             else:
                 self._play(path)     # e.g. a .zip — let vbam try
 
-    # ================= settings =================
-    def _on_fs_toggled(self, btn):
-        self._settings["fullscreen"] = bool(btn.get_active())
-        self._save_settings()
-
-    def _load_settings(self):
-        try:
-            with open(CFG_FILE) as fh:
-                data = json.load(fh)
-            if isinstance(data, dict):
-                if isinstance(data.get("fullscreen"), bool):
-                    self._settings["fullscreen"] = data["fullscreen"]
-                if isinstance(data.get("scale"), int):
-                    self._settings["scale"] = max(1, min(6, data["scale"]))
-        except Exception:
-            pass
-
-    def _save_settings(self):
-        try:
-            nbapp.atomic_write_json(CFG_FILE, self._settings)
-        except Exception:
-            pass
-
     def _on_destroy(self, *_):
+        # Idempotent, and the gate is raised FIRST: "destroy" can reach this
+        # handler more than once (File ▸ Close on an already-closing window, a
+        # second teardown pass at Shut Down), and the session teardown and the
+        # final write below must each happen exactly once. Marking closed first
+        # also means a launch idle GLib had already dispatched, and the session
+        # end this teardown itself provokes, both find a dead window and touch
+        # no widgets.
+        if self._closed:
+            return False
+        self._closed = True
+
+        # Clear the id before removing the source, so a failed removal still
+        # leaves nothing armed to fire against a destroyed widget tree.
+        sid = self._launch_source
+        self._launch_source = 0
+        if sid:
+            try:
+                GLib.source_remove(sid)
+            except Exception:
+                pass
+
         # Tear down a running game so it can't orphan a stage/vbam over the desktop.
         if self._session is not None:
             try:
@@ -602,7 +631,6 @@ class GbaEmu(nbapp.AppWindow):
             except Exception:
                 pass
             self._session = None
-        self._save_settings()
         return False
 
     # ================= menu =================
@@ -657,32 +685,48 @@ class GbaEmu(nbapp.AppWindow):
         .emutitle { font-size: 17px; font-weight: 600; color: #1A1916; }
         .emusub { font-size: 12px; color: #9A9484; letter-spacing: 0.03em; }
         .emubtn { min-height: 30px; padding: 0 14px; border: 1px solid #C9C4B6;
-                  background: #FCFBF8; border-radius: 2px; box-shadow: none;
-                  font-size: 12.5px; font-weight: 600; color: #1A1916; }
+                  background: #FCFBF8; border-radius: 8px; box-shadow: none;
+                  font-size: 12px; font-weight: 600; color: #1A1916; }
         .emubtn:hover { background: #F4F2EC; }
         .emutoggle { padding: 6px 12px; border: 1px solid #C9C4B6;
-                     background: #FCFBF8; border-radius: 2px; box-shadow: none;
-                     font-size: 12.5px; color: #1A1916; }
+                     background: #FCFBF8; border-radius: 8px; box-shadow: none;
+                     font-size: 12px; color: #1A1916; }
         .emutoggle:hover { background: #F4F2EC; }
         .emutoggle:checked { background: #EAE3D2; border-color: #B3AD9E; }
         .libscroll, .libscroll viewport { background: #FCFBF8; }
         .libflow { padding: 24px; }
+        /* The ROM card's button is invisible BY DESIGN: it exists to be
+           focusable and activatable, not to be seen. Every property here
+           removes something the theme's button would otherwise add -- the
+           theme gives a button 5px 14px of padding, a hairline border and a
+           radius, which would have grown and re-boxed every card in the
+           library. Nothing sets `outline`, so the global focus ring still
+           draws on the card when it is tabbed to. The hover feedback stays
+           where it always was, on the art tile. */
+        .rombutton { padding: 0; margin: 0; border: none; border-radius: 0;
+                     background: transparent; background-image: none;
+                     box-shadow: none; min-width: 0; min-height: 0; }
+        .rombutton:hover, .rombutton:active, .rombutton:checked {
+                     background: transparent; background-image: none;
+                     box-shadow: none; }
         .romcard { padding: 4px; }
         .romart { background: #F1EEE6; border: 1px solid #C9C4B6;
                   border-radius: 4px; }
-        .romcard:hover .romart { background: #FBEFEC; border-color: #C8341E; }
+        .romcard:hover .romart { background: #F4F2EC; border-color: #C8341E; }
+        .rombutton:hover .romart { background: #F4F2EC;
+                                   border-color: #C8341E; }
         .romname { font-size: 13px; color: #1A1916; font-weight: 600; }
         .romsys { font-size: 11px; color: #9A9484; }
         .emptytitle { font-size: 15px; font-weight: 600; color: #6E695E; }
         .emptysub { font-size: 13px; color: #9A9484; }
         .emunotice { margin: 20px 24px 0; padding: 12px 16px;
-                     background: #FBEFEC; border: 1px solid #E4C7C0;
-                     border-radius: 3px; }
+                     background: #F4F2EC; border: 1px solid #C9C4B6;
+                     border-radius: 12px; }
         .noticetitle { font-size: 13px; font-weight: 600; color: #B12D19; }
-        .noticebody { font-size: 12.5px; color: #6E695E; }
+        .noticebody { font-size: 12px; color: #6E695E; }
         .ctrlbar { background: #F1EEE6; border-top: 1px solid #C9C4B6;
                    padding: 10px 22px; }
-        .ctrllabel { font-size: 12.5px; color: #6E695E; }
+        .ctrllabel { font-size: 12px; color: #6E695E; }
         .emualert { background: #FCFBF8; border: 1px solid #C9C4B6;
                     padding: 22px 26px 16px; }
         .alerttitle { font-size: 16px; font-weight: 700; color: #1A1916; }

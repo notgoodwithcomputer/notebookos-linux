@@ -7,6 +7,29 @@
 @define-color ink     #1A1916;
 @define-color hair    #C9C4B6;
 @define-color accent  #C8341E;
+/* The accent pressed / border state, and the accent when an action is
+   present but not available yet. Both were previously written out as
+   near-duplicates (#A82B18, #B32E1A) that differ from these by 2-9 units --
+   invisible individually, and exactly the drift the design tokens exist to
+   stop. Named here so nothing has to guess them again. */
+@define-color accentdk  #B12D19;
+@define-color accentdim #E0B8B0;
+/* The palest accent wash (a destructive control's hover ground). */
+@define-color accentwash #FBEFEC;
+/* THE ONE GREEN, and the only colour in this theme that is not a warm neutral
+   or the signage red. It is the "Saved" / "up to date" dot, and it is here
+   because NINE modules already agreed on it (18 uses) without it ever being
+   written down: academics, cookbook, illustrator, journal, novel, screenplay,
+   sequencer, terminal, writer. The palette cannot otherwise say "this went
+   well" -- everything else in it is paper, ink or a warning. */
+@define-color ok        #7FA98C;
+/* The deep member of the same green family: pale for an ambient dot, deep for
+   a FILL (a progress bar, a strength pip, a correct-answer button). One hue,
+   two weights -- exactly the structure @accent / @accentdk already has. */
+@define-color okdk      #4F7A3A;
+/* A row under the pointer. Between @rail and @select, so hover, selection and
+   ground stay three distinct things in a sidebar. */
+@define-color hover     #F0EADC;
 @define-color muted   #6E695E;
 @define-color select  #EAE3D2;
 /* The rail: sidebars, side panels and status bars — one step darker than the
@@ -15,6 +38,30 @@
 /* The lighter hairline used INSIDE a panel, where @hair would read as a
    border between two windows rather than a seam within one. */
 @define-color hairlt  #D7D2C5;
+/* The FIRM hairline: the edge of a control that is pressed, checked or being
+   dragged. Written out as #B3AD9E in three separate places (the pressed
+   button's border, the slider knob's border, a disabled tick's fill) before it
+   was named. */
+@define-color hairdk  #B3AD9E;
+
+/* ---------------------------------------------------------- UNAVAILABLE
+   The three tones that say "this control exists but you cannot use it yet".
+   They are a family and must be read together: a disabled control keeps its
+   shape and its place in the row and changes only its INK WEIGHT — it is the
+   same object, printed faintly, which is the paper equivalent of greyed-out.
+
+   All three were already in the file as bare hex in the two places that had
+   thought about the state at all (check:disabled, menuitem:disabled); naming
+   them is what lets the rest of the control set join in without inventing a
+   fourth grey. See the `unavailable` section further down for the rules.
+
+   @inkoff on @paper is 2.43:1. That is deliberately BELOW the 3:1 the rest of
+   the OS is held to: WCAG 1.4.3 exempts inactive controls, and a disabled label
+   that meets contrast is indistinguishable from an enabled one, which defeats
+   the entire point of the state. */
+@define-color inkoff   #A9A395;
+@define-color hairoff  #DDD8CB;
+@define-color paperoff #F1EEE6;
 
 * {
   color: @ink;
@@ -41,6 +88,26 @@
   outline-offset: -3px;
 }
 
+/* A BUTTON'S LABEL MUST FOLLOW THE BUTTON'S COLOUR.
+   This is the single most damaging consequence of the `*` rule above, and it
+   was live in the shipped OS: `*` matches the LABEL node directly, so a label
+   always took @ink no matter what its button asked for. An app writing the
+   obvious thing --
+       .mybutton { background: #1A1916; color: #FCFBF8; }
+   -- got ink text on an ink slab. Measured on the installer's Next button:
+   background #1A1916, button colour #FCFBF8, LABEL colour #1A1916. Invisible.
+
+   Three apps (login, g2048, ebook) had each discovered this separately and
+   worked around it with a private `... label { color: ... }` rule; every dark
+   button that had NOT discovered it was unreadable. `inherit` fixes all of them
+   at once, and cannot override an app that does state its own label colour --
+   such a rule matches the label directly at APPLICATION priority and still
+   wins. Plain buttons are unaffected: their button colour is @ink already.
+
+   Kept immediately under the `*` rule it repairs, because the two only make
+   sense read together. */
+button label { color: inherit; }
+
 window, .background { background-color: @paper; }
 
 /* Container surfaces MUST default to paper.
@@ -62,12 +129,39 @@ window, .background { background-color: @paper; }
    implicitly, and which genuinely render black when unstyled, belong here. */
 scrolledwindow, viewport { background-color: @paper; }
 
+/* ---------------------------------------------------------------- geometry
+   ONE radius scale and ONE control height for the whole OS. GTK3's @define-*
+   only takes colours, so these cannot be variables and are written out; treat
+   the numbers below as the definition and change them here, together, rather
+   than per-control.
+
+       4px   small marks that sit inside text (the check box)
+       8px   controls: buttons, entries, spins, toggles
+      12px   containers: cards, dialogs, popovers, grouped lists
+      full   things that are conceptually round: switches, slider knobs
+
+   WHY IT MOVED. Every control was 2px, which is a square corner with the edge
+   knocked off — the single strongest "this is a Linux desktop from 2004" signal
+   the interface had, and the one a person who has only ever used an iPad reads
+   instantly and without being able to name. 8px is deliberately mid: large
+   enough to read as current, small enough that it stays paper stationery rather
+   than becoming a phone toy. It is a ratio, not a constant — 8px against the
+   30px control height below is the proportion doing the work, so the two must
+   move together.
+
+   CONTROL HEIGHT is 30px everywhere. It used to be whatever each control's
+   padding happened to produce: buttons came out ~28px, entries ~28px and the
+   switch ~34px, so a row containing a button, a field and a switch had three
+   different heights and no shared baseline. Nothing looks more unfinished than
+   controls that do not line up, and it is invisible in any screenshot of a
+   single widget. */
 button {
   background: #F8F7F2;
   border: 1px solid @hair;
-  border-radius: 2px;
+  border-radius: 8px;
   color: @ink;
-  padding: 4px 10px;
+  padding: 5px 14px;
+  min-height: 20px;      /* + padding + border = the 30px shared height */
 }
 button:hover { background: #F1EEE6; }
 /* A pressed or checked button is SELECTED, not inverted.
@@ -80,7 +174,7 @@ button:active, button:checked {
   background: @select;
   background-image: none;
   color: @ink;
-  border-color: #B3AD9E;
+  border-color: @hairdk;
 }
 button:checked:hover, button:active:hover { background: #E0D8C4; }
 /* Selection anywhere else (list rows, tree views, text) uses the same tone
@@ -105,36 +199,123 @@ textview text selection, entry selection, label selection {
 entry {
   background: #FBFAF6;
   border: 1px solid @hair;
-  border-radius: 2px;
+  border-radius: 8px;
   color: #2A2620;
+  padding: 5px 10px;
+  min-height: 20px;      /* matches button: fields and buttons share a baseline */
 }
-entry:focus { border-color: @accent; }
+/* Focus is a 2px accent edge rather than a 1px one, drawn by thickening the
+   border INWARD via an inset shadow instead of changing border-width. Changing
+   the width would change the widget's size on focus, which reflows the row and
+   makes the whole form twitch as the user tabs through it. */
+entry:focus {
+  border-color: @accent;
+  box-shadow: inset 0 0 0 1px @accent;
+}
+/* Placeholder text must read as an absent value, not a present one. Left at the
+   entry's own colour it is indistinguishable from typed text, so an empty
+   search field looks like a field containing the word "Search". */
+entry placeholder, entry text placeholder { color: #9A9484; }
 
 /* Native toggles/sliders default to papertone so a stray GtkSwitch, GtkScale,
    check, radio or progress bar never shows Adwaita blue on this stack. An app
    that styles its own (widgets.py's cairo check, the media sliders) wins at
    APPLICATION priority and is unaffected. Flat - no blur, no gradient. */
+/* 17px, not 14px. A checkbox is a HIT TARGET as well as a mark, and 14px is
+   below the size at which one can be clicked confidently — it was also visibly
+   smaller than the text beside it, which made every settings list look like the
+   controls had been shrunk to fit. 17px sits just above the cap-height of the
+   13px body text, so the mark and its label read as the same size of thing.
+   `margin-right` is the gap to that label: GTK puts none there by default, and
+   the box sat flush against the first letter of its own caption. */
 check, radio { background: #FBFAF6; border: 1px solid @hair;
-               min-width: 14px; min-height: 14px; }
-check { border-radius: 2px; }
+               min-width: 17px; min-height: 17px;
+               margin-right: 6px; }
+check { border-radius: 4px; }
 radio { border-radius: 100%; }
-check:checked, radio:checked { background: @select; border-color: #B3AD9E;
-                               color: @ink; }
-switch { background: #DED4C2; border: 1px solid @hair; border-radius: 12px; }
+/* CHECKED IS INK. This used to be the warm @select tone with a hairline, which
+   is the same treatment a HOVERED row gets — so "on" and "the pointer is over
+   it" looked alike, and a settings pane full of options gave no glanceable
+   answer to "which of these are on?". Filling the box solid and putting the
+   mark in paper makes the state readable across the room, which is the whole
+   job of a checkbox.
+   This does not contradict the no-black-slab rule above: that rule is about
+   BUTTONS inverting into slabs. A 17px mark is not a slab, and the theme
+   already fills at ink for .suggested-action. */
+check:checked, check:indeterminate,
+radio:checked, radio:indeterminate {
+  background: @ink;
+  background-image: none;
+  border-color: @ink;
+  color: #FCFBF8;         /* the tick / dot itself */
+}
+check:disabled, radio:disabled { background: @paperoff; border-color: @hairoff; }
+check:checked:disabled, radio:checked:disabled {
+  background: @hairdk; border-color: @hairdk; }
+
+/* The switch was 34px tall against a 30px control row, and its "on" state was a
+   full-saturation accent pill — so the loudest object on any settings pane was
+   whichever toggle happened to be enabled. Sized down to 38x22 it sits inside
+   the shared control height, and the accent still says "on" without shouting.
+   Explicit min sizes on BOTH the switch and its slider: GTK derives the slider
+   from the trough and leaves a lozenge that does not fit its own track if only
+   one of the two is set. */
+switch { background: #DED4C2; border: 1px solid @hair;
+         border-radius: 100px;
+         min-width: 38px; min-height: 22px; }
 switch:checked { background: @accent; border-color: #B12D19; }
+switch:disabled { background: #ECE8DE; }
+/* `padding: 0` IS THE SIZING FIX, and it is the non-obvious one.
+   GtkSwitch does not take its size from the switch node — it measures its
+   SLIDER and doubles it. So min-width/min-height on `switch` are only a floor,
+   and the widget stayed 62x32 no matter what was set there. The slider was
+   inheriting padding, which inflated the measured slider and therefore the
+   whole control. Zeroing it brings the switch to 46x24, inside the 30px control
+   row. Measured, not guessed: setting only margin (as this rule first did)
+   changed nothing at all. */
 switch slider { background: @paper; border: 1px solid @hair;
-                border-radius: 100%; }
+                border-radius: 100%;
+                min-width: 18px; min-height: 18px;
+                padding: 0; margin: 1px; }
+
+/* KNOWN LIMITATION, recorded so it is not re-investigated from scratch.
+   GTK3 draws small "I" and "O" marks inside the trough. They are a skeuomorph
+   of a physical rocker and the only glyphs in the OS that nobody chose. They
+   cannot be removed from here: verified by rendering the switch under four
+   candidate rules (slider `color: transparent`, `-gtk-icon-source: none` on
+   both nodes, and `font-size: 0`) — all four left the marks on screen, and
+   stock Adwaita avoids them through a slider treatment this palette cannot
+   adopt. The fix is to stop using GtkSwitch; there are only three in the whole
+   OS (settings.py x2, widgetsettings.py x1). Tracked separately. */
+
+/* Slider and progress share a track so they read as the same family. 6px, not
+   5px: an odd height cannot be centred on a whole pixel inside an even-height
+   control, so the track was landing half a pixel off and antialiasing into a
+   soft grey smear instead of a crisp line. */
 scale trough, progressbar trough { background: #DED4C2; border: none;
-                                   border-radius: 6px; min-height: 5px; }
-scale highlight, progressbar progress { background: @ink; border-radius: 6px; }
-scale slider { background: @paper; border: 1px solid @hair; border-radius: 100%;
+                                   border-radius: 100px; min-height: 6px; }
+/* The FILL has to be given the track's height explicitly. Setting min-height on
+   the trough alone left the progress node at its own inherited minimum, so the
+   filled part rendered as a ~14px ink slab sitting inside a 6px track — the bar
+   looked broken rather than partly full, and it was the heaviest object on any
+   sheet it appeared on. Both nodes, same number. */
+scale highlight, progressbar progress { background: @ink;
+                                        border-radius: 100px;
+                                        min-height: 6px; }
+scale slider { background: @paper; border: 1px solid @hairdk;
+               border-radius: 100%;
                min-width: 16px; min-height: 16px; }
+/* The knob is the one control the user drags, so it is the one that most needs
+   to answer "am I on it?". */
+scale slider:hover { background: #FFFFFF; border-color: @muted; }
+scale slider:active { background: @select; border-color: @ink; }
 
 /* SpinButton field — give the numeric box the same paper the entries use so a
    stray spin (GBA SDK room size / sprite anim, sequencer tempo) doesn't sit on
    bare white. An app that styles its own spins wins at APPLICATION priority. */
 spinbutton { background-color: #FBFAF6; border: 1px solid @hair;
-             border-radius: 2px; color: #2A2620; }
+             border-radius: 8px; color: #2A2620;
+             min-height: 20px; }
 /* The +/- step buttons: the paper `button` rule sets their fill, but the
    increment/decrement GLYPHS are symbolic icons that must follow `color` to
    stay ink instead of the host accent. Pin `color: @ink` (the offscreen uishot
@@ -147,6 +328,15 @@ spinbutton button { color: @ink; background: #F4F2EC; border: none;
                     min-width: 22px; padding: 0 4px; }
 spinbutton button:hover { background: #ECE8DE; color: @ink; }
 spinbutton button:active { background: #E0D8C4; color: @ink; }
+/* The steppers sit flush against the field's right edge, so the OUTER one has
+   to carry the field's own 8px corner. Without this the square stepper pokes
+   out past the rounded field and the control reads as two widgets that have
+   been pushed together — which, before the radius went up, is exactly what a
+   0px-corner stepper on a 2px-corner field looked like and nobody noticed. */
+spinbutton button:last-child {
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
 
 /* ---- Dialog actions: primary, destructive, and the default button ----------
    GTK's built-in stylesheet paints a dialog's DEFAULT button, and the standard
@@ -171,7 +361,13 @@ button.default {
   border: 1px solid @hair;
   color: @ink;
   box-shadow: none;
-  outline: none;
+  /* NO `outline: none` here. It was, and it silently cancelled the global focus
+     rule above for the one button that matters most: GTK hands `.default` to
+     the dialog's default action, and Article III §2 puts focus on it (Cancel,
+     the safe choice). So a keyboard user opening any confirm in the OS saw an
+     unringed dialog and could not tell what Enter would do. The blue ring that
+     line was reaching for is already handled — the global rule recolours the
+     outline to @accent rather than removing it. */
 }
 button.default:hover { background: #F1EEE6; }
 
@@ -194,7 +390,7 @@ button.suggested-action:hover, button.suggested-action.default:hover {
    Delete Forever and Empty Trash. */
 button.destructive-action, button.destructive-action.default {
   background: @accent;
-  border: 1px solid #A82B18;
+  border: 1px solid @accentdk;
   color: #F8F7F2;
   box-shadow: none;
   font-weight: 600;
@@ -202,8 +398,8 @@ button.destructive-action, button.destructive-action.default {
 button.destructive-action label,
 button.destructive-action:hover label { color: #F8F7F2; }
 button.destructive-action:hover, button.destructive-action.default:hover {
-  background: #B32E1A;
-  border-color: #A82B18;
+  background: @accentdk;
+  border-color: @accentdk;
 }
 
 /* A dialog's own heading. Most confirmations in the OS state their question
@@ -274,3 +470,204 @@ scrollbar.overlay-indicator:not(.dragging):not(.hovering) slider {
 .statusbar { background: @rail; border-top: 1px solid @hairlt;
              min-height: 32px; padding: 0 18px; }
 .statusbar label { font-size: 12px; color: @muted; }
+
+
+/* =================================================================== MOTION
+   What moves, how far, and for how long.
+
+   THE BRIEF THIS ANSWERS. This OS exists to be the opposite of an attention
+   economy device, so it cannot borrow that world's motion language: nothing
+   here bounces, springs, overshoots, pulses or slides in from off-screen to be
+   noticed. But "no motion at all" is not calm, it is CHEAP — a control that
+   changes state between two frames with no transition reads as a redraw rather
+   than as a response, and that instant-snap quality is most of what separates a
+   free desktop from an iPad in the four seconds someone spends forming an
+   opinion.
+
+   So the rule is: motion only ever confirms something the user just did, it is
+   always short enough to feel like feedback rather than animation, and there is
+   never any motion the user did not cause.
+
+       90ms   state feedback: hover, press, focus, check, selection
+      140ms   a surface arriving or leaving (the elevation layer above)
+
+   Both are under the ~200ms at which a transition stops reading as "the control
+   responded" and starts reading as "the interface is playing an animation". The
+   easing is ease-out everywhere — fast at the start, settling at the end, which
+   is the curve that feels like a physical control returning to rest. There is
+   deliberately no ease-in-out (it feels sluggish at these durations) and no
+   cubic-bezier overshoot (that is the bounce this design does not have).
+
+   ONLY COLOUR AND BORDER ANIMATE. No transition on width, height, margin or
+   padding: those force GTK to re-layout on every frame of the transition, which
+   on a software-rendered machine is exactly how "smooth" becomes "janky".
+
+   WHERE THIS DOES NOT RUN: nbapp.py turns GTK animations OFF entirely when the
+   machine has no accelerated rendering (see gtk-enable-animations there). A
+   90ms fade that drops half its frames looks worse than no fade at all, and the
+   whole point of this section is the impression of quality. */
+button, button.default, button.suggested-action, button.destructive-action,
+spinbutton, spinbutton button,
+entry,
+check, radio,
+switch, switch slider,
+scale slider,
+menuitem,
+treeview.view,
+scrollbar slider {
+  transition-property: background-color, background-image, border-color, color,
+                       box-shadow, opacity;
+  transition-duration: 90ms;
+  transition-timing-function: ease-out;
+}
+
+/* The surfaces that arrive rather than merely change: a menu opening, a tooltip
+   appearing. Slightly longer, because they travel further conceptually — but
+   still short enough that the menu is READY when the pointer gets there. */
+menu, .menu, popover, popover.background, tooltip, tooltip.background {
+  transition-property: opacity, box-shadow;
+  transition-duration: 140ms;
+  transition-timing-function: ease-out;
+}
+
+/* Pressing something is the one interaction that must feel INSTANT: a press is
+   a physical act and any delay between finger and ink reads as lag, not as
+   polish. So the press-down state has no transition at all; only the release
+   back to rest is eased. */
+button:active, button:checked,
+check:checked, radio:checked,
+scale slider:active {
+  transition-duration: 0ms;
+}
+
+
+/* ================================================================ ELEVATION
+   How a thing that floats says so.
+
+   The papertone language has, until now, had exactly one way to separate two
+   surfaces: a hairline. That works between panes of the same window and stops
+   working the moment something is meant to be ABOVE the page rather than beside
+   it — a menu, a tooltip, a confirmation card. Those all read as flat inserts
+   cut into the paper, and the interface loses its front-to-back order.
+
+   The rule here is PAPER, not Material: a sheet resting on another sheet casts
+   a short, soft, nearly colourless shadow, and does not glow, tint or blur what
+   is under it. So every shadow below is
+     * two layers — a tight contact edge and a wider ambient one, because a
+       single blur reads as a drop shadow from a 90s word processor;
+     * cast in warm INK (26,25,22) at very low alpha, never pure black, which on
+       a warm paper field goes visibly grey-blue;
+     * offset straight down only. Light comes from above; a diagonal offset
+       implies a light source the rest of the interface does not have.
+
+   Two levels, and deliberately no more:
+     RAISED   things attached to something on the page (menus, tooltips)
+     FLOATING things that took over the page (dialogs, overlay cards) */
+
+/* --------------------------------------------------------------- tooltips
+   THE MOST REPEATED UNSTYLED SURFACE IN THE OS: 214 set_tooltip_text() calls
+   across the apps, every one of which was rendering in GTK's default — a dark
+   charcoal slab with white text and a square-ish corner. In a design language
+   made entirely of warm paper and ink, the single most frequently seen floating
+   element was the one thing that looked like it came from another operating
+   system. Nothing app-specific about a tooltip, so it is defined once, here.
+   `tooltip.background` as well as `tooltip`: GTK puts the .background class on
+   the tooltip's own window node, and the window rule at the top of this file
+   would otherwise win and paint it plain @paper with no border. */
+tooltip, tooltip.background {
+  background-color: #2E2A24;      /* ink, one step up from @ink so it reads as
+                                     an object rather than as text */
+  border: 1px solid #464036;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(26, 25, 22, 0.10),
+              0 6px 18px rgba(26, 25, 22, 0.14);
+}
+tooltip label, tooltip.background label {
+  color: #F6F3EC;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+/* ------------------------------------------------------------------- menus
+   Only six Gtk.Menu()s survive in the OS (most menus here are custom widgets),
+   but an unstyled one is very loud: default GTK paints white with a square
+   border and a BLUE hover, and blue does not exist in this palette. */
+menu, .menu, popover, popover.background {
+  background-color: @paper;
+  border: 1px solid @hair;
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 1px 2px rgba(26, 25, 22, 0.08),
+              0 10px 28px rgba(26, 25, 22, 0.14);
+}
+/* `background-color: transparent`, not a colour. Left unset, the item painted
+   its own near-white (#F6F5F5 measured) INSIDE the warm paper menu, so every
+   menu showed a faintly cool rectangle behind each row and a warm border around
+   the outside. Transparent lets the menu's own paper show through, which is
+   what makes the menu read as one sheet. */
+menuitem, .menu menuitem {
+  background-color: transparent;
+  background-image: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  min-height: 20px;
+  color: @ink;
+}
+/* Menu items highlight on HOVER, not on :selected — a menu has no selection,
+   only a pointer. Using the shared @select tone keeps it off Adwaita blue, and
+   `background-image: none` is required here for the same reason it is required
+   on button:active: the highlight is painted as an image, so a colour-only rule
+   loses. */
+menuitem:hover, menuitem:focus, .menu menuitem:hover {
+  background-color: @select;
+  background-image: none;
+  color: @ink;
+}
+menuitem:disabled, menuitem:disabled label { color: @inkoff; }
+menu separator, .menu separator, popover separator {
+  background-color: @hairlt; margin: 5px 4px; min-height: 1px;
+}
+
+/* --------------------------------------------------------- treeview headers
+   The Finder's file list, the System Monitor's process table and the language
+   picker are all GtkTreeViews, and a column header is a `button` — so it was
+   picking up the 8px rounded paper button above and rendering a row of little
+   floating pills across the top of the list instead of a header band. Two apps
+   had already patched this privately; defined here it is right everywhere,
+   including nbpicker and nbi18n, which never did. */
+treeview.view header button {
+  background: @rail;
+  border: none;
+  border-right: 1px solid @hairlt;
+  border-bottom: 1px solid @hair;
+  border-radius: 0;
+  box-shadow: none;
+  color: @muted;
+  font-size: 12px;
+  padding: 5px 10px;
+  min-height: 22px;
+}
+treeview.view header button:hover  { background: #ECE8DE; color: @ink; }
+treeview.view header button:active { background: #E4DFD2; }
+treeview.view header button:last-child { border-right: none; }
+/* THE ROWS THEMSELVES. Stated explicitly rather than left to the global `*`
+   rule at the top of this file: cell renderers resolve against the treeview's
+   own style context, and `background-color` in particular is not inherited at
+   all — the same reason the scrolledwindow/viewport rule near the top exists.
+   Verified by measurement, not by eye: the rendered rows come out neutral ink
+   (sampled #2C1F1D-ish at the glyph cores). Small grayscale-antialiased text on
+   warm paper LOOKS faintly blue in a screenshot, which sent one pass of this
+   work chasing a colour bug that was not there — sample the pixels before
+   believing a tint. */
+treeview.view {
+  background-color: @paper;
+  color: @ink;
+}
+treeview.view:hover { background-color: #F5F2EA; }
+/* A selected row keeps the shared warm @select tone (set once near the top of
+   this file) rather than the view's own selection colour, which is blue. */
+treeview.view:selected, treeview.view:selected:focus {
+  background-color: @select;
+  background-image: none;
+  color: @ink;
+}

@@ -268,6 +268,18 @@ app = fresh()
 r, t = running_vs_total(app.tx, app.opening)
 check("loaded amounts are quantised too", r == t, (r, t))
 
+# ...and so is the OPENING BALANCE, which is a stored figure exactly like an
+# amount and feeds both routes to the balance. A sub-cent opening carried in
+# from a hand-edited or imported file used to put a final running balance of
+# $0.00 under a headline BALANCE of $0.01 — the same ledger, two answers.
+# Read through _load_state alone, so this needs no widgets and no display.
+write_ledger([{"date": "1 Jan", "desc": "a", "amt": -0.01},
+              {"date": "2 Jan", "desc": "b", "amt": 0.01}], opening=0.005)
+st = A._load_state(A.__new__(A))
+r, t = running_vs_total(st["tx"], st["opening"])
+check("a sub-cent opening balance is quantised on load",
+      st["opening"] == 0.01 and r == t, (st["opening"], r, t))
+
 # ------------------------------------------------------------------- search
 print("== find ==")
 
@@ -325,13 +337,18 @@ if csvs:
     with open(os.path.join(accounting.DOCS_DIR, csvs[0]), newline="") as fh:
         rows = list(csv.reader(fh))
     check("CSV has a header and every entry", len(rows) == 3, rows)
+    # Columns are now Date(iso), Shown as, Description, Debit, Credit, Balance.
+    # The ISO column was added at the FRONT so an exported ledger can be sorted;
+    # everything these checks were already guarding simply moved right by one.
+    check("CSV leads with a machine-readable date column",
+          rows[0][0] == "Date" and rows[0][1] == "Shown as", rows[0])
     check("CSV quotes commas and quotes in descriptions",
-          rows[1][1] == "Rent, monthly" and rows[2][1] == 'He said "hi"', rows)
+          rows[1][2] == "Rent, monthly" and rows[2][2] == 'He said "hi"', rows)
     check("CSV debit/credit are bare numbers a spreadsheet can add",
-          rows[1][2] == "800.00" and rows[1][3] == "" and rows[2][3] == "1500.00",
+          rows[1][3] == "800.00" and rows[1][4] == "" and rows[2][4] == "1500.00",
           rows)
     check("CSV running balance matches the app",
-          rows[2][4] == "700.00", rows)
+          rows[2][5] == "700.00", rows)
 
 app._export_pdf()
 pdfs = [n for n in os.listdir(accounting.DOCS_DIR) if n.endswith(".pdf")]

@@ -7,13 +7,20 @@ The loading screen, the desktop backdrop and the volume that appears when a USB
 stick is plugged in. None of them is an app, so none of them was covered by any
 existing selftest, and all three are reached in the first hour.
 
-The two defects that made this file:
+The defects that made this file:
 
-  * THE BACKDROP DID NOT FOLLOW THE SETTING. Settings > Backdrop changes the
+  * THE BACKDROP DID NOT FOLLOW THE SETTING. Settings > Backdrop changed the
     colour with `xsetroot -solid`, which paints the X ROOT — and desktopbg.py
     exists precisely because the root is not what is on screen once a full
     screen desktop-type window is covering it. Picking a colour therefore did
-    nothing at all until the machine was restarted.
+    nothing at all until the machine was restarted. RESOLVED BY REMOVAL: the
+    alternate desktop colours are gone (they mis-rendered behind the widget
+    board), session.sh passes the one papertone field on the command line, and
+    settings.py:_apply_saved_prefs deliberately ignores a "background" left
+    behind by an older build. What test_backdrop still guards is the part that
+    ships — that whatever desktopbg is handed, the desktop comes up PAINTED,
+    because an unpainted backdrop is an alpha hole the compositor fills with
+    black, which reads as a dead machine rather than a wrong colour.
   * A USB STICK'S OWN LABEL COULD ESCAPE /media. automount.sh names the mount
     point after the volume's label and replaced only "/" and "\\" in it, so
     "." and ".." went through untouched. Measured: a stick labelled "." was
@@ -22,7 +29,6 @@ The two defects that made this file:
     de-duplication loop only deflects for as long as /media exists at all. A
     label is whatever the last person to format the stick typed.
 """
-import json
 import os
 import subprocess
 import sys
@@ -56,87 +62,67 @@ def pump(n=600):
 
 # ------------------------------------------------------------------ backdrop
 def test_backdrop():
-    print("-- the desktop backdrop follows Settings > Backdrop")
-    home = tempfile.mkdtemp(prefix="nbhome-bg-")
-    os.environ["NB_HOME"] = home
-    cfg = os.path.join(home, ".config", "notebook")
-    os.makedirs(cfg)
-    path = os.path.join(cfg, "settings.json")
-
+    print("-- the desktop backdrop paints the one papertone field")
+    # There is NO backdrop setting. The alternate desktop colours were removed
+    # (they mis-rendered behind the widget board), session.sh passes the colour
+    # on the command line once, and settings.py:_apply_saved_prefs deliberately
+    # IGNORES a "background" left in settings.json by an older build. This test
+    # used to drive a settings-following backdrop through Backdrop.watch_settings(),
+    # which never existed in any build -- so it raised AttributeError on the
+    # first call and took test_splash() and test_automount_labels() down with
+    # it, unrun, for as long as it sat in the baseline. What is left is the part
+    # that ships: whatever it is handed, the desktop comes up PAINTED.
     import importlib
     import desktopbg
     importlib.reload(desktopbg)
-    from gi.repository import GLib
 
     def rgb(win):
         c = win._rgba
         return (round(c.red, 3), round(c.green, 3), round(c.blue, 3))
 
-    win = desktopbg.Backdrop("#DED4C2")
-    win.watch_settings()
-    start = rgb(win)
-    check(start != (0, 0, 0), "the backdrop starts on a real colour: %r" % (start,))
+    paper = (round(0xDE / 255.0, 3), round(0xD4 / 255.0, 3),
+             round(0xC2 / 255.0, 3))
+    check(desktopbg.DEFAULT_COLOR == "#DED4C2",
+          "the default is the papertone field: %r" % desktopbg.DEFAULT_COLOR)
 
-    def save(data):
-        # The atomic write Settings uses: a temp file renamed over the old one.
-        # A monitor watching only the FILE goes deaf to this; that is why
-        # watch_settings() watches the directory too.
-        tmp = path + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump(data, fh)
-        os.replace(tmp, path)
+    win = desktopbg.Backdrop("#123456")
+    check(rgb(win) == (round(0x12 / 255.0, 3), round(0x34 / 255.0, 3),
+                       round(0x56 / 255.0, 3)),
+          "a colour on the command line is the colour painted: %r" % (rgb(win),))
 
-    def settle(ms=900):
-        loop = GLib.MainLoop()
-        GLib.timeout_add(ms, lambda: (loop.quit(), False)[1])
-        loop.run()
-
-    save({"background": "#123456"})
-    settle()
-    got = rgb(win)
-    want = (round(0x12 / 255.0, 3), round(0x34 / 255.0, 3),
-            round(0x56 / 255.0, 3))
-    check(got == want,
-          "choosing a backdrop repaints it without a restart: %r want %r"
-          % (got, want))
-
-    # A damaged settings file must leave the colour alone, never blank it.
-    with open(path, "w") as fh:
-        fh.write('{"background": "#12345')
-    settle()
-    check(rgb(win) == want, "a half-written settings file keeps the backdrop")
-    save({"background": "not a colour"})
-    settle()
-    check(rgb(win) == want, "a nonsense colour keeps the backdrop")
-    save({"background": None})
-    settle()
-    check(rgb(win) == want, "a null colour keeps the backdrop")
-    save(["not", "a", "dict"])
-    settle()
-    check(rgb(win) == want, "a settings file of the wrong shape keeps it")
-    os.unlink(path)
-    settle()
-    check(rgb(win) == want, "a DELETED settings file keeps the backdrop")
-
-    save({"background": "#DED4C2"})
-    settle()
-    check(rgb(win) != want, "and a later valid change is still picked up")
-
-    # _saved_color must never raise, whatever it is pointed at.
-    for junk in (b"\x00\x01\xff", b"", b"[]", b"null", b'{"background": 5}'):
-        with open(path, "wb") as fh:
-            fh.write(junk)
+    # A malformed value must never leave the desktop unpainted -- an unpainted
+    # backdrop is an alpha hole the compositor fills with BLACK, which reads as
+    # a dead machine rather than a wrong colour.
+    for junk in ("not a colour", "", "#", "#12345", "#GGGGGG", None, 5, [], {}):
+        w = desktopbg.Backdrop(junk)
+        got = rgb(w)
+        check(got == paper,
+              "a backdrop of %r falls back to paper, never black: %r"
+              % (junk, got))
         try:
-            desktopbg._saved_color()
-            ok = True
-        except Exception as e:                                 # noqa: BLE001
-            ok = "raised %r" % e
-        check(ok is True, "_saved_color on %r: %s" % (junk[:12], ok))
+            w.destroy()
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    # set_color() is the live repaint path. It is not wired to a screen today,
+    # but it is public and must hold the same guarantee.
+    win.set_color("#DED4C2")
+    check(rgb(win) == paper, "set_color repaints: %r" % (rgb(win),))
+    win.set_color("garbage")
+    check(rgb(win) == paper, "and set_color on junk keeps it painted")
+
+    # The decision itself, guarded: if a "background" key ever starts being
+    # honoured again, it must come with a screen that can change it back.
+    src = open(os.path.join(DE, "settings.py"), encoding="utf-8").read()
+    check("_saved_color" not in open(
+              os.path.join(DE, "desktopbg.py"), encoding="utf-8").read(),
+          "desktopbg has no settings reader to go stale")
+    check("backdrop colour is applied" in src or "background" not in src,
+          "settings.py records why a stored background is ignored")
     try:
         win.destroy()
     except Exception:                                          # noqa: BLE001
         pass
-
 
 # -------------------------------------------------------------------- splash
 def test_splash():

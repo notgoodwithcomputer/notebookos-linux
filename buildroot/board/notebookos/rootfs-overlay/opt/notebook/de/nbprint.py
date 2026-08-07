@@ -1,16 +1,26 @@
 """Shared printing for Notebook OS.
 
-CUPS is the spooler (cupsd starts at boot); USB printers are auto-discovered by
-the kernel usblp driver + CUPS usb backend, with Gutenprint (~5000 models) and
-driverless IPP covering the drivers. Apps never talk to a printer directly: they
-render their document to a PDF with cairo and hand the file here, and we submit
-it with `lp`.
+CUPS is the spooler (cupsd starts at boot). Apps never talk to a printer
+directly: they render their document to a PDF with cairo and hand the file here,
+and we submit it with `lp`.
+
+A printer is reached one of two ways. Printers made since roughly 2016 advertise
+IPP Everywhere and rasterise pages themselves, so the `ippusb` backend hands
+them the PDF over their USB IPP interface and no driver is involved — see
+package/ippusb. Older printers need a page language, which comes from Gutenprint
+(~5000 models) plus brlaser, splix and captdriver for the host-based lasers.
+Settings picks between the two; nothing here has to care which was used.
 
 This module carries three things:
 
   * discovery + submit .......... list_printers() / submit_pdf()
   * a small themed Print dialog .. print_document() / print_booklet()
   * page/booklet rendering ....... simple_pdf() / booklet_pdf()
+
+Discovery is four `lpstat` calls at four seconds apiece, so the dialog runs it
+on a background job (see discover_printers_async) and opens immediately; only
+submission and the app's own PDF rendering still happen on the UI thread, and
+on_print says why.
 
 booklet_pdf() is the "Zine Print" engine shared by Novel and Screenplay: it lays
 N half-letter (5.5x8.5") logical pages 2-up onto letter sheets in saddle-stitch
@@ -27,6 +37,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+
+import nbjobs
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -134,6 +146,40 @@ def list_printers():
     return printers, default
 
 
+DISCOVER_KEY = "printers"
+
+
+def discover_printers_async(owner, on_ready, key=DISCOVER_KEY,
+                            policy=nbjobs.REPLACE):
+    """Run list_printers() on a background thread; call on_ready(printers,
+    default) on the owner's dispatcher, or not at all.
+
+    list_printers() runs four `lpstat` subprocesses with a four-second timeout
+    each, so on a machine whose cupsd is wedged or whose printer has been
+    unplugged it can block for the better part of quarter of a minute. Called on
+    the UI thread — which is how every caller used to call it — that is a Print
+    dialog that does not appear, from a menu item that gave no sign of having
+    been clicked, in an OS whose whole promise is that it responds.
+
+    `owner` is an nbjobs.JobOwner belonging to whatever will show the answer.
+    Close it and the answer is dropped: a discovery started by a dialog that has
+    since been closed (or closed and reopened) cannot reach back into it.
+
+    Discovery is defined never to fail — list_printers() already swallows
+    everything a missing or broken CUPS can do — so an error is delivered as the
+    same empty result the synchronous call would have returned.
+    """
+    def work(job):
+        job.checkpoint()
+        return list_printers()
+
+    return owner.start(
+        key, work,
+        on_done=lambda res: on_ready(res[0], res[1]),
+        on_error=lambda _err: on_ready([], None),
+        policy=policy)
+
+
 def printer_stopped(name):
     """Return a human-readable reason if the queue is stopped/disabled, else None.
 
@@ -160,7 +206,52 @@ def printer_stopped(name):
         if ln.strip():
             reason = ln.strip()
             break
-    return reason or "The printer queue is paused."
+    return explain_reason(reason) or "The printer queue is paused."
+
+
+# CUPS and IPP report why a printer stopped as a keyword. They are precise and
+# unreadable, and they are the words a person sees at the exact moment their
+# document did not come out, so the common ones are said in plain English.
+_REASONS = (
+    ("media-jam", "There is a paper jam."),
+    ("media-empty", "The printer is out of paper."),
+    ("media-needed", "The printer is out of paper."),
+    ("cover-open", "A cover on the printer is open."),
+    ("door-open", "A door on the printer is open."),
+    ("input-tray-missing", "The paper tray is missing."),
+    ("output-area-full", "The output tray is full."),
+    ("marker-supply-empty", "The printer is out of ink or toner."),
+    ("toner-empty", "The printer is out of toner."),
+    ("marker-supply-low", "The printer is low on ink or toner."),
+    ("toner-low", "The printer is low on toner."),
+    ("offline", "The printer is switched off or unplugged."),
+    ("shutdown", "The printer is switched off."),
+    ("timed-out", "The printer stopped responding."),
+    ("connecting-to-device", "The printer is not responding yet."),
+    ("paused", "The printer queue is paused."),
+)
+
+
+def explain_reason(text):
+    """A readable sentence for a CUPS/IPP state reason, or the text unchanged
+    when it is not one we know. Never returns empty for non-empty input."""
+    low = (text or "").lower()
+    for key, sentence in _REASONS:
+        if key in low:
+            return sentence
+    return (text or "").strip()
+
+
+def jobs_pending(name):
+    """True if the queue still has a job waiting or printing."""
+    if not _have("lpstat"):
+        return False
+    try:
+        out = subprocess.run(["lpstat", "-o", name], capture_output=True,
+                             text=True, timeout=4)
+    except Exception:
+        return False
+    return any(ln.strip() for ln in out.stdout.splitlines())
 
 
 def resume_printer(name):
@@ -175,6 +266,27 @@ def resume_printer(name):
     except Exception:
         return False
     return printer_stopped(name) is None
+
+
+def make_print_file(make_pdf):
+    """Render make_pdf(path) into a fresh temporary PDF and return its path.
+
+    Whatever make_pdf raises is re-raised, but the half-written temporary file
+    goes with it. A print that failed must not leave a file behind: the ENOSPC
+    message asks the person to free up some space, and the leftovers of the
+    attempt that just failed are part of what filled the disk. /tmp is a tmpfs
+    on the live system, so each abandoned draft also sits in RAM until reboot."""
+    fd, path = tempfile.mkstemp(suffix=".pdf", prefix="nbprint-")
+    os.close(fd)
+    try:
+        make_pdf(path)
+    except BaseException:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def submit_pdf(pdf_path, printer=None, copies=1, options=None,
@@ -248,7 +360,11 @@ def _booklet_order(total4):
         yield (total4 - 2 * s, 1 + 2 * s, 2 + 2 * s, total4 - 1 - 2 * s)
 
 
-def booklet_pdf(out_path, page_count, draw_page):
+FOLD_LINE_W = 0.4          # pt — a hairline, thin enough to fold along
+FOLD_LINE_INK = (0.0, 0.0, 0.0)
+
+
+def booklet_pdf(out_path, page_count, draw_page, fold_line=False):
     """Impose page_count half-letter (5.5x8.5") logical pages 2-up onto letter
     sheets in booklet folding order, front then back per sheet, so the printed
     stack folds down the middle into a reading-order booklet.
@@ -275,6 +391,19 @@ def booklet_pdf(out_path, page_count, draw_page):
     for fl, fr, bl, br in _booklet_order(total4):
         place(cr, fl, 0)              # front side: [left | right]
         place(cr, fr, HALF_W_PT)
+        # The fold, on the OUTSIDE of the finished booklet only. Sheet 1's
+        # front side is [back cover | front cover], so this hairline runs
+        # between them — down the spine — and is the line to fold and staple
+        # along once the stack is assembled. Drawn on that sheet alone: a line
+        # on the inner sheets would be buried in the fold and just costs ink.
+        if fold_line and sides == 0:
+            cr.save()
+            cr.set_source_rgb(*FOLD_LINE_INK)
+            cr.set_line_width(FOLD_LINE_W)
+            cr.move_to(HALF_W_PT, 0)
+            cr.line_to(HALF_W_PT, SHEET_H_PT)
+            cr.stroke()
+            cr.restore()
         cr.show_page()
         sides += 1
         place(cr, bl, 0)             # back side: [left | right]
@@ -433,7 +562,7 @@ class PdfText:
             self.y += lh
         self.y += gap_after
 
-    def rule(self, color="#ECE7DA", right=None, gap_after=18.0):
+    def rule(self, color="#D7D2C5", right=None, gap_after=18.0):
         """A hairline across the text column, then a gap."""
         if right is None:
             right = self.left + self.width
@@ -468,8 +597,8 @@ _CSS = b"""
 .nbprint * { font-family: "Nimbus Sans","Helvetica",sans-serif; color: #1A1916; }
 .nbprint-h { font-family: "Newsreader","Liberation Serif","Georgia",serif;
              font-size: 20px; font-weight: 600; }
-.nbprint-sub { font-size: 12.5px; color: #6E695E; }
-.nbprint-note { font-size: 12.5px; color: #9A9484; }
+.nbprint-sub { font-size: 12px; color: #6E695E; }
+.nbprint-note { font-size: 12px; color: #9A9484; }
 .nbprint entry, .nbprint combobox button.combo, .nbprint spinbutton {
              background: #FCFBF8; border: 1px solid #C9C4B6; border-radius: 4px;
              box-shadow: none; padding: 4px 8px; }
@@ -480,7 +609,7 @@ _CSS = b"""
              color: #FCFBF8; border: 1px solid #C8341E; border-radius: 4px;
              box-shadow: none; font-size: 14px; font-weight: 600; }
 .nbprint-primary:hover { background: #B12D19; border-color: #B12D19; }
-.nbprint-primary:disabled { background: #E0B8B0; border-color: #E0B8B0; color: #FCFBF8; }
+.nbprint-primary:disabled { background: #C9C4B6; border-color: #C9C4B6; color: #FCFBF8; }
 """
 _css_done = False
 
@@ -521,8 +650,13 @@ def _dialog(parent, title):
     return win, box
 
 
-def _no_printer_dialog(parent, extra_note):
-    win, box = _dialog(parent, "Print")
+def _no_printer_body(win, box, extra_note):
+    """The contents of the no-printer dialog, built into an existing box.
+
+    Split out of _no_printer_dialog so the async dialog can put the very same
+    widgets, in the same order, with the same words, into the window it already
+    opened — the "no printer" answer now arrives after the window does, and it
+    has to look like it always did."""
     h = Gtk.Label(label="No printer found", xalign=0)
     h.get_style_context().add_class("nbprint-h")
     box.pack_start(h, False, False, 0)
@@ -543,22 +677,22 @@ def _no_printer_dialog(parent, extra_note):
     close.connect("clicked", lambda *_: win.destroy())
     row.pack_end(close, False, False, 0)
     box.pack_start(row, False, False, 0)
+
+
+def _no_printer_dialog(parent, extra_note):
+    win, box = _dialog(parent, "Print")
+    _no_printer_body(win, box, extra_note)
     win.show_all()
     return win
 
 
-def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
-                  media=DEFAULT_MEDIA):
-    """Core dialog. make_pdf(path) writes the document PDF to path.
-    When booklet is True the copies row is joined by a two-sided toggle and the
-    supplied booklet_note is shown. `media` is the CUPS page size the document
-    was rendered at (see print_document)."""
-    printers, default = list_printers()
-    if not printers:
-        note = "File ▸ Export to PDF saves this document as a file instead."
-        return _no_printer_dialog(parent, note)
+NO_PRINTER_NOTE = "File ▸ Export to PDF saves this document as a file instead."
+LOOKING_TEXT = "Looking for printers…"
 
-    win, box = _dialog(parent, "Print")
+
+def _print_body(win, box, printers, default, job_name, make_pdf, booklet,
+                booklet_note, media):
+    """The contents of the Print dialog once the printer list is known."""
     h = Gtk.Label(label="Print", xalign=0)
     h.get_style_context().add_class("nbprint-h")
     box.pack_start(h, False, False, 0)
@@ -616,6 +750,17 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
     box.pack_start(status, False, False, 0)
 
     def on_print(_b):
+        # This handler stays on the UI thread ON PURPOSE, and is the one part of
+        # the dialog that was NOT moved onto nbjobs. make_pdf is the app's own
+        # renderer: Writer walks a live Gtk.TextBuffer, Novel and Screenplay
+        # measure with PangoCairo layouts created from widget state, Academics
+        # reads its stores as the window holds them. None of that is safe to
+        # touch from a worker thread — GTK is not thread-safe and Pango/cairo
+        # contexts made on the UI thread are not either — and a renderer that
+        # races the widget it is reading produces a document that is WRONG
+        # rather than one that is late. Freezing for the length of a render is
+        # the correct trade here; silently printing torn state is not.
+        #
         # Rendering + spooling blocks this handler for a beat; without this the
         # button stays live and an impatient second click prints twice.
         go.set_sensitive(False)
@@ -624,9 +769,7 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
             Gtk.main_iteration()
         pname = printers[combo.get_active() if combo.get_active() >= 0 else 0]["name"]
         try:
-            fd, path = tempfile.mkstemp(suffix=".pdf", prefix="nbprint-")
-            os.close(fd)
-            make_pdf(path)
+            path = make_print_file(make_pdf)
         except Exception as e:
             status.set_text(_prepare_problem(e))
             go.set_sensitive(True)
@@ -639,8 +782,19 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
             # A booklet is always imposed 2-up on a letter sheet by
             # booklet_pdf(), whatever the document's own page size.
             opts["media"] = "Letter"
-            opts["landscape"] = None
+            # NO `landscape` here. booklet_pdf writes pages that are ALREADY
+            # landscape — 792x612pt, the letter sheet turned on its side — so
+            # the PDF states its own orientation and CUPS turns it to fit the
+            # paper by itself. Asking for landscape on top of that rotated a
+            # second time, which mapped the 11in imposed width onto the 8.5in
+            # dimension and left CUPS to scale or crop the difference: text ran
+            # off the edge of the sheet.
             if two_sided is not None and two_sided.get_active():
+                # Short edge for a sheet folded down its middle: the back has to
+                # be the mirror of the front about the fold, so page 2 lands
+                # behind page 1. If a particular printer turns the paper the
+                # other way, the give-away is the back sides reading in the
+                # wrong order — everything else about the job is unaffected.
                 opts["sides"] = "two-sided-short-edge"
         ok, msg = submit_pdf(path, printer=pname,
                              copies=int(copies.get_value()),
@@ -656,8 +810,75 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
             go.set_sensitive(True)
 
     go.connect("clicked", on_print)
+
+
+def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
+                  media=DEFAULT_MEDIA):
+    """Core dialog. make_pdf(path) writes the document PDF to path.
+    When booklet is True the copies row is joined by a two-sided toggle and the
+    supplied booklet_note is shown. `media` is the CUPS page size the document
+    was rendered at (see print_document).
+
+    The window is returned before the printer list is known: discovery is four
+    `lpstat` calls (see discover_printers_async) and used to happen right here,
+    on the UI thread, before a single pixel of this dialog existed. Print showed
+    nothing at all for as long as that took. Now the window opens saying what it
+    is doing, and swaps in one of the two real bodies — the printer form, or the
+    unchanged "No printer found" panel — when the answer lands.
+
+    The job belongs to THIS window: the "destroy" handler closes the owner, so a
+    discovery still running when the dialog is closed delivers nothing, and a
+    dialog opened again afterwards is a different owner that the old answer has
+    no way to reach.
+
+    Printing itself stays on the UI thread deliberately; see on_print.
+    """
+    win, box = _dialog(parent, "Print")
+    owner = nbjobs.JobOwner(name="nbprint")
+    _OPEN_OWNERS.add(owner)
+
+    def _shut(*_a):
+        owner.close()
+        _OPEN_OWNERS.discard(owner)
+
+    win.connect("destroy", _shut)
+
+    # -- what the window says while it looks --------------------------------
+    h = Gtk.Label(label="Print", xalign=0)
+    h.get_style_context().add_class("nbprint-h")
+    box.pack_start(h, False, False, 0)
+    looking = Gtk.Label(label=LOOKING_TEXT, xalign=0)
+    looking.get_style_context().add_class("nbprint-sub")
+    box.pack_start(looking, False, False, 0)
+    wait_row = Gtk.Box(spacing=10)
+    wait_row.set_halign(Gtk.Align.END)
+    wait_row.set_margin_top(10)
+    wait_cancel = Gtk.Button(label="Cancel")
+    wait_cancel.get_style_context().add_class("nbprint-btn")
+    wait_cancel.connect("clicked", lambda *_: win.destroy())
+    wait_row.pack_end(wait_cancel, False, False, 0)
+    box.pack_start(wait_row, False, False, 0)
+
+    def _ready(printers, default):
+        for child in box.get_children():
+            box.remove(child)
+            child.destroy()
+        if printers:
+            _print_body(win, box, printers, default, job_name, make_pdf,
+                        booklet, booklet_note, media)
+        else:
+            _no_printer_body(win, box, NO_PRINTER_NOTE)
+        win.show_all()
+
+    discover_printers_async(owner, _ready)
     win.show_all()
     return win
+
+
+# Every dialog owner that is currently open. Only bookkeeping — the window's
+# "destroy" handler is what closes an owner — but it makes a leaked dialog
+# visible to the selftests instead of invisible.
+_OPEN_OWNERS = set()
 
 
 def print_document(parent, make_pdf, job_name="Document",

@@ -421,7 +421,7 @@ def _conf_text(card, device, cap=None):
 
       * `dmix` is not optional either, because `type hw` under the plug takes the
         device EXCLUSIVELY. "One app at a time" is not true of sound: the
-        Sequencer's tone engine holds its pipeline in PLAYING for as long as the
+        Sequencer's render engine holds its pipeline in PLAYING for as long as the
         window is open, Music and Video hold the device open while PAUSED, and
         the GBA emulator opens it through SDL. Measured on the build host, two
         openers of plughw:1,3 give the second "Device or resource busy", and

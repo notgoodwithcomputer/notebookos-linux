@@ -242,6 +242,8 @@ class MediaViewer(nbapp.AppWindow):
         self._vsink = None             # the embedded gtksink element, or None
         self._vwidget = None           # the sink's GtkWidget, or None
         self._v_playing = False        # transport play/pause toggle
+        self._v_path = None            # the clip the pipeline is loaded with
+        self._closed = False           # True once the window is being destroyed
         self._v_poll_id = 0            # GLib source polling video progress, or 0
         self._v_duration_ns = 0        # cached clip duration in ns
         self._v_user_seeking = False   # True while the user drags the seek bar
@@ -334,7 +336,7 @@ class MediaViewer(nbapp.AppWindow):
         wrap.set_halign(Gtk.Align.CENTER)
         wrap.set_valign(Gtk.Align.CENTER)
         try:
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("media", 56, "#9A9484"))
+            img = nbicons.image("media", 56, "#9A9484")
         except Exception:
             img = Gtk.Image()  # icon render failed -> blank placeholder image
         img.set_halign(Gtk.Align.CENTER)
@@ -384,8 +386,7 @@ class MediaViewer(nbapp.AppWindow):
         # The only unnamed control on the video transport.
         self._v_play.set_tooltip_text(_t("Play"))
         try:
-            self._v_play_img = Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf("play", 16, "#1A1916"))
+            self._v_play_img = nbicons.image("play", 16, "#1A1916")
         except Exception:
             self._v_play_img = Gtk.Image()
         self._v_play.add(self._v_play_img)
@@ -427,6 +428,14 @@ class MediaViewer(nbapp.AppWindow):
     def _show_surface(self, which):
         """Reveal exactly one stage surface: 'empty', 'image', 'video' or
         'notice'; the others are hidden."""
+        # Video-fullscreen belongs to the video stage and nothing else. Leaving
+        # that stage while it is on — Ctrl+O opening a picture mid-film (the
+        # toolbar is hidden, but the shortcut still works), a clip that fails to
+        # decode, trashing the last file — left the window with no menu bar, no
+        # toolbar, no filmstrip and the desktop panel still stood down, over a
+        # surface that has no Fullscreen button to press to get any of it back.
+        if which != "video" and getattr(self, "_vfull", False):
+            self._exit_video_fullscreen()
         self._empty.set_visible(which == "empty")
         self._scroll.set_visible(which == "image")
         self._video.set_visible(which == "video")
@@ -443,8 +452,7 @@ class MediaViewer(nbapp.AppWindow):
         openb.get_style_context().add_class("openbtn")
         ob = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         try:
-            ob.pack_start(Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf("folder", 15, "#1A1916")), False, False, 0)
+            ob.pack_start(nbicons.image("folder", 15, "#1A1916"), False, False, 0)
         except Exception:
             pass  # icon render failed -> omit the glyph, keep the Open button
         ob.pack_start(Gtk.Label(label=_t("Open")), False, False, 0)
@@ -507,7 +515,7 @@ class MediaViewer(nbapp.AppWindow):
         b.set_tooltip_text(tip)
         img = None
         try:
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(name, 16, TOOL_INK))
+            img = nbicons.image(name, 16, TOOL_INK)
             b.add(img)
         except Exception:
             pass  # icon render failed -> leave the toolbar button glyphless
@@ -730,7 +738,7 @@ class MediaViewer(nbapp.AppWindow):
                 else:
                     # nothing could read the file — a faint glyph reads as
                     # "no preview" instead of an empty, broken-looking cell
-                    img.set_from_pixbuf(nbicons.pixbuf("media", 22, "#C9C4B6"))
+                    nbicons.set_image(img, "media", 22, "#C9C4B6")
             except Exception:
                 pass
         if self._thumb_queue:
@@ -766,6 +774,16 @@ class MediaViewer(nbapp.AppWindow):
             return
 
         def _do():
+            # The allocation belongs to this exact strip generation. Opening
+            # another folder can rebuild the row before this idle runs, leaving
+            # `btn` detached while `_strip_scroll` already belongs to the new
+            # media. Applying A's allocation to B's adjustment makes the newly
+            # selected thumbnail jump off-screen. Destruction is the same
+            # ownership change, only terminal.
+            if (getattr(self, "_closed", False)
+                    or self._media_path != path
+                    or self._strip_btns.get(path) is not btn):
+                return False
             try:
                 adj = self._strip_scroll.get_hadjustment()
                 if adj is not None:
@@ -1034,10 +1052,22 @@ class MediaViewer(nbapp.AppWindow):
         ow, oh = pb.get_width(), pb.get_height()
         if ow <= 0 or oh <= 0:
             return
-        nw = max(1, int(round(ow * scale)))
-        nh = max(1, int(round(oh * scale)))
+        # `scale` is the zoom the user chose and stays in LOGICAL units -- it is
+        # what the percentage in the toolbar reports, and it must keep meaning
+        # "100% = one image pixel per point of layout" on every screen. `sf` is
+        # the screen's own density, applied on top: at 100% zoom on a 2x panel
+        # the viewer decodes twice the pixels and shows them in the same space.
+        # Without this a PHOTO VIEWER displayed soft photos on the one class of
+        # screen bought for looking at photos.
+        sf = nbicons.scale_factor()
+        nw = max(1, int(round(ow * scale * sf)))
+        nh = max(1, int(round(oh * scale * sf)))
         big = max(nw, nh)
         if big > MAX_PIX:               # keep an extreme zoom from OOM-ing
+            # MAX_PIX is a MEMORY ceiling and so is counted in real pixels, not
+            # logical ones -- but the zoom the user is told about must then be
+            # corrected by the same factor in LOGICAL terms, or the toolbar
+            # would report a percentage the image is not actually at.
             k = MAX_PIX / float(big)
             nw = max(1, int(nw * k))
             nh = max(1, int(nh * k))
@@ -1045,7 +1075,10 @@ class MediaViewer(nbapp.AppWindow):
         self._zoom = scale
         try:
             scaled = pb.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
-            self._img.set_from_pixbuf(scaled)
+            # Handed over as a surface carrying the device scale: those extra
+            # pixels are finer than logical units, and set_from_pixbuf would
+            # instead draw the photo at sf times its intended size.
+            nbicons.set_image_pixbuf(self._img, scaled, sf)
         except Exception:
             pass
         self._set_zoom(scale)
@@ -1179,9 +1212,9 @@ class MediaViewer(nbapp.AppWindow):
         img = self._btn_img.get("play")
         if img is not None:
             try:
-                img.set_from_pixbuf(nbicons.pixbuf(
+                nbicons.set_image(img,
                     "stopsq" if on else "play", 16,
-                    SEL_RED if on else TOOL_INK))
+                    SEL_RED if on else TOOL_INK)
             except Exception:
                 pass
 
@@ -1268,6 +1301,11 @@ class MediaViewer(nbapp.AppWindow):
             return
         try:
             self._player.set_state(Gst.State.NULL)
+            # The pipeline is reused for every clip, so the end-of-stream and
+            # error messages of the clip being replaced are still sitting on its
+            # bus. Dropped here, or they arrive after the new clip has started
+            # and rewind (or fail) the wrong film.
+            self._flush_video_bus()
             self._player.set_property("uri", Gst.filename_to_uri(path))
             self._v_duration_ns = 0
             self._v_dims_set = False
@@ -1275,7 +1313,12 @@ class MediaViewer(nbapp.AppWindow):
             self._v_total.set_text("0:00")
             self._set_seek(0)
             self._show_surface("video")
-            self._player.set_state(Gst.State.PLAYING)
+            self._v_path = path
+            if self._player.set_state(Gst.State.PLAYING) == \
+                    Gst.StateChangeReturn.FAILURE:
+                # the engine refused the clip: say so rather than show a
+                # Pause button over a picture that is not moving
+                raise RuntimeError("playback refused")
             self._v_playing = True
             self._set_video_glyph("pause")
             self._start_video_poll()
@@ -1286,9 +1329,25 @@ class MediaViewer(nbapp.AppWindow):
                 "The file may be damaged, or saved in a format Notebook OS "
                 "does not read. Try another video.")
 
+    def _flush_video_bus(self):
+        """Discard any message queued for the clip being replaced or stopped."""
+        if self._player is None:
+            return
+        try:
+            bus = self._player.get_bus()
+            if bus is not None:
+                bus.set_flushing(True)
+                bus.set_flushing(False)
+        except Exception:
+            pass
+
     def _stop_video(self):
         """Halt the pipeline and its progress poll (surface switching is the
-        caller's job)."""
+        caller's job).
+
+        Clearing `_v_path` is what makes the stop stick: a message already on
+        its way from the pipeline finds no clip loaded and does nothing."""
+        self._v_path = None
         if self._v_poll_id:
             try:
                 GLib.source_remove(self._v_poll_id)
@@ -1303,7 +1362,7 @@ class MediaViewer(nbapp.AppWindow):
                 pass
 
     def _on_video_toggle(self, *_):
-        if self._player is None:
+        if self._closed or self._player is None or self._v_path is None:
             return
         try:
             if self._v_playing:
@@ -1327,13 +1386,15 @@ class MediaViewer(nbapp.AppWindow):
         except Exception:
             pass
         try:
-            self._v_play_img.set_from_pixbuf(nbicons.pixbuf(name, 16, "#1A1916"))
+            nbicons.set_image(self._v_play_img, name, 16, "#1A1916")
         except Exception:
             pass
 
     def _on_video_eos(self, *_):
         # a clip finished — rewind to the start and pause, so the last frame is
         # not left frozen mid-transport.
+        if self._closed or self._v_path is None or self._player is None:
+            return
         try:
             self._player.seek_simple(
                 Gst.Format.TIME,
@@ -1348,6 +1409,8 @@ class MediaViewer(nbapp.AppWindow):
     def _on_video_error(self, _bus, _msg):
         # a decode/pipeline error — stop cleanly and show a neutral note rather
         # than wedge on the file.
+        if self._closed or self._v_path is None:
+            return
         self._stop_video()
         self._show_notice(
             "This video cannot be played",
@@ -1355,11 +1418,12 @@ class MediaViewer(nbapp.AppWindow):
             "does not read. Try another video.")
 
     def _start_video_poll(self):
-        if self._v_poll_id == 0:
+        if (not self._closed and self._v_path is not None
+                and self._v_poll_id == 0):
             self._v_poll_id = GLib.timeout_add(300, self._on_video_poll)
 
     def _on_video_poll(self):
-        if self._player is None:
+        if self._closed or self._player is None or self._v_path is None:
             self._v_poll_id = 0
             return False
         try:
@@ -1440,6 +1504,10 @@ class MediaViewer(nbapp.AppWindow):
         return "%d:%02d" % (secs // 60, secs % 60)
 
     def _on_destroy(self, *_):
+        # Raise the lifetime gate before teardown: a bus callback dispatched by
+        # set_state(NULL), or already queued behind this destroy handler, must
+        # see a closed owner and do nothing.
+        self._closed = True
         self._stop_slideshow()
         self._stop_video()
         self._cancel_thumbs()
@@ -1750,20 +1818,20 @@ class MediaViewer(nbapp.AppWindow):
         .toolbar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         /* Open: the one labelled control, an outlined paper button. */
         .openbtn { padding: 0 16px; min-height: 32px; border: 1px solid #C9C4B6;
-                   background: #FCFBF8; border-radius: 2px; box-shadow: none;
-                   font-size: 13.5px; font-weight: 600; color: #1A1916; }
+                   background: #FCFBF8; border-radius: 8px; box-shadow: none;
+                   font-size: 13px; font-weight: 600; color: #1A1916; }
         .openbtn:hover { background: #EFEBE0; }
         /* Tool buttons: flat pictographic icons, no chrome; a calm hover only. */
         .toolbtn { min-width: 32px; min-height: 32px; padding: 0;
                    border: none; background: transparent;
-                   border-radius: 2px; box-shadow: none; }
-        .toolbtn:hover { background: #EAE5D9; }
+                   border-radius: 8px; box-shadow: none; }
+        .toolbtn:hover { background: #F1EEE6; }
         .toolbtn:disabled { border: none; background: transparent; }
         /* the running-slideshow button: a faint red cell behind its red glyph,
            the one active accent among the tools (never decorative). */
-        .toolbtn.active { background: #FBEFEC; }
-        .toolbtn.active:hover { background: #F7E3DD; }
-        .zoompct { font-size: 12.5px; color: #9A9484; }
+        .toolbtn.active { background: #EAE3D2; }
+        .toolbtn.active:hover { background: #DED4C2; }
+        .zoompct { font-size: 12px; color: #9A9484; }
         /* the zoom percentage is also the Fit-to-window button: it reads as
            plain text but takes the same calm hover as the other tools. */
         .fitbtn { min-width: 44px; padding: 0 4px; }
@@ -1775,16 +1843,16 @@ class MediaViewer(nbapp.AppWindow):
         .stage * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .stage-title { font-size: 16px; font-weight: 600; color: #6E695E;
                        margin-top: 4px; }
-        .stage-sub { font-size: 13.5px; color: #9A9484; }
+        .stage-sub { font-size: 13px; color: #9A9484; }
         .imgscroll, .imgscroll viewport { background-color: #F1EEE6; }
 
         /* Video surface: a dark stage for the frame, with a paper transport bar
            beneath (play/pause, timecodes, seek). */
-        .videobox { background: #16150F; }
+        .videobox { background: #1A1916; }
         .vtransport { background: #F4F2EC; border-top: 1px solid #D7D2C5;
                       padding: 8px 18px; }
         .vtransport * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .vtimecode { font-size: 12.5px; color: #6E695E; }
+        .vtimecode { font-size: 12px; color: #6E695E; }
 
         .infopanel { background: #F4F2EC; border-left: 1px solid #C9C4B6;
                      padding: 28px 26px; }
@@ -1792,8 +1860,8 @@ class MediaViewer(nbapp.AppWindow):
         .info-head { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
                      font-weight: 700; margin-bottom: 18px; }
         .info-row { padding: 12px 0; border-bottom: 1px solid #D7D2C5; }
-        .info-key { font-size: 13.5px; color: #6E695E; }
-        .info-val { font-size: 13.5px; color: #1A1916; }
+        .info-key { font-size: 13px; color: #6E695E; }
+        .info-val { font-size: 13px; color: #1A1916; }
 
         .filmstrip { background: #F4F2EC; border-top: 1px solid #D7D2C5; }
         /* Opaque rail tone: a transparent viewport window renders solid black
@@ -1805,27 +1873,27 @@ class MediaViewer(nbapp.AppWindow):
            accent in this viewer), never black. */
         .filmcell { min-width: 116px; min-height: 66px; padding: 2px;
                     margin: 0 4px; border: 1px solid #D7D2C5; background: #FCFBF8;
-                    border-radius: 2px; box-shadow: none; }
+                    border-radius: 8px; box-shadow: none; }
         .filmcell:hover { border-color: #C9C4B6; background: #F4F2EC; }
-        .filmcell.filmsel { border-color: #C8341E; background: #FBEFEC; }
-        .strip-empty { font-size: 12.5px; color: #9A9484;
+        .filmcell.filmsel { border-color: #C8341E; background: #EAE3D2; }
+        .strip-empty { font-size: 12px; color: #9A9484;
                        font-family: "Nimbus Sans","Helvetica",sans-serif; }
 
         /* In-window confirmation card (Move to Trash): the house pattern of
            warm paper, a taupe hairline, and the one signage red reserved for
            the single destructive action. */
-        .vdlg { background: #F8F7F2; border: 1px solid #C4BFB1;
+        .vdlg { background: #F8F7F2; border: 1px solid #C9C4B6;
                 padding: 24px 28px; }
         .vdlg * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .vdlg-title { font-size: 17px; font-weight: 700; color: #1A1916; }
         .vdlg-body { font-size: 13px; color: #6E695E; }
-        .vdlg-btn { min-height: 34px; padding: 0 18px; border-radius: 2px;
+        .vdlg-btn { min-height: 34px; padding: 0 18px; border-radius: 8px;
                     border: 1px solid #C9C4B6; background: #FCFBF8;
                     color: #1A1916; font-size: 14px; box-shadow: none; }
-        .vdlg-btn:hover { background: #ECE7DB; }
+        .vdlg-btn:hover { background: #EFEBE0; }
         .vdlg-primary { background: #C8341E; border-color: #C8341E;
                         color: #FCFBF8; font-weight: 600; }
-        .vdlg-primary:hover { background: #B12C18; border-color: #B12C18; }
+        .vdlg-primary:hover { background: #B12D19; border-color: #B12D19; }
         """
         prov = Gtk.CssProvider()
         prov.load_from_data(css)

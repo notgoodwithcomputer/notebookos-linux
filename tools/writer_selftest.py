@@ -21,11 +21,16 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gtk, Pango, GdkPixbuf  # noqa: E402
+from gi.repository import Gtk, GLib, Pango, GdkPixbuf  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DE = os.path.abspath(os.path.join(HERE, "..", "buildroot", "board", "notebookos",
                                   "rootfs-overlay", "opt", "notebook", "de"))
+# `--de DIR` points the suite at a scratch copy, which is how a red-proof
+# sabotages the app without touching the tree. Without it a mutation run
+# silently measures the REAL writer.py and reports a clean pass (measured).
+if "--de" in sys.argv:
+    DE = os.path.abspath(sys.argv[sys.argv.index("--de") + 1])
 if DE not in sys.path:
     sys.path.insert(0, DE)
 
@@ -58,6 +63,25 @@ def check(name, cond):
 def has(name, a, b):
     return w._range_has_tag(buf.get_iter_at_offset(a),
                             buf.get_iter_at_offset(b), name)
+
+
+def effective(offset):
+    """The (points, bold) a reader would actually SEE at offset.
+
+    Checking that a tag is present is not the same as checking it has any
+    effect: GtkTextBuffer resolves two tags that set the same property by
+    priority, which is creation order, so a tag can be applied and lose. This
+    suite asserted tag presence for a long time while Heading 1 was visibly
+    doing nothing to any text whose size had been set from the toolbar.
+    get_tags() returns tags in increasing priority, so the last setter wins."""
+    it = buf.get_iter_at_offset(offset)
+    pts, bold = float(writer.DEFAULT_SIZE), False
+    for t in it.get_tags():
+        if t.get_property("size-set"):
+            pts = t.get_property("size-points")
+        if t.get_property("weight-set"):
+            bold = t.get_property("weight") >= Pango.Weight.BOLD
+    return (round(pts, 1), bold)
 
 
 def text():
@@ -146,6 +170,169 @@ check("bullet list applied", has("list:bullet", 0, 10))
 w._toggle_list("bullet")
 check("bullet list toggles off", not has("list:bullet", 0, 10))
 
+# ---- styles must CHANGE THE TEXT, not merely be applied ----------------------
+# The reported bug: pick Heading 1 and nothing happens. It happened to any text
+# whose size had ever been set from the toolbar, and it stuck across save and
+# reopen, because a lazily created "size:N" tag outranks every paragraph style.
+buf.set_text("Chapter One\nbody\n")
+buf.place_cursor(buf.get_iter_at_offset(3))
+w._set_style("Heading 1")
+check("Heading 1 actually makes the text heading-sized",
+      effective(3) == (float(writer.STYLES["Heading 1"][0]), True))
+w._set_style("Body")
+check("Body actually returns the text to body size",
+      effective(3) == (float(writer.DEFAULT_SIZE), False))
+
+select(0, 11)
+w._apply_value_tag("size:", "size:12")
+buf.place_cursor(buf.get_iter_at_offset(3))
+w._set_style("Heading 1")
+check("Heading 1 still takes after the size dropdown has been used",
+      effective(3) == (float(writer.STYLES["Heading 1"][0]), True))
+w._set_style("Title")
+check("Title takes over from Heading 1",
+      effective(3) == (float(writer.STYLES["Title"][0]), True))
+
+# ...and a size chosen AFTER a style must still win, or the size dropdown would
+# be the thing that stopped working.
+select(0, 11)
+w._apply_value_tag("size:", "size:9")
+check("a size chosen after a style still wins", effective(3) == (9.0, True))
+
+# ---- superscript / subscript -------------------------------------------------
+buf.set_text("H2O and x2\n")
+select(1, 2)
+w._toggle_char("sub")
+check("subscript applied to a selection", has("sub", 1, 2))
+select(1, 2)
+w._toggle_char("super")
+check("superscript replaces subscript rather than stacking with it",
+      has("super", 1, 2) and not has("sub", 1, 2))
+select(1, 2)
+w._toggle_char("super")
+check("superscript toggles off", not has("super", 1, 2))
+
+# It has to reach the PRINTED page too, not just the screen: a marker that is
+# raised on screen and full-size on the baseline in the PDF is the same bug
+# class as the styles that were applied but had no effect.
+select(1, 2)
+w._toggle_char("super")
+_al = w._line_attrs(buf.get_iter_at_offset(0), buf.get_iter_at_offset(10))
+
+
+def _pango_attrs(al):
+    got = []
+    it = al.get_iterator()
+    while True:
+        for a in it.get_attrs():
+            got.append(a.klass.type)
+        if not it.next():
+            break
+    return got
+
+
+check("the PDF renderer raises a superscript run",
+      Pango.AttrType.RISE in _pango_attrs(_al))
+check("the PDF renderer also shrinks it",
+      Pango.AttrType.SIZE in _pango_attrs(_al))
+check("both scripts are in the saved tag list",
+      "super" in w._serial_tag_names() and "sub" in w._serial_tag_names())
+_doc = w._serialize()
+buf.set_text("")
+w._deserialize(_doc)
+check("superscript survives a save and reopen", has("super", 1, 2))
+
+# ---- page breaks ---------------------------------------------------------
+buf.set_text("one\ntwo\nthree\n")
+buf.place_cursor(buf.get_iter_at_offset(5))       # inside "two"
+w._toggle_page_break()
+check("a page break is set on the paragraph the caret is in",
+      w._line_break(buf.get_iter_at_offset(5)))
+check("...and not on its neighbours",
+      not w._line_break(buf.get_iter_at_offset(1))
+      and not w._line_break(buf.get_iter_at_offset(10)))
+_flags = [b for (_t_, _a, _j, _i, _s, _lk, _li, _o, b) in w._para_iter()]
+check("the paragraph iterator reports exactly one break", _flags.count(True) == 1)
+
+# It has to reach the paper: a break that only draws a red line on screen and
+# prints nothing is worse than no break at all.
+import tempfile as _tf
+
+
+def _render_pages(text_setup):
+    """Render to a throwaway PDF and return how many sheets came out."""
+    fd, path = _tf.mkstemp(suffix=".pdf")
+    os.close(fd)
+    text_setup()
+    n = w._render_pdf(path)
+    ok_size = os.path.getsize(path) > 0
+    os.unlink(path)
+    return n, ok_size
+
+
+_n_with, _ok = _render_pages(lambda: None)
+check("a document with a page break renders", _ok)
+check("the break puts the rest of the document on a second sheet",
+      _n_with == 2)
+
+# ...and the same three lines with no break stay on one sheet, so the count
+# above is the break's doing and not the paper simply running out.
+_saved = w._serialize()
+buf.set_text("one\ntwo\nthree\n")
+_n_without, _ = _render_pages(lambda: None)
+check("the same text with no break stays on one sheet", _n_without == 1)
+w._deserialize(_saved)
+
+_doc = w._serialize()
+buf.set_text("")
+w._deserialize(_doc)
+check("the page break survives a save and reopen",
+      w._line_break(buf.get_iter_at_offset(5)))
+buf.place_cursor(buf.get_iter_at_offset(5))
+w._toggle_page_break()
+check("toggling again takes the break away",
+      not w._line_break(buf.get_iter_at_offset(5)))
+
+# ---- zoom, tab stops, and pagination by LINE --------------------------------
+check("a fresh document is at actual size", w._zoom == writer.DEFAULT_ZOOM)
+w._zoom_step(1)
+check("Zoom In magnifies", w._zoom > writer.DEFAULT_ZOOM)
+check("...and the paper grows with the text",
+      w._px_per_in() == writer.PX_PER_IN * w._zoom)
+w._set_zoom(99.0)
+check("zoom cannot exceed the largest step", w._zoom == writer.ZOOM_STEPS[-1])
+w._set_zoom(0.01)
+check("...nor go below the smallest", w._zoom == writer.ZOOM_STEPS[0])
+w._set_zoom(1.0)
+
+check("a fresh document has no tab stops of its own", w._tabs() == [])
+w._page["tabs"] = [1.0, 2.5, 2.5]
+check("stops are sorted and de-duplicated", w._tabs() == [1.0, 2.5])
+w._apply_tabs()
+check("the view is given the stops", w.body.get_tabs() is not None)
+w._clear_tabs()
+check("Clear Tab Stops empties them", w._tabs() == [])
+
+# The renderer used to draw a paragraph as ONE block and move it whole to the
+# next sheet, so a paragraph taller than a page ran off the bottom of the paper
+# and every line past the edge was lost.
+_long = ("Lorem ipsum dolor sit amet consectetur adipiscing elit sed do "
+         "eiusmod tempor incididunt ut labore. ") * 90
+buf.set_text(_long)
+_fd, _p = _tf.mkstemp(suffix=".pdf")
+os.close(_fd)
+_pages = w._render_pdf(_p)
+os.unlink(_p)
+check("one paragraph longer than a page is split across pages, not clipped "
+      "(%d pages)" % _pages, _pages >= 3)
+buf.set_text("short\n")
+_fd, _p = _tf.mkstemp(suffix=".pdf")
+os.close(_fd)
+check("...while a short document is still one page", w._render_pdf(_p) == 1)
+os.unlink(_p)
+check("widow and orphan minimums are set",
+      writer.ORPHAN_MIN >= 2 and writer.WIDOW_MIN >= 2)
+
 # ---- links: a real tagged span, with the href in the tag name ---------------
 URL = "https://example.org/a"
 buf.set_text("")
@@ -185,7 +372,12 @@ check("round-trip restores the text", text().startswith("Chapter One"))
 check("round-trip restores bold", has("bold", 0, 11))
 check("round-trip restores the paragraph style", has("style:Heading 2", 0, 11))
 
-# ---- images: a real embedded pixbuf that persists as a path reference --------
+# ---- images: the BYTES travel with the document, not a path to them ----------
+# ROADMAP #1. This used to hand-build _img_meta with just {"path", "ow"} and
+# then assert a path was collected — so it never touched the embedding at all,
+# and round-tripped through the load-from-path fallback instead. It would have
+# gone on passing with the fix removed. The picker is patched out (a dialog is
+# not reachable from here); everything after it is the real code path.
 img_path = os.path.join(tempfile.gettempdir(), "writer_selftest_img.png")
 have_img = True
 try:
@@ -196,29 +388,74 @@ except Exception as e:
     have_img = False
     check("test image written (%s)" % e, False)
 
+def first_pixbuf():
+    probe = buf.get_start_iter()
+    while True:
+        pb = probe.get_pixbuf()
+        if pb is not None:
+            return pb
+        if not probe.forward_char():
+            return None
+
+
+def is_the_test_image():
+    """The SAME picture, not merely a picture.
+
+    When neither the bytes nor the original file can be found, writer draws a
+    visible placeholder — correct behaviour, and a pixbuf. So "a pixbuf is
+    present" passes with the embedding removed (measured: it did). 16x10 of
+    one known colour is unmistakable.
+    """
+    pb = first_pixbuf()
+    if pb is None:
+        return False, "no pixbuf at all"
+    if (pb.get_width(), pb.get_height()) != (16, 10):
+        return False, "%dx%d — the placeholder, not the picture" % (
+            pb.get_width(), pb.get_height())
+    px = pb.get_pixels()[:3]
+    if tuple(px) != (0x33, 0x66, 0xff):
+        return False, "wrong colour %r" % (tuple(px),)
+    return True, "16x10 #3366ff"
+
+
 if have_img:
     buf.set_text("A B")
     buf.place_cursor(buf.get_iter_at_offset(1))
-    it = buf.get_iter_at_mark(buf.get_insert())
-    buf.insert_pixbuf(it, pb)
-    w._img_meta[pb] = {"path": img_path, "ow": 16}
+    _real_open = writer.nbpicker.open_file
+    writer.nbpicker.open_file = lambda *a, **k: img_path
+    try:
+        w._insert_image()
+    finally:
+        writer.nbpicker.open_file = _real_open
     doc = w._serialize()
     check("image placeholder present in the serialised body",
           writer.OBJ in doc["body"])
+    recs = doc["images"]
     check("image path collected for persistence",
-          any(i.get("path") == img_path for i in doc["images"]))
+          any(i.get("path") == img_path for i in recs))
+    embedded = any(i.get("data") for i in recs)
+    check("the picture itself is embedded, not just its path (%s)"
+          % ", ".join(sorted({k for i in recs for k in i})), embedded)
+
+    # The whole point: the source goes away. A USB stick is pulled, a file is
+    # tidied up — and the document has to be complete on its own.
+    os.remove(img_path)
     buf.set_text("")
     w._img_meta.clear()
     w._deserialize(doc)
-    found = False
-    probe = buf.get_start_iter()
-    while True:
-        if probe.get_pixbuf() is not None:
-            found = True
-            break
-        if not probe.forward_char():
-            break
-    check("image re-embedded after a save/reopen round-trip", found)
+    same, why = is_the_test_image()
+    check("the picture survives the original file being deleted (%s)" % why,
+          same)
+
+    # And it must still be there after an autosave/undo cycle, which is where
+    # a path reference used to lose it a second time.
+    doc2 = w._serialize()
+    buf.set_text("")
+    w._img_meta.clear()
+    w._deserialize(doc2)
+    same2, why2 = is_the_test_image()
+    check("...and through a second round-trip with the source gone (%s)" % why2,
+          same2)
 
 # ---- tables ------------------------------------------------------------------
 buf.set_text("")
@@ -249,6 +486,39 @@ check("redo wipes it again", text() == "")
 w._undo()
 check("undo again", text() == kept)
 check("history is capped at 100 checkpoints", len(w._history) <= 100)
+
+# ---- an undo leaves the document UNSAVED ------------------------------------
+# Undo rebuilds the buffer through _deserialize, which suppresses the buffer's
+# "changed" handler on purpose — so undo and redo used to be the only edits in
+# Writer that never reached _mark_dirty. The document on screen no longer
+# matched the file on disk while the chip still read "● Saved 14:32", no
+# autosave was armed for it, and File > New / File > Open discarded the undone
+# work without asking, because _confirm_discard consults _file_dirty alone.
+# (History here is ["", kept, ""] with _hi at `kept`, so both moves are live.)
+def _clean():
+    """Pretend the document was just written to its file."""
+    w._file_dirty = False
+    if w._save_timer:
+        GLib.source_remove(w._save_timer)
+        w._save_timer = None
+
+
+_clean()
+w._redo()
+check("redo marks the document unsaved", w._file_dirty is True)
+check("redo arms the autosave", w._save_timer is not None)
+_clean()
+w._undo()
+check("undo marks the document unsaved", w._file_dirty is True)
+check("undo arms the autosave", w._save_timer is not None)
+check("undo still restored the text", text() == kept)
+# ...and a redo with nothing to redo must not claim an edit that never happened
+while w._hi < len(w._history) - 1:
+    w._redo()
+_clean()
+w._redo()
+check("a redo at the end of the history changes nothing and stays saved",
+      w._file_dirty is False and w._save_timer is None)
 
 # ---- the printed page's header and footer are the AUTHOR'S OWN text --------
 # They were drawn with cairo's toy API bound to Liberation Sans, which carries

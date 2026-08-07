@@ -27,15 +27,25 @@ import time
 import subprocess
 
 import nbapp
+import nbprefs
+import nbmotion
+import nbtransitions
+import nbstate
 import nbicons
 import nbprint
 import nbi18n
 import nbaudio
+import nbjobs
 from nbi18n import _t
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 CFG_FILE = os.path.join(CFG_DIR, "settings.json")
+
+# Which pane the window was left on. Window state, not a preference: it is
+# stored beside the preferences because there is only one file, and it is
+# validated against the panes this build has before it is used.
+LAST_PANE = "last_pane"
 
 # Time zones as (label, IANA name, POSIX TZ string). This is an offline
 # appliance built WITHOUT tzdata (no /usr/share/zoneinfo), so the IANA name is
@@ -73,6 +83,29 @@ DEFAULT_APP_CATEGORIES = [
     ("Images (.png, .jpg)", [".png", ".jpg", ".jpeg", ".gif"], "media"),
     ("E-books (.epub, .pdf)", [".epub", ".pdf"], "ebook"),
 ]
+
+def resolve_default_app(mapping, exts, default_mod):
+    """Which app a Default Apps category is actually set to open with.
+
+    settings["default_apps"] is a plain {ext: module} dict on disk, so its
+    values are not guaranteed to name an app this build still offers: earlier
+    images listed more of them, and the file is hand-editable. A value that is
+    no longer a choice is not a choice — falling back to the FIRST entry of
+    APP_CHOICES (which is Writer) claimed images open in the word processor,
+    which is both untrue and not something the user ever picked. The category's
+    own default is the honest answer, and it is the one Finder would reach for
+    anyway."""
+    known = [m for m, _d in APP_CHOICES]
+    if isinstance(mapping, dict):
+        # Every extension in the category, not just the first: the page writes
+        # all of them together, but a mapping that arrived any other way can
+        # carry .jpg without .png.
+        for ext in exts:
+            mod = mapping.get(ext)
+            if mod in known:
+                return mod
+    return default_mod if default_mod in known else known[0]
+
 
 # ---- Backup ----
 # This machine has no network and one disk. Everything a person makes on it
@@ -190,13 +223,30 @@ class Settings(nbapp.AppWindow):
         super().__init__()
         self._install_css()
         self._settings = self._load_settings()
+        # "We are putting the window back, not editing it." Reopening on the
+        # pane the user left walks the same _select the sidebar walks, so
+        # without this the restore itself would look like a preference change
+        # and write settings.json on every launch. Set before anything can
+        # reach _save_settings.
+        self._restore = nbstate.RestoreScope()
         self._confirm_layer = None
         self._dt_source = None
+        # Built by _page_datetime, but declared here: _apply_datetime writes to
+        # it, and a method that reaches for a widget only some pages create is
+        # the exact shape of the crash that stopped Settings opening at all
+        # (task 001). _set_status already treats None as "nowhere to report".
+        self._dt_status = None
         # Cleared on destroy, so a worker thread that finishes after the window
         # has gone (the backup copy, the size measurement) drops its result
         # instead of poking widgets that no longer exist.
         self._alive = True
         self._bk_working = False
+        # The backup copy is the one job in Settings that writes hundreds of
+        # files onto something the person is standing there waiting to pull
+        # out, so it gets a real owner rather than a bare thread: closing the
+        # window cancels it at the next file boundary instead of leaving it
+        # copying to a stick nobody is watching any more. Article V §2.5/§2.6.
+        self._bk_jobs = nbjobs.JobOwner(name="settings-backup")
         self.connect("destroy", self._on_destroy)
 
         body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -227,10 +277,17 @@ class Settings(nbapp.AppWindow):
         sb.pack_start(sbscroll, True, True, 0)
 
         self.stack = Gtk.Stack()
-        # Instant switch (no crossfade): a frame-clock-driven transition stalls
-        # under the no-compositor swrast fallback (the new page never finishes
-        # fading in) and only adds latency on virgl. Impatient users want the
-        # section to change the instant they click.
+        # The shared page-switch primitive owns the transition from here on:
+        # it sets the type and duration per switch so the direction follows the
+        # sidebar order (going down the list slides forward, back up slides
+        # back) instead of every switch looking identical. It also keeps the
+        # old behaviour where it mattered — under the no-compositor swrast
+        # fallback nbmotion's policy resolves to instant, which is exactly the
+        # NONE this line used to hard-code, because a transition that stalls
+        # there never finishes fading the new page in.
+        self._pager = nbtransitions.PageSwitcher(
+            self.stack, order=[name for name, _icon in SECTIONS],
+            duration=nbtransitions.PAGE)
         self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
         body.pack_start(self.stack, True, True, 0)
 
@@ -241,8 +298,7 @@ class Settings(nbapp.AppWindow):
             row.get_style_context().add_class("setrow")
             hb = Gtk.Box(spacing=12)
             try:
-                icon_img = Gtk.Image.new_from_pixbuf(
-                    nbicons.pixbuf(icon, 18, "#6E695E"))
+                icon_img = nbicons.image(icon, 18, "#6E695E")
             except Exception:
                 # icon renderer unavailable — keep the row, drop the glyph.
                 icon_img = Gtk.Image()
@@ -264,6 +320,7 @@ class Settings(nbapp.AppWindow):
         # visible System page is built up front, so the window opens instantly
         # on real content.
         self._built = set()
+        self._switch_gen = 0     # the newest _select; see _select / _pager
         self._page_holders = {}
         self._page_builders = {
             "System": self._page_system,
@@ -299,16 +356,39 @@ class Settings(nbapp.AppWindow):
         # to the stack (not just _select) catches every switch path: sidebar
         # clicks, the "View" menu, and any direct set_visible_child_name call.
         self.stack.connect("notify::visible-child-name", self._on_page_switch)
+        # Reopen on the pane this window was left on. The stored name is run
+        # through nbstate.choice against the panes that actually exist in THIS
+        # build, so a hand-edited settings.json, a pane a later build removed,
+        # or a number instead of a name all land on System rather than leaving
+        # the stack with no visible child. The whole restore runs inside
+        # self._restore, so it selects the pane without recording it as a
+        # choice and without writing settings.json.
+        start = nbstate.choice(
+            self._settings.get(LAST_PANE),
+            [name for name, _icon in SECTIONS if name in self._page_builders],
+            "System")
         # Build the first page eagerly so the window opens on real content.
-        self._ensure_built("System")
-        self._select(None, "System")
+        with self._restore:
+            self._ensure_built(start)
+            self._select(None, start)
 
         # Re-apply persisted preferences so they actually take effect this
         # session (each guarded — a missing tool is a no-op, never a crash).
         self._apply_saved_prefs()
 
     def _select(self, _btn, name):
-        self.stack.set_visible_child_name(name)
+        # Every path into a pane goes through the shared switcher — sidebar
+        # clicks, the View menu, and the initial selection — so the direction
+        # is decided in one place from one order. The switch is synchronous, so
+        # a burst of rapid clicks leaves the stack on the LAST one asked for;
+        # the generation token it returns is what any deferred work (a lazily
+        # built page, a restored scroll position) checks before it lands.
+        self._switch_gen = self._pager.switch(name)
+        # Remember where the user actually went, so the next launch opens here.
+        # Not while restoring: that path is this same call replaying the stored
+        # pane, and it has nothing new to record.
+        if not self._restore.active:
+            self._settings[LAST_PANE] = name
         for n, row in self._rows:
             ctx = row.get_style_context()
             if n == name:
@@ -490,7 +570,7 @@ class Settings(nbapp.AppWindow):
 
     def _pref_switch(self, card, label, key, default, first=False,
                      sub=None, on_change=None):
-        sw = Gtk.Switch()
+        sw = nbapp.PaperSwitch()
         sw.set_active(bool(self._settings.get(key, default)))
         sw.connect("state-set", self._on_pref_switch, key, on_change)
         self._row_widget(card, label, sw, first=first, sub=sub)
@@ -518,6 +598,12 @@ class Settings(nbapp.AppWindow):
         return {}
 
     def _save_settings(self):
+        # Every preference handler mutates self._settings and calls this, so
+        # this one line is what makes restoration read-only: a control that
+        # emits its signal while its page is being built during a restore
+        # cannot persist anything the user did not ask for.
+        if getattr(self, "_restore", None) is not None and self._restore.active:
+            return
         try:
             nbapp.atomic_write_json(CFG_FILE, self._settings)
         except Exception:
@@ -525,6 +611,7 @@ class Settings(nbapp.AppWindow):
 
     def _on_destroy(self, *_):
         self._alive = False
+        self._backup_close()
         # Stop the Date & Time clock ticker so nothing fires after teardown.
         src = getattr(self, "_dt_source", None)
         if src is not None:
@@ -645,6 +732,20 @@ class Settings(nbapp.AppWindow):
             self._confirm_layer = None
         return True
 
+    def _on_key(self, w, ev):
+        # Esc leaves the INNERMOST thing first (interaction constitution,
+        # Article I §4). The confirm card above is what Restart, Shut Down and
+        # Remove printer put on screen, and without this Esc fell straight
+        # through to the base handler and closed Settings out from under the
+        # question instead of answering it. Same shape as accounting.py's
+        # override; _close_confirm() always returns True, so the layer itself
+        # is what decides whether the key was consumed.
+        if (ev.keyval == Gdk.KEY_Escape
+                and getattr(self, "_confirm_layer", None) is not None):
+            self._close_confirm()
+            return True
+        return super()._on_key(w, ev)
+
     def _apply_saved_prefs(self):
         # No backdrop colour is applied. The alternate desktop colours were
         # removed (they mis-rendered behind the widget board), so a "background"
@@ -660,27 +761,20 @@ class Settings(nbapp.AppWindow):
                 if iana == tz:
                     self._apply_tz(iana, posix)
                     break
-        # Render scale — re-apply the saved xrandr supersample factor so the
-        # value shown on the Displays page is genuinely active (the 1.0 native
-        # default is a no-op; a missing xrandr is silently ignored).
-        scale = str(self._settings.get("display_scale", "1.0"))
-        if scale in ("1.25", "1.5", "2.0"):
-            out = self._x_output()
-            if out:
-                run(["xrandr", "--output", out, "--scale",
-                     "%sx%s" % (scale, scale)])
-        # Screen-blank timeout
-        if "blank_timeout" in self._settings:
-            self._apply_blank(self._cfg_int("blank_timeout", 0))
-        # Keyboard repeat
-        if "kbd_delay" in self._settings or "kbd_rate" in self._settings:
-            self._apply_repeat(self._cfg_int("kbd_delay", 500),
-                               self._cfg_int("kbd_rate", 25))
-        # Mouse
-        if "pointer_speed" in self._settings:
-            self._apply_pointer_speed(self._cfg_float("pointer_speed", 0.0))
-        if "natural_scroll" in self._settings:
-            self._apply_natural_scroll(self._settings["natural_scroll"])
+        # Screen blanking, key repeat and render scale, through the module
+        # session.sh runs at start-up. Opening Settings used to be the ONLY
+        # thing that applied them (ROADMAP #22) — nothing starts Settings at
+        # boot, so a restart put the machine back on the defaults while the
+        # page went on showing the choice. This call is now the redundant one.
+        nbprefs.apply_all(self._settings)
+        # "pointer_speed" and "natural_scroll" are deliberately IGNORED, for the
+        # same reason as "background" above: the Mouse & Touchpad page was
+        # removed because it was inert (xinput is not in the image, so the
+        # slider moved and the pointer did not). An upgraded machine still has
+        # both keys in its settings.json, and honouring them here would need
+        # apply methods that were removed with the page -- which is exactly what
+        # used to happen: this ran in __init__, so Settings raised AttributeError
+        # and would not open at all on any machine that had ever touched Mouse.
         # Accessibility is NOT re-applied here: nbapp reads the same two keys
         # as it is imported, which is what makes the choice reach every app
         # rather than this one. Doing it again would only re-parse stylesheets
@@ -902,14 +996,7 @@ class Settings(nbapp.AppWindow):
 
         Falls back to the first connected output, which is what a desktop with
         no built-in panel has and what this always returned."""
-        if o is None:
-            _rc, o = run(["xrandr"])
-        connected = [line.split()[0] for line in o.splitlines()
-                     if " connected" in line and line[:1].strip()]
-        for name in connected:
-            if name.startswith(("eDP", "LVDS", "DSI")):
-                return name
-        return connected[0] if connected else ""
+        return nbprefs.x_output(o)
 
     def _x_modes(self, out, o=None):
         if o is None:
@@ -1032,7 +1119,7 @@ class Settings(nbapp.AppWindow):
         adj = Gtk.Adjustment(value=vol, lower=0, upper=100, step_increment=5)
         scale = self._percent_scale(adj, self._on_vol)
         self._row_widget(card, "Volume", scale, first=True)
-        mute = Gtk.Switch()
+        mute = nbapp.PaperSwitch()
         mute.set_active(self._get_mute())
         mute.connect("state-set", self._on_mute)
         self._row_widget(card, "Silence all sound", mute)
@@ -1184,7 +1271,12 @@ class Settings(nbapp.AppWindow):
         bits = []
         if info and info != name:
             bits.append(info)
-        bits.append("Ready" if ready else "Paused")
+        if ready:
+            bits.append("Ready")
+        else:
+            # "Paused" on its own is the least useful thing this row can say at
+            # the moment a document did not come out. CUPS knows why.
+            bits.append(nbprint.printer_stopped(name) or "Paused")
         sub = "  ·  ".join(bits)
 
         box = Gtk.Box(spacing=6)
@@ -1305,6 +1397,30 @@ class Settings(nbapp.AppWindow):
         if self._pr_drv_combo is not None:
             self._printers_fill_drivers(label, devices[i][0])
 
+    @staticmethod
+    def _is_usb_uri(uri):
+        low = (uri or "").lower()
+        return low.startswith("usb:") or low.startswith("ippusb:")
+
+    def _printer_ident(self, uri, urlparse):
+        # The identity of the PHYSICAL printer, independent of which backend
+        # found it. A driverless printer is reported twice — once by the stock
+        # `usb` backend as its printer port and once by `ippusb` as its IPP
+        # interface — and the two must collapse to one entry in the picker, or
+        # the same machine is offered twice with no way to tell which is which.
+        try:
+            body = uri.split("://", 1)[1]
+            path, _, query = body.partition("?")
+            segs = [urlparse.unquote(s).strip().lower()
+                    for s in path.split("/") if s]
+            serial = ""
+            for part in query.split("&"):
+                if part.lower().startswith("serial="):
+                    serial = urlparse.unquote(part.split("=", 1)[1]).lower()
+            return (tuple(segs), serial)
+        except Exception:
+            return ((uri,), "")
+
     def _printers_scan_usb(self):
         # `lpinfo -l -v` lists devices as blocks carrying the IEEE-1284 device-id
         # and make-and-model the printer reports about ITSELF. Those are the only
@@ -1318,19 +1434,20 @@ class Settings(nbapp.AppWindow):
             return []
         import urllib.parse
         self._pr_devinfo = {}
-        devices = []
+        self._pr_classic_uri = {}
+        found = []
         seen = set()
         rc, out = run(["lpinfo", "-l", "-v"], timeout=12)
         if rc == 0:
             uri = did = mm = info = None
 
             def _flush():
-                if uri and uri.lower().startswith("usb:") and uri not in seen:
+                if uri and self._is_usb_uri(uri) and uri not in seen:
                     seen.add(uri)
                     label = (info or mm or "").strip() or \
                         self._printer_uri_label(uri, urllib.parse)
                     self._pr_devinfo[uri] = (did or "", mm or "")
-                    devices.append((uri, label))
+                    found.append((uri, label))
 
             for ln in out.splitlines():
                 s = ln.strip()
@@ -1351,25 +1468,46 @@ class Settings(nbapp.AppWindow):
                     elif k == "info":
                         info = v
             _flush()
-        if devices:
-            return devices
-        # Fall back to the bare two-field form if -l gave us nothing.
-        rc, out = run(["lpinfo", "-v"], timeout=8)
-        if rc != 0:
-            return []
-        for ln in out.splitlines():
-            parts = ln.split(None, 1)
-            if len(parts) != 2:
+        if not found:
+            # Fall back to the bare two-field form if -l gave us nothing.
+            rc, out = run(["lpinfo", "-v"], timeout=8)
+            if rc != 0:
+                return []
+            for ln in out.splitlines():
+                parts = ln.split(None, 1)
+                if len(parts) != 2:
+                    continue
+                _cls, uri = parts[0], parts[1].strip()
+                if not self._is_usb_uri(uri) or uri in seen:
+                    continue
+                seen.add(uri)
+                self._pr_devinfo[uri] = ("", "")
+                found.append((uri, self._printer_uri_label(uri, urllib.parse)))
+
+        # Collapse the two views of one printer, keeping the driverless one.
+        # The classic URI is remembered so that choosing a classic driver for
+        # that printer still spools down the printer port it belongs to.
+        by_ident = {}
+        order = []
+        for uri, label in found:
+            key = self._printer_ident(uri, urllib.parse)
+            if key not in by_ident:
+                by_ident[key] = (uri, label)
+                order.append(key)
                 continue
-            _cls, uri = parts[0], parts[1].strip()
-            if not uri.lower().startswith("usb:"):
-                continue
-            if uri in seen:
-                continue
-            seen.add(uri)
-            self._pr_devinfo[uri] = ("", "")
-            devices.append((uri, self._printer_uri_label(uri, urllib.parse)))
-        return devices
+            old_uri, old_label = by_ident[key]
+            if uri.lower().startswith("ippusb:"):
+                # Prefer the driverless view, but keep the identifying strings
+                # the classic backend read out of the printer.
+                if not self._pr_devinfo.get(uri, ("", ""))[0]:
+                    self._pr_devinfo[uri] = self._pr_devinfo.get(old_uri,
+                                                                 ("", ""))
+                self._pr_classic_uri[uri] = old_uri
+                by_ident[key] = (uri, old_label or label)
+            else:
+                self._pr_classic_uri[old_uri] = uri
+
+        return [by_ident[k] for k in order]
 
     def _printer_uri_label(self, uri, urlparse):
         # Turn usb://Make/Model?serial=... into a friendly "Make Model".
@@ -1394,6 +1532,12 @@ class Settings(nbapp.AppWindow):
     # ("cupsfilters/pxlmono.ppd", not "pxlmono.ppd"), and only ones actually
     # present in `lpinfo -m` are offered — a hard-coded name that is not in the
     # model list turns Add into an outright failure.
+    # Sentinel for "this printer needs no driver file". It is not a ppd-name —
+    # every real one carries a '/' — so it can never collide with one from
+    # `lpinfo -m`; _on_printer_add recognises it and builds the PPD from what
+    # the printer itself reports instead.
+    _DRIVERLESS = "driverless"
+
     _GENERIC_PPDS = [
         ("cupsfilters/pxlmono.ppd", "Generic laser printer (PCL 6)"),
         ("cupsfilters/pxlcolor.ppd", "Generic colour laser printer (PCL 6)"),
@@ -1423,7 +1567,11 @@ class Settings(nbapp.AppWindow):
         # confusing failure this page can cause.
         note = getattr(self, "_pr_drv_note", None)
         if note is not None:
-            if confident:
+            if self._pr_driver_ppds[:1] == [self._DRIVERLESS]:
+                note.set_text("This printer prints without a driver file. "
+                              "Its page sizes and options come from the "
+                              "printer.")
+            elif confident:
                 note.set_text("")
             else:
                 note.set_text("This printer was not identified. A generic "
@@ -1450,6 +1598,13 @@ class Settings(nbapp.AppWindow):
         if uri:
             did, mm = getattr(self, "_pr_devinfo", {}).get(uri, ("", ""))
 
+        # A printer reached over its IPP interface needs no driver at all: it
+        # is handed a PDF and rasterises the page itself. That is both the most
+        # accurate option and the only one that can be offered with confidence,
+        # so it goes first. The classic drivers below it stay available, and
+        # spool over the printer port rather than the IPP interface.
+        driverless = bool(uri) and uri.lower().startswith("ippusb:")
+
         def _parse(text):
             got = []
             for ln in (text or "").splitlines():
@@ -1460,6 +1615,9 @@ class Settings(nbapp.AppWindow):
 
         results = []
         seen = set()
+        if driverless:
+            results.append((self._DRIVERLESS, "Driverless — no driver file"))
+            seen.add(self._DRIVERLESS)
 
         def _add(items):
             added = 0
@@ -1564,7 +1722,7 @@ class Settings(nbapp.AppWindow):
             _add([(by_suffix[suf][0], friendly)
                   for suf, friendly in self._GENERIC_PPDS if suf in by_suffix])
 
-        return results[:12], bool(exact or fuzzy)
+        return results[:12], bool(driverless or exact or fuzzy)
 
     def _on_printer_add(self, _btn=None):
         entry = getattr(self, "_pr_name_entry", None)
@@ -1595,8 +1753,24 @@ class Settings(nbapp.AppWindow):
                              "No driver is available for this printer",
                              warn=True)
             return
-        cmd = ["lpadmin", "-p", name, "-E", "-v", device, "-m", driver]
-        rc, out = run(cmd, timeout=20)
+        if driver == self._DRIVERLESS:
+            cmd, cleanup, err = self._driverless_lpadmin(name, device)
+            if err:
+                self._set_status(self._pr_add_status, err, warn=True)
+                return
+        else:
+            # A classic driver speaks a page language down the printer PORT, so
+            # it must not be pointed at the IPP interface — that interface only
+            # accepts the formats the printer advertised.
+            device = getattr(self, "_pr_classic_uri", {}).get(device, device)
+            cmd = ["lpadmin", "-p", name, "-E", "-v", device, "-m", driver]
+            cleanup = None
+        rc, out = run(cmd, timeout=60)
+        if cleanup:
+            try:
+                os.unlink(cleanup)
+            except OSError:
+                pass
         if rc != 0:
             # Keep the whole message: lpadmin's failures ("IPP Everywhere driver
             # requires an IPP connection.") are unintelligible truncated to 40.
@@ -1606,6 +1780,41 @@ class Settings(nbapp.AppWindow):
             return
         self._set_status(self._pr_add_status, "Added", warn=False)
         self._printers_refresh()
+
+    # Where the ippusb backend lives. It is a CUPS backend, so it is not on
+    # PATH; asking it for a PPD is a direct call to that path.
+    _IPPUSB_BACKEND = "/usr/lib/cups/backend/ippusb"
+
+    def _driverless_lpadmin(self, name, device):
+        """Build the lpadmin command for a driverless queue.
+
+        Returns (cmd, ppd_path_to_delete, error_message). The PPD is generated
+        from the printer's own reported capabilities rather than chosen from a
+        list, which is the whole point: there is no model to guess at."""
+        import tempfile
+        if not os.path.exists(self._IPPUSB_BACKEND):
+            return None, None, "Driverless printing is not installed"
+        try:
+            fd, ppd = tempfile.mkstemp(suffix=".ppd", prefix="nbippusb-")
+            os.close(fd)
+        except OSError:
+            return None, None, "Could not prepare the printer"
+        rc, out = run([self._IPPUSB_BACKEND, "--ppd", device, ppd], timeout=60)
+        if rc != 0 or not os.path.exists(ppd) or os.path.getsize(ppd) == 0:
+            try:
+                os.unlink(ppd)
+            except OSError:
+                pass
+            # The backend's own last line is written for a reader, not a
+            # developer, so it is the better message when there is one.
+            msg = ""
+            for ln in (out or "").splitlines():
+                ln = ln.strip()
+                if ln.startswith("ERROR:"):
+                    msg = ln[6:].strip()
+            return None, None, msg or "The printer did not answer"
+        return (["lpadmin", "-p", name, "-E", "-v", device, "-P", ppd],
+                ppd, "")
 
     # ---- per-printer actions ----
     def _on_printer_default(self, _btn, name):
@@ -1644,8 +1853,35 @@ class Settings(nbapp.AppWindow):
             os.unlink(path)
         except OSError:
             pass
-        btn.set_label(_t("Sent") if ok else "Test failed")
-        GLib.timeout_add_seconds(4, self._reset_test_btn, btn)
+        if not ok:
+            btn.set_label(_t("Test failed"))
+            GLib.timeout_add_seconds(4, self._reset_test_btn, btn)
+            return
+        # `lp` returning 0 only means the job was QUEUED. Reporting "Sent" there
+        # and stopping is what let a printer that receives a job and prints
+        # nothing look like a success — the one thing a test page exists to rule
+        # out. So watch the queue until the job clears or the printer stops.
+        btn.set_label(_t("Printing…"))
+        self._pr_test_ticks = 0
+        GLib.timeout_add(1500, self._poll_test, btn, name)
+
+    def _poll_test(self, btn, name):
+        self._pr_test_ticks = getattr(self, "_pr_test_ticks", 0) + 1
+        why = nbprint.printer_stopped(name)
+        if why:
+            # The row is rebuilt with the reason on it, so this button goes
+            # away; set nothing on it afterwards.
+            self._printers_refresh()
+            return False
+        if not nbprint.jobs_pending(name):
+            btn.set_label(_t("Printed"))
+            GLib.timeout_add_seconds(4, self._reset_test_btn, btn)
+            return False
+        if self._pr_test_ticks > 60:        # ~90s, longer than any first page
+            btn.set_label(_t("Sent"))
+            GLib.timeout_add_seconds(4, self._reset_test_btn, btn)
+            return False
+        return True
 
     def _reset_test_btn(self, btn):
         try:
@@ -1813,17 +2049,9 @@ class Settings(nbapp.AppWindow):
         self._save_settings()
 
     def _apply_blank(self, secs):
-        try:
-            secs = int(secs)
-        except (TypeError, ValueError):
-            secs = 0
-        if secs > 0:
-            run(["xset", "s", str(secs)])
-            run(["xset", "+dpms"])
-            run(["xset", "dpms", str(secs), str(secs), str(secs)])
-        else:
-            run(["xset", "s", "off"])
-            run(["xset", "-dpms"])
+        # nbprefs owns this, because session.sh has to do the same thing at
+        # boot and two copies of "what does 5 minutes mean" would drift.
+        nbprefs.apply_blank(secs)
 
     def _open_apps(self):
         """The apps that are open right now, by name.
@@ -1979,12 +2207,7 @@ class Settings(nbapp.AppWindow):
         self._save_settings()
 
     def _apply_repeat(self, delay, rate):
-        try:
-            delay = int(delay)
-            rate = int(rate)
-        except (TypeError, ValueError):
-            return
-        run(["xset", "r", "rate", str(delay), str(rate)])
+        nbprefs.apply_repeat(delay, rate)
 
     # No Mouse & Touchpad page. Its two controls drove `xinput`, which is not
     # built into this image (BR2_PACKAGE_XAPP_XINPUT is off and there is no
@@ -2011,6 +2234,14 @@ class Settings(nbapp.AppWindow):
         self._tz_combo.set_active(idx)
         self._tz_combo.connect("changed", self._on_tz)
         self._row_widget(card, "Time zone", self._tz_combo)
+        # Say the scope, in the same terms the Language setting already uses.
+        # Exporting TZ from session.sh fixes every app STARTED after the change;
+        # one already on screen holds the environment it was launched with, and
+        # claiming otherwise would be the same lie this setting used to tell.
+        self._note(col, "Apps opened from now on use the time zone chosen "
+                        "here. Apps that are already open keep the one they "
+                        "started in; restart the computer to change all of "
+                        "them.")
 
         setcard = self._card(col, top=16)
         now = time.localtime()
@@ -2038,7 +2269,9 @@ class Settings(nbapp.AppWindow):
         setbtn = Gtk.Button(label=_t("Set Clock"))
         setbtn.get_style_context().add_class("setbtn")
         setbtn.connect("clicked", self._apply_datetime)
-        for w in (self._hspin, colon, self._mspin, setbtn):
+        self._dt_status = self._field_status()
+        for w in (self._hspin, colon, self._mspin, setbtn,
+                  self._dt_status):
             timebox.pack_start(w, False, False, 0)
         self._row_widget(setcard, "Time", timebox)
 
@@ -2129,6 +2362,13 @@ class Settings(nbapp.AppWindow):
         _lbl, iana, posix = TIMEZONES[i]
         self._apply_tz(iana, posix)
         self._settings["tz"] = iana
+        # The POSIX form too, because that is the one that has to survive the
+        # process. _apply_tz sets os.environ["TZ"], which reaches THIS process
+        # and nothing else — the panel clock, Calendar and Journal are separate
+        # processes and stayed on the old zone. session.sh exports TZ for the
+        # whole session at start-up and reads this key: no zoneinfo ships, so
+        # the IANA name on its own would tell it nothing.
+        self._settings["tz_posix"] = posix
         self._save_settings()
         # keep the Region page's zone combo (if built) in agreement
         rc = getattr(self, "_region_tz", None)
@@ -2136,11 +2376,40 @@ class Settings(nbapp.AppWindow):
             rc.set_active(i)
 
     def _apply_datetime(self, _btn=None):
+        """Set the clock, and make it survive a restart.
+
+        `date -s` moves the RUNNING clock only. The battery-backed one on
+        the board is untouched, and on x86 that is what the kernel reads
+        back at boot (read_persistent_clock64 -> the CMOS), so every
+        restart threw the setting away and the machine came back to
+        whatever the hardware said. With no networking there is no NTP to
+        correct it afterwards: this button is the only clock the OS has,
+        so it has to write both.
+
+        The ROADMAP recorded this as unfixable because "no hwclock in the
+        tree". There is one -- busybox provides it (CONFIG_HWCLOCK=y) and
+        it is on the image at /sbin/hwclock."""
         y, mon, day = self._cal.get_date()  # month is 0-based
         h = self._hspin.get_value_as_int()
         mi = self._mspin.get_value_as_int()
         stamp = "%04d-%02d-%02d %02d:%02d:00" % (y, mon + 1, day, h, mi)
-        run(["date", "-s", stamp])
+        rc, _out = run(["date", "-s", stamp])
+        if rc != 0:
+            self._set_status(self._dt_status,
+                             _t("The clock could not be set."), warn=True)
+            self._dt_tick()
+            return
+        # -w is system -> hardware. A machine with no RTC (some boards, a
+        # VM without one) fails here and that is not the same as failing
+        # to set the clock, so it gets its own sentence rather than a
+        # single "did not work" covering two different outcomes.
+        rc, _out = run(["hwclock", "-w"])
+        self._set_status(
+            self._dt_status,
+            _t("Clock set.") if rc == 0 else
+            _t("Clock set, but this computer cannot remember it. "
+               "It will need setting again after a restart."),
+            warn=(rc != 0))
         self._dt_tick()
 
     # ---- Region & Language ----
@@ -2280,20 +2549,21 @@ class Settings(nbapp.AppWindow):
             kc.set_active(i)
             self._suppress_kb = False
 
-    def _locale_lang(self):
-        return (os.environ.get("LANG") or os.environ.get("LC_ALL")
-                or "C (POSIX)")
-
-    def _locale_charset(self):
-        lang = os.environ.get("LANG", "")
-        if "." in lang:
-            return lang.split(".", 1)[1]
-        rc, o = run(["locale", "charmap"])
-        return o.strip() if rc == 0 and o.strip() else "ANSI_X3.4-1968"
-
-    def _locale_full(self):
-        return (os.environ.get("LC_ALL") or os.environ.get("LANG")
-                or "C")
+    # _locale_lang / _locale_charset / _locale_full were deleted here. They were
+    # dead — defined, never called from anywhere in the tree, and there is no
+    # "Character set" row on the Region page for them to fill. They were also
+    # the ONLY reference in the OS to the `locale` binary, which busybox does not
+    # provide and the image does not ship, so `guest_divergence_check` reported
+    # them as a hard failure.
+    #
+    # Deleted rather than wired up, on purpose. This OS does not use POSIX
+    # locales: the interface language is $NB_LANG (see nbi18n) and nothing
+    # exports $LANG, so on every shipped machine these would have answered
+    # "C (POSIX)" and "ANSI_X3.4-1968" — telling a reader whose desktop is in
+    # Japanese that their machine is 7-bit ASCII and cannot hold their own
+    # alphabet. That is precisely the lie the governing principle forbids, and
+    # showing it accurately is not possible because the underlying fact is not
+    # what this OS runs on. A row that cannot be true does not belong on screen.
 
     def _on_region_tz(self, combo):
         i = combo.get_active()
@@ -2302,6 +2572,13 @@ class Settings(nbapp.AppWindow):
         _lbl, iana, posix = TIMEZONES[i]
         self._apply_tz(iana, posix)
         self._settings["tz"] = iana
+        # The POSIX form too, because that is the one that has to survive the
+        # process. _apply_tz sets os.environ["TZ"], which reaches THIS process
+        # and nothing else — the panel clock, Calendar and Journal are separate
+        # processes and stayed on the old zone. session.sh exports TZ for the
+        # whole session at start-up and reads this key: no zoneinfo ships, so
+        # the IANA name on its own would tell it nothing.
+        self._settings["tz_posix"] = posix
         self._save_settings()
         tc = getattr(self, "_tz_combo", None)
         if tc is not None and tc.get_active() != i:
@@ -2532,6 +2809,12 @@ class Settings(nbapp.AppWindow):
         self._bk_btn.get_style_context().add_class("setprimary")
         self._bk_btn.connect("clicked", self._on_backup_start)
         act.pack_start(self._bk_btn, False, False, 0)
+        self._bk_stop = Gtk.Button(label=_t("Stop"))
+        self._bk_stop.get_style_context().add_class("setbtn")
+        self._bk_stop.connect("clicked", self._backup_cancel)
+        self._bk_stop.set_no_show_all(True)
+        self._bk_stop.hide()
+        act.pack_start(self._bk_stop, False, False, 0)
         rescan = Gtk.Button(label=_t("Look again"))
         rescan.get_style_context().add_class("setbtn")
         rescan.connect("clicked", lambda *_: self._refresh_backup_dests())
@@ -2657,11 +2940,15 @@ class Settings(nbapp.AppWindow):
 
     # -- measuring (worker thread: a Pictures folder can hold thousands) --
     def _measure_backup(self):
-        threading.Thread(target=self._measure_worker, daemon=True).start()
+        # Leaving the Backup pane and coming back rebuilds the page, which
+        # starts another measurement. Keyed, so the newer one supersedes the
+        # older and only one answer ever reaches the label.
+        self._bk_jobs.start("measure", self._measure_worker,
+                            on_done=self._measure_done)
 
-    def _measure_worker(self):
-        files, total = self._walk_size()
-        GLib.idle_add(self._measure_done, files, total)
+    def _measure_worker(self, job):
+        job.checkpoint()
+        return self._walk_size()
 
     def _walk_size(self):
         files = total = 0
@@ -2686,9 +2973,10 @@ class Settings(nbapp.AppWindow):
                 out.append(p)
         return out
 
-    def _measure_done(self, files, total):
+    def _measure_done(self, sized):
         if not getattr(self, "_alive", True):
             return False
+        files, total = sized
         self._bk_files, self._bk_total = files, total
         if files:
             self._bk_what_lbl.set_text(
@@ -2724,8 +3012,53 @@ class Settings(nbapp.AppWindow):
         self._bk_bar.set_text(_t("Starting…"))
         self._bk_status.pack_start(self._bk_bar, False, False, 0)
         self._bk_status.show_all()
-        threading.Thread(target=self._backup_worker,
-                         args=(self._bk_dest,), daemon=True).start()
+        if self._bk_stop is not None:
+            self._bk_stop.set_sensitive(True)
+            self._bk_stop.show()
+        self._backup_start_job(self._bk_dest, self._bk_total)
+
+    def _backup_start_job(self, mnt, total):
+        """Wire the copy onto the pane's job owner. Separated from the button
+        handler so the lifecycle suite can drive the real wiring — the
+        callbacks and the cancellation — without a window to click."""
+        # The total is passed IN, not read off self by the worker. Coming back
+        # to a rebuilt Backup pane zeroes `_bk_total` and starts a fresh
+        # measurement; a copy that kept reading that attribute measured itself
+        # against someone else's number and sat at 100% with most of the files
+        # still to write.
+        started = self._bk_jobs.start(
+            "copy", lambda job: self._backup_worker(job, mnt, total),
+            on_done=self._backup_finished,
+            on_error=self._backup_crashed,
+            on_cancel=self._backup_stopped,
+            on_progress=self._backup_progress,
+            # REJECT, not REPLACE: a second copy must never supersede one that
+            # is part-way through writing to a stick. There is nothing to
+            # replace — the files already written are on the device.
+            policy=nbjobs.REJECT)
+        if started is None:
+            self._bk_working = False
+            self._update_backup_button()
+            self._show_backup_result(
+                _t("A copy is already running. Wait for it to finish."),
+                warn=True)
+        return started
+
+    # -- stopping --
+    def _backup_cancel(self, _btn=None):
+        """The Stop button. The copy leaves at the next whole file: a file cut
+        in half on the stick would look like a file."""
+        if not self._bk_jobs.cancel("copy"):
+            return
+        if self._bk_bar is not None:
+            self._bk_bar.set_text(_t("Stopping…"))
+        if self._bk_stop is not None:
+            self._bk_stop.set_sensitive(False)
+
+    def _backup_close(self):
+        """Called from the window's destroy handler. Cancels the copy and stops
+        every callback — Article V §2.6."""
+        self._bk_jobs.close()
 
     def _backup_dest_dir(self, mnt):
         # A dated folder per run, never a name that could already hold someone
@@ -2739,65 +3072,111 @@ class Settings(nbapp.AppWindow):
             n += 1
         return dest
 
-    def _backup_worker(self, mnt):
+    def _backup_worker(self, job, mnt, total):
+        """The copy. Returns what happened; never touches a widget.
+
+        Cancellation is checked once per file, which is the only boundary at
+        which stopping is honest: shutil.copy2 cannot be interrupted part-way,
+        so the most a stop can cost is the one file already in flight. The
+        flush is in a `finally` for the same reason — nothing may report
+        "stopped" while the kernel still has our writes queued for the stick.
+        """
         copied = done_bytes = 0
         last_pct = -1
         failed = []
+        dest = None
         try:
-            dest = self._backup_dest_dir(mnt)
-            os.makedirs(dest)
-        except OSError as e:
-            # The very first thing the copy does is make its dated folder on
-            # the stick. If that fails nothing has been written at all — say
-            # which step failed and on what, and never print the raw exception:
-            # "Could not start: [Errno 30] Read-only file system" tells the one
-            # person who cannot act on it exactly nothing.
-            GLib.idle_add(self._backup_failed, self._start_error(e), 0)
-            return
-        for src in self._backup_sources():
-            top = os.path.join(dest, os.path.basename(src)
-                               if not src.endswith(APP_DATA_DIR)
-                               else "App data")
-            for root, _dirs, names in os.walk(src):
-                rel = os.path.relpath(root, src)
-                outdir = top if rel == "." else os.path.join(top, rel)
-                try:
-                    os.makedirs(outdir, exist_ok=True)
-                except OSError as e:
-                    failed.append((root, e))
-                    continue
-                for n in names:
-                    sp = os.path.join(root, n)
-                    if os.path.islink(sp):
-                        continue
+            try:
+                dest = self._backup_dest_dir(mnt)
+                os.makedirs(dest)
+            except OSError as e:
+                return {"outcome": "failed", "why": self._start_error(e),
+                        "copied": 0, "dest": None, "done_bytes": 0,
+                        "failed": 0}
+            for src in self._backup_sources():
+                top = os.path.join(dest, os.path.basename(src)
+                                   if not src.endswith(APP_DATA_DIR)
+                                   else "App data")
+                for root, _dirs, names in os.walk(src):
+                    job.checkpoint()
+                    rel = os.path.relpath(root, src)
+                    outdir = top if rel == "." else os.path.join(top, rel)
                     try:
-                        sz = os.path.getsize(sp)
-                        shutil.copy2(sp, os.path.join(outdir, n))
-                        copied += 1
-                        done_bytes += sz
+                        os.makedirs(outdir, exist_ok=True)
                     except OSError as e:
-                        failed.append((sp, e))
-                        # A full or disconnected stick fails on every remaining
-                        # file; stop and say so once rather than 900 times.
-                        if e.errno in (28, 30, 5, 6):   # ENOSPC EROFS EIO ENXIO
-                            GLib.idle_add(self._backup_failed,
-                                          self._copy_error(e), copied)
-                            return
-                    # One update per whole percent, not per file. A home
-                    # folder with 40,000 photos in it would otherwise queue
-                    # 40,000 idle callbacks onto the main loop and make the
-                    # window that is meant to be showing progress stop
-                    # answering the mouse.
-                    if self._bk_total:
-                        frac = done_bytes / float(self._bk_total)
-                        pct = int(frac * 100)
-                        if pct != last_pct:
-                            last_pct = pct
-                            GLib.idle_add(self._backup_progress, frac, n)
-        # Flush to the device before claiming anything landed on it.
-        run(["sync"], timeout=60)
-        GLib.idle_add(self._backup_verify, dest, copied, done_bytes,
-                      len(failed))
+                        failed.append((root, e))
+                        continue
+                    for name in names:
+                        sp = os.path.join(root, name)
+                        if os.path.islink(sp):
+                            continue
+                        # Cancellation is cooperative at a whole-file boundary:
+                        # never deliberately leave a plausible-looking partial
+                        # file on the backup device.
+                        job.checkpoint()
+                        try:
+                            size = os.path.getsize(sp)
+                            shutil.copy2(sp, os.path.join(outdir, name))
+                            copied += 1
+                            done_bytes += size
+                        except OSError as e:
+                            failed.append((sp, e))
+                            if e.errno in (28, 30, 5, 6):
+                                return {"outcome": "failed",
+                                        "why": self._copy_error(e),
+                                        "copied": copied, "dest": dest,
+                                        "done_bytes": done_bytes,
+                                        "failed": len(failed)}
+                        if total:
+                            frac = min(1.0, done_bytes / float(total))
+                            pct = int(frac * 100)
+                            if pct != last_pct:
+                                last_pct = pct
+                                job.progress(frac, name)
+            return {"outcome": "done", "dest": dest, "copied": copied,
+                    "done_bytes": done_bytes, "failed": len(failed)}
+        finally:
+            # A completion/cancel callback is dispatched only after this
+            # returns, so "stopped" or "safe to remove" never races buffered
+            # writes still headed for the stick.
+            if dest is not None:
+                run(["sync"], timeout=60)
+
+    def _backup_finished(self, result):
+        if not getattr(self, "_alive", True):
+            return False
+        if result.get("outcome") == "failed":
+            return self._backup_failed(result.get("why", _t("Copy failed.")),
+                                       result.get("copied", 0))
+        return self._backup_verify(result.get("dest"),
+                                   result.get("copied", 0),
+                                   result.get("done_bytes", 0),
+                                   result.get("failed", 0))
+
+    def _backup_crashed(self, _error):
+        if not getattr(self, "_alive", True):
+            return False
+        self._bk_working = False
+        self._update_backup_button()
+        if self._bk_stop is not None:
+            self._bk_stop.hide()
+        self._show_backup_result(
+            _t("The copy stopped unexpectedly. Files already copied remain "
+               "on the stick, but this backup is incomplete."), warn=True)
+        return False
+
+    def _backup_stopped(self):
+        if not getattr(self, "_alive", True):
+            return False
+        self._bk_working = False
+        self._update_backup_button()
+        if self._bk_stop is not None:
+            self._bk_stop.hide()
+            self._bk_stop.set_sensitive(True)
+        self._show_backup_result(
+            _t("Copy stopped. Files already copied remain on the stick. This "
+               "backup is incomplete."), warn=True)
+        return False
 
     def _start_error(self, e):
         """Why the backup never got started, in words that name the step."""
@@ -2828,6 +3207,9 @@ class Settings(nbapp.AppWindow):
             return False
         self._bk_working = False
         self._update_backup_button()
+        if self._bk_stop is not None:
+            self._bk_stop.hide()
+            self._bk_stop.set_sensitive(True)
         # Only report a count when there IS one: a failure before the first
         # file said "0 files were copied before it stopped", which reads as a
         # second, separate piece of bad news rather than the same one.
@@ -2848,6 +3230,9 @@ class Settings(nbapp.AppWindow):
             return False
         self._bk_working = False
         self._update_backup_button()
+        if self._bk_stop is not None:
+            self._bk_stop.hide()
+            self._bk_stop.set_sensitive(True)
         there = there_bytes = 0
         for root, _dirs, names in os.walk(dest):
             for n in names:
@@ -2895,7 +3280,7 @@ class Settings(nbapp.AppWindow):
     # ---- Accessibility ----
     def _page_accessibility(self):
         outer, col = self._page("Accessibility",
-                                "Text size and contrast")
+                                "Text size, contrast and motion")
         card = self._card(col)
         self._pref_switch(card, "Large text", "large_text", False, first=True,
                           sub="Makes the smallest text bigger",
@@ -2903,7 +3288,10 @@ class Settings(nbapp.AppWindow):
         self._pref_switch(card, "High contrast", "high_contrast", False,
                           sub="Deepens faint text and strengthens lines",
                           on_change=lambda _v: self._apply_accessibility())
-        self._note(col, "Both settings apply to every app. An app that is "
+        self._pref_switch(card, "Reduced motion", "reduced_motion", False,
+                          sub="Changes happen at once instead of moving",
+                          on_change=lambda _v: self._apply_accessibility())
+        self._note(col, "These settings apply to every app. An app that is "
                         "already open keeps the look it started with until it "
                         "is closed and opened again.")
         return outer
@@ -2921,6 +3309,12 @@ class Settings(nbapp.AppWindow):
         # see is one you cannot judge.
         nbapp.a11y_set(bool(self._settings.get("large_text", False)),
                        bool(self._settings.get("high_contrast", False)))
+        # Reduced motion lives in nbmotion for the same reason: it is read by
+        # the shared motion engine as every app starts, and set here so this
+        # window (and GTK's own theme transitions in it) stop moving on the
+        # toggle rather than at the next launch. Same store, same key.
+        nbmotion.set_reduced_motion(
+            bool(self._settings.get("reduced_motion", False)))
 
     # ---- Default Applications ----
     def _page_defaultapps(self):
@@ -2930,16 +3324,35 @@ class Settings(nbapp.AppWindow):
         current = self._settings.get("default_apps", {})
         if not isinstance(current, dict):
             current = {}
+        # Rewrite any stored module this build no longer offers to the choice
+        # the row is about to SHOW. Correcting only the combo would leave the
+        # page saying "Media Viewer" while Finder was still handed the dead
+        # name — and the disagreement would come back on the next restart,
+        # because nothing on the page ever writes a row the user did not touch.
+        # Only unrecognised values are touched; a valid non-default choice is
+        # the user's and is left exactly as it is.
+        known = [m for m, _d in APP_CHOICES]
+        fixed = dict(current)
+        for _label, exts, default_mod in DEFAULT_APP_CATEGORIES:
+            pick = resolve_default_app(current, exts, default_mod)
+            for ext in exts:
+                if ext in fixed and fixed[ext] not in known:
+                    fixed[ext] = pick
+        if fixed != current:
+            current = fixed
+            self._settings["default_apps"] = fixed
+            self._save_settings()
         self._da_combos = []
         for i, (label, exts, default_mod) in enumerate(DEFAULT_APP_CATEGORIES):
             combo = Gtk.ComboBoxText()
             for mod, disp in APP_CHOICES:
                 combo.append_text(disp)
-            # current choice = the stored module for the first extension, else
-            # the built-in default for this category.
-            chosen = current.get(exts[0], default_mod)
+            # current choice = the stored module for this category, else the
+            # built-in default. Never APP_CHOICES[0] as a catch-all: see
+            # resolve_default_app.
+            chosen = resolve_default_app(current, exts, default_mod)
             mods = [m for m, _d in APP_CHOICES]
-            combo.set_active(mods.index(chosen) if chosen in mods else 0)
+            combo.set_active(mods.index(chosen))
             combo.connect("changed", self._on_defaultapp, exts)
             self._row_widget(card, label, combo, first=(i == 0))
             self._da_combos.append((exts, combo))
@@ -3040,11 +3453,11 @@ class Settings(nbapp.AppWindow):
            panel gives the sidebar, and one clipped row at the bottom of an
            otherwise complete list reads as breakage. 36px rows are still a
            comfortable target and match the Finder's sidebar density. */
-        .setrow { padding: 8px 12px; margin: 1px 0; border-radius: 2px;
+        .setrow { padding: 8px 12px; margin: 1px 0; border-radius: 6px;
                   background: transparent; border: none;
                   border-left: 3px solid transparent; box-shadow: none;
                   font-size: 14px; color: #1A1916; }
-        .setrow:hover { background: #EAE5D8; }
+        .setrow:hover { background: #F1EEE6; }
         .setrow.selected { background: #EAE3D2; color: #1A1916; font-weight: 600;
                            border-left: 3px solid #C8341E; }
 
@@ -3055,7 +3468,7 @@ class Settings(nbapp.AppWindow):
         .settitle { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                     font-size: 34px; font-weight: 500; color: #1A1916;
                     letter-spacing: -0.01em; margin-bottom: 6px; }
-        .setsubtitle { font-size: 14px; color: #79736A; margin-bottom: 2px; }
+        .setsubtitle { font-size: 14px; color: #6E695E; margin-bottom: 2px; }
         .setrule { background: #1A1916; min-height: 1px; margin-top: 14px;
                    margin-bottom: 22px; }
         .setgroup { font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
@@ -3064,23 +3477,23 @@ class Settings(nbapp.AppWindow):
         /* ---- About masthead ---- */
         .setabout { margin: 2px 2px 0; }
         .setabout-name { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                    font-size: 22px; font-weight: 700; color: #1A1916; }
+                    font-size: 20px; font-weight: 700; color: #1A1916; }
 
         /* ---- card / rows ---- */
         .setcard { background: #F4F2EC; border: 1px solid #D7D2C5;
-                   border-radius: 2px; padding: 2px 22px;
+                   border-radius: 12px; padding: 2px 22px;
                    box-shadow: 0 1px 3px rgba(26,25,22,0.05); }
         .setitem { padding: 16px 2px; min-height: 30px; }
         .setitem.bordered { border-top: 1px solid #D7D2C5; }
-        .setlabel { font-size: 14.5px; color: #1A1916; }
+        .setlabel { font-size: 14px; color: #1A1916; }
         .setsublabel { font-size: 12px; color: #9A9484; }
-        .setvalue { font-size: 14.5px; color: #6E695E; }
+        .setvalue { font-size: 14px; color: #6E695E; }
         /* inline apply-feedback: alert red only when something's wrong */
         .setwarn { color: #C8341E; }
         /* 'Default' printer badge - signage red, opaque, safe on no-compositor */
         .setbadge { background: #C8341E; color: #FCFBF8; font-size: 11px;
-                    font-weight: 600; padding: 2px 8px; border-radius: 2px; }
-        .setnote  { font-size: 12.5px; color: #9A9484; margin-top: 16px;
+                    font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+        .setnote  { font-size: 12px; color: #9A9484; margin-top: 16px;
                     margin-left: 2px; }
         /* the outcome of something the user asked for and waited on: ink, not
            the grey of the explanatory notes it sits beside. .setwarn recolours
@@ -3092,10 +3505,10 @@ class Settings(nbapp.AppWindow):
 
         /* ---- secondary buttons ---- */
         .setbtn { padding: 6px 18px; background: #FCFBF8; color: #1A1916;
-                  border: 1px solid #C9C4B6; border-radius: 2px;
-                  box-shadow: none; font-size: 13.5px; }
+                  border: 1px solid #C9C4B6; border-radius: 8px;
+                  box-shadow: none; font-size: 13px; }
         .setbtn:hover  { background: #F1EEE6; }
-        .setbtn:active { background: #EAE5D8; }
+        .setbtn:active { background: #EAE3D2; }
 
         /* ---- destructive-confirm overlay ---- */
         /* The scrim MUST carry a background: an EventBox owns a GdkWindow, and
@@ -3108,13 +3521,13 @@ class Settings(nbapp.AppWindow):
                   padding: 26px 30px;
                   font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .setconfirm-h { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                  font-size: 22px; color: #1A1916; }
+                  font-size: 20px; color: #1A1916; }
         .setconfirm-b { font-size: 14px; color: #6E695E; }
         .setprimary { padding: 6px 18px; background: #C8341E; color: #FCFBF8;
-                  border: 1px solid #C8341E; border-radius: 2px;
-                  box-shadow: none; font-size: 13.5px; }
-        .setprimary:hover  { background: #B12F1B; }
-        .setprimary:active { background: #9C2917; }
+                  border: 1px solid #C8341E; border-radius: 8px;
+                  box-shadow: none; font-size: 13px; }
+        .setprimary:hover  { background: #B12D19; }
+        .setprimary:active { background: #B12D19; }
         /* a primary that cannot be pressed yet must not still read as the
            full-strength action (the Backup button before a stick is chosen) */
         .setprimary:disabled { background: #E0B8B0; border-color: #E0B8B0;
@@ -3122,18 +3535,18 @@ class Settings(nbapp.AppWindow):
 
         /* ---- native controls ---- */
         .setpage combobox button.combo { background: #FCFBF8; color: #1A1916;
-                  border: 1px solid #C9C4B6; border-radius: 2px;
+                  border: 1px solid #C9C4B6; border-radius: 8px;
                   box-shadow: none; padding: 4px 10px; }
         .setpage combobox button.combo:hover { background: #F1EEE6; }
         .setpage entry { background: #FCFBF8; color: #1A1916;
-                  border: 1px solid #C9C4B6; border-radius: 2px;
+                  border: 1px solid #C9C4B6; border-radius: 8px;
                   box-shadow: none; padding: 4px 8px; }
         .setpage entry:focus { border-color: #9A9484; }
 
         .setpage scale { margin-top: 0; margin-bottom: 0; }
-        .setpage scale trough { background: #DDD8CB; border: none;
-                  border-radius: 2px; min-height: 5px; }
-        .setpage scale highlight { background: #1A1916; border-radius: 2px; }
+        .setpage scale trough { background: #DED4C2; border: none;
+                  border-radius: 100px; min-height: 5px; }
+        .setpage scale highlight { background: #1A1916; border-radius: 100px; }
         .setpage scale slider { background: #FCFBF8; border: 1px solid #C9C4B6;
                   border-radius: 50%; min-width: 16px; min-height: 16px;
                   box-shadow: 0 1px 2px rgba(26,25,22,0.14); }
@@ -3144,26 +3557,26 @@ class Settings(nbapp.AppWindow):
         .setpage switch:checked { background: #C8341E; border-color: #C8341E; }
         .setpage switch slider { background: #FCFBF8; }
 
-        .setpage progressbar trough { background: #DDD8CB; border: none;
-                  border-radius: 2px; min-height: 16px; }
+        .setpage progressbar trough { background: #DED4C2; border: none;
+                  border-radius: 100px; min-height: 16px; }
         /* Neutral fill by default; red is reserved for the near-full alert.
            The fill is the muted-text taupe, NOT ink: a mostly-full disk bar in
            #1A1916 drew a heavy black slab across the page, the one thing the
            papertone language never does (System Monitor's gauges were moved off
            ink for exactly this reason - keep the two apps in step). */
-        .setpage progressbar progress { background: #6E695E; border-radius: 2px;
+        .setpage progressbar progress { background: #6E695E; border-radius: 100px;
                   min-height: 16px; }
         .setpage progressbar.nearfull progress { background: #C8341E; }
-        .setpage progressbar text { color: #1A1916; font-size: 12.5px; }
+        .setpage progressbar text { color: #1A1916; font-size: 12px; }
 
         /* ---- date & time controls ---- */
         .setpage spinbutton { background: #FCFBF8; color: #1A1916;
-                  border: 1px solid #C9C4B6; border-radius: 2px;
+                  border: 1px solid #C9C4B6; border-radius: 8px;
                   box-shadow: none; }
         .setpage spinbutton entry { background: transparent; color: #1A1916;
                   border: none; box-shadow: none; min-width: 30px; }
         .setpage calendar { background: #FCFBF8; color: #1A1916;
-                  border: 1px solid #C9C4B6; border-radius: 2px; padding: 4px; }
+                  border: 1px solid #C9C4B6; border-radius: 8px; padding: 4px; }
         .setpage calendar:selected { background: #C8341E; color: #FCFBF8; }
         """
         prov = Gtk.CssProvider(); prov.load_from_data(css)

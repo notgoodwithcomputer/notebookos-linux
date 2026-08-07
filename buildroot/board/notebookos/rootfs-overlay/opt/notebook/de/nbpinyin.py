@@ -24,6 +24,20 @@ DICT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 PAGE = 9
 
 
+def _pinyin_letter(ch):
+    """One ASCII letter — the whole alphabet pinyin is written in.
+
+    `str.isalpha()`, which this used, is true of every Unicode letter, so é, ü,
+    Cyrillic д and even 好 itself were appended to the composition. The buffer
+    then matched nothing, the popup emptied, and the keystroke was SWALLOWED —
+    so on any layout that can produce an accented letter the composition died
+    with no visible cause. A character that cannot be part of a pinyin syllable
+    is handled the way punctuation already is: commit what is there and let it
+    through.
+    """
+    return len(ch) == 1 and ("a" <= ch <= "z" or "A" <= ch <= "Z")
+
+
 class PinyinIME:
     """One instance per app window; intercepts keys at the toplevel so it runs
     before the focused text widget."""
@@ -128,7 +142,7 @@ class PinyinIME:
                     self.page += 1
                     self._show()
                 return True
-            if len(ch) == 1 and ch.isalpha() and not ctrl and not alt:
+            if _pinyin_letter(ch) and not ctrl and not alt:
                 self.buffer += ch.lower()
                 self._update()
                 return True
@@ -141,7 +155,7 @@ class PinyinIME:
             return False
         else:
             # not buffering: a bare lowercase letter starts a pinyin run
-            if len(ch) == 1 and ch.isalpha() and not ctrl and not alt:
+            if _pinyin_letter(ch) and not ctrl and not alt:
                 self.buffer = ch.lower()
                 self._update()
                 return True
@@ -204,7 +218,7 @@ class PinyinIME:
         self.popup.add(fr)
         prov = Gtk.CssProvider()
         prov.load_from_data(
-            b".pyime{background:#FCFBF8;border:1px solid #BDB7A8;}"
+            b".pyime{background:#FCFBF8;border:1px solid #B3AD9E;}"
             b".pyime label{font-family:'Nimbus Sans','Noto Sans CJK SC',sans-serif;"
             b"font-size:15px;color:#1A1916;}")
         self._pop_label.get_style_context().add_provider(
@@ -226,15 +240,33 @@ class PinyinIME:
             more = "   (%d/%d  -/=)" % (self.page + 1, pages)
         txt = "%s   %s%s" % (self.buffer, "  ".join(parts) or "…", more)
         self._pop_label.set_text(txt)
-        self._place()
-        self.popup.show_all()
+        # Placing and showing the popup is COSMETIC and must never decide what
+        # gets typed. _on_key claims the keystroke on the strength of the
+        # composition and then calls this — so when _place raised, PyGObject
+        # swallowed the exception, the handler counted as unhandled, and GTK
+        # passed the raw pinyin on to the widget: every TextView in the OS
+        # produced "nihao你好" instead of 你好. A popup that cannot be placed
+        # is not shown; the keystroke is still ours.
+        try:
+            self._place()
+            self.popup.show_all()
+        except Exception:
+            self.popup.hide()
 
     def _place(self):
         # position just under the focused widget
         tgt = self._focus_text()
         if tgt is None:
             return
-        gdkwin = tgt.get_window() or self.win.get_window()
+        if isinstance(tgt, Gtk.TextView):
+            # Gtk.TextView.get_window(win_type) SHADOWS the inherited
+            # zero-argument Gtk.Widget.get_window, so the ordinary call raises
+            # TypeError here — on every keystroke, in all eleven apps with a
+            # text area, which is every long-form writing surface there is.
+            gdkwin = tgt.get_window(Gtk.TextWindowType.WIDGET)
+        else:
+            gdkwin = tgt.get_window()
+        gdkwin = gdkwin or self.win.get_window()
         if gdkwin is None:
             return
         res = gdkwin.get_origin()          # (x, y) or (ok, x, y) across bindings

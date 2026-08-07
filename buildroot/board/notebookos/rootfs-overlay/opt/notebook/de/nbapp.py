@@ -20,10 +20,12 @@ import time
 import sys
 import os
 import re
+import math
 import json
 import tempfile
 
 from nbi18n import _t  # noqa: E402  (shared translation layer)
+import nbcommands  # noqa: E402  (canonical command labels/shortcuts/grouping)
 
 # Single source of truth for the release version, shared with the ISO
 # builder / installer. /etc/os-release (when present) is authoritative; this
@@ -529,6 +531,11 @@ class UndoHistory:
         self._timer = None         # pending typing checkpoint
         self._label = None         # what the edit in flight should be called
         self.busy = False          # True while restoring (apps guard on this)
+        # The state that is on disk, for is_dirty(). Held BY VALUE rather than
+        # as a history index, so trimming an old step or dropping a redo tail
+        # cannot silently re-point it at the wrong document.
+        self._saved = None
+        self._saved_known = False
 
     # -- taking checkpoints --
     def _take(self):
@@ -581,7 +588,43 @@ class UndoHistory:
         self._hist = []
         self._hi = -1
         self._label = None
+        self._saved = None
+        self._saved_known = False
         self._push(None)
+
+    # -- where the document last matched the file --
+    def mark_saved(self):
+        """The document on screen has just been written to disk.
+
+        Apps flip a _file_dirty flag on every edit and clear it on save, which
+        is only half true: undo the edit and the page matches the file again,
+        but the flag stays set, so Close and New keep demanding a Discard
+        confirm for work that is not at risk — and a user who is told that
+        often enough stops reading it. Recording the saved state here lets
+        is_dirty() answer relative to the file instead of "anything ever
+        happened"."""
+        self.flush()               # a save lands the sentence being typed
+        if self._hi >= 0:
+            self._saved = self._stable(self._hist[self._hi][0])
+            self._saved_known = True
+        else:
+            self._saved = None
+            self._saved_known = False
+
+    def is_dirty(self):
+        """True when the document differs from the last mark_saved() point.
+
+        Errs towards dirty: typing still inside the debounce, a history that
+        has never been marked, and any state it cannot compare all count as
+        unsaved, because over-reporting costs one confirmation dialog and
+        under-reporting costs the work."""
+        if self._timer is not None:
+            return True
+        if not self._saved_known:
+            return self._hi > 0
+        if self._hi < 0:
+            return True
+        return self._stable(self._hist[self._hi][0]) != self._saved
 
     def touch(self):
         """An ordinary edit happened. Re-arms the typing checkpoint; a burst of
@@ -693,17 +736,15 @@ def undo_menu_items(hist):
     Each names the action it would reverse ("Undo Delete Chapter") so the
     history is legible rather than a leap of faith, and greys out with a
     callback of None when there is nothing to reverse - the convention
-    menu_items() already uses. Shared so all four editors word it identically."""
-    def entry(plain, framed, name, enabled, action):
-        if not enabled:
-            return (plain, None)
-        return ((_t(framed) % name) if name else _t(plain), action)
+    menu_items() already uses. Shared so all four editors word it identically.
 
+    The wording and the accelerators come from nbcommands, so the Undo and
+    Redo labels are spelled in exactly one place in the OS."""
     return [
-        entry("Undo    Ctrl+Z", "Undo %s    Ctrl+Z",
-              hist.undo_label(), hist.can_undo(), hist.undo),
-        entry("Redo    Ctrl+Shift+Z", "Redo %s    Ctrl+Shift+Z",
-              hist.redo_label(), hist.can_redo(), hist.redo),
+        nbcommands.dynamic_item("edit.undo", hist.undo_label(),
+                                hist.can_undo(), hist.undo),
+        nbcommands.dynamic_item("edit.redo", hist.redo_label(),
+                                hist.can_redo(), hist.redo),
     ]
 
 
@@ -969,10 +1010,12 @@ def nb_pretty_name():
 #
 # What that rewrite does is RAISE A FLOOR, not apply a multiplier, and the
 # choice was made by measuring rather than by taste. Every app has to keep
-# laying out inside 1024x740 (the smallest panel we support: 768 minus the 28px
-# desktop panel), because GTK cannot shrink a window below its minimum and the
-# overflow is simply unreachable on that hardware. Measured across all 28 apps
-# with tools/appshot.py:
+# laying out inside 1024x722 (the smallest panel we support: 768 minus the 46px
+# desktop panel shell.py actually strut-reserves — docs/PAPER-PHYSICS.md
+# §E3.6; an earlier revision of this note said 28px/740, which was wrong and
+# hid an overflow), because GTK cannot shrink a window below its minimum and
+# the overflow is simply unreachable on that hardware. Measured across all 28
+# apps with tools/appshot.py:
 #
 #     multiplier 1.05  fits          multiplier 1.10  Cookbook 1037 wide
 #     multiplier 1.15  Cookbook 1043 wide, 1.25 also GBA SDK 1056
@@ -1040,6 +1083,14 @@ _HC_TEXT = {
     # contrast firms those rules up instead of drawing six near-black bars
     # through the toolbars.
     b"#D7D2C5": _HC_HAIR, b"#C9C4B6": _HC_HAIR,
+    # hair-firm. It is a LINE tone and _HC_LINE already covers it there, but it
+    # is reachable as TEXT too: the design-token pass conforms the drift tones
+    # #B9B4A8 and #B0AB9D onto it, and both of those were TEXT keys above.
+    # Without this entry a caption that used to be boosted would quietly stop
+    # being boosted the moment it was conformed -- an accessibility regression
+    # produced by a tidying change, which is the worst kind. As text on paper it
+    # is about 2.3:1, so it belongs in the quiet tier.
+    b"#B3AD9E": _HC_QUIET,
 }
 _HC_LINE = {
     b"#C9C4B6": _HC_HAIR, b"#C4BFB1": _HC_HAIR, b"#D7D2C5": _HC_HAIR,
@@ -1060,12 +1111,28 @@ _HEX6 = re.compile(rb"#[0-9A-Fa-f]{6}")
 # format button and check button in the OS look live. WCAG agrees: 1.4.3
 # exempts inactive components from the contrast minimum. Six rules in de/ and
 # shell.py depend on this, nbapp's own .nbmenu-item:disabled among them.
-_HC_SKIP = (b":disabled", b":insensitive")
+# Selectors whose colours high contrast must LEAVE ALONE, because their whole
+# job is to look unavailable. Boosting them makes a greyed-out control read as
+# live, which is worse than low contrast: WCAG 1.4.3 exempts inactive controls
+# precisely because "you cannot use this" has to stay legible AS a state.
+#
+# The CLASS-based entries matter as much as the pseudo-classes. GTK only gives
+# :disabled to widgets made insensitive, but this OS also dims things by adding
+# a class -- illustrator's `.dim` group (7 rules), `.pipoff`, `.chip-off`,
+# `.disabled`. That was harmless while those rules used off-palette tones no
+# mapping table knew about; the design-token pass conformed them onto MAPPED
+# tokens, at which point high contrast started rewriting them and an unavailable
+# group would have rendered as though it were available. Found by a conformance
+# agent reading its own diff, which is exactly the sort of second-order breakage
+# a value-only change is not supposed to be able to cause.
+_HC_SKIP = (b":disabled", b":insensitive",
+            b".dim", b".disabled", b".pipoff", b".chip-off")
 
 _A11Y = None                # (text floor px, contrast), read once from the store
 _A11Y_SHEETS = []           # [(provider, original css)] for a live re-style
 _A11Y_BASE = None           # our own SETTINGS-priority provider
 _A11Y_LOAD = None           # Gtk's own load_from_data, before we wrapped it
+_NAME_LOAD = None           # Gtk's own set_tooltip_text, before we wrapped it
 
 
 def a11y_prefs():
@@ -1173,6 +1240,59 @@ def _a11y_hook():
     Gtk.CssProvider.load_from_data = load_from_data
 
 
+def name_control(widget, name):
+    """Give a control a name assistive technology can read, and return it.
+
+    For the controls a tooltip cannot cover: a custom DrawingArea, an icon-only
+    button whose picture is its whole meaning but which has no tooltip, an image
+    that is the label of something else. `Gtk.Label`-bearing widgets already
+    name themselves from their text and need no call."""
+    try:
+        acc = widget.get_accessible()
+        if acc is not None:
+            acc.set_name(name)
+    except Exception:                                             # noqa: BLE001
+        pass                    # naming is never worth failing a window over
+    return widget
+
+
+def _name_hook():
+    """Make every tooltip in the OS an accessible name as well.
+
+    MEASURED: a Gtk.Button holding only a Gtk.Image reports
+    `get_accessible().get_name() == None` however carefully its tooltip is
+    written — GTK maps a tooltip to the ATK *description*, and the name comes
+    from the label the button does not have. So the Finder toolbar, the media
+    transport, the Illustrator dock and the sequencer's ~250 icon-only buttons
+    were all reachable, all documented on hover, and all anonymous to anything
+    reading the interface aloud. Constitution VII §2 asks for the tooltip AND
+    the name; every app in the tree had written the tooltip and none had ever
+    called get_accessible().
+
+    Installed as a wrapper at import, the same technique (and for the same
+    reason) as _a11y_hook: it fixes all of them in one place instead of asking
+    28 apps to remember a second call, and it covers the surfaces that never
+    build an AppWindow. A widget that already has a name — anything with a
+    label, which GTK names for free — keeps it; this only fills the blanks."""
+    global _NAME_LOAD
+    if _NAME_LOAD is not None:
+        return
+    _NAME_LOAD = original = Gtk.Widget.set_tooltip_text
+
+    def set_tooltip_text(self, text, *args):
+        result = original(self, text, *args)
+        if text:
+            try:
+                acc = self.get_accessible()
+                if acc is not None and not (acc.get_name() or "").strip():
+                    acc.set_name(text)
+            except Exception:                                     # noqa: BLE001
+                pass
+        return result
+
+    Gtk.Widget.set_tooltip_text = set_tooltip_text
+
+
 def _default_font_px():
     """GTK's default font size in pixels — what text nobody styled comes out
     at. Here that is "Sans 10" = 13.3px, comfortably under the floor; read
@@ -1257,6 +1377,7 @@ def a11y_set(large, contrast):
 
 
 _a11y_hook()
+_name_hook()
 # Also at import, not only from install_css: the desktop panel, the widget
 # column and the Finder style themselves without ever constructing an
 # AppWindow, and a person who needs larger text needs it on the desktop most
@@ -1268,7 +1389,12 @@ APP_CSS = b"""
                   min-height: 46px; }
 .nbapp .menubar * { font-family: "Nimbus Sans","Helvetica",sans-serif;
                     color: #1A1916; }
-.nbapp .menuitem { padding: 4px 8px; border-radius: 2px; font-size: 15px;
+/* 6px, matching the `menuitem` radius the Papertone theme sets. This CSS loads
+   at APPLICATION priority and therefore WINS over the theme, so a radius left
+   at the old 2px here would have quietly kept the menu bar square while every
+   other control in the OS moved to the new geometry -- the one strip of chrome
+   visible in every app, on every screen, disagreeing with all of it. */
+.nbapp .menuitem { padding: 4px 8px; border-radius: 6px; font-size: 15px;
                    background: transparent; border: 1px solid #F4F2EC;
                    box-shadow: none; }
 .nbapp .menuitem:hover { background: #EAE3D2; color: #1A1916; }
@@ -1281,17 +1407,34 @@ APP_CSS = b"""
    separate popup window - reliable on the no-compositor stack). Warm-paper
    card with a darker-beige border and a beige selection - never black, per the
    design language - matching shell.py's system menu. */
-.nbmenu { background: #F8F7F2; border: 1px solid #C9C4B6; padding: 4px 0; box-shadow: 3px 3px 0 rgba(26,25,22,0.15); }
+/* The dropdown card. The shadow was `3px 3px 0` -- a HARD offset with no blur,
+   cast down-and-right, which is the drop shadow of a 1990s word processor and
+   the only place in the OS that lit the interface from the top-LEFT. Replaced
+   with the paper elevation the theme defines for menus: two layers, warm ink,
+   straight down, low alpha.
+   Kept deliberately TIGHT (10px rather than the theme's 28px ambient) because
+   this menu is drawn as an overlay INSIDE the app window rather than in its own
+   popup window, so anything it casts is clipped to its own allocation -- a wide
+   ambient blur would simply be cut off and read as a grey edge.
+   NOTE: this whole block lives inside a BYTES literal, so it must stay ASCII
+   and must never contain a triple quote. An em dash here is a SyntaxError that
+   takes EVERY app down with it; ascii_css_check.py caught exactly that while
+   this comment was being written, and then the comment itself broke the file a
+   second time by quoting the delimiter it was warning about. */
+.nbmenu { background: #F8F7F2; border: 1px solid #C9C4B6; padding: 5px;
+          border-radius: 12px;
+          box-shadow: 0 1px 2px rgba(26,25,22,0.10),
+                      0 6px 10px rgba(26,25,22,0.12); }
 .nbmenu-item { font-family: "Nimbus Sans","Helvetica",sans-serif;
-               font-size: 14px; color: #1A1916; padding: 6px 24px 6px 16px;
+               font-size: 14px; color: #1A1916; padding: 6px 20px 6px 12px;
                min-width: 190px; background: transparent; border: none;
-               box-shadow: none; border-radius: 0; }
+               box-shadow: none; border-radius: 6px; }
 .nbmenu-item:hover { background: #EAE3D2; color: #1A1916; }
 .nbmenu-item:disabled { color: #9A9484; }
 .nbmenu-sep { background: #D7D2C5; min-height: 1px; margin: 4px 10px; }
 .nbabout { background: #FCFBF8; border: 1px solid #C9C4B6; padding: 30px 40px; }
 .nbabout .a-name { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                   font-size: 27px; font-weight: 500; letter-spacing: 0.01em;
+                   font-size: 24px; font-weight: 500; letter-spacing: 0.01em;
                    color: #1A1916; }
 .nbabout .a-sub  { font-size: 13px; color: #6E695E; }
 """
@@ -1329,6 +1472,128 @@ def apply_direction():
 # panel, the widget column and the splash have the same shape.
 apply_direction()
 
+class PaperSwitch(Gtk.Switch):
+    """A GtkSwitch that paints itself in the papertone language.
+
+    WHY SUBCLASS RATHER THAN BUILD ONE. GTK3's switch draws small "I" and "O"
+    rocker marks inside its track. They are a skeuomorph of a physical rocker,
+    they are the only glyphs in the interface nobody chose, and at 22px they are
+    illegible anyway -- but they cannot be removed with CSS. Four candidate
+    rules were rendered and measured (slider `color: transparent`,
+    `-gtk-icon-source: none` on both nodes, `font-size: 0`); every one of them
+    left the marks on screen, because the switch draws them itself.
+
+    Writing a toggle from scratch would mean re-implementing state, the
+    `state-set` and `notify::active` signals, keyboard activation, focus and
+    accessibility -- and the three call sites in this OS use two DIFFERENT
+    signals between them, so any mismatch would silently stop a setting from
+    saving. Overriding do_draw changes the pixels and nothing else: every bit of
+    behaviour is still GtkSwitch's.
+
+    Deliberately not animated. GtkSwitch's own slide position is private, so the
+    knob snaps -- which suits an interface whose motion rule is that nothing
+    moves decoratively (see the MOTION section of the Papertone theme)."""
+
+    # Papertone, matching the theme's switch rule so the two cannot drift.
+    _TRACK_OFF = (0xDE / 255, 0xD4 / 255, 0xC2 / 255)
+    _TRACK_ON = (0xC8 / 255, 0x34 / 255, 0x1E / 255)
+    _EDGE_OFF = (0xC9 / 255, 0xC4 / 255, 0xB6 / 255)
+    _EDGE_ON = (0xB1 / 255, 0x2D / 255, 0x19 / 255)
+    _KNOB = (0xFC / 255, 0xFB / 255, 0xF8 / 255)
+    _DISABLED = (0xEC / 255, 0xE8 / 255, 0xDE / 255)
+
+    def do_draw(self, cr):
+        w = self.get_allocated_width()
+        h = self.get_allocated_height()
+        if w < 4 or h < 4:
+            return True
+        on = self.get_active()
+        sensitive = self.get_sensitive()
+
+        inset = 0.5                      # half a pixel: hairlines land crisp
+        r = (h - 2 * inset) / 2.0
+        cr.save()
+        cr.set_line_width(1.0)
+
+        # --- track: a pill -------------------------------------------------
+        cr.new_sub_path()
+        cr.arc(inset + r, inset + r, r, math.pi / 2, 3 * math.pi / 2)
+        cr.arc(w - inset - r, inset + r, r, 3 * math.pi / 2, math.pi / 2)
+        cr.close_path()
+        if not sensitive:
+            cr.set_source_rgb(*self._DISABLED)
+        else:
+            cr.set_source_rgb(*(self._TRACK_ON if on else self._TRACK_OFF))
+        cr.fill_preserve()
+        cr.set_source_rgb(*(self._EDGE_ON if on and sensitive
+                            else self._EDGE_OFF))
+        cr.stroke()
+
+        # --- knob ----------------------------------------------------------
+        kr = max(2.0, r - 2.0)
+        kx = (w - inset - r) if on else (inset + r)
+        cr.arc(kx, inset + r, kr, 0, 2 * math.pi)
+        cr.set_source_rgb(*self._KNOB)
+        cr.fill_preserve()
+        cr.set_source_rgb(*self._EDGE_OFF)
+        cr.stroke()
+
+        # --- keyboard focus -------------------------------------------------
+        # Only when focus is VISIBLE, i.e. reached by keyboard rather than by a
+        # click -- the same rule the theme's global outline follows.
+        if self.has_visible_focus():
+            cr.set_source_rgb(*self._TRACK_ON)
+            cr.set_line_width(2.0)
+            cr.new_sub_path()
+            cr.arc(inset + r, inset + r, r - 2, math.pi / 2, 3 * math.pi / 2)
+            cr.arc(w - inset - r, inset + r, r - 2, 3 * math.pi / 2, math.pi / 2)
+            cr.close_path()
+            cr.stroke()
+
+        cr.restore()
+        return True                      # fully drawn; do not chain up
+
+
+def _apply_motion_policy():
+    """Turn GTK's animations on only where they will actually be smooth.
+
+    The Papertone theme defines a small motion vocabulary (90ms state feedback,
+    140ms for a surface arriving) — see the MOTION section of its gtk.css. All of
+    it runs through GTK's animation machinery, which this switch controls.
+
+    IT IS GATED ON NB_ACCEL, and that is the point rather than a caveat. A 90ms
+    transition is six frames; on a machine with no accelerated rendering, where a
+    first paint can take the better part of a second, those frames are not
+    dropped evenly — the control lurches between two or three states and arrives
+    late. That reads as a computer struggling, which is materially worse than
+    the honest instant snap of no animation at all. Motion here is meant to say
+    "this responded to you"; it must never end up saying "this is slow".
+
+    session.sh exports NB_ACCEL after probing what Mesa can actually drive (see
+    opt/notebook/accel.sh). Absent or unreadable -> assume software and stay
+    still, which is the answer that is never worse.
+
+    Reduced Motion (Settings > Accessibility) is the SECOND, independent switch
+    and applies regardless of NB_ACCEL: a person who turned it on gets no theme
+    transitions on an accelerated machine either. nbmotion owns that preference
+    so the shared motion engine and GTK's own animations cannot disagree; it is
+    imported here rather than at module scope because this is on the import
+    path of every app and a missing nbmotion must not be fatal."""
+    reduced = False
+    try:
+        import nbmotion
+        reduced = nbmotion.reduced_motion()
+    except Exception:                                             # noqa: BLE001
+        pass                          # no engine, no preference: accel decides
+    try:
+        accel = (os.environ.get("NB_ACCEL", "0").strip() == "1")
+        Gtk.Settings.get_default().set_property("gtk-enable-animations",
+                                                accel and not reduced)
+    except Exception:                                             # noqa: BLE001
+        # Never fatal: a missing setting must not stop an app from opening.
+        pass
+
+
 def install_css():
     global _CSS_DONE
     if _CSS_DONE:
@@ -1337,6 +1602,7 @@ def install_css():
     # The accessibility floor (see TEXT_STEPS): a no-op at the defaults, and
     # placed here so every app gets it from the one call it already makes.
     _a11y_base()
+    _apply_motion_policy()
     prov = Gtk.CssProvider()
     prov.load_from_data(APP_CSS)
     Gtk.StyleContext.add_provider_for_screen(
@@ -1542,17 +1808,22 @@ class AppWindow(Gtk.Window):
     def menu_items(self, name):
         """Return a list of (label, callback) entries for menu `name`.
         callback=None with label '-' is a separator; callback=None otherwise is
-        a disabled item. Subclasses override and may call super().menu_items()."""
+        a disabled item. Subclasses override and may call super().menu_items().
+
+        The three menus the base class owns are built from nbcommands, so the
+        labels, the ellipses, the accelerator text and the group separators
+        cannot drift from the rest of the OS. Nothing here prints Ctrl+W or
+        Ctrl+Q: _on_key suppresses both in the terminal, and an accelerator
+        that is only sometimes bound must not be promised in a shared menu."""
         if name == self.app_name:
-            return [(_t("About %s") % _t(self.app_name), self._about), SEP,
-                    (_t("Close    Esc"), self.close)]
+            return nbcommands.app_menu(self.app_name, self._about, self.close)
         if name == "File":
-            return [(_t("Close    Esc"), self.close)]
+            return nbcommands.file_menu(self.close)
         if name == "Edit":
-            return [(_t("Cut"), lambda: self._edit("cut")),
-                    (_t("Copy"), lambda: self._edit("copy")),
-                    (_t("Paste"), lambda: self._edit("paste")), SEP,
-                    (_t("Select All"), lambda: self._edit("all"))]
+            return nbcommands.edit_menu(lambda: self._edit("cut"),
+                                        lambda: self._edit("copy"),
+                                        lambda: self._edit("paste"),
+                                        lambda: self._edit("all"))
         return []
 
     def _open_menu(self, name, button):

@@ -20,7 +20,9 @@ import os
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gtk, Pango                 # noqa: E402
+gi.require_version("Pango", "1.0")
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gdk, Gtk, Pango, PangoCairo     # noqa: E402
 
 import nbapp                                              # noqa: E402
 import widgets                                            # noqa: E402
@@ -45,8 +47,138 @@ TILE_BLURB = {
     "meals": "Breakfast, lunch and dinner from today's meal plan",
     "workout": "Today's sets against the goal, exercise by exercise",
     "journal": "Whether today has been written",
+    "bills": "What is due next, and what it comes to this month",
     "accounting": "Cash balance and recent entries",
+    "birthdays": "Whose birthday is coming, and how soon",
+    "reading": "The books on the shelf and how far through each one is",
+    "language": "Whether today's practice goal has been met",
+    "novel": "The manuscript, chapter by chapter, counted in words",
 }
+
+# The board's own colours, so the preview below is the desktop and not an
+# illustration of it.
+_PAPER = (0xF8 / 255.0, 0xF7 / 255.0, 0xF2 / 255.0)
+_DESK = (0xDE / 255.0, 0xD4 / 255.0, 0xC2 / 255.0)
+_FRAME = (0x1A / 255.0, 0x19 / 255.0, 0x16 / 255.0)
+_MUTED = (0x9A / 255.0, 0x94 / 255.0, 0x84 / 255.0)
+
+
+class BoardPreview(Gtk.DrawingArea):
+    """A small live picture of the desktop, drawn to the board's own geometry.
+
+    Switching a name on and off in a list says nothing about what the desktop
+    will look like — which tile moves up into the gap, what the grid does when
+    only two are left, where the pinned pair sits. This is the same 3x2 grid
+    plus pinned column the board lays out, so the answer is on screen while the
+    switch is being flipped rather than after closing the window.
+
+    Drawn rather than built from widgets: it has to be small, it must not
+    depend on a font having any particular glyph, and nothing in it is
+    interactive."""
+
+    def __init__(self, get_state):
+        super().__init__()
+        self._get_state = get_state
+        self.set_size_request(-1, 176)
+        self.connect("draw", self._draw)
+
+    def _draw(self, _area, cr):
+        try:
+            self._paint(cr)
+        except Exception:                                   # noqa: BLE001
+            pass          # a preview must never be the thing that crashes
+        return False
+
+    def _paint(self, cr):
+        w = self.get_allocated_width()
+        h = self.get_allocated_height()
+        if w <= 8 or h <= 8:
+            return
+        on, order = self._get_state()
+
+        cr.set_source_rgb(*_DESK)
+        cr.rectangle(0, 0, w, h)
+        cr.fill()
+
+        pad, gap = 7.0, 5.0
+        # GRID_COLS counts the pinned column, so the tiles get all but one of
+        # them and the pinned pair gets the last.
+        cols = max(1, widgets.TILE_COLS)
+        rows = max(1, widgets.TILE_ROWS)
+        colw = (w - 2 * pad - gap * cols) / (cols + 1)
+        rowh = (h - 2 * pad - gap * (rows - 1)) / rows
+
+        shown = [t for t in order if on.get(t)][:cols * rows]
+        for slot in range(cols * rows):
+            x = pad + (slot % cols) * (colw + gap)
+            y = pad + (slot // cols) * (rowh + gap)
+            if slot < len(shown):
+                self._card(cr, x, y, colw, rowh,
+                           _t(widgets.TILE_TITLE[shown[slot]]))
+            else:
+                self._empty(cr, x, y, colw, rowh)
+
+        # The pinned column: Tasks over the calendar, always. Their split is
+        # the tile grid's own row split, because on the real board the two line
+        # up with the rows beside them.
+        px = pad + cols * (colw + gap)
+        pw = w - pad - px
+        self._card(cr, px, pad, pw, rowh, _t("Tasks"), pinned=True)
+        self._card(cr, px, pad + rowh + gap, pw, rowh, _t("Calendar"),
+                   pinned=True)
+
+    @staticmethod
+    def _show_text(cr, x, y, text, size, bold=False):
+        """Draw `text` with its BASELINE at y, through Pango.
+
+        NOT cr.show_text: the toy API binds one face and does no per-glyph
+        fallback, and Nimbus Sans carries no CJK, Devanagari or Hebrew — so
+        every tile title in this preview came out as .notdef (invisible, not a
+        box) in ja/zh/ko/hi/yi. The card frames drew, the titles did not.
+        """
+        layout = PangoCairo.create_layout(cr)
+        fd = Pango.FontDescription("Nimbus Sans")
+        fd.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
+        fd.set_absolute_size(size * Pango.SCALE)
+        layout.set_font_description(fd)
+        layout.set_text(text, -1)
+        cr.move_to(x, y - layout.get_baseline() / Pango.SCALE)
+        PangoCairo.show_layout(cr, layout)
+
+    def _card(self, cr, x, y, w, h, title, pinned=False):
+        if w < 2 or h < 2:
+            return
+        cr.set_source_rgb(*_PAPER)
+        cr.rectangle(x, y, w, h)
+        cr.fill()
+        cr.set_source_rgb(*_FRAME)
+        cr.set_line_width(1.0)
+        cr.rectangle(x + 0.5, y + 0.5, w - 1, h - 1)
+        cr.stroke()
+        # the card's header rule, the one piece of a real card that reads at
+        # this size
+        head = min(15.0, h * 0.34)
+        cr.move_to(x + 0.5, y + head + 0.5)
+        cr.line_to(x + w - 0.5, y + head + 0.5)
+        cr.stroke()
+        cr.save()
+        cr.rectangle(x + 3, y, w - 6, head)
+        cr.clip()
+        cr.set_source_rgb(*_FRAME)
+        self._show_text(cr, x + 5, y + head - 4.5, title, 9.5, bold=pinned)
+        cr.restore()
+
+    def _empty(self, cr, x, y, w, h):
+        """A slot no tile is in. Dashed, so it reads as space left on purpose
+        rather than as a card that failed to draw."""
+        if w < 2 or h < 2:
+            return
+        cr.set_source_rgb(*_MUTED)
+        cr.set_line_width(1.0)
+        cr.set_dash([3.0, 3.0])
+        cr.rectangle(x + 0.5, y + 0.5, w - 1, h - 1)
+        cr.stroke()
+        cr.set_dash([])
 
 
 class WidgetSettings(nbapp.AppWindow):
@@ -55,8 +187,9 @@ class WidgetSettings(nbapp.AppWindow):
 
     def __init__(self):
         super().__init__()
-        self.data = self._load()
+        self.data, self.order = self._load()
         self._switches = {}
+        self._rows = {}
         self._build()
         self._install_css()
         self._refresh_status()
@@ -64,26 +197,25 @@ class WidgetSettings(nbapp.AppWindow):
     # -- store ---------------------------------------------------------------
 
     def _load(self):
-        """Which tiles are on. Tolerates anything that is not the right shape:
-        a hand-edited or truncated store must open this screen showing the
-        defaults, not stop it opening."""
-        on = dict(widgets.TILE_DEFAULT_ON)
+        """Which tiles are on, and the order they sit in. Tolerates anything
+        that is not the right shape: a hand-edited or truncated store must open
+        this screen showing the defaults, not stop it opening."""
         try:
             with open(STORE, encoding="utf-8") as fh:
                 raw = json.load(fh)
         except (OSError, ValueError):
-            return on
-        tiles = raw.get("tiles") if isinstance(raw, dict) else None
-        if isinstance(tiles, dict):
-            for tid in widgets.TILE_ORDER:
-                if tid in tiles:
-                    on[tid] = bool(tiles[tid])
-        return on
+            raw = {}
+        # widgets.board_state is what the DESKTOP reads this file with, so the
+        # writer and the reader can never disagree about what it means -- down
+        # to which tile an older store's missing entries default to.
+        return widgets.board_state(raw)
 
     def _save(self):
         try:
             os.makedirs(os.path.dirname(STORE), exist_ok=True)
-            nbapp.atomic_write_json(STORE, {"tiles": self.data}, indent=1)
+            nbapp.atomic_write_json(
+                STORE, {"tiles": self.data, "order": list(self.order)},
+                indent=1)
         except OSError:
             pass          # a read-only home must never stop the app working
 
@@ -95,22 +227,39 @@ class WidgetSettings(nbapp.AppWindow):
         css = b"""
         .ws-main { background: #FCFBF8; }
         .ws-main * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .ws-title { font-size: 26px; font-weight: 700; color: #1A1916; }
+        .ws-title { font-size: 24px; font-weight: 700; color: #1A1916; }
         .ws-lede { font-size: 14px; color: #6E695E; }
         .ws-eyebrow { font-size: 11px; letter-spacing: 0.14em;
                       font-weight: 700; color: #9A9484; }
-        .ws-rule { background: #E4DFD2; }
-        .ws-row { padding: 14px 8px; }
+        .ws-rule { background: #D7D2C5; }
+        .ws-row { padding: 12px 8px; }
         .ws-row-hot { background: #F4F2EC; }
-        .ws-row-sep { border-top: 1px solid #EDE9DE; }
+        .ws-row-sep { border-top: 1px solid #D7D2C5; }
         .ws-name { font-size: 15px; color: #1A1916; }
         .ws-blurb { font-size: 13px; color: #6E695E; }
-        .ws-pinned { background: #F4F2EC; border: 1px solid #E2DCCE;
-                     border-radius: 3px; padding: 14px 16px; }
+        /* the board's position number, in the board's own furniture colour */
+        .ws-slot { font-size: 12px; color: #9A9484; }
+        /* "4 / 6" beside the section name: how much of the board is spoken
+           for. Tabular-ish weight so it reads as a count, not a heading. */
+        .ws-count { font-size: 12px; font-weight: 700; color: #6E695E; }
+        /* Why a control below is dead, or why a list is empty. Stated once per
+           list rather than left to be discovered by pressing something. */
+        .ws-reason { font-size: 13px; color: #8A857A; padding: 2px 0 10px 28px; }
+        .ws-preview { border: 1px solid #D7D2C5; padding: 0; }
+        .ws-move { min-width: 26px; min-height: 24px; padding: 0;
+                   background: #FCFBF8; border: 1px solid #D7D2C5;
+                   border-radius: 8px; box-shadow: none; color: #3A362E;
+                   font-size: 11px; }
+        .ws-move:hover { background: #EFEBE0; }
+        .ws-move:disabled { color: #C9C4B6; background: #F8F7F2; }
+        /* Information, not a disabled control: no fill, just a rule down the
+           side. A grey panel here read as a section that had been switched
+           off, which is the opposite of "always on". */
+        .ws-pinned { border-left: 2px solid #D7D2C5; padding: 2px 0 2px 16px; }
         .ws-pinnedname { font-size: 14px; color: #1A1916; }
         .ws-pinnedwhy { font-size: 12px; color: #6E695E; }
         .ws-status { padding: 7px 16px; font-size: 12px; color: #6E695E;
-                     border-top: 1px solid #E4DFD2; background: #F8F7F2; }
+                     border-top: 1px solid #D7D2C5; background: #F8F7F2; }
         """
         try:
             prov = Gtk.CssProvider()
@@ -151,27 +300,33 @@ class WidgetSettings(nbapp.AppWindow):
         title = Gtk.Label(label=_t("Widgets"), xalign=0)
         title.get_style_context().add_class("ws-title")
         inner.pack_start(title, False, False, 0)
-        # This is a FULLSCREEN app window, so the desktop it configures is not
-        # on screen while the switches are being set: the one line says how to
-        # get back to it.
         lede = Gtk.Label(
-            label=_t("Close this window to see the desktop."),
+            label=_t("The desktop holds six tiles beside Tasks and the "
+                     "calendar. Choose which six, and the order they sit in."),
             xalign=0)
         lede.get_style_context().add_class("ws-lede")
         self._wrap(lede)
         lede.set_margin_top(4)
         inner.pack_start(lede, False, False, 0)
 
+        # The desktop as it will look, updated on every change.
+        self.preview = BoardPreview(lambda: (self.data, self.order))
+        frame = Gtk.Box()
+        frame.get_style_context().add_class("ws-preview")
+        frame.pack_start(self.preview, True, True, 0)
+        frame.set_margin_top(18)
+        inner.pack_start(frame, False, False, 0)
+
         rule = Gtk.Box()
         rule.get_style_context().add_class("ws-rule")
         rule.set_size_request(-1, 1)
-        rule.set_margin_top(20)
+        rule.set_margin_top(24)
         rule.set_margin_bottom(6)
         inner.pack_start(rule, False, False, 0)
 
-        for i, tid in enumerate(widgets.TILE_ORDER):
-            inner.pack_start(self._tile_row(tid, first=(i == 0)),
-                             False, False, 0)
+        self._rowbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        inner.pack_start(self._rowbox, False, False, 0)
+        self._fill_rows()
 
         # The two that cannot be switched off, said plainly rather than left as
         # a silent absence from the list above.
@@ -214,12 +369,136 @@ class WidgetSettings(nbapp.AppWindow):
 
         self.content.pack_start(main, True, True, 0)
 
-    def _tile_row(self, tid, first=False):
+    # -- the two lists -------------------------------------------------------
+    #
+    # There are eleven tiles and six slots, so a single flat list of switches
+    # cannot say the thing that matters: WHICH SIX are on the desktop. Split in
+    # two, the screen answers that by its shape — the top list IS the board, in
+    # board order, and the bottom one is everything still to choose from.
+
+    def _shown(self):
+        """The switched-on tiles, in board order. This is what the desktop
+        draws (capped at the slots there are), so it is what the top list
+        shows."""
+        return [t for t in self.order if self.data.get(t)]
+
+    def _full(self):
+        return len(self._shown()) >= widgets.slot_count()
+
+    def _fill_rows(self):
+        """(Re)build both lists. Wholesale, on every change: the lists ARE the
+        state — which section a tile is in, what position it holds, whether its
+        switch can be flipped — so a row left where it was would be the screen
+        disagreeing with the desktop it is describing."""
+        for child in self._rowbox.get_children():
+            self._rowbox.remove(child)
+        self._switches.clear()
+        shown = self._shown()
+        slots = widgets.slot_count()
+        off = [t for t in self.order if not self.data.get(t)]
+
+        self._rowbox.pack_start(
+            self._section(_t("ON THE DESKTOP"),
+                          "%d / %d" % (min(len(shown), slots), slots)),
+            False, False, 0)
+        if not shown:
+            self._rowbox.pack_start(
+                self._note(_t("Nothing is on the desktop. Switch a tile on "
+                              "below.")), False, False, 0)
+        for i, tid in enumerate(shown):
+            self._rowbox.pack_start(
+                self._tile_row(tid, first=(i == 0), pos=i,
+                               last=(i == len(shown) - 1), shown=True),
+                False, False, 0)
+
+        if off:
+            self._rowbox.pack_start(
+                self._section(_t("NOT ON THE DESKTOP"), "", top=26),
+                False, False, 0)
+            # Said once, here, rather than left for someone to discover by
+            # flipping a switch that does nothing. The switches below really
+            # are dead while the board is full, so the screen has to say so.
+            if self._full():
+                self._rowbox.pack_start(
+                    self._note(_t("The board is full. Switch one off above to "
+                                  "make room.")), False, False, 0)
+            for i, tid in enumerate(off):
+                self._rowbox.pack_start(
+                    self._tile_row(tid, first=(i == 0), shown=False),
+                    False, False, 0)
+        self._rowbox.show_all()
+
+    @staticmethod
+    def _section(title, count="", top=6):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.set_margin_top(top)
+        row.set_margin_bottom(6)
+        lbl = Gtk.Label(label=title, xalign=0)
+        lbl.get_style_context().add_class("ws-eyebrow")
+        row.pack_start(lbl, True, True, 0)
+        if count:
+            num = Gtk.Label(label=count, xalign=1)
+            num.get_style_context().add_class("ws-count")
+            row.pack_end(num, False, False, 0)
+        return row
+
+    def _note(self, text):
+        lbl = Gtk.Label(label=text, xalign=0)
+        lbl.get_style_context().add_class("ws-reason")
+        self._wrap(lbl)
+        return lbl
+
+    def _move(self, tid, delta):
+        """Move a tile one place along THE BOARD, not one place along the
+        stored order.
+
+        Those are different lists once some tiles are switched off: swapping
+        with the neighbouring entry in `order` can swap with a tile that is not
+        on the desktop, and the button then visibly does nothing. The shown
+        tiles are reordered among themselves and written back into the
+        positions they already occupied, so the switched-off tiles keep their
+        places and come back where they were left."""
+        shown = self._shown()
+        if tid not in shown:
+            return
+        i = shown.index(tid)
+        j = i + delta
+        if not (0 <= j < len(shown)):
+            return
+        shown[i], shown[j] = shown[j], shown[i]
+        slots = [k for k, t in enumerate(self.order) if self.data.get(t)]
+        for k, t in zip(slots, shown):
+            self.order[k] = t
+        self._save()
+        self._fill_rows()
+        self.preview.queue_draw()
+        self._refresh_status()
+
+    def _tile_row(self, tid, first=False, pos=0, last=False, shown=True):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         ctx = row.get_style_context()
         ctx.add_class("ws-row")
         if not first:
             ctx.add_class("ws-row-sep")
+
+        # Where this tile lands on the board, so the row and the picture above
+        # it are talking about the same thing. A tile in the lower list has no
+        # position, and a hand-edited store with more tiles on than the board
+        # can draw leaves the ones past the cap marked "-" rather than
+        # pretending they are somewhere.
+        slot = Gtk.Label(xalign=0.5)
+        slot.get_style_context().add_class("ws-slot")
+        if shown:
+            if pos < widgets.slot_count():
+                slot.set_text("%d" % (pos + 1))
+            else:
+                slot.set_text("-")
+                slot.set_tooltip_text(_t("The board has room for six tiles"))
+        else:
+            slot.set_text("")
+        slot.set_size_request(20, -1)
+        slot.set_valign(Gtk.Align.CENTER)
+        row.pack_start(slot, False, False, 0)
 
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         name = Gtk.Label(label=_t(widgets.TILE_TITLE[tid]), xalign=0)
@@ -234,14 +513,42 @@ class WidgetSettings(nbapp.AppWindow):
         text.pack_start(blurb, False, False, 0)
         row.pack_start(text, True, True, 0)
 
-        sw = Gtk.Switch()
+        # A switch that cannot change anything is left visible and greyed, the
+        # way an unavailable menu item is: removing it would make the lower
+        # list shift under the pointer as tiles are switched on and off, and
+        # hide what the app can do. The reason is printed once above the list.
+        blocked = not shown and self._full()
+        sw = nbapp.PaperSwitch()
         sw.set_valign(Gtk.Align.CENTER)
         sw.set_active(bool(self.data.get(tid)))
+        sw.set_sensitive(not blocked)
         sw.connect("notify::active", self._on_toggle, tid)
-        sw.set_tooltip_text(_t("Show %s on the desktop")
-                            % _t(widgets.TILE_TITLE[tid]))
+        sw.set_tooltip_text(
+            _t("The board is full. Switch one off to make room.") if blocked
+            else (_t("Take %s off the desktop") if shown
+                  else _t("Show %s on the desktop"))
+            % _t(widgets.TILE_TITLE[tid]))
         self._switches[tid] = sw
         row.pack_end(sw, False, False, 0)
+
+        # Up/down rather than dragging: a drag is fiddly and there is no undo
+        # on this screen. Only on a tile that is ON — position is a fact about
+        # the board, and a tile that is not on it has none. Insensitive at the
+        # ends, so the limits are visible instead of being discovered by a
+        # press that does nothing.
+        if shown:
+            moves = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            moves.set_valign(Gtk.Align.CENTER)
+            for glyph, delta, tip, stop in (("▲", -1, "Move up", first),
+                                            ("▼", 1, "Move down", last)):
+                b = Gtk.Button(label=glyph)
+                b.get_style_context().add_class("ws-move")
+                b.set_tooltip_text(_t(tip))
+                b.set_sensitive(not stop)
+                b.connect("clicked",
+                          lambda _b, t=tid, d=delta: self._move(t, d))
+                moves.pack_start(b, False, False, 0)
+            row.pack_end(moves, False, False, 0)
 
         # The whole row is the target, not just the 48px switch: the name and
         # the line explaining it are what someone aims at, and a click that
@@ -254,8 +561,7 @@ class WidgetSettings(nbapp.AppWindow):
                        | Gdk.EventMask.ENTER_NOTIFY_MASK
                        | Gdk.EventMask.LEAVE_NOTIFY_MASK)
         hit.add(row)
-        hit.set_tooltip_text(_t("Show %s on the desktop")
-                             % _t(widgets.TILE_TITLE[tid]))
+        hit.set_tooltip_text(sw.get_tooltip_text() or "")
         hit.connect("button-press-event", self._on_row_press, tid)
         # A row that can be clicked has to look like one, or the target is a
         # secret. Flipping a style class costs nothing to draw and needs no
@@ -274,47 +580,100 @@ class WidgetSettings(nbapp.AppWindow):
         except AttributeError:
             return False
         sw = self._switches.get(tid)
-        if sw is not None:
+        # An insensitive switch still changes when its "active" property is
+        # set, so the whole-row target has to check the same condition the
+        # switch does — otherwise clicking the words beside a greyed switch
+        # would do what the switch itself refuses to.
+        if sw is not None and sw.get_sensitive():
             sw.set_active(not sw.get_active())   # notify::active does the rest
         return True
 
     def _refresh_status(self):
+        """How many tiles are on -- and, when more are on than the board has
+        room for, how many are not being drawn.
+
+        There are more tiles than slots, so counting the SWITCHES would be a
+        plain untruth about what is on screen. Any tile past the cap already
+        shows "-" where its position would be; this is the same fact said once
+        for the board as a whole. It is normally unreachable -- the lower
+        list's switches go dead when the board is full -- but a hand-edited
+        store can still arrive with eight tiles on, and the screen must not
+        misdescribe it."""
+        slots = widgets.slot_count()
         n = sum(1 for tid in widgets.TILE_ORDER if self.data.get(tid))
+        shown = min(n, slots)
         if not n:
-            self.status.set_text(
-                _t("No widgets on the desktop"))
-        else:
-            self.status.set_text(
-                _t("%d widget%s on the desktop") % (n, "" if n == 1 else "s"))
+            self.status.set_text(_t("No widgets on the desktop"))
+            return
+        text = _t("%d widget%s on the desktop") % (shown,
+                                                   "" if shown == 1 else "s")
+        if n > shown:
+            # The separator is composed OUTSIDE the catalog keys: a key with
+            # padding baked into it matches nothing and shows English.
+            text += "  ·  " + _t("%d with no slot") % (n - shown)
+        self.status.set_text(text)
 
     # -- actions -------------------------------------------------------------
 
     def _on_toggle(self, sw, _param, tid):
         self.data[tid] = bool(sw.get_active())
-        self._save()
-        self._refresh_status()
+        # A tile that goes on or off changes SECTION, renumbers everything
+        # under it, and can be what makes the board full -- so both lists are
+        # rebuilt, not just the row that was touched.
+        self._after_change()
+
+    def _fill_board(self):
+        """Switch tiles on, in board order, until the grid is full.
+
+        Not "switch everything on": there are more tiles than the board can
+        draw, so that would leave some of them switched on and undrawable --
+        the exact state the lower list's dead switches exist to prevent."""
+        room = widgets.slot_count() - len(self._shown())
+        for tid in self.order:
+            if room <= 0:
+                break
+            if not self.data.get(tid):
+                self.data[tid] = True
+                room -= 1
+        self._after_change()
 
     def _set_all(self, on):
         for tid in widgets.TILE_ORDER:
             self.data[tid] = on
-            self._switches[tid].set_active(on)
+        self._after_change()
+
+    def _reset_order(self):
+        self.order = list(widgets.TILE_ORDER)
+        self._after_change()
+
+    def _after_change(self):
+        """Save, then redraw everything that describes the board. One place,
+        because the picture, the two lists and the status line all describe the
+        same state, and any of them left stale is the screen disagreeing with
+        the desktop."""
         self._save()
         self._refresh_status()
+        self.preview.queue_draw()
+        self._fill_rows()
 
     def menu_items(self, name):
         if name == "File":
             return [("Close    Esc", self.close)]
         if name == "View":
-            all_on = all(self.data.get(t) for t in widgets.TILE_ORDER)
             any_on = any(self.data.get(t) for t in widgets.TILE_ORDER)
+            moved = self.order != list(widgets.TILE_ORDER)
             return [
-                # Each entry names what happens on the desktop rather than
-                # the kind of thing being switched — the same sentence the
-                # rows' own tooltips use ("Show %s on the desktop").
-                ("Show All on the Desktop",
-                 (lambda: self._set_all(True)) if not all_on else None),
+                # Each entry names what happens ON THE DESKTOP rather than the
+                # kind of thing being switched. "Show All" is gone: there are
+                # more tiles than the board can draw, so it was a promise the
+                # grid cannot keep — filling the board is the real outcome.
+                ("Fill the Board",
+                 self._fill_board if not self._full() else None),
                 ("Hide All from the Desktop",
                  (lambda: self._set_all(False)) if any_on else None),
+                nbapp.SEP,
+                ("Restore the Original Order",
+                 self._reset_order if moved else None),
             ]
         return super().menu_items(name)
 

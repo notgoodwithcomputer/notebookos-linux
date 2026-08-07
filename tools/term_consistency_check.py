@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""One concept, one word — per language, inside one app.
+
+A translated interface can be 100% covered, pass every placeholder check and
+still read badly, because nothing in the pipeline notices that the same thing
+is called three different names. The GBA SDK called a tile `baldosa`,
+`mosaico` and `pieza` in Spanish, `tessera` and `casella` in Italian, `peça`
+and `mosaico` in Portuguese, `плитка` and `тайл` in Russian, `karo`, `taş` and
+`döşeme` in Turkish, and `פּליטקע` and `קאַפֿל` in Yiddish — all in the same
+app, several of them in adjacent labels.
+
+For each concept this checks every catalog key that names it, and fails if a
+language uses more than one root across them.
+
+Two traps this tool exists to avoid, both of which produced wrong answers on
+the first attempt:
+
+* **Match roots on word boundaries.** Bare substring matching reported Italian
+  as inconsistent because the verb `mettile` ("put them") contains `tile`.
+* **Establish which app owns a key before unifying it.** Spanish uses `ficha`
+  for the desktop board tiles, the 2048 tiles and the sliding-tile puzzle.
+  That is a genuinely different concept and correctly a different word;
+  "fixing" it would have been the defect. Ownership is decided by looking for
+  the key as a QUOTED literal — plain substring matching claimed `TILES` was
+  shared with widgets.py, where the real text is the identifier `FILL_TILES`,
+  and that `1 tile` was shared with xrootbg.py, where it is inside a comment.
+"""
+import io
+import json
+import os
+import re
+import sys
+import unicodedata
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DE = os.path.join(HERE, "..", "buildroot", "board", "notebookos",
+                  "rootfs-overlay", "opt", "notebook", "de")
+
+# concept -> (key pattern, owning apps, {lang: [root, ...]})
+# The FIRST root listed is the agreed term; the rest are the words that have
+# turned up as alternatives and must not come back.
+CONCEPTS = {
+    "tile": {
+        "pattern": r"\btiles?\b",
+        "apps": {"gbasdk.py", "gbahelp.py", "gbabuild.py"},
+        # These five are written across two source lines, so they are not
+        # findable as a single quoted literal. Naming them by prefix keeps
+        # them in the check instead of silently dropping five of 25 keys.
+        "also": ("Click to paint the chosen tile",
+                 "Every tile in this set is cropped",
+                 "Paint 8×8 tiles",
+                 "Pin this sprite to one colour set",
+                 "This tile and the 15 after it"),
+        "roots": {
+            "de": [r"kachel"],
+            "el": [r"πλακ"],
+            "eo": [r"kahel"],
+            "es": [r"baldos", r"mosaic", r"\bpieza", r"\blosa"],
+            "fr": [r"tuile"],
+            "it": [r"tesser", r"\btile\b", r"casell"],
+            "nl": [r"tegel"],
+            "pl": [r"kafel"],
+            "pt": [r"mosaic", r"peça"],
+            "ru": [r"плит", r"тайл"],
+            "tr": [r"karo", r"taş", r"döşeme"],
+            "yi": [r"פּליטקע", r"קאַפֿל"],
+        },
+    },
+    "sprite": {
+        "pattern": r"\bsprites?\b",
+        "apps": {"gbasdk.py", "gbahelp.py", "gbabuild.py"},
+        "also": ("Pin this sprite to one colour set",),
+        "roots": {
+            "eo": [r"sprajt", r"rolfigur", r"\bfigur"],
+            "pl": [r"dusz", r"postać"],
+            "sr": [r"sprajt", r"\bfigur"],
+        },
+    },
+    "frame": {
+        "pattern": r"\bframes?\b",
+        "apps": {"gbasdk.py", "gbahelp.py", "gbabuild.py"},
+        "roots": {
+            "sr": [r"kadar|kadr", r"sličic"],
+        },
+    },
+    # The action that turns a project into a .gba. English said BOTH "Build"
+    # (menu) and "Compile" (buttons, messages) for it, and every translation
+    # inherited the split. English is now Build throughout; each language picks
+    # ONE word, which need NOT be a literal translation of "build" -- Spanish
+    # "Compilar" used consistently is right, and "Construir" would be worse.
+    # The tool itself stays "the compiler" everywhere: that is a different
+    # noun, not the action.
+    "build": {
+        "pattern": r"^(Build|Cannot build|Build .*|.*did not build.*|"
+                   r"The build log.*|The working files for the build.*|"
+                   r"Loaded the example game.*)$",
+        "apps": {"gbasdk.py", "gbahelp.py", "gbabuild.py"},
+        "roots": {
+            "de": [r"kompilier", r"erstell"],
+            "el": [r"μεταγλωττ", r"δημιουργ"],
+            "eo": [r"kompil", r"konstru", r"traduk"],
+            "es": [r"compil", r"constru"],
+            "fr": [r"compil", r"constru"],
+            "it": [r"compil", r"costru"],
+            "ja": [r"ビルド", r"コンパイル"],
+            "ko": [r"빌드", r"컴파일"],
+            "nl": [r"compiler", r"bouw"],
+            "pl": [r"kompil", r"budow|zbuduj|buduj"],
+            "pt": [r"compil", r"constru"],
+            "ru": [r"собра|сборк", r"компил"],
+            "sr": [r"kompajl", r"izgrad", r"\bpreve"],
+            "tr": [r"derle", r"inşa"],
+            "yi": [r"קאָמפּיל", r"בוי"],
+            "zh": [r"编译", r"构建", r"生成"],
+        },
+    },
+    # "event" is the standing homograph: a diary appointment (calendar, tasks)
+    # and a thing a game object reacts to are the same English word and would
+    # share one catalog key. gbasdk already renamed its own labels -- OBJECT
+    # EVENTS, Add Object Event, No object events -- so only SDK-owned keys are
+    # checked here, and Turkish must use `olay` for them, never the calendar's
+    # `etkinlik`.
+    "event": {
+        "pattern": r"\bevents?\b",
+        "apps": {"gbasdk.py", "gbahelp.py", "gbabuild.py"},
+        "also": ("Start a countdown; fires the Alarm event",
+                 "Stop running the rest of this event",
+                 "Select an event, then add actions"),
+        "roots": {
+            "tr": [r"olay", r"etkinlik"],
+        },
+    },
+}
+
+
+def norm(s):
+    return unicodedata.normalize("NFD", s.lower())
+
+
+def owned_by(key, src, apps):
+    """True when this key appears as a quoted literal ONLY in `apps`."""
+    # ensure_ascii=False matters: the default escapes non-ASCII, so a key
+    # holding an ellipsis, an em dash or the menu arrow was compared against
+    # "\u2026" and never matched anything. Every concept was quietly checking
+    # fewer keys than it claimed.
+    pats = [json.dumps(key, ensure_ascii=False),
+            "'" + key.replace("'", "\\'") + "'"]
+    found = {a for a, t in src.items() if any(p in t for p in pats)}
+    return bool(found) and found <= apps
+
+
+def main():
+    try:
+        with io.open(os.path.join(DE, "lang_es.json"), encoding="utf-8") as fh:
+            english = list(json.load(fh))
+    except (OSError, ValueError):
+        print("could not read a catalog to take the key set from")
+        return 2
+    src = {}
+    for name in sorted(os.listdir(DE)):
+        if name.endswith(".py"):
+            with io.open(os.path.join(DE, name), encoding="utf-8",
+                         errors="replace") as fh:
+                src[name] = fh.read()
+
+    problems = 0
+    for concept, spec in sorted(CONCEPTS.items()):
+        pat = re.compile(spec["pattern"], re.I)
+        keys = [k for k in english if pat.search(k)]
+        owned = sorted(k for k in keys if owned_by(k, src, spec["apps"]))
+        # Keys the source wraps across lines are not findable as one literal;
+        # take them by prefix rather than dropping them from the check.
+        extra = [k for k in keys if not owned_by(k, src, spec["apps"])
+                 and any(k.startswith(p) for p in spec.get("also", ()))]
+        keys = sorted(set(owned) | set(extra))
+        if not keys:
+            print("%s: no owned keys found — the pattern or the app set is "
+                  "wrong" % concept)
+            problems += 1
+            continue
+        print("%s: %d keys owned by %s"
+              % (concept, len(keys), ", ".join(sorted(spec["apps"]))))
+        for lang, roots in sorted(spec["roots"].items()):
+            p = os.path.join(DE, "lang_%s.json" % lang)
+            try:
+                with io.open(p, encoding="utf-8") as fh:
+                    cat = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            used = {}
+            for r in roots:
+                n = sum(1 for k in keys
+                        if re.search(norm(r), norm(cat.get(k, ""))))
+                if n:
+                    used[r] = n
+            if len(used) > 1:
+                agreed = roots[0]
+                strays = {r: n for r, n in used.items() if r != agreed}
+                print("  %s uses %d words for one concept: agreed %r, also %s"
+                      % (lang, len(used), agreed,
+                         ", ".join("%r x%d" % (r, n)
+                                   for r, n in sorted(strays.items()))))
+                for k in keys:
+                    v = cat.get(k, "")
+                    if any(re.search(norm(r), norm(v)) for r in strays):
+                        print("      %-44s %s" % (k[:44], v[:52]))
+                problems += 1
+    print("\nRESULT: " + ("CONSISTENT" if not problems
+                          else "%d language(s) using more than one word"
+                               % problems))
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

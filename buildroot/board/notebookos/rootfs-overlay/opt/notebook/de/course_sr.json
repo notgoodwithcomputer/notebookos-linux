@@ -1,261 +1,6015 @@
 {
-  "code": "sr",
-  "name": "Serbo-Croatian",
-  "from": "English",
-  "units": [
+ "code": "sr",
+ "name": "Serbo-Croatian",
+ "from": "English",
+ "note": "Written in the Latin alphabet, one of the two the language uses.",
+ "alphabet": [
+  {
+   "c": "c",
+   "ipa": "ts",
+   "e": "ts, as in cats"
+  },
+  {
+   "c": "č",
+   "ipa": "tʃ",
+   "e": "ch, as in church"
+  },
+  {
+   "c": "ć",
+   "ipa": "tɕ",
+   "e": "a softer ch, near the t in future"
+  },
+  {
+   "c": "dž",
+   "ipa": "dʒ",
+   "e": "j, as in judge"
+  },
+  {
+   "c": "đ",
+   "ipa": "dʑ",
+   "e": "a softer j, near the d in during"
+  },
+  {
+   "c": "j",
+   "ipa": "j",
+   "e": "y, as in yes"
+  },
+  {
+   "c": "lj",
+   "ipa": "ʎ",
+   "e": "lli, as in million"
+  },
+  {
+   "c": "nj",
+   "ipa": "ɲ",
+   "e": "ny, as in canyon"
+  },
+  {
+   "c": "š",
+   "ipa": "ʃ",
+   "e": "sh, as in ship"
+  },
+  {
+   "c": "ž",
+   "ipa": "ʒ",
+   "e": "s, as in measure"
+  },
+  {
+   "c": "h",
+   "ipa": "x",
+   "e": "ch, as in Scottish loch"
+  },
+  {
+   "c": "v",
+   "ipa": "ʋ",
+   "e": "v, made with a light contact"
+  },
+  {
+   "c": "r",
+   "ipa": "r̩",
+   "e": "a rolled r, and a vowel on its own in prst"
+  }
+ ],
+ "units": [
+  {
+   "title": "BASICS",
+   "subtitle": "Greeting people, naming who is who, and counting to ten",
+   "skills": [
     {
-      "title": "BASICS",
-      "skills": [
-        {
-          "name": "Greetings",
-          "words": [
-            {"t": "zdravo", "e": "hello", "ipa": "zdrâːʋo"},
-            {"t": "ćao", "e": "hi", "ipa": "tɕaːo"},
-            {"t": "doviđenja", "e": "goodbye", "ipa": "doʋiˈdʑeːɲa"},
-            {"t": "hvala", "e": "thank you", "ipa": "xʋǎːla"},
-            {"t": "molim", "e": "please", "ipa": "mǒlim"},
-            {"t": "da", "e": "yes", "ipa": "dâ"},
-            {"t": "ne", "e": "no", "ipa": "nê"},
-            {"t": "izvini", "e": "sorry", "ipa": "izʋǐːni"},
-            {"t": "dobro jutro", "e": "good morning", "ipa": "dôbroː jǔtro"}
-          ],
-          "phrases": [
-            {"t": "Kako si?", "e": "How are you?", "ipa": "kǎko si"},
-            {"t": "Dobro sam", "e": "I am well", "ipa": "dôbro sam"}
-          ]
-        },
-        {
-          "name": "People",
-          "words": [
-            {"t": "ja", "e": "I", "ipa": "jâ"},
-            {"t": "ti", "e": "you", "ipa": "tî"},
-            {"t": "on", "e": "he", "ipa": "ôn"},
-            {"t": "ona", "e": "she", "ipa": "ǒna"},
-            {"t": "mi", "e": "we", "ipa": "mî"},
-            {"t": "oni", "e": "they", "ipa": "ǒni"},
-            {"t": "čovek", "e": "man", "ipa": "tʃǒʋeːk"},
-            {"t": "žena", "e": "woman", "ipa": "ʒěna"},
-            {"t": "dečak", "e": "boy", "ipa": "dětʃaːk"},
-            {"t": "devojka", "e": "girl", "ipa": "děʋoːjka"}
-          ],
-          "phrases": [
-            {"t": "On je čovek", "e": "He is a man", "ipa": "ôn je tʃǒʋeːk"}
-          ]
-        },
-        {
-          "name": "Numbers",
-          "words": [
-            {"t": "jedan", "e": "one", "ipa": "jědan"},
-            {"t": "dva", "e": "two", "ipa": "dʋâ"},
-            {"t": "tri", "e": "three", "ipa": "trî"},
-            {"t": "četiri", "e": "four", "ipa": "tʃětiri"},
-            {"t": "pet", "e": "five", "ipa": "pêːt"},
-            {"t": "šest", "e": "six", "ipa": "ʃêːst"},
-            {"t": "sedam", "e": "seven", "ipa": "sědam"},
-            {"t": "osam", "e": "eight", "ipa": "ǒsam"},
-            {"t": "devet", "e": "nine", "ipa": "děʋeːt"},
-            {"t": "deset", "e": "ten", "ipa": "dêset"}
-          ],
-          "phrases": [
-            {"t": "Imam dva brata", "e": "I have two brothers", "ipa": "îmaːm dʋâ brâta"}
-          ]
-        }
-      ]
+     "name": "Greetings",
+     "tips": [
+      {
+       "h": "Zdravo and ćao",
+       "b": "Zdravo is neutral and fits any situation. Ćao is informal and passes between friends, family and people of the same age, and it serves as an informal goodbye as well.",
+       "eg": [
+        [
+         "Zdravo.",
+         "Hello."
+        ],
+        [
+         "Ćao.",
+         "Hi."
+        ],
+        [
+         "Doviđenja.",
+         "Goodbye."
+        ]
+       ]
+      },
+      {
+       "h": "Ti and vi",
+       "b": "Two words address a listener. Ti is singular and informal, used with friends, family and children. Vi is the plural, and also the polite singular for a stranger or an older person; the verb stays plural with it.",
+       "eg": [
+        [
+         "Kako si?",
+         "How are you? (informal)"
+        ],
+        [
+         "Kako ste?",
+         "How are you? (polite)"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "zdravo",
+       "e": "hello",
+       "ipa": "ˈzdrâːʋo",
+       "pos": "interj"
+      },
+      {
+       "t": "ćao",
+       "e": "hi",
+       "ipa": "ˈtɕâːo",
+       "pos": "interj"
+      },
+      {
+       "t": "doviđenja",
+       "e": "goodbye",
+       "ipa": "doʋiˈdʑeːɲa",
+       "pos": "interj"
+      },
+      {
+       "t": "hvala",
+       "e": "thank you",
+       "ipa": "ˈxʋǎːla",
+       "pos": "interj"
+      },
+      {
+       "t": "molim",
+       "e": "please",
+       "ipa": "ˈmǒlim",
+       "pos": "interj"
+      },
+      {
+       "t": "izvini",
+       "e": "sorry",
+       "ipa": "iˈzʋǐːni",
+       "pos": "interj"
+      },
+      {
+       "t": "dobro jutro",
+       "e": "good morning",
+       "ipa": "ˈdôbro ˈjǔtro",
+       "pos": "interj"
+      },
+      {
+       "t": "dobar dan",
+       "e": "good afternoon",
+       "ipa": "ˈdôbar ˈdâːn",
+       "pos": "interj"
+      },
+      {
+       "t": "dobro veče",
+       "e": "good evening",
+       "ipa": "ˈdôbro ˈʋětʃe",
+       "pos": "interj"
+      },
+      {
+       "t": "laku noć",
+       "e": "good night",
+       "ipa": "ˈlâku ˈnôːtɕ",
+       "pos": "interj"
+      },
+      {
+       "t": "da",
+       "e": "yes",
+       "ipa": "ˈdâ",
+       "pos": "interj"
+      },
+      {
+       "t": "ne",
+       "e": "no",
+       "ipa": "ˈnê",
+       "pos": "interj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Kako si danas?",
+       "e": "How are you today?",
+       "ipa": "ˈkǎko si ˈdânas"
+      },
+      {
+       "t": "Dobro sam, hvala",
+       "e": "I am well, thank you",
+       "ipa": "ˈdôbro sam ˈxʋǎːla"
+      },
+      {
+       "t": "Kako se zoveš?",
+       "e": "What is your name?",
+       "ipa": "ˈkǎko se ˈzǒʋeʃ",
+       "lit": "how yourself you-call"
+      },
+      {
+       "t": "Drago mi je",
+       "e": "Pleased to meet you",
+       "ipa": "ˈdrâːɡo mi je",
+       "lit": "dear to-me it-is"
+      }
+     ]
     },
     {
-      "title": "PEOPLE",
-      "skills": [
-        {
-          "name": "Family",
-          "words": [
-            {"t": "otac", "e": "father", "ipa": "ǒtats"},
-            {"t": "majka", "e": "mother", "ipa": "mâːjka"},
-            {"t": "sin", "e": "son", "ipa": "sîːn"},
-            {"t": "ćerka", "e": "daughter", "ipa": "tɕêrka"},
-            {"t": "brat", "e": "brother", "ipa": "brâːt"},
-            {"t": "sestra", "e": "sister", "ipa": "sêstra"},
-            {"t": "porodica", "e": "family", "ipa": "porǒditsa"},
-            {"t": "prijatelj", "e": "friend", "ipa": "prǐjatelj"}
-          ],
-          "phrases": [
-            {"t": "Ona je moja sestra", "e": "She is my sister", "ipa": "ǒna je mǒja sêstra"}
-          ]
-        },
-        {
-          "name": "Colors",
-          "words": [
-            {"t": "crveno", "e": "red", "ipa": "tsř̩ʋeno"},
-            {"t": "plavo", "e": "blue", "ipa": "plâːʋo"},
-            {"t": "zeleno", "e": "green", "ipa": "zěleno"},
-            {"t": "žuto", "e": "yellow", "ipa": "ʒûto"},
-            {"t": "crno", "e": "black", "ipa": "tsr̩̂no"},
-            {"t": "belo", "e": "white", "ipa": "bêlo"}
-          ],
-          "phrases": [
-            {"t": "Jabuka je crvena", "e": "The apple is red", "ipa": "jǎbuka je tsř̩ʋena"}
-          ]
-        }
-      ]
+     "name": "People",
+     "tips": [
+      {
+       "h": "Every noun has a gender",
+       "b": "Nouns are masculine, feminine or neuter. A noun ending in a consonant is usually masculine, one ending in -a is usually feminine, and one ending in -o or -e is usually neuter. The gender is listed beside each noun.",
+       "eg": [
+        [
+         "čovek",
+         "man (m)"
+        ],
+        [
+         "žena",
+         "woman (f)"
+        ],
+        [
+         "jutro",
+         "morning (n)"
+        ]
+       ]
+      },
+      {
+       "h": "Pronouns are usually dropped",
+       "b": "The verb ending already names the subject, so ja, ti and mi appear only for emphasis or contrast. Dobro sam on its own means I am well.",
+       "eg": [
+        [
+         "Dobro sam.",
+         "I am well."
+        ],
+        [
+         "Ja sam dobro.",
+         "I am well, whatever the others are."
+        ]
+       ]
+      },
+      {
+       "h": "Nouns take no article",
+       "b": "There is no word for a or the. Žena covers woman, a woman and the woman, and the surrounding sentence supplies which reading is meant.",
+       "eg": [
+        [
+         "Žena je dobro.",
+         "The woman is well."
+        ],
+        [
+         "To je žena.",
+         "That is a woman."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ja",
+       "e": "I",
+       "ipa": "ˈjâ",
+       "pos": "pron"
+      },
+      {
+       "t": "ti",
+       "e": "you",
+       "ipa": "ˈtî",
+       "pos": "pron"
+      },
+      {
+       "t": "on",
+       "e": "he",
+       "ipa": "ˈôn",
+       "pos": "pron"
+      },
+      {
+       "t": "ona",
+       "e": "she",
+       "ipa": "ˈǒna",
+       "pos": "pron"
+      },
+      {
+       "t": "ono",
+       "e": "it",
+       "ipa": "ˈǒno",
+       "pos": "pron"
+      },
+      {
+       "t": "mi",
+       "e": "we",
+       "ipa": "ˈmî",
+       "pos": "pron"
+      },
+      {
+       "t": "vi",
+       "e": "you (formal)",
+       "ipa": "ˈʋî",
+       "pos": "pron"
+      },
+      {
+       "t": "oni",
+       "e": "they",
+       "ipa": "ˈǒni",
+       "pos": "pron"
+      },
+      {
+       "t": "čovek",
+       "e": "man",
+       "ipa": "ˈtʃǒʋeːk",
+       "pos": "noun",
+       "note": "(m), pl ljudi"
+      },
+      {
+       "t": "žena",
+       "e": "woman",
+       "ipa": "ˈʒěna",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "dečak",
+       "e": "boy",
+       "ipa": "ˈdětʃaːk",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "devojka",
+       "e": "girl",
+       "ipa": "ˈděʋoːjka",
+       "pos": "noun",
+       "note": "(f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ja sam žena",
+       "e": "I am a woman",
+       "ipa": "ˈjâ sam ˈʒěna"
+      },
+      {
+       "t": "On je dečak",
+       "e": "He is a boy",
+       "ipa": "ˈôn je ˈdětʃaːk"
+      },
+      {
+       "t": "Mi smo dobro",
+       "e": "We are well",
+       "ipa": "ˈmî smo ˈdôbro"
+      },
+      {
+       "t": "Kako se ona zove?",
+       "e": "What is her name?",
+       "ipa": "ˈkǎko se ˈǒna ˈzǒʋe",
+       "lit": "how herself she calls"
+      }
+     ]
     },
     {
-      "title": "EVERYDAY",
-      "skills": [
-        {
-          "name": "Food",
-          "words": [
-            {"t": "voda", "e": "water", "ipa": "ʋǒda"},
-            {"t": "hleb", "e": "bread", "ipa": "xlêːb"},
-            {"t": "mleko", "e": "milk", "ipa": "mlěko"},
-            {"t": "jabuka", "e": "apple", "ipa": "jǎbuka"},
-            {"t": "meso", "e": "meat", "ipa": "mêso"},
-            {"t": "kafa", "e": "coffee", "ipa": "kâfa"},
-            {"t": "sir", "e": "cheese", "ipa": "sîːr"}
-          ],
-          "phrases": [
-            {"t": "Ja jedem hleb", "e": "I eat bread", "ipa": "jâ jêdeːm xlêːb"},
-            {"t": "Pijem vodu", "e": "I drink water", "ipa": "pǐjeːm ʋǒdu"}
-          ]
-        },
-        {
-          "name": "Verbs",
-          "words": [
-            {"t": "biti", "e": "to be", "ipa": "bîti"},
-            {"t": "imati", "e": "to have", "ipa": "îmati"},
-            {"t": "ići", "e": "to go", "ipa": "îtɕi"},
-            {"t": "videti", "e": "to see", "ipa": "ʋǐdeti"},
-            {"t": "govoriti", "e": "to speak", "ipa": "ɡoʋǒriti"},
-            {"t": "učiti", "e": "to learn", "ipa": "ǔtʃiti"},
-            {"t": "jesti", "e": "to eat", "ipa": "jêsti"},
-            {"t": "piti", "e": "to drink", "ipa": "pîti"}
-          ],
-          "phrases": [
-            {"t": "Učim srpski", "e": "I learn Serbian", "ipa": "ǔtʃim sr̩̂pski"},
-            {"t": "Govorite li srpski?", "e": "Do you speak Serbian?", "ipa": "ɡoʋǒriteː li sr̩̂pski"}
-          ]
-        },
-        {
-          "name": "Describing",
-          "words": [
-            {"t": "veliko", "e": "big", "ipa": "ʋěliko"},
-            {"t": "malo", "e": "small", "ipa": "mâːlo"},
-            {"t": "dobro", "e": "good", "ipa": "dôbro"},
-            {"t": "lepo", "e": "beautiful", "ipa": "lêːpo"},
-            {"t": "novo", "e": "new", "ipa": "nôʋo"},
-            {"t": "toplo", "e": "warm", "ipa": "tôplo"},
-            {"t": "hladno", "e": "cold", "ipa": "xlâdno"}
-          ],
-          "phrases": [
-            {"t": "Velika kuća", "e": "A big house", "ipa": "ʋělika kûːtɕa"}
-          ]
-        }
-      ]
+     "name": "Phrases",
+     "tips": [
+      {
+       "h": "Molim does several jobs",
+       "b": "Molim is the word for please. Used alone after hvala it returns the thanks, and used as a question it asks for something to be repeated.",
+       "eg": [
+        [
+         "Kafu, molim.",
+         "Coffee, please."
+        ],
+        [
+         "Hvala. Molim.",
+         "Thank you. Not at all."
+        ],
+        [
+         "Molim?",
+         "Pardon?"
+        ]
+       ]
+      },
+      {
+       "h": "Polite and informal pairs",
+       "b": "A form addressed to one person has an informal and a polite variant, and the polite one is identical to the plural: izvoli and izvolite, hvala ti and hvala vam.",
+       "eg": [
+        [
+         "Izvoli.",
+         "Here you are. (informal)"
+        ],
+        [
+         "Izvolite.",
+         "Here you are. (polite)"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "dobrodošli",
+       "e": "welcome",
+       "ipa": "dobroˈdôʃli",
+       "pos": "interj"
+      },
+      {
+       "t": "nema na čemu",
+       "e": "not at all",
+       "ipa": "ˈnêma na ˈtʃêmu",
+       "pos": "interj"
+      },
+      {
+       "t": "izvolite",
+       "e": "here you are",
+       "ipa": "iˈzʋǒlite",
+       "pos": "interj"
+      },
+      {
+       "t": "srećno",
+       "e": "good luck",
+       "ipa": "ˈsrêːtɕno",
+       "pos": "interj"
+      },
+      {
+       "t": "možda",
+       "e": "maybe",
+       "ipa": "ˈmôʒda",
+       "pos": "adv"
+      },
+      {
+       "t": "naravno",
+       "e": "of course",
+       "ipa": "ˈnâraʋno",
+       "pos": "adv"
+      },
+      {
+       "t": "takođe",
+       "e": "also",
+       "ipa": "taˈkǒːdʑe",
+       "pos": "adv"
+      },
+      {
+       "t": "ništa",
+       "e": "nothing",
+       "ipa": "ˈnîʃta",
+       "pos": "pron"
+      },
+      {
+       "t": "razumem",
+       "e": "I understand",
+       "ipa": "raˈzǔmeːm",
+       "pos": "verb"
+      },
+      {
+       "t": "i",
+       "e": "and",
+       "ipa": "ˈi",
+       "pos": "conj"
+      },
+      {
+       "t": "ali",
+       "e": "but",
+       "ipa": "ˈâli",
+       "pos": "conj"
+      },
+      {
+       "t": "ili",
+       "e": "or",
+       "ipa": "ˈîli",
+       "pos": "conj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Da, naravno, izvolite",
+       "e": "Yes, of course, here you are",
+       "ipa": "ˈdâ ˈnâraʋno iˈzʋǒlite"
+      },
+      {
+       "t": "Ja to ne razumem",
+       "e": "I do not understand that",
+       "ipa": "ˈjâ ˈtô ˈnê raˈzǔmeːm",
+       "lit": "I that not understand"
+      },
+      {
+       "t": "Ne, hvala vam",
+       "e": "No, thank you",
+       "ipa": "ˈnê ˈxʋǎːla ʋam"
+      },
+      {
+       "t": "Kafa ili čaj?",
+       "e": "Coffee or tea?",
+       "ipa": "ˈkâfa ˈîli ˈtʃâːj"
+      }
+     ]
     },
     {
-      "title": "GETTING AROUND",
-      "skills": [
-        {
-          "name": "Places",
-          "words": [
-            {"t": "kuća", "e": "house", "ipa": "kûːtɕa"},
-            {"t": "škola", "e": "school", "ipa": "ʃkôːla"},
-            {"t": "grad", "e": "city", "ipa": "ɡrâːd"},
-            {"t": "ulica", "e": "street", "ipa": "ûlitsa"},
-            {"t": "selo", "e": "village", "ipa": "sêlo"},
-            {"t": "vrata", "e": "door", "ipa": "ʋrǎːta"},
-            {"t": "put", "e": "road", "ipa": "pûːt"}
-          ],
-          "phrases": [
-            {"t": "Škola je velika", "e": "The school is big", "ipa": "ʃkôːla je ʋělika"},
-            {"t": "Grad je velik", "e": "The city is big", "ipa": "ɡrâːd je ʋělik"}
-          ]
-        },
-        {
-          "name": "Time",
-          "words": [
-            {"t": "danas", "e": "today", "ipa": "dânas"},
-            {"t": "sutra", "e": "tomorrow", "ipa": "sûtra"},
-            {"t": "sada", "e": "now", "ipa": "sâda"},
-            {"t": "dan", "e": "day", "ipa": "dâːn"},
-            {"t": "noć", "e": "night", "ipa": "nôːtɕ"},
-            {"t": "nedelja", "e": "week", "ipa": "nêdeʎa"},
-            {"t": "sat", "e": "hour", "ipa": "sâːt"},
-            {"t": "godina", "e": "year", "ipa": "ɡǒdina"}
-          ],
-          "phrases": [
-            {"t": "Danas je lepo", "e": "Today is nice", "ipa": "dânas je lêːpo"},
-            {"t": "Danas je hladno", "e": "Today is cold", "ipa": "dânas je xlâdno"}
-          ]
-        },
-        {
-          "name": "Travel",
-          "words": [
-            {"t": "auto", "e": "car", "ipa": "âuto"},
-            {"t": "voz", "e": "train", "ipa": "ʋôːz"},
-            {"t": "avion", "e": "airplane", "ipa": "ǎʋion"},
-            {"t": "ovde", "e": "here", "ipa": "ôʋde"},
-            {"t": "tamo", "e": "there", "ipa": "tâmo"},
-            {"t": "daleko", "e": "far", "ipa": "dalěko"},
-            {"t": "blizu", "e": "near", "ipa": "blîzu"}
-          ],
-          "phrases": [
-            {"t": "Auto je nov", "e": "The car is new", "ipa": "âuto je nôʋ"},
-            {"t": "Voz je velik", "e": "The train is big", "ipa": "ʋôːz je ʋělik"}
-          ]
-        }
-      ]
-    },
-    {
-      "title": "THE WORLD",
-      "skills": [
-        {
-          "name": "Animals",
-          "words": [
-            {"t": "pas", "e": "dog", "ipa": "pâːs"},
-            {"t": "mačka", "e": "cat", "ipa": "mâtʃka"},
-            {"t": "ptica", "e": "bird", "ipa": "ptîtsa"},
-            {"t": "konj", "e": "horse", "ipa": "kôɲ"},
-            {"t": "riba", "e": "fish", "ipa": "rîba"},
-            {"t": "krava", "e": "cow", "ipa": "krâʋa"},
-            {"t": "pile", "e": "chicken", "ipa": "pîle"}
-          ],
-          "phrases": [
-            {"t": "Imam psa", "e": "I have a dog", "ipa": "îmaːm psâ"},
-            {"t": "Imam mačku", "e": "I have a cat", "ipa": "îmaːm ˈmâtʃku"}
-          ]
-        },
-        {
-          "name": "Nature",
-          "words": [
-            {"t": "sunce", "e": "sun", "ipa": "sûːntse"},
-            {"t": "mesec", "e": "moon", "ipa": "mêsets"},
-            {"t": "drvo", "e": "tree", "ipa": "dr̩̂ʋo"},
-            {"t": "cvet", "e": "flower", "ipa": "tsʋêːt"},
-            {"t": "kiša", "e": "rain", "ipa": "kîʃa"},
-            {"t": "more", "e": "sea", "ipa": "môre"},
-            {"t": "nebo", "e": "sky", "ipa": "nêbo"}
-          ],
-          "phrases": [
-            {"t": "Nebo je plavo", "e": "The sky is blue", "ipa": "nêbo je plâːʋo"},
-            {"t": "Sunce je toplo", "e": "The sun is warm", "ipa": "sûːntse je tôplo"}
-          ]
-        },
-        {
-          "name": "More Verbs",
-          "words": [
-            {"t": "raditi", "e": "to work", "ipa": "râditi"},
-            {"t": "hteti", "e": "to want", "ipa": "xtêti"},
-            {"t": "moći", "e": "to be able", "ipa": "môtɕi"},
-            {"t": "reći", "e": "to say", "ipa": "rêtɕi"},
-            {"t": "doći", "e": "to come", "ipa": "dôtɕi"},
-            {"t": "kupiti", "e": "to buy", "ipa": "kǔːpiti"},
-            {"t": "živeti", "e": "to live", "ipa": "ʒǐːʋeti"}
-          ],
-          "phrases": [
-            {"t": "Hoću da jedem", "e": "I want to eat", "ipa": "xǒtɕu da jêdeːm"},
-            {"t": "Hoću da pijem vodu", "e": "I want to drink water", "ipa": "xǒtɕu da pǐjeːm ʋǒdu"}
-          ]
-        }
-      ]
+     "name": "Numbers",
+     "tips": [
+      {
+       "h": "One agrees, two has a gender",
+       "b": "Jedan changes with its noun: jedan čovek, jedna žena, jedno jutro. Dva has the separate feminine form dve. From tri upward the number itself does not change.",
+       "eg": [
+        [
+         "jedan dečak",
+         "one boy"
+        ],
+        [
+         "jedna žena",
+         "one woman"
+        ],
+        [
+         "dva dečaka",
+         "two boys"
+        ],
+        [
+         "dve žene",
+         "two women"
+        ]
+       ]
+      },
+      {
+       "h": "Counting changes the noun",
+       "b": "Dva, tri and četiri are followed by a count form ending in -a for masculine and neuter nouns and -e for feminine ones. From pet upward the noun stands in the genitive plural.",
+       "eg": [
+        [
+         "dva dečaka",
+         "two boys"
+        ],
+        [
+         "pet dečaka",
+         "five boys"
+        ],
+        [
+         "dve žene",
+         "two women"
+        ],
+        [
+         "pet žena",
+         "five women"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "nula",
+       "e": "zero",
+       "ipa": "ˈnûla",
+       "pos": "num"
+      },
+      {
+       "t": "jedan",
+       "e": "one",
+       "ipa": "ˈjědan",
+       "pos": "num"
+      },
+      {
+       "t": "dva",
+       "e": "two",
+       "ipa": "ˈdʋâ",
+       "pos": "num"
+      },
+      {
+       "t": "tri",
+       "e": "three",
+       "ipa": "ˈtrî",
+       "pos": "num"
+      },
+      {
+       "t": "četiri",
+       "e": "four",
+       "ipa": "ˈtʃětiri",
+       "pos": "num"
+      },
+      {
+       "t": "pet",
+       "e": "five",
+       "ipa": "ˈpêːt",
+       "pos": "num"
+      },
+      {
+       "t": "šest",
+       "e": "six",
+       "ipa": "ˈʃêːst",
+       "pos": "num"
+      },
+      {
+       "t": "sedam",
+       "e": "seven",
+       "ipa": "ˈsědam",
+       "pos": "num"
+      },
+      {
+       "t": "osam",
+       "e": "eight",
+       "ipa": "ˈǒsam",
+       "pos": "num"
+      },
+      {
+       "t": "devet",
+       "e": "nine",
+       "ipa": "ˈděʋeːt",
+       "pos": "num"
+      },
+      {
+       "t": "deset",
+       "e": "ten",
+       "ipa": "ˈdêset",
+       "pos": "num"
+      },
+      {
+       "t": "jedanaest",
+       "e": "eleven",
+       "ipa": "jeˈdǎnaest",
+       "pos": "num"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Imam deset godina",
+       "e": "I am ten years old",
+       "ipa": "ˈîmaːm ˈdêset ˈɡǒdiːna",
+       "lit": "I-have ten of-years"
+      },
+      {
+       "t": "Dva i dva su četiri",
+       "e": "Two and two are four",
+       "ipa": "ˈdʋâ i ˈdʋâ su ˈtʃětiri"
+      },
+      {
+       "t": "Ovde su tri žene",
+       "e": "There are three women here",
+       "ipa": "ˈôʋde su ˈtrî ˈʒêne",
+       "lit": "here are three women"
+      },
+      {
+       "t": "Koliko je to?",
+       "e": "How much is that?",
+       "ipa": "ˈkǒliko je ˈtô"
+      }
+     ]
     }
-  ]
+   ]
+  },
+  {
+   "title": "EVERYDAY",
+   "subtitle": "Food, drink, colour and the people of a household",
+   "skills": [
+    {
+     "name": "Food",
+     "tips": [
+      {
+       "h": "The object of a verb changes form",
+       "b": "A noun that receives the action stands in the accusative. A feminine noun in -a takes -u, while a masculine noun for a thing and every neuter noun keep their basic form.",
+       "eg": [
+        [
+         "Jabuka je dobra.",
+         "The apple is good."
+        ],
+        [
+         "Jedem jabuku.",
+         "I eat an apple."
+        ],
+        [
+         "Hleb je dobar.",
+         "The bread is good."
+        ],
+        [
+         "Jedem hleb.",
+         "I eat bread."
+        ]
+       ]
+      },
+      {
+       "h": "One bare noun, three readings",
+       "b": "A noun with no article covers a definite reading, an indefinite one and a partial amount. Jedem hleb is I eat bread, I eat the bread and I am eating some bread.",
+       "eg": [
+        [
+         "Jedem hleb.",
+         "I am eating bread."
+        ],
+        [
+         "Hleb je na stolu.",
+         "The bread is on the table."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "hleb",
+       "e": "bread",
+       "ipa": "ˈxlêːb",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "meso",
+       "e": "meat",
+       "ipa": "ˈmêso",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "sir",
+       "e": "cheese",
+       "ipa": "ˈsîːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "jabuka",
+       "e": "apple",
+       "ipa": "ˈjǎbuka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "jaje",
+       "e": "egg",
+       "ipa": "ˈjǎːje",
+       "pos": "noun",
+       "note": "(n), pl jaja"
+      },
+      {
+       "t": "supa",
+       "e": "soup",
+       "ipa": "ˈsûpa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "salata",
+       "e": "salad",
+       "ipa": "saˈlǎːta",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "povrće",
+       "e": "vegetables",
+       "ipa": "ˈpôʋr̩tɕe",
+       "pos": "noun",
+       "note": "(n), no plural"
+      },
+      {
+       "t": "voće",
+       "e": "fruit",
+       "ipa": "ˈʋôːtɕe",
+       "pos": "noun",
+       "note": "(n), no plural"
+      },
+      {
+       "t": "so",
+       "e": "salt",
+       "ipa": "ˈsôː",
+       "pos": "noun",
+       "note": "(f), gen soli"
+      },
+      {
+       "t": "šećer",
+       "e": "sugar",
+       "ipa": "ˈʃětɕeːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "doručak",
+       "e": "breakfast",
+       "ipa": "ˈdǒrutʃak",
+       "pos": "noun",
+       "note": "(m), gen doručka"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Jedem hleb i sir",
+       "e": "I eat bread and cheese",
+       "ipa": "ˈjêdeːm ˈxlêːb i ˈsîːr"
+      },
+      {
+       "t": "Volim voće i povrće",
+       "e": "I like fruit and vegetables",
+       "ipa": "ˈʋǒliːm ˈʋôːtɕe i ˈpôʋr̩tɕe"
+      },
+      {
+       "t": "Ovo meso je dobro",
+       "e": "This meat is good",
+       "ipa": "ˈôʋo ˈmêso je ˈdôbro"
+      },
+      {
+       "t": "Hoću jednu jabuku",
+       "e": "I want one apple",
+       "ipa": "ˈxǒtɕu ˈjêdnu ˈjǎbuku"
+      }
+     ]
+    },
+    {
+     "name": "Drinks",
+     "tips": [
+      {
+       "h": "Hoću and želim",
+       "b": "Hoću is the first person of hteti, to want, and what is wanted follows in the accusative: hoću vodu, hoću kafu. Želim is the more formal equivalent and behaves the same way.",
+       "eg": [
+        [
+         "Hoću vodu.",
+         "I want water."
+        ],
+        [
+         "Želim kafu.",
+         "I would like coffee."
+        ]
+       ]
+      },
+      {
+       "h": "Containers name the drink",
+       "b": "Šolja, čaša and flaša name a container and are feminine. What the container holds follows in the genitive, which ends in -e for a feminine noun and -a for a masculine one.",
+       "eg": [
+        [
+         "šolja kafe",
+         "a cup of coffee"
+        ],
+        [
+         "čaša vode",
+         "a glass of water"
+        ],
+        [
+         "flaša vina",
+         "a bottle of wine"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "voda",
+       "e": "water",
+       "ipa": "ˈʋǒda",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "mleko",
+       "e": "milk",
+       "ipa": "mˈlěko",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "kafa",
+       "e": "coffee",
+       "ipa": "ˈkâfa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "čaj",
+       "e": "tea",
+       "ipa": "ˈtʃâːj",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "sok",
+       "e": "juice",
+       "ipa": "ˈsôːk",
+       "pos": "noun",
+       "note": "(m), pl sokovi"
+      },
+      {
+       "t": "vino",
+       "e": "wine",
+       "ipa": "ˈʋîːno",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "pivo",
+       "e": "beer",
+       "ipa": "ˈpîʋo",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "rakija",
+       "e": "brandy",
+       "ipa": "ˈrǎkija",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "čaša",
+       "e": "glass",
+       "ipa": "ˈtʃâʃa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "šolja",
+       "e": "cup",
+       "ipa": "ˈʃôʎa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "flaša",
+       "e": "bottle",
+       "ipa": "ˈflâʃa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "led",
+       "e": "ice",
+       "ipa": "ˈlêːd",
+       "pos": "noun",
+       "note": "(m), no plural"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Pijem kafu i vodu",
+       "e": "I drink coffee and water",
+       "ipa": "ˈpǐjeːm ˈkâfu i ˈʋǒdu"
+      },
+      {
+       "t": "Hoću jedno pivo",
+       "e": "I want one beer",
+       "ipa": "ˈxǒtɕu ˈjêdno ˈpîʋo"
+      },
+      {
+       "t": "Vino je dobro",
+       "e": "The wine is good",
+       "ipa": "ˈʋîːno je ˈdôbro"
+      },
+      {
+       "t": "Ovo je moja šolja",
+       "e": "This is my cup",
+       "ipa": "ˈôʋo je ˈmǒja ˈʃôʎa"
+      }
+     ]
+    },
+    {
+     "name": "Colors",
+     "tips": [
+      {
+       "h": "Adjectives take the gender of the noun",
+       "b": "An adjective ends in a consonant before a masculine noun, in -a before a feminine one and in -o before a neuter one. The form listed in a dictionary is the masculine.",
+       "eg": [
+        [
+         "crven auto",
+         "a red car"
+        ],
+        [
+         "crvena jabuka",
+         "a red apple"
+        ],
+        [
+         "crveno jaje",
+         "a red egg"
+        ]
+       ]
+      },
+      {
+       "h": "Wine is black, not red",
+       "b": "Red wine is crno vino, black wine. Crven is kept for the colour of an apple, a flag or a jacket.",
+       "eg": [
+        [
+         "crno vino",
+         "red wine"
+        ],
+        [
+         "belo vino",
+         "white wine"
+        ],
+        [
+         "crvena jabuka",
+         "a red apple"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "crven",
+       "e": "red",
+       "ipa": "ˈtsř̩ʋen",
+       "pos": "adj",
+       "note": "f crvena, n crveno"
+      },
+      {
+       "t": "plav",
+       "e": "blue",
+       "ipa": "ˈplâːʋ",
+       "pos": "adj"
+      },
+      {
+       "t": "zelen",
+       "e": "green",
+       "ipa": "ˈzělen",
+       "pos": "adj"
+      },
+      {
+       "t": "žut",
+       "e": "yellow",
+       "ipa": "ˈʒûːt",
+       "pos": "adj"
+      },
+      {
+       "t": "crn",
+       "e": "black",
+       "ipa": "ˈtsr̩̂n",
+       "pos": "adj"
+      },
+      {
+       "t": "beo",
+       "e": "white",
+       "ipa": "ˈbêːo",
+       "pos": "adj",
+       "note": "f bela, n belo"
+      },
+      {
+       "t": "siv",
+       "e": "grey",
+       "ipa": "ˈsîːʋ",
+       "pos": "adj"
+      },
+      {
+       "t": "braon",
+       "e": "brown",
+       "ipa": "ˈbrâːon",
+       "pos": "adj",
+       "note": "never declines"
+      },
+      {
+       "t": "narandžast",
+       "e": "orange",
+       "ipa": "ˈnǎrandʒast",
+       "pos": "adj"
+      },
+      {
+       "t": "ružičast",
+       "e": "pink",
+       "ipa": "ˈrǔʒitʃast",
+       "pos": "adj"
+      },
+      {
+       "t": "ljubičast",
+       "e": "purple",
+       "ipa": "ˈʎǔbitʃast",
+       "pos": "adj"
+      },
+      {
+       "t": "boja",
+       "e": "colour",
+       "ipa": "ˈbôja",
+       "pos": "noun",
+       "note": "(f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Jabuka je crvena",
+       "e": "The apple is red",
+       "ipa": "ˈjǎbuka je ˈtsř̩ʋena"
+      },
+      {
+       "t": "Nebo je plavo danas",
+       "e": "The sky is blue today",
+       "ipa": "ˈnêbo je ˈplâːʋo ˈdânas"
+      },
+      {
+       "t": "Volim zelenu boju",
+       "e": "I like the colour green",
+       "ipa": "ˈʋǒliːm ˈzělenu ˈbôju",
+       "lit": "I-like green colour"
+      },
+      {
+       "t": "Ovo vino je crno",
+       "e": "This wine is red",
+       "ipa": "ˈôʋo ˈʋîːno je ˈtsr̩̂no",
+       "lit": "this wine is black"
+      }
+     ]
+    },
+    {
+     "name": "Family",
+     "tips": [
+      {
+       "h": "Possessives agree like adjectives",
+       "b": "Moj, tvoj and naš change with the noun that follows them: moj brat, moja sestra, moje dete. The ending follows the gender of the thing owned, not the gender of the owner.",
+       "eg": [
+        [
+         "moj brat",
+         "my brother"
+        ],
+        [
+         "moja sestra",
+         "my sister"
+        ],
+        [
+         "moje dete",
+         "my child"
+        ]
+       ]
+      },
+      {
+       "h": "The form for addressing someone",
+       "b": "A noun used to call or address a person takes the vocative. A masculine noun adds -e or -u and a feminine noun in -a takes -o: brate, sine, majko, sestro.",
+       "eg": [
+        [
+         "Dobar dan, majko.",
+         "Good afternoon, mother."
+        ],
+        [
+         "Zdravo, brate.",
+         "Hello, brother."
+        ],
+        [
+         "Sine, gde si?",
+         "Son, where are you?"
+        ]
+       ]
+      },
+      {
+       "h": "Brat and dete have odd plurals",
+       "b": "Brat has the collective plural braća and dete has deca. Both are formed with a collective ending and both decline as feminine singular nouns.",
+       "eg": [
+        [
+         "moja braća",
+         "my brothers"
+        ],
+        [
+         "mala deca",
+         "small children"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "otac",
+       "e": "father",
+       "ipa": "ˈǒtats",
+       "pos": "noun",
+       "note": "(m), gen oca"
+      },
+      {
+       "t": "majka",
+       "e": "mother",
+       "ipa": "ˈmâːjka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "sin",
+       "e": "son",
+       "ipa": "ˈsîːn",
+       "pos": "noun",
+       "note": "(m), pl sinovi"
+      },
+      {
+       "t": "ćerka",
+       "e": "daughter",
+       "ipa": "ˈtɕêrka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "brat",
+       "e": "brother",
+       "ipa": "ˈbrâːt",
+       "pos": "noun",
+       "note": "(m), pl braća"
+      },
+      {
+       "t": "sestra",
+       "e": "sister",
+       "ipa": "ˈsêstra",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "dete",
+       "e": "child",
+       "ipa": "ˈdêːte",
+       "pos": "noun",
+       "note": "(n), pl deca"
+      },
+      {
+       "t": "porodica",
+       "e": "family",
+       "ipa": "poˈrǒditsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "muž",
+       "e": "husband",
+       "ipa": "ˈmûːʒ",
+       "pos": "noun",
+       "note": "(m), pl muževi"
+      },
+      {
+       "t": "supruga",
+       "e": "wife",
+       "ipa": "ˈsûpruɡa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "baka",
+       "e": "grandmother",
+       "ipa": "ˈbâka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "deda",
+       "e": "grandfather",
+       "ipa": "ˈdêda",
+       "pos": "noun",
+       "note": "(m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ovo je moja porodica",
+       "e": "This is my family",
+       "ipa": "ˈôʋo je ˈmǒja poˈrǒditsa"
+      },
+      {
+       "t": "Moj brat ima dete",
+       "e": "My brother has a child",
+       "ipa": "ˈmôj ˈbrâːt ˈîma ˈdêːte"
+      },
+      {
+       "t": "Ona je moja sestra",
+       "e": "She is my sister",
+       "ipa": "ˈǒna je ˈmǒja ˈsêstra"
+      },
+      {
+       "t": "Imam brata i sestru",
+       "e": "I have a brother and a sister",
+       "ipa": "ˈîmaːm ˈbrâːta i ˈsêstru"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "ACTIONS",
+   "subtitle": "The present tense, describing things, asking and denying",
+   "skills": [
+    {
+     "name": "Verbs",
+     "tips": [
+      {
+       "h": "Three present-tense patterns",
+       "b": "A present form is the stem plus a personal ending. The first person singular ends in -am, -im or -em, and that vowel runs through the whole set: imam, imaš, ima, imamo, imate, imaju.",
+       "eg": [
+        [
+         "imam, imaš, ima",
+         "I have, you have, he has"
+        ],
+        [
+         "govorim, govoriš, govori",
+         "I speak, you speak, he speaks"
+        ],
+        [
+         "pijem, piješ, pije",
+         "I drink, you drink, he drinks"
+        ]
+       ]
+      },
+      {
+       "h": "Biti has two sets of forms",
+       "b": "The present of biti has a short set used in ordinary statements, sam, si, je, smo, ste, su, and a full set used for emphasis and for a one-word answer, jesam, jesi, jeste, jesmo, jeste, jesu. A short form never opens a sentence.",
+       "eg": [
+        [
+         "Dobro sam.",
+         "I am well."
+        ],
+        [
+         "Jesam.",
+         "I am. (as an answer)"
+        ],
+        [
+         "Ja sam čovek.",
+         "I am a man."
+        ]
+       ]
+      },
+      {
+       "h": "Infinitives end in -ti or -ći",
+       "b": "Most infinitives end in -ti. A small closed group ends in -ći: ići, moći, reći, doći. The present stem of that group does not follow from the infinitive and is learned with the verb.",
+       "eg": [
+        [
+         "raditi, radim",
+         "to work, I work"
+        ],
+        [
+         "ići, idem",
+         "to go, I go"
+        ],
+        [
+         "moći, mogu",
+         "to be able, I can"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "biti",
+       "e": "to be",
+       "ipa": "ˈbîti",
+       "pos": "verb"
+      },
+      {
+       "t": "imati",
+       "e": "to have",
+       "ipa": "ˈîmati",
+       "pos": "verb"
+      },
+      {
+       "t": "ići",
+       "e": "to go",
+       "ipa": "ˈîtɕi",
+       "pos": "verb"
+      },
+      {
+       "t": "videti",
+       "e": "to see",
+       "ipa": "ˈʋǐdeti",
+       "pos": "verb"
+      },
+      {
+       "t": "govoriti",
+       "e": "to speak",
+       "ipa": "ɡoˈʋǒriti",
+       "pos": "verb"
+      },
+      {
+       "t": "učiti",
+       "e": "to learn",
+       "ipa": "ˈǔtʃiti",
+       "pos": "verb"
+      },
+      {
+       "t": "jesti",
+       "e": "to eat",
+       "ipa": "ˈjêsti",
+       "pos": "verb"
+      },
+      {
+       "t": "piti",
+       "e": "to drink",
+       "ipa": "ˈpîti",
+       "pos": "verb"
+      },
+      {
+       "t": "raditi",
+       "e": "to work",
+       "ipa": "ˈrâditi",
+       "pos": "verb"
+      },
+      {
+       "t": "znati",
+       "e": "to know",
+       "ipa": "ˈznâti",
+       "pos": "verb"
+      },
+      {
+       "t": "hteti",
+       "e": "to want",
+       "ipa": "ˈxtêti",
+       "pos": "verb"
+      },
+      {
+       "t": "čitati",
+       "e": "to read",
+       "ipa": "ˈtʃîtati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Učim srpski svaki dan",
+       "e": "I learn Serbian every day",
+       "ipa": "ˈǔtʃiːm ˈsr̩̂pski ˈsʋâki ˈdâːn"
+      },
+      {
+       "t": "On govori engleski",
+       "e": "He speaks English",
+       "ipa": "ˈôn ˈɡǒʋoriː ˈêŋɡleski"
+      },
+      {
+       "t": "Mi radimo i učimo",
+       "e": "We work and we learn",
+       "ipa": "ˈmî ˈrâdimo i ˈǔtʃimo"
+      },
+      {
+       "t": "Vidim tvoju sestru",
+       "e": "I see your sister",
+       "ipa": "ˈʋîdiːm ˈtʋǒju ˈsêstru"
+      }
+     ]
+    },
+    {
+     "name": "Adjectives",
+     "tips": [
+      {
+       "h": "The adjective stands before the noun",
+       "b": "An adjective comes before its noun and agrees with it in gender, number and case: velik grad, velika kuća, veliko selo. After biti it agrees in the same way.",
+       "eg": [
+        [
+         "velik grad",
+         "a big city"
+        ],
+        [
+         "velika kuća",
+         "a big house"
+        ],
+        [
+         "Kuća je velika.",
+         "The house is big."
+        ]
+       ]
+      },
+      {
+       "h": "Comparatives add -iji",
+       "b": "The comparative of most adjectives adds -iji to the stem: nov, noviji; star, stariji. A handful are irregular: dobar, bolji; velik, veći; mali, manji; loš, gori.",
+       "eg": [
+        [
+         "nov, noviji",
+         "new, newer"
+        ],
+        [
+         "dobar, bolji",
+         "good, better"
+        ],
+        [
+         "velik, veći",
+         "big, bigger"
+        ],
+        [
+         "mali, manji",
+         "small, smaller"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "velik",
+       "e": "big",
+       "ipa": "ˈʋělik",
+       "pos": "adj"
+      },
+      {
+       "t": "mali",
+       "e": "small",
+       "ipa": "ˈmâːli",
+       "pos": "adj"
+      },
+      {
+       "t": "dobar",
+       "e": "good",
+       "ipa": "ˈdôbar",
+       "pos": "adj",
+       "note": "f dobra, n dobro"
+      },
+      {
+       "t": "loš",
+       "e": "bad",
+       "ipa": "ˈlôːʃ",
+       "pos": "adj"
+      },
+      {
+       "t": "nov",
+       "e": "new",
+       "ipa": "ˈnôʋ",
+       "pos": "adj"
+      },
+      {
+       "t": "star",
+       "e": "old",
+       "ipa": "ˈstâːr",
+       "pos": "adj"
+      },
+      {
+       "t": "lep",
+       "e": "beautiful",
+       "ipa": "ˈlêːp",
+       "pos": "adj"
+      },
+      {
+       "t": "ružan",
+       "e": "ugly",
+       "ipa": "ˈrûʒan",
+       "pos": "adj",
+       "note": "f ružna, n ružno"
+      },
+      {
+       "t": "mlad",
+       "e": "young",
+       "ipa": "mˈlâːd",
+       "pos": "adj"
+      },
+      {
+       "t": "jak",
+       "e": "strong",
+       "ipa": "ˈjâːk",
+       "pos": "adj"
+      },
+      {
+       "t": "dug",
+       "e": "long",
+       "ipa": "ˈdûːɡ",
+       "pos": "adj"
+      },
+      {
+       "t": "kratak",
+       "e": "short",
+       "ipa": "ˈkrâtak",
+       "pos": "adj",
+       "note": "f kratka, n kratko"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ovo je velika kuća",
+       "e": "This is a big house",
+       "ipa": "ˈôʋo je ˈʋělika ˈkûːtɕa"
+      },
+      {
+       "t": "Moj deda je star",
+       "e": "My grandfather is old",
+       "ipa": "ˈmôj ˈdêda je ˈstâːr"
+      },
+      {
+       "t": "Imam novu knjigu",
+       "e": "I have a new book",
+       "ipa": "ˈîmaːm ˈnôʋu ˈkɲîɡu"
+      },
+      {
+       "t": "Ovaj čaj je jak",
+       "e": "This tea is strong",
+       "ipa": "ˈôʋaːj ˈtʃâːj je ˈjâːk"
+      }
+     ]
+    },
+    {
+     "name": "Questions",
+     "tips": [
+      {
+       "h": "Two ways to ask a yes-no question",
+       "b": "A yes-no question either puts da li in front of the statement or moves the verb to the front and follows it with li. Both are standard; da li is the more frequent in speech.",
+       "eg": [
+        [
+         "Da li govoriš srpski?",
+         "Do you speak Serbian?"
+        ],
+        [
+         "Govoriš li srpski?",
+         "Do you speak Serbian?"
+        ],
+        [
+         "Da li je ovo kafa?",
+         "Is this coffee?"
+        ]
+       ]
+      },
+      {
+       "h": "Question words open the sentence",
+       "b": "Ko, šta, gde, kada, zašto and kako stand first and need no auxiliary verb. The verb follows, and any short form sits between the two.",
+       "eg": [
+        [
+         "Gde je kafa?",
+         "Where is the coffee?"
+        ],
+        [
+         "Šta radiš?",
+         "What are you doing?"
+        ],
+        [
+         "Zašto je ovo ovde?",
+         "Why is this here?"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ko",
+       "e": "who",
+       "ipa": "ˈkô",
+       "pos": "pron"
+      },
+      {
+       "t": "šta",
+       "e": "what",
+       "ipa": "ˈʃtâ",
+       "pos": "pron"
+      },
+      {
+       "t": "gde",
+       "e": "where",
+       "ipa": "ˈɡdê",
+       "pos": "adv"
+      },
+      {
+       "t": "kada",
+       "e": "when",
+       "ipa": "ˈkǎda",
+       "pos": "adv"
+      },
+      {
+       "t": "zašto",
+       "e": "why",
+       "ipa": "ˈzâʃto",
+       "pos": "adv"
+      },
+      {
+       "t": "kako",
+       "e": "how",
+       "ipa": "ˈkǎko",
+       "pos": "adv"
+      },
+      {
+       "t": "koliko",
+       "e": "how much",
+       "ipa": "ˈkǒliko",
+       "pos": "adv"
+      },
+      {
+       "t": "koji",
+       "e": "which",
+       "ipa": "ˈkǒjiː",
+       "pos": "det"
+      },
+      {
+       "t": "čiji",
+       "e": "whose",
+       "ipa": "ˈtʃîjiː",
+       "pos": "det"
+      },
+      {
+       "t": "pitanje",
+       "e": "question",
+       "ipa": "ˈpîtaɲe",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "odgovor",
+       "e": "answer",
+       "ipa": "ˈôdɡoʋor",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "pitati",
+       "e": "to ask",
+       "ipa": "ˈpîtati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Gde je moja kafa?",
+       "e": "Where is my coffee?",
+       "ipa": "ˈɡdê je ˈmǒja ˈkâfa"
+      },
+      {
+       "t": "Da li govorite srpski?",
+       "e": "Do you speak Serbian?",
+       "ipa": "ˈdâ li ˈɡǒʋoriːte ˈsr̩̂pski"
+      },
+      {
+       "t": "Ko je taj čovek?",
+       "e": "Who is that man?",
+       "ipa": "ˈkô je ˈtâːj ˈtʃǒʋeːk"
+      },
+      {
+       "t": "Koliko košta ovo vino?",
+       "e": "How much does this wine cost?",
+       "ipa": "ˈkǒliko ˈkôʃtaː ˈôʋo ˈʋîːno"
+      }
+     ]
+    },
+    {
+     "name": "Negation",
+     "tips": [
+      {
+       "h": "Ne goes in front of the verb",
+       "b": "Negation places ne directly before the verb: ne govorim, ne pijem. Three verbs fuse with it instead of taking it as a separate word: nisam from biti, nemam from imati and neću from hteti.",
+       "eg": [
+        [
+         "Ne govorim srpski.",
+         "I do not speak Serbian."
+        ],
+        [
+         "Nisam gladan.",
+         "I am not hungry."
+        ],
+        [
+         "Nemam vremena.",
+         "I have no time."
+        ]
+       ]
+      },
+      {
+       "h": "Negatives stack",
+       "b": "A negative pronoun or adverb does not replace ne; both appear in the clause. Niko ne zna carries two negatives and means nobody knows, and leaving out ne is ungrammatical.",
+       "eg": [
+        [
+         "Niko ne zna.",
+         "Nobody knows."
+        ],
+        [
+         "Nikad ne pijem vino.",
+         "I never drink wine."
+        ],
+        [
+         "Nigde nema hleba.",
+         "There is no bread anywhere."
+        ]
+       ]
+      },
+      {
+       "h": "Nema states an absence",
+       "b": "Nema is the negative counterpart of ima and says that something is not there. What is absent stands in the genitive: nema hleba, nema vode, nema vremena.",
+       "eg": [
+        [
+         "Ima hleba.",
+         "There is bread."
+        ],
+        [
+         "Nema hleba.",
+         "There is no bread."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ne",
+       "e": "not",
+       "ipa": "ˈnê",
+       "pos": "adv"
+      },
+      {
+       "t": "nije",
+       "e": "is not",
+       "ipa": "ˈnîje",
+       "pos": "verb"
+      },
+      {
+       "t": "nisam",
+       "e": "I am not",
+       "ipa": "ˈnîsam",
+       "pos": "verb"
+      },
+      {
+       "t": "nema",
+       "e": "there is not",
+       "ipa": "ˈnêma",
+       "pos": "verb"
+      },
+      {
+       "t": "niko",
+       "e": "nobody",
+       "ipa": "ˈnîko",
+       "pos": "pron"
+      },
+      {
+       "t": "nigde",
+       "e": "nowhere",
+       "ipa": "ˈnîɡde",
+       "pos": "adv"
+      },
+      {
+       "t": "nikad",
+       "e": "never",
+       "ipa": "ˈnîkad",
+       "pos": "adv"
+      },
+      {
+       "t": "nikako",
+       "e": "in no way",
+       "ipa": "ˈnîkako",
+       "pos": "adv"
+      },
+      {
+       "t": "nijedan",
+       "e": "not one",
+       "ipa": "ˈnîjedan",
+       "pos": "det"
+      },
+      {
+       "t": "bez",
+       "e": "without",
+       "ipa": "ˈbêz",
+       "pos": "prep"
+      },
+      {
+       "t": "ni",
+       "e": "nor",
+       "ipa": "ˈnî",
+       "pos": "conj"
+      },
+      {
+       "t": "niti",
+       "e": "neither",
+       "ipa": "ˈnîti",
+       "pos": "conj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ja ne govorim srpski",
+       "e": "I do not speak Serbian",
+       "ipa": "ˈjâ ˈnê ˈɡǒʋoriːm ˈsr̩̂pski"
+      },
+      {
+       "t": "Niko ništa ne zna",
+       "e": "Nobody knows anything",
+       "ipa": "ˈnîko ˈnîʃta ˈnê ˈznâː",
+       "lit": "nobody nothing not knows"
+      },
+      {
+       "t": "Ovo nije moja kafa",
+       "e": "This is not my coffee",
+       "ipa": "ˈôʋo ˈnîje ˈmǒja ˈkâfa"
+      },
+      {
+       "t": "Nikad ne pijem vino",
+       "e": "I never drink wine",
+       "ipa": "ˈnîkad ˈnê ˈpǐjeːm ˈʋîːno"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "AT HOME",
+   "subtitle": "The rooms of a house, the things in it, clothes and animals",
+   "skills": [
+    {
+     "name": "House",
+     "tips": [
+      {
+       "h": "U and na for a location",
+       "b": "To state where something is, u or na is followed by the locative case: u kuhinji, u sobi, na krovu. U covers enclosed places and na open or flat ones, and which of the two a place takes is fixed by the word.",
+       "eg": [
+        [
+         "u kuhinji",
+         "in the kitchen"
+        ],
+        [
+         "u sobi",
+         "in the room"
+        ],
+        [
+         "na krovu",
+         "on the roof"
+        ]
+       ]
+      },
+      {
+       "h": "The same preposition for motion",
+       "b": "With a verb of motion u and na take the accusative instead of the locative, and the pair of cases marks the difference between a place and a destination.",
+       "eg": [
+        [
+         "Ja sam u sobi.",
+         "I am in the room."
+        ],
+        [
+         "Idem u sobu.",
+         "I am going into the room."
+        ],
+        [
+         "Mačka je na krovu.",
+         "The cat is on the roof."
+        ],
+        [
+         "Mačka ide na krov.",
+         "The cat is going onto the roof."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "kuća",
+       "e": "house",
+       "ipa": "ˈkûːtɕa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "stan",
+       "e": "apartment",
+       "ipa": "ˈstâːn",
+       "pos": "noun",
+       "note": "(m), pl stanovi"
+      },
+      {
+       "t": "soba",
+       "e": "room",
+       "ipa": "ˈsôba",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "kuhinja",
+       "e": "kitchen",
+       "ipa": "ˈkûxiɲa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "kupatilo",
+       "e": "bathroom",
+       "ipa": "kuˈpǎtilo",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "spavaća soba",
+       "e": "bedroom",
+       "ipa": "ˈspǎʋaːtɕaː ˈsôba",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "vrata",
+       "e": "door",
+       "ipa": "ʋˈrǎːta",
+       "pos": "noun",
+       "note": "(n), plural only"
+      },
+      {
+       "t": "prozor",
+       "e": "window",
+       "ipa": "ˈprôzor",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "zid",
+       "e": "wall",
+       "ipa": "ˈzîːd",
+       "pos": "noun",
+       "note": "(m), pl zidovi"
+      },
+      {
+       "t": "pod",
+       "e": "floor",
+       "ipa": "ˈpôd",
+       "pos": "noun",
+       "note": "(m), pl podovi"
+      },
+      {
+       "t": "krov",
+       "e": "roof",
+       "ipa": "ˈkrôʋ",
+       "pos": "noun",
+       "note": "(m), pl krovovi"
+      },
+      {
+       "t": "dvorište",
+       "e": "yard",
+       "ipa": "ˈdʋǒriʃte",
+       "pos": "noun",
+       "note": "(n)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Moja kuća ima dve sobe",
+       "e": "My house has two rooms",
+       "ipa": "ˈmǒja ˈkûːtɕa ˈîma ˈdʋê ˈsôbe"
+      },
+      {
+       "t": "Mačka je u kuhinji",
+       "e": "The cat is in the kitchen",
+       "ipa": "ˈmâtʃka je u ˈkûxiɲi"
+      },
+      {
+       "t": "Prozor je velik",
+       "e": "The window is big",
+       "ipa": "ˈprôzor je ˈʋělik"
+      },
+      {
+       "t": "Idem u kupatilo",
+       "e": "I am going to the bathroom",
+       "ipa": "ˈîdeːm u kuˈpǎtilo"
+      }
+     ]
+    },
+    {
+     "name": "Objects",
+     "tips": [
+      {
+       "h": "Short masculine nouns lengthen",
+       "b": "Many one-syllable masculine nouns insert -ov- or -ev- before the plural ending: sto, stolovi; nož, noževi; ključ, ključevi. Longer masculine nouns take plain -i: prozori, kreveti.",
+       "eg": [
+        [
+         "sto, stolovi",
+         "table, tables"
+        ],
+        [
+         "nož, noževi",
+         "knife, knives"
+        ],
+        [
+         "prozor, prozori",
+         "window, windows"
+        ]
+       ]
+      },
+      {
+       "h": "Na for a surface, u for an inside",
+       "b": "Na with the locative marks contact with a surface: na stolu, na zidu, na podu. U with the locative marks the inside of something: u ormaru, u sobi, u kući.",
+       "eg": [
+        [
+         "na stolu",
+         "on the table"
+        ],
+        [
+         "na zidu",
+         "on the wall"
+        ],
+        [
+         "u ormaru",
+         "in the wardrobe"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "sto",
+       "e": "table",
+       "ipa": "ˈstôː",
+       "pos": "noun",
+       "note": "(m), pl stolovi"
+      },
+      {
+       "t": "stolica",
+       "e": "chair",
+       "ipa": "ˈstǒlitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "krevet",
+       "e": "bed",
+       "ipa": "ˈkrěʋet",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "ormar",
+       "e": "wardrobe",
+       "ipa": "ˈôrmaːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "lampa",
+       "e": "lamp",
+       "ipa": "ˈlâmpa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "časovnik",
+       "e": "clock",
+       "ipa": "ˈtʃǎsoʋnik",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "ključ",
+       "e": "key",
+       "ipa": "ˈkʎûːtʃ",
+       "pos": "noun",
+       "note": "(m), pl ključevi"
+      },
+      {
+       "t": "ogledalo",
+       "e": "mirror",
+       "ipa": "oˈɡlědalo",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "tepih",
+       "e": "carpet",
+       "ipa": "ˈtêpix",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "slika",
+       "e": "picture",
+       "ipa": "ˈslîka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "kašika",
+       "e": "spoon",
+       "ipa": "ˈkǎʃika",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "nož",
+       "e": "knife",
+       "ipa": "ˈnôːʒ",
+       "pos": "noun",
+       "note": "(m), pl noževi"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ključ je na stolu",
+       "e": "The key is on the table",
+       "ipa": "ˈkʎûːtʃ je na ˈstǒlu"
+      },
+      {
+       "t": "Imam novu lampu",
+       "e": "I have a new lamp",
+       "ipa": "ˈîmaːm ˈnôʋu ˈlâmpu"
+      },
+      {
+       "t": "Slika je na zidu",
+       "e": "The picture is on the wall",
+       "ipa": "ˈslîka je na ˈzîdu"
+      },
+      {
+       "t": "Ova stolica je stara",
+       "e": "This chair is old",
+       "ipa": "ˈǒʋaː ˈstǒlitsa je ˈstâra"
+      }
+     ]
+    },
+    {
+     "name": "Clothing",
+     "tips": [
+      {
+       "h": "Garments that exist only in plural",
+       "b": "Pantalone, cipele and čarape have no singular and take plural agreement: cipele su nove. A single item is counted with par: par cipela.",
+       "eg": [
+        [
+         "Cipele su nove.",
+         "The shoes are new."
+        ],
+        [
+         "par čarapa",
+         "a pair of socks"
+        ]
+       ]
+      },
+      {
+       "h": "One verb for wearing and carrying",
+       "b": "Nositi covers both wearing a garment and carrying an object, and what is worn or carried stands in the accusative. Obući se is the separate verb for the act of getting dressed.",
+       "eg": [
+        [
+         "Nosim šešir.",
+         "I am wearing a hat."
+        ],
+        [
+         "Nosim knjige.",
+         "I am carrying books."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "odeća",
+       "e": "clothes",
+       "ipa": "ˈôdetɕa",
+       "pos": "noun",
+       "note": "(f), no plural"
+      },
+      {
+       "t": "košulja",
+       "e": "shirt",
+       "ipa": "ˈkôʃuʎa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "pantalone",
+       "e": "trousers",
+       "ipa": "pantaˈlǒne",
+       "pos": "noun",
+       "note": "(f), plural only"
+      },
+      {
+       "t": "haljina",
+       "e": "dress",
+       "ipa": "ˈxâʎina",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "suknja",
+       "e": "skirt",
+       "ipa": "ˈsûkɲa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "jakna",
+       "e": "jacket",
+       "ipa": "ˈjâkna",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "kaput",
+       "e": "coat",
+       "ipa": "kaˈpût",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "cipele",
+       "e": "shoes",
+       "ipa": "tsiˈpěle",
+       "pos": "noun",
+       "note": "(f), plural only"
+      },
+      {
+       "t": "čarape",
+       "e": "socks",
+       "ipa": "ˈtʃǎrape",
+       "pos": "noun",
+       "note": "(f), plural only"
+      },
+      {
+       "t": "šešir",
+       "e": "hat",
+       "ipa": "ˈʃěʃiːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "majica",
+       "e": "t-shirt",
+       "ipa": "ˈmǎjitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "nositi",
+       "e": "to wear",
+       "ipa": "ˈnǒsiti",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Nosim crvenu majicu",
+       "e": "I am wearing a red t-shirt",
+       "ipa": "ˈnôsiːm ˈtsř̩ʋenu ˈmǎjitsu"
+      },
+      {
+       "t": "Gde su moje cipele?",
+       "e": "Where are my shoes?",
+       "ipa": "ˈɡdê su ˈmǒje tsiˈpěle"
+      },
+      {
+       "t": "On nosi crn kaput",
+       "e": "He is wearing a black coat",
+       "ipa": "ˈôn ˈnôsiː ˈtsr̩̂n kaˈpût"
+      },
+      {
+       "t": "Ova haljina je lepa",
+       "e": "This dress is beautiful",
+       "ipa": "ˈǒʋaː ˈxâʎina je ˈlêːpa"
+      }
+     ]
+    },
+    {
+     "name": "Animals",
+     "tips": [
+      {
+       "h": "Animate masculine objects",
+       "b": "A masculine noun naming a living being takes the genitive form as its accusative: vidim psa, vidim konja, vidim brata. A masculine noun naming a thing keeps its basic form: vidim sto.",
+       "eg": [
+        [
+         "Vidim psa.",
+         "I see a dog."
+        ],
+        [
+         "Vidim konja.",
+         "I see a horse."
+        ],
+        [
+         "Vidim sto.",
+         "I see a table."
+        ]
+       ]
+      },
+      {
+       "h": "Pas loses its vowel",
+       "b": "Pas drops the a everywhere outside the nominative singular: psa, psu, psi. The same movable a appears in otac, oca and in adjectives such as dobar, dobra.",
+       "eg": [
+        [
+         "pas, psa",
+         "dog, of a dog"
+        ],
+        [
+         "otac, oca",
+         "father, of a father"
+        ],
+        [
+         "dobar, dobra",
+         "good (m), good (f)"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "pas",
+       "e": "dog",
+       "ipa": "ˈpâːs",
+       "pos": "noun",
+       "note": "(m), gen psa"
+      },
+      {
+       "t": "mačka",
+       "e": "cat",
+       "ipa": "ˈmâtʃka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "ptica",
+       "e": "bird",
+       "ipa": "ˈptîtsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "konj",
+       "e": "horse",
+       "ipa": "ˈkôɲ",
+       "pos": "noun",
+       "note": "(m), pl konji"
+      },
+      {
+       "t": "riba",
+       "e": "fish",
+       "ipa": "ˈrîba",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "krava",
+       "e": "cow",
+       "ipa": "ˈkrâʋa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "kokoška",
+       "e": "hen",
+       "ipa": "ˈkǒkoʃka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "svinja",
+       "e": "pig",
+       "ipa": "ˈsʋîɲa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "ovca",
+       "e": "sheep",
+       "ipa": "ˈôːʋtsa",
+       "pos": "noun",
+       "note": "(f), pl ovce"
+      },
+      {
+       "t": "miš",
+       "e": "mouse",
+       "ipa": "ˈmîʃ",
+       "pos": "noun",
+       "note": "(m), pl miševi"
+      },
+      {
+       "t": "medved",
+       "e": "bear",
+       "ipa": "ˈmêdʋed",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "životinja",
+       "e": "animal",
+       "ipa": "ʒiˈʋǒtiɲa",
+       "pos": "noun",
+       "note": "(f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Imam psa i mačku",
+       "e": "I have a dog and a cat",
+       "ipa": "ˈîmaːm ˈpsâ i ˈmâtʃku"
+      },
+      {
+       "t": "Ptica je na krovu",
+       "e": "The bird is on the roof",
+       "ipa": "ˈptîtsa je na ˈkrôʋu"
+      },
+      {
+       "t": "Vidim konja u dvorištu",
+       "e": "I see a horse in the yard",
+       "ipa": "ˈʋîdiːm ˈkôɲa u ˈdʋǒriʃtu"
+      },
+      {
+       "t": "Mačka pije mleko",
+       "e": "The cat is drinking milk",
+       "ipa": "ˈmâtʃka ˈpǐjeː mˈlěko"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "TIME",
+   "subtitle": "The days, the months, the clock and the weather",
+   "skills": [
+    {
+     "name": "Days",
+     "tips": [
+      {
+       "h": "Days are written in lower case",
+       "b": "The names of the days start with a small letter: ponedeljak, utorak, sreda. The week begins on Monday, and nedelja is Sunday.",
+       "eg": [
+        [
+         "ponedeljak",
+         "Monday"
+        ],
+        [
+         "subota",
+         "Saturday"
+        ],
+        [
+         "nedelja",
+         "Sunday"
+        ]
+       ]
+      },
+      {
+       "h": "U for a day, -om for a habit",
+       "b": "A single day on which something happens takes u with the accusative: u ponedeljak, u subotu, u nedelju. A day that recurs takes the instrumental on its own: subotom, nedeljom.",
+       "eg": [
+        [
+         "u subotu",
+         "on Saturday"
+        ],
+        [
+         "subotom",
+         "on Saturdays"
+        ],
+        [
+         "u nedelju",
+         "on Sunday"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ponedeljak",
+       "e": "Monday",
+       "ipa": "poˈnědeʎak",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "utorak",
+       "e": "Tuesday",
+       "ipa": "ˈûtorak",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "sreda",
+       "e": "Wednesday",
+       "ipa": "ˈsrěda",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "četvrtak",
+       "e": "Thursday",
+       "ipa": "tʃeˈtʋr̩̂tak",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "petak",
+       "e": "Friday",
+       "ipa": "ˈpêtak",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "subota",
+       "e": "Saturday",
+       "ipa": "ˈsûbota",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "nedelja",
+       "e": "Sunday",
+       "ipa": "ˈnêdeʎa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "sedmica",
+       "e": "week",
+       "ipa": "ˈsêdmitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "dan",
+       "e": "day",
+       "ipa": "ˈdâːn",
+       "pos": "noun",
+       "note": "(m), pl dani"
+      },
+      {
+       "t": "danas",
+       "e": "today",
+       "ipa": "ˈdânas",
+       "pos": "adv"
+      },
+      {
+       "t": "sutra",
+       "e": "tomorrow",
+       "ipa": "ˈsûtra",
+       "pos": "adv"
+      },
+      {
+       "t": "juče",
+       "e": "yesterday",
+       "ipa": "ˈjûtʃe",
+       "pos": "adv"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Danas je ponedeljak",
+       "e": "Today is Monday",
+       "ipa": "ˈdânas je poˈnědeʎak"
+      },
+      {
+       "t": "U subotu idem u grad",
+       "e": "On Saturday I go to town",
+       "ipa": "u ˈsûbotu ˈîdeːm u ˈɡrâːd"
+      },
+      {
+       "t": "Sutra je moj rođendan",
+       "e": "Tomorrow is my birthday",
+       "ipa": "ˈsûtra je ˈmôj ˈrǒdʑendaːn"
+      },
+      {
+       "t": "Radim svaki dan",
+       "e": "I work every day",
+       "ipa": "ˈrâdiːm ˈsʋâki ˈdâːn"
+      }
+     ]
+    },
+    {
+     "name": "Months",
+     "tips": [
+      {
+       "h": "Months take u and the locative",
+       "b": "The month in which something happens takes u with the locative: u januaru, u martu, u julu. The names are masculine and are written with a small letter.",
+       "eg": [
+        [
+         "u januaru",
+         "in January"
+        ],
+        [
+         "u martu",
+         "in March"
+        ],
+        [
+         "u julu",
+         "in July"
+        ]
+       ]
+      },
+      {
+       "h": "Dates count in the genitive",
+       "b": "A date is an ordinal number in the genitive followed by the month in the genitive: prvog januara, petog marta. Spoken dates keep the same two endings.",
+       "eg": [
+        [
+         "prvi januar",
+         "the first of January"
+        ],
+        [
+         "prvog januara",
+         "on the first of January"
+        ],
+        [
+         "petog marta",
+         "on the fifth of March"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "januar",
+       "e": "January",
+       "ipa": "ˈjânuaːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "februar",
+       "e": "February",
+       "ipa": "ˈfêbruaːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "mart",
+       "e": "March",
+       "ipa": "ˈmâːrt",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "april",
+       "e": "April",
+       "ipa": "ˈâpriːl",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "maj",
+       "e": "May",
+       "ipa": "ˈmâːj",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "jun",
+       "e": "June",
+       "ipa": "ˈjûːn",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "jul",
+       "e": "July",
+       "ipa": "ˈjûːl",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "avgust",
+       "e": "August",
+       "ipa": "ˈâʋɡust",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "septembar",
+       "e": "September",
+       "ipa": "ˈsêptembar",
+       "pos": "noun",
+       "note": "(m), gen septembra"
+      },
+      {
+       "t": "oktobar",
+       "e": "October",
+       "ipa": "ˈǒktoːbar",
+       "pos": "noun",
+       "note": "(m), gen oktobra"
+      },
+      {
+       "t": "novembar",
+       "e": "November",
+       "ipa": "ˈnǒʋeːmbar",
+       "pos": "noun",
+       "note": "(m), gen novembra"
+      },
+      {
+       "t": "decembar",
+       "e": "December",
+       "ipa": "ˈdětseːmbar",
+       "pos": "noun",
+       "note": "(m), gen decembra"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "U januaru je hladno",
+       "e": "It is cold in January",
+       "ipa": "u ˈjânuaːru je ˈxlâdno"
+      },
+      {
+       "t": "U maju je toplo",
+       "e": "It is warm in May",
+       "ipa": "u ˈmâːju je ˈtôplo"
+      },
+      {
+       "t": "Moj rođendan je u martu",
+       "e": "My birthday is in March",
+       "ipa": "ˈmôj ˈrǒdʑendaːn je u ˈmâːrtu"
+      },
+      {
+       "t": "Idem na more u julu",
+       "e": "I go to the seaside in July",
+       "ipa": "ˈîdeːm na ˈmôre u ˈjûːlu"
+      }
+     ]
+    },
+    {
+     "name": "Time of Day",
+     "tips": [
+      {
+       "h": "Telling the hour",
+       "b": "The hour takes u with the accusative of the number, followed by the count form of sat: u jedan sat, u dva sata, u pet sati. The question is Koliko je sati.",
+       "eg": [
+        [
+         "Koliko je sati?",
+         "What time is it?"
+        ],
+        [
+         "u dva sata",
+         "at two o'clock"
+        ],
+        [
+         "u pet sati",
+         "at five o'clock"
+        ]
+       ]
+      },
+      {
+       "h": "Parts of the day as adverbs",
+       "b": "The nouns for the parts of the day have adverb forms that say when something happens, and these stand alone without a preposition.",
+       "eg": [
+        [
+         "ujutru",
+         "in the morning"
+        ],
+        [
+         "popodne",
+         "in the afternoon"
+        ],
+        [
+         "uveče",
+         "in the evening"
+        ],
+        [
+         "noću",
+         "at night"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "jutro",
+       "e": "morning",
+       "ipa": "ˈjûtro",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "podne",
+       "e": "noon",
+       "ipa": "ˈpôdne",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "popodne",
+       "e": "afternoon",
+       "ipa": "ˈpôpodne",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "veče",
+       "e": "evening",
+       "ipa": "ˈʋětʃe",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "noć",
+       "e": "night",
+       "ipa": "ˈnôːtɕ",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "sat",
+       "e": "hour",
+       "ipa": "ˈsâːt",
+       "pos": "noun",
+       "note": "(m), pl sati"
+      },
+      {
+       "t": "minut",
+       "e": "minute",
+       "ipa": "ˈmînuːt",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "sekunda",
+       "e": "second",
+       "ipa": "seˈkûnda",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "vreme",
+       "e": "time",
+       "ipa": "ʋˈrêːme",
+       "pos": "noun",
+       "note": "(n), gen vremena"
+      },
+      {
+       "t": "sada",
+       "e": "now",
+       "ipa": "ˈsâda",
+       "pos": "adv"
+      },
+      {
+       "t": "rano",
+       "e": "early",
+       "ipa": "ˈrâno",
+       "pos": "adv"
+      },
+      {
+       "t": "kasno",
+       "e": "late",
+       "ipa": "ˈkâsno",
+       "pos": "adv"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Koliko je sati?",
+       "e": "What time is it?",
+       "ipa": "ˈkǒliko je ˈsâːtiː",
+       "lit": "how-much is of-hours"
+      },
+      {
+       "t": "Sada je pet sati",
+       "e": "It is five o'clock",
+       "ipa": "ˈsâda je ˈpêːt ˈsâːtiː"
+      },
+      {
+       "t": "Vidimo se u podne",
+       "e": "We meet at noon",
+       "ipa": "ˈʋîdimo se u ˈpôdne",
+       "lit": "we-see ourselves at noon"
+      },
+      {
+       "t": "Uveče pijem čaj",
+       "e": "In the evening I drink tea",
+       "ipa": "ˈǔʋetʃe ˈpǐjeːm ˈtʃâːj"
+      }
+     ]
+    },
+    {
+     "name": "Weather",
+     "tips": [
+      {
+       "h": "Weather has no subject",
+       "b": "A statement about the weather uses a neuter adjective with je and no subject at all: hladno je, toplo je, sunčano je. The verb agrees with nothing.",
+       "eg": [
+        [
+         "Hladno je.",
+         "It is cold."
+        ],
+        [
+         "Toplo je.",
+         "It is warm."
+        ],
+        [
+         "Sunčano je.",
+         "It is sunny."
+        ]
+       ]
+      },
+      {
+       "h": "Rain falls",
+       "b": "Rain and snow are stated with padati, to fall, and the noun as subject: pada kiša, pada sneg. The verb before the subject is the ordinary order here.",
+       "eg": [
+        [
+         "Pada kiša.",
+         "It is raining."
+        ],
+        [
+         "Pada sneg.",
+         "It is snowing."
+        ],
+        [
+         "Duva vetar.",
+         "The wind is blowing."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "vreme",
+       "e": "weather",
+       "ipa": "ʋˈrêːme",
+       "pos": "noun",
+       "note": "(n), gen vremena"
+      },
+      {
+       "t": "kiša",
+       "e": "rain",
+       "ipa": "ˈkîʃa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "sneg",
+       "e": "snow",
+       "ipa": "ˈsnêːɡ",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "vetar",
+       "e": "wind",
+       "ipa": "ˈʋêtar",
+       "pos": "noun",
+       "note": "(m), gen vetra"
+      },
+      {
+       "t": "oblak",
+       "e": "cloud",
+       "ipa": "ˈôblaːk",
+       "pos": "noun",
+       "note": "(m), pl oblaci"
+      },
+      {
+       "t": "magla",
+       "e": "fog",
+       "ipa": "ˈmâɡla",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "temperatura",
+       "e": "temperature",
+       "ipa": "temperaˈtûra",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "sunčano",
+       "e": "sunny",
+       "ipa": "ˈsûntʃano",
+       "pos": "adj"
+      },
+      {
+       "t": "oblačno",
+       "e": "cloudy",
+       "ipa": "ˈôblatʃno",
+       "pos": "adj"
+      },
+      {
+       "t": "topao",
+       "e": "warm",
+       "ipa": "ˈtôpao",
+       "pos": "adj",
+       "note": "f topla, n toplo"
+      },
+      {
+       "t": "hladan",
+       "e": "cold",
+       "ipa": "ˈxlâdan",
+       "pos": "adj",
+       "note": "f hladna, n hladno"
+      },
+      {
+       "t": "padati",
+       "e": "to fall",
+       "ipa": "ˈpâdati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Danas pada kiša",
+       "e": "It is raining today",
+       "ipa": "ˈdânas ˈpâdaː ˈkîʃa",
+       "lit": "today falls rain"
+      },
+      {
+       "t": "Napolju je veoma hladno",
+       "e": "It is very cold outside",
+       "ipa": "ˈnâpoʎu je ˈʋěoma ˈxlâdno"
+      },
+      {
+       "t": "Zimi pada sneg",
+       "e": "In winter it snows",
+       "ipa": "ˈzîmi ˈpâdaː ˈsnêːɡ"
+      },
+      {
+       "t": "Kakvo je vreme danas?",
+       "e": "What is the weather like today?",
+       "ipa": "ˈkâkʋo je ʋˈrêːme ˈdânas"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "GETTING AROUND",
+   "subtitle": "Places in town, giving directions, transport and travel",
+   "skills": [
+    {
+     "name": "Places",
+     "tips": [
+      {
+       "h": "U or na is fixed by the place",
+       "b": "Some places take u and others take na, and the choice belongs to the word rather than to a rule: u banci, u prodavnici, u školi, na pijaci, na pošti, na stanici.",
+       "eg": [
+        [
+         "u banci",
+         "at the bank"
+        ],
+        [
+         "u prodavnici",
+         "in the shop"
+        ],
+        [
+         "na pijaci",
+         "at the market"
+        ],
+        [
+         "na pošti",
+         "at the post office"
+        ]
+       ]
+      },
+      {
+       "h": "The genitive links two nouns",
+       "b": "Where English joins two nouns with of, Serbo-Croatian puts the second noun in the genitive: centar grada, vrata kuće, ulica grada.",
+       "eg": [
+        [
+         "centar grada",
+         "the centre of town"
+        ],
+        [
+         "vrata kuće",
+         "the door of the house"
+        ],
+        [
+         "ime ulice",
+         "the name of the street"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "grad",
+       "e": "city",
+       "ipa": "ˈɡrâːd",
+       "pos": "noun",
+       "note": "(m), pl gradovi"
+      },
+      {
+       "t": "selo",
+       "e": "village",
+       "ipa": "ˈsêlo",
+       "pos": "noun",
+       "note": "(n), pl sela"
+      },
+      {
+       "t": "ulica",
+       "e": "street",
+       "ipa": "ˈûlitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "trg",
+       "e": "square",
+       "ipa": "ˈtr̩̂ɡ",
+       "pos": "noun",
+       "note": "(m), pl trgovi"
+      },
+      {
+       "t": "pijaca",
+       "e": "market",
+       "ipa": "piˈjǎtsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "prodavnica",
+       "e": "shop",
+       "ipa": "proˈdâʋnitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "banka",
+       "e": "bank",
+       "ipa": "ˈbâːŋka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "bolnica",
+       "e": "hospital",
+       "ipa": "ˈbôlnitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "pošta",
+       "e": "post office",
+       "ipa": "ˈpôʃta",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "crkva",
+       "e": "church",
+       "ipa": "ˈtsr̩̂kʋa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "biblioteka",
+       "e": "library",
+       "ipa": "biblioˈtěka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "muzej",
+       "e": "museum",
+       "ipa": "ˈmûzej",
+       "pos": "noun",
+       "note": "(m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Banka je u centru grada",
+       "e": "The bank is in the town centre",
+       "ipa": "ˈbâːŋka je u ˈtsêntru ˈɡrâːda"
+      },
+      {
+       "t": "Idem na pijacu",
+       "e": "I am going to the market",
+       "ipa": "ˈîdeːm na piˈjǎtsu"
+      },
+      {
+       "t": "Gde je najbliža pošta?",
+       "e": "Where is the nearest post office?",
+       "ipa": "ˈɡdê je ˈnâjbliʒaː ˈpôʃta"
+      },
+      {
+       "t": "Ova prodavnica je nova",
+       "e": "This shop is new",
+       "ipa": "ˈǒʋaː proˈdâʋnitsa je ˈnôʋa"
+      }
+     ]
+    },
+    {
+     "name": "Directions",
+     "tips": [
+      {
+       "h": "The imperative",
+       "b": "A command drops the infinitive ending and adds -i for one person and -ite for several. The -ite form is also the polite command to a single person.",
+       "eg": [
+        [
+         "Idi pravo.",
+         "Go straight. (informal)"
+        ],
+        [
+         "Idite pravo.",
+         "Go straight. (polite)"
+        ],
+        [
+         "Skreni levo.",
+         "Turn left. (informal)"
+        ],
+        [
+         "Skrenite levo.",
+         "Turn left. (polite)"
+        ]
+       ]
+      },
+      {
+       "h": "Position words take the genitive",
+       "b": "Pored, iza, ispred, blizu and do are followed by the genitive: pored banke, iza crkve, ispred škole, do raskrsnice.",
+       "eg": [
+        [
+         "pored banke",
+         "next to the bank"
+        ],
+        [
+         "iza crkve",
+         "behind the church"
+        ],
+        [
+         "ispred škole",
+         "in front of the school"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "levo",
+       "e": "left",
+       "ipa": "ˈlêːʋo",
+       "pos": "adv"
+      },
+      {
+       "t": "desno",
+       "e": "right",
+       "ipa": "ˈdêsno",
+       "pos": "adv"
+      },
+      {
+       "t": "pravo",
+       "e": "straight ahead",
+       "ipa": "ˈprâːʋo",
+       "pos": "adv"
+      },
+      {
+       "t": "nazad",
+       "e": "back",
+       "ipa": "ˈnâzad",
+       "pos": "adv"
+      },
+      {
+       "t": "gore",
+       "e": "up",
+       "ipa": "ˈɡôre",
+       "pos": "adv"
+      },
+      {
+       "t": "dole",
+       "e": "down",
+       "ipa": "ˈdôle",
+       "pos": "adv"
+      },
+      {
+       "t": "blizu",
+       "e": "near",
+       "ipa": "ˈblîzu",
+       "pos": "adv"
+      },
+      {
+       "t": "daleko",
+       "e": "far",
+       "ipa": "daˈlěko",
+       "pos": "adv"
+      },
+      {
+       "t": "pored",
+       "e": "next to",
+       "ipa": "ˈpôred",
+       "pos": "prep"
+      },
+      {
+       "t": "iza",
+       "e": "behind",
+       "ipa": "ˈǐza",
+       "pos": "prep"
+      },
+      {
+       "t": "ispred",
+       "e": "in front of",
+       "ipa": "ˈîspred",
+       "pos": "prep"
+      },
+      {
+       "t": "skrenuti",
+       "e": "to turn",
+       "ipa": "ˈskrênuti",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Idite pravo do banke",
+       "e": "Go straight to the bank",
+       "ipa": "ˈîdite ˈprâːʋo do ˈbâːŋke"
+      },
+      {
+       "t": "Pošta je pored banke",
+       "e": "The post office is next to the bank",
+       "ipa": "ˈpôʃta je ˈpôred ˈbâːŋke"
+      },
+      {
+       "t": "Da li je daleko?",
+       "e": "Is it far?",
+       "ipa": "ˈdâ li je daˈlěko"
+      },
+      {
+       "t": "Muzej je iza crkve",
+       "e": "The museum is behind the church",
+       "ipa": "ˈmûzej je ˈîza ˈtsr̩̂kʋe"
+      }
+     ]
+    },
+    {
+     "name": "Transport",
+     "tips": [
+      {
+       "h": "The instrumental names the means",
+       "b": "The vehicle taken stands in the instrumental with no preposition. A masculine noun adds -om, or -em after a soft consonant, and a feminine noun in -a takes -om.",
+       "eg": [
+        [
+         "autobusom",
+         "by bus"
+        ],
+        [
+         "vozom",
+         "by train"
+        ],
+        [
+         "avionom",
+         "by plane"
+        ],
+        [
+         "kartom",
+         "with a ticket"
+        ]
+       ]
+      },
+      {
+       "h": "Ići, putovati and voziti",
+       "b": "Ići covers going on foot and going in general, putovati names a journey, and voziti means to drive a vehicle. The destination follows u or na in the accusative.",
+       "eg": [
+        [
+         "Idem u grad.",
+         "I am going to town."
+        ],
+        [
+         "Putujem u Beograd.",
+         "I am travelling to Belgrade."
+        ],
+        [
+         "Vozim auto.",
+         "I am driving a car."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "auto",
+       "e": "car",
+       "ipa": "ˈâuto",
+       "pos": "noun",
+       "note": "(m), pl auti"
+      },
+      {
+       "t": "autobus",
+       "e": "bus",
+       "ipa": "auˈtǒbus",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "voz",
+       "e": "train",
+       "ipa": "ˈʋôːz",
+       "pos": "noun",
+       "note": "(m), pl vozovi"
+      },
+      {
+       "t": "avion",
+       "e": "airplane",
+       "ipa": "ˈǎʋion",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "brod",
+       "e": "ship",
+       "ipa": "ˈbrôd",
+       "pos": "noun",
+       "note": "(m), pl brodovi"
+      },
+      {
+       "t": "bicikl",
+       "e": "bicycle",
+       "ipa": "ˈbîtsikl",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "tramvaj",
+       "e": "tram",
+       "ipa": "ˈtrâmʋaj",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "taksi",
+       "e": "taxi",
+       "ipa": "ˈtâksi",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "stanica",
+       "e": "station",
+       "ipa": "ˈstânitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "karta",
+       "e": "ticket",
+       "ipa": "ˈkâːrta",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "vozač",
+       "e": "driver",
+       "ipa": "ˈʋǒzaːtʃ",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "voziti",
+       "e": "to drive",
+       "ipa": "ˈʋǒziti",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Idem na posao autobusom",
+       "e": "I go to work by bus",
+       "ipa": "ˈîdeːm na ˈpôsao auˈtǒbusom"
+      },
+      {
+       "t": "Voz stiže u pet",
+       "e": "The train arrives at five",
+       "ipa": "ˈʋôːz ˈstîʒeː u ˈpêːt"
+      },
+      {
+       "t": "Gde je autobuska stanica?",
+       "e": "Where is the bus station?",
+       "ipa": "ˈɡdê je auˈtǒbuskaː ˈstânitsa"
+      },
+      {
+       "t": "Kupujem kartu za voz",
+       "e": "I am buying a train ticket",
+       "ipa": "ˈkǔpujeːm ˈkâːrtu za ˈʋôːz"
+      }
+     ]
+    },
+    {
+     "name": "Travel",
+     "tips": [
+      {
+       "h": "Verbs come in aspect pairs",
+       "b": "Most verbs exist in two forms. The imperfective presents an action as ongoing or repeated, the perfective presents it as one completed whole. Putovati is imperfective and otputovati perfective; ići is imperfective and poći perfective.",
+       "eg": [
+        [
+         "Putujem u Beograd.",
+         "I am travelling to Belgrade."
+        ],
+        [
+         "Otputovao sam u Beograd.",
+         "I travelled to Belgrade."
+        ],
+        [
+         "Idem kući.",
+         "I am going home."
+        ],
+        [
+         "Pošao sam kući.",
+         "I set off home."
+        ]
+       ]
+      },
+      {
+       "h": "A perfective has no present meaning",
+       "b": "A perfective verb in the present form does not describe the present moment. It appears after da, after kada and in the future: hoću da stignem, kada stignem.",
+       "eg": [
+        [
+         "Hoću da stignem na vreme.",
+         "I want to arrive on time."
+        ],
+        [
+         "Kada stignem, zvaću te.",
+         "When I arrive, I will call you."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "put",
+       "e": "road",
+       "ipa": "ˈpûːt",
+       "pos": "noun",
+       "note": "(m), pl putevi"
+      },
+      {
+       "t": "putovanje",
+       "e": "journey",
+       "ipa": "putoˈʋǎːɲe",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "kofer",
+       "e": "suitcase",
+       "ipa": "ˈkôfer",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "pasoš",
+       "e": "passport",
+       "ipa": "ˈpâsoʃ",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "granica",
+       "e": "border",
+       "ipa": "ˈɡrânitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "aerodrom",
+       "e": "airport",
+       "ipa": "aeroˈdrôːm",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "odmor",
+       "e": "holiday",
+       "ipa": "ˈôdmor",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "more",
+       "e": "sea",
+       "ipa": "ˈmôre",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "planina",
+       "e": "mountain",
+       "ipa": "plaˈnǐna",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "putovati",
+       "e": "to travel",
+       "ipa": "puˈtǒʋati",
+       "pos": "verb"
+      },
+      {
+       "t": "stići",
+       "e": "to arrive",
+       "ipa": "ˈstîtɕi",
+       "pos": "verb"
+      },
+      {
+       "t": "poći",
+       "e": "to set off",
+       "ipa": "ˈpôːtɕi",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Putujemo na more",
+       "e": "We are travelling to the seaside",
+       "ipa": "ˈpǔtujemo na ˈmôre"
+      },
+      {
+       "t": "Gde je moj pasoš?",
+       "e": "Where is my passport?",
+       "ipa": "ˈɡdê je ˈmôj ˈpâsoʃ"
+      },
+      {
+       "t": "Voz stiže na stanicu",
+       "e": "The train arrives at the station",
+       "ipa": "ˈʋôːz ˈstîʒeː na ˈstânitsu"
+      },
+      {
+       "t": "Idemo na odmor u julu",
+       "e": "We are going on holiday in July",
+       "ipa": "ˈîdemo na ˈôdmor u ˈjûːlu"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "PEOPLE",
+   "subtitle": "Feelings, the body, health and describing a person",
+   "skills": [
+    {
+     "name": "Feelings",
+     "tips": [
+      {
+       "h": "States are stated in the dative",
+       "b": "A physical or emotional state uses a neuter adjective with je and the dative of the person affected. The person is not the subject of the sentence.",
+       "eg": [
+        [
+         "Hladno mi je.",
+         "I am cold."
+        ],
+        [
+         "Drago mi je.",
+         "I am pleased."
+        ],
+        [
+         "Dosadno mu je.",
+         "He is bored."
+        ]
+       ]
+      },
+      {
+       "h": "Adjectives in -an lose the a",
+       "b": "An adjective ending in -an drops that a before any ending: srećan, srećna, srećno; gladan, gladna, gladno. The masculine singular is the only form that keeps it.",
+       "eg": [
+        [
+         "srećan čovek",
+         "a happy man"
+        ],
+        [
+         "srećna žena",
+         "a happy woman"
+        ],
+        [
+         "gladno dete",
+         "a hungry child"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "srećan",
+       "e": "happy",
+       "ipa": "ˈsrêtɕan",
+       "pos": "adj",
+       "note": "f srećna, n srećno"
+      },
+      {
+       "t": "tužan",
+       "e": "sad",
+       "ipa": "ˈtûʒan",
+       "pos": "adj",
+       "note": "f tužna, n tužno"
+      },
+      {
+       "t": "ljut",
+       "e": "angry",
+       "ipa": "ˈʎûːt",
+       "pos": "adj"
+      },
+      {
+       "t": "umoran",
+       "e": "tired",
+       "ipa": "ˈûmoran",
+       "pos": "adj",
+       "note": "f umorna"
+      },
+      {
+       "t": "gladan",
+       "e": "hungry",
+       "ipa": "ˈɡlâːdan",
+       "pos": "adj",
+       "note": "f gladna"
+      },
+      {
+       "t": "žedan",
+       "e": "thirsty",
+       "ipa": "ˈʒêːdan",
+       "pos": "adj",
+       "note": "f žedna"
+      },
+      {
+       "t": "uplašen",
+       "e": "afraid",
+       "ipa": "uˈplâʃen",
+       "pos": "adj"
+      },
+      {
+       "t": "iznenađen",
+       "e": "surprised",
+       "ipa": "izneˈnâːdʑen",
+       "pos": "adj"
+      },
+      {
+       "t": "sreća",
+       "e": "happiness",
+       "ipa": "ˈsrêtɕa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "strah",
+       "e": "fear",
+       "ipa": "ˈstrâːx",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "ljubav",
+       "e": "love",
+       "ipa": "ˈʎûbaʋ",
+       "pos": "noun",
+       "note": "(f), gen ljubavi"
+      },
+      {
+       "t": "osećati",
+       "e": "to feel",
+       "ipa": "oˈsětɕati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Srećan sam danas",
+       "e": "I am happy today",
+       "ipa": "ˈsrêtɕan sam ˈdânas"
+      },
+      {
+       "t": "Gladan sam i žedan",
+       "e": "I am hungry and thirsty",
+       "ipa": "ˈɡlâːdan sam i ˈʒêːdan"
+      },
+      {
+       "t": "Hladno mi je",
+       "e": "I am cold",
+       "ipa": "ˈxlâdno mi je",
+       "lit": "cold to-me it-is"
+      },
+      {
+       "t": "Ona je veoma umorna",
+       "e": "She is very tired",
+       "ipa": "ˈǒna je ˈʋěoma ˈûmorna"
+      }
+     ]
+    },
+    {
+     "name": "Body",
+     "tips": [
+      {
+       "h": "Paired parts keep old plurals",
+       "b": "Oko and uvo are neuter in the singular and take the feminine plurals oči and uši. Ruka and noga name the whole arm and the whole leg; šaka and stopalo name the hand and the foot alone.",
+       "eg": [
+        [
+         "oko, oči",
+         "eye, eyes"
+        ],
+        [
+         "uvo, uši",
+         "ear, ears"
+        ],
+        [
+         "ruka, ruke",
+         "arm, arms"
+        ]
+       ]
+      },
+      {
+       "h": "Body parts drop the possessive",
+       "b": "The owner of a body part goes unstated when it is obvious: perem ruke means I wash my hands. A possessive appears only where the owner would otherwise be in doubt.",
+       "eg": [
+        [
+         "Perem ruke.",
+         "I wash my hands."
+        ],
+        [
+         "Boli me glava.",
+         "My head hurts."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "telo",
+       "e": "body",
+       "ipa": "ˈtêːlo",
+       "pos": "noun",
+       "note": "(n), pl tela"
+      },
+      {
+       "t": "glava",
+       "e": "head",
+       "ipa": "ˈɡlâːʋa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "oko",
+       "e": "eye",
+       "ipa": "ˈôko",
+       "pos": "noun",
+       "note": "(n), pl oči (f)"
+      },
+      {
+       "t": "uvo",
+       "e": "ear",
+       "ipa": "ˈûʋo",
+       "pos": "noun",
+       "note": "(n), pl uši (f)"
+      },
+      {
+       "t": "nos",
+       "e": "nose",
+       "ipa": "ˈnôːs",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "usta",
+       "e": "mouth",
+       "ipa": "ˈûsta",
+       "pos": "noun",
+       "note": "(n), plural only"
+      },
+      {
+       "t": "zub",
+       "e": "tooth",
+       "ipa": "ˈzûːb",
+       "pos": "noun",
+       "note": "(m), pl zubi"
+      },
+      {
+       "t": "ruka",
+       "e": "hand",
+       "ipa": "ˈrûka",
+       "pos": "noun",
+       "note": "(f), also arm"
+      },
+      {
+       "t": "noga",
+       "e": "leg",
+       "ipa": "ˈnôɡa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "prst",
+       "e": "finger",
+       "ipa": "ˈpr̩̂st",
+       "pos": "noun",
+       "note": "(m), pl prsti"
+      },
+      {
+       "t": "srce",
+       "e": "heart",
+       "ipa": "ˈsr̩̂tse",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "kosa",
+       "e": "hair",
+       "ipa": "ˈkǒsa",
+       "pos": "noun",
+       "note": "(f), no plural"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Boli me glava",
+       "e": "My head hurts",
+       "ipa": "ˈbǒliː me ˈɡlâːʋa",
+       "lit": "hurts me head"
+      },
+      {
+       "t": "Ona ima plave oči",
+       "e": "She has blue eyes",
+       "ipa": "ˈǒna ˈîma ˈplâːʋe ˈôtʃi"
+      },
+      {
+       "t": "Perem ruke svako jutro",
+       "e": "I wash my hands every morning",
+       "ipa": "ˈpêreːm ˈrûke ˈsʋâko ˈjûtro"
+      },
+      {
+       "t": "Njegova kosa je crna",
+       "e": "His hair is black",
+       "ipa": "ˈɲêɡoʋa ˈkǒsa je ˈtsr̩̂na"
+      }
+     ]
+    },
+    {
+     "name": "Health",
+     "tips": [
+      {
+       "h": "Boleti makes the part the subject",
+       "b": "With boleti the aching part is the subject and the person is the object in the accusative: boli me glava, bole me zubi. The verb agrees with the body part, so a plural part takes bole.",
+       "eg": [
+        [
+         "Boli me glava.",
+         "My head hurts."
+        ],
+        [
+         "Bole me zubi.",
+         "My teeth hurt."
+        ],
+        [
+         "Boli ga noga.",
+         "His leg hurts."
+        ]
+       ]
+      },
+      {
+       "h": "Kod for a person's place",
+       "b": "Kod with the genitive names the place of a person, and it covers both being there and going there: kod lekara, kod brata, kod kuće.",
+       "eg": [
+        [
+         "kod lekara",
+         "at the doctor's"
+        ],
+        [
+         "kod brata",
+         "at my brother's"
+        ],
+        [
+         "kod kuće",
+         "at home"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "zdravlje",
+       "e": "health",
+       "ipa": "ˈzdrâːʋʎe",
+       "pos": "noun",
+       "note": "(n), no plural"
+      },
+      {
+       "t": "lekar",
+       "e": "doctor",
+       "ipa": "ˈlêkaːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "apoteka",
+       "e": "pharmacy",
+       "ipa": "apoˈtěka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "lek",
+       "e": "medicine",
+       "ipa": "ˈlêːk",
+       "pos": "noun",
+       "note": "(m), pl lekovi"
+      },
+      {
+       "t": "bol",
+       "e": "pain",
+       "ipa": "ˈbôːl",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "groznica",
+       "e": "fever",
+       "ipa": "ˈɡrôznitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "kašalj",
+       "e": "cough",
+       "ipa": "ˈkâʃaʎ",
+       "pos": "noun",
+       "note": "(m), gen kašlja"
+      },
+      {
+       "t": "povreda",
+       "e": "injury",
+       "ipa": "ˈpôʋreda",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "bolestan",
+       "e": "ill",
+       "ipa": "ˈbôlestan",
+       "pos": "adj",
+       "note": "f bolesna"
+      },
+      {
+       "t": "zdrav",
+       "e": "healthy",
+       "ipa": "ˈzdrâːʋ",
+       "pos": "adj"
+      },
+      {
+       "t": "boleti",
+       "e": "to hurt",
+       "ipa": "ˈbǒleti",
+       "pos": "verb"
+      },
+      {
+       "t": "odmarati",
+       "e": "to rest",
+       "ipa": "ˈǒdmarati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Idem kod lekara",
+       "e": "I am going to the doctor",
+       "ipa": "ˈîdeːm kod ˈlêkara"
+      },
+      {
+       "t": "Boli me zub",
+       "e": "I have toothache",
+       "ipa": "ˈbǒliː me ˈzûːb",
+       "lit": "hurts me tooth"
+      },
+      {
+       "t": "On je bolestan danas",
+       "e": "He is ill today",
+       "ipa": "ˈôn je ˈbôlestan ˈdânas"
+      },
+      {
+       "t": "Treba mi lek",
+       "e": "I need medicine",
+       "ipa": "ˈtrêbaː mi ˈlêːk",
+       "lit": "is-needed to-me medicine"
+      }
+     ]
+    },
+    {
+     "name": "Describing",
+     "tips": [
+      {
+       "h": "Comparison uses od",
+       "b": "What something is compared against follows od in the genitive: viši od mene, stariji od brata. Nego with the nominative is the alternative construction: viši nego ja.",
+       "eg": [
+        [
+         "viši od mene",
+         "taller than me"
+        ],
+        [
+         "stariji od brata",
+         "older than my brother"
+        ],
+        [
+         "viši nego ja",
+         "taller than I am"
+        ]
+       ]
+      },
+      {
+       "h": "Naj- builds the superlative",
+       "b": "The superlative is the comparative with naj- written in front of it as one word: najviši, najstariji, najbolji. The group compared within follows u with the locative.",
+       "eg": [
+        [
+         "viši",
+         "taller"
+        ],
+        [
+         "najviši",
+         "tallest"
+        ],
+        [
+         "najviši u razredu",
+         "the tallest in the class"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "visok",
+       "e": "tall",
+       "ipa": "ˈʋîsok",
+       "pos": "adj"
+      },
+      {
+       "t": "nizak",
+       "e": "short in height",
+       "ipa": "ˈnîzak",
+       "pos": "adj",
+       "note": "f niska, n nisko"
+      },
+      {
+       "t": "debeo",
+       "e": "fat",
+       "ipa": "ˈdêbeo",
+       "pos": "adj",
+       "note": "f debela"
+      },
+      {
+       "t": "mršav",
+       "e": "thin",
+       "ipa": "ˈmr̩̂ʃaʋ",
+       "pos": "adj"
+      },
+      {
+       "t": "pametan",
+       "e": "clever",
+       "ipa": "ˈpâmetan",
+       "pos": "adj",
+       "note": "f pametna"
+      },
+      {
+       "t": "glup",
+       "e": "stupid",
+       "ipa": "ˈɡlûːp",
+       "pos": "adj"
+      },
+      {
+       "t": "tih",
+       "e": "quiet",
+       "ipa": "ˈtîːx",
+       "pos": "adj"
+      },
+      {
+       "t": "glasan",
+       "e": "loud",
+       "ipa": "ˈɡlâsan",
+       "pos": "adj",
+       "note": "f glasna"
+      },
+      {
+       "t": "vredan",
+       "e": "hard-working",
+       "ipa": "ʋˈrêːdan",
+       "pos": "adj",
+       "note": "f vredna"
+      },
+      {
+       "t": "lenj",
+       "e": "lazy",
+       "ipa": "ˈlêːɲ",
+       "pos": "adj"
+      },
+      {
+       "t": "ljubazan",
+       "e": "kind",
+       "ipa": "ʎuˈbâzan",
+       "pos": "adj",
+       "note": "f ljubazna"
+      },
+      {
+       "t": "strog",
+       "e": "strict",
+       "ipa": "ˈstrôɡ",
+       "pos": "adj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Moj brat je visok",
+       "e": "My brother is tall",
+       "ipa": "ˈmôj ˈbrâːt je ˈʋîsok"
+      },
+      {
+       "t": "Ona je vrlo pametna",
+       "e": "She is very clever",
+       "ipa": "ˈǒna je ˈʋr̩̂lo ˈpâmetna"
+      },
+      {
+       "t": "Ovaj čovek je ljubazan",
+       "e": "This man is kind",
+       "ipa": "ˈôʋaːj ˈtʃǒʋeːk je ʎuˈbâzan"
+      },
+      {
+       "t": "Ona je viša od mene",
+       "e": "She is taller than me",
+       "ipa": "ˈǒna je ˈʋîʃaː od ˈmêne"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "WORK AND SCHOOL",
+   "subtitle": "School, work, numbers past ten and handling money",
+   "skills": [
+    {
+     "name": "School",
+     "tips": [
+      {
+       "h": "Quantity words take the genitive",
+       "b": "Mnogo, malo, nekoliko and dosta are followed by the genitive plural, and the quantity word itself never changes: mnogo knjiga, nekoliko dana. An uncountable noun takes the genitive singular: malo vremena.",
+       "eg": [
+        [
+         "mnogo knjiga",
+         "many books"
+        ],
+        [
+         "nekoliko dana",
+         "a few days"
+        ],
+        [
+         "malo vremena",
+         "little time"
+        ]
+       ]
+      },
+      {
+       "h": "Feminine nouns in the locative",
+       "b": "A feminine noun in -a ends in -i in the locative: škola, u školi; soba, u sobi. A k, g or h in front of that ending softens to c, z or s: knjiga, u knjizi.",
+       "eg": [
+        [
+         "u školi",
+         "at school"
+        ],
+        [
+         "u sobi",
+         "in the room"
+        ],
+        [
+         "u knjizi",
+         "in the book"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "škola",
+       "e": "school",
+       "ipa": "ˈʃkôːla",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "učenik",
+       "e": "pupil",
+       "ipa": "utʃeˈnîːk",
+       "pos": "noun",
+       "note": "(m), pl učenici"
+      },
+      {
+       "t": "učitelj",
+       "e": "teacher",
+       "ipa": "ˈûtʃiteʎ",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "knjiga",
+       "e": "book",
+       "ipa": "ˈkɲîɡa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "sveska",
+       "e": "notebook",
+       "ipa": "ˈsʋêska",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "olovka",
+       "e": "pencil",
+       "ipa": "ˈǒloʋka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "papir",
+       "e": "paper",
+       "ipa": "paˈpîːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "razred",
+       "e": "class",
+       "ipa": "ˈrâzred",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "zadatak",
+       "e": "task",
+       "ipa": "ˈzâdatak",
+       "pos": "noun",
+       "note": "(m), gen zadatka"
+      },
+      {
+       "t": "ispit",
+       "e": "exam",
+       "ipa": "ˈîspit",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "univerzitet",
+       "e": "university",
+       "ipa": "uniʋerˈzǐteːt",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "pisati",
+       "e": "to write",
+       "ipa": "ˈpîsati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Učim u školi svaki dan",
+       "e": "I study at school every day",
+       "ipa": "ˈǔtʃiːm u ˈʃkôli ˈsʋâki ˈdâːn"
+      },
+      {
+       "t": "Imam mnogo knjiga",
+       "e": "I have many books",
+       "ipa": "ˈîmaːm mˈnôɡo ˈkɲîːɡaː",
+       "lit": "I-have many of-books"
+      },
+      {
+       "t": "Gde je moja sveska?",
+       "e": "Where is my notebook?",
+       "ipa": "ˈɡdê je ˈmǒja ˈsʋêska"
+      },
+      {
+       "t": "Sutra imamo važan ispit",
+       "e": "Tomorrow we have an important exam",
+       "ipa": "ˈsûtra ˈîmamo ˈʋâʒan ˈîspit"
+      }
+     ]
+    },
+    {
+     "name": "Work",
+     "tips": [
+      {
+       "h": "Short forms stand in second place",
+       "b": "The short forms je, sam, se, mi, te and li occupy the second slot of the clause, straight after the first stressed word or phrase. The rest of the order is free, and whatever stands first carries the emphasis.",
+       "eg": [
+        [
+         "Moj otac je inženjer.",
+         "My father is an engineer."
+        ],
+        [
+         "Inženjer je moj otac.",
+         "It is my father who is the engineer."
+        ],
+        [
+         "Danas sam umoran.",
+         "Today I am tired."
+        ]
+       ]
+      },
+      {
+       "h": "Job names have feminine forms",
+       "b": "Most job nouns are masculine and build a feminine with -ica or -ka: konobar, konobarica; prodavac, prodavačica; lekar, lekarka. The masculine also serves as the general term for the occupation.",
+       "eg": [
+        [
+         "konobar, konobarica",
+         "waiter, waitress"
+        ],
+        [
+         "lekar, lekarka",
+         "doctor (m), doctor (f)"
+        ],
+        [
+         "kuvar, kuvarica",
+         "cook (m), cook (f)"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "posao",
+       "e": "job",
+       "ipa": "ˈpôsao",
+       "pos": "noun",
+       "note": "(m), gen posla"
+      },
+      {
+       "t": "kancelarija",
+       "e": "office",
+       "ipa": "kantseˈlǎːrija",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "šef",
+       "e": "boss",
+       "ipa": "ˈʃêːf",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "kolega",
+       "e": "colleague",
+       "ipa": "koˈlêɡa",
+       "pos": "noun",
+       "note": "(m), declines as f"
+      },
+      {
+       "t": "plata",
+       "e": "salary",
+       "ipa": "ˈplâːta",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "sastanak",
+       "e": "meeting",
+       "ipa": "ˈsâstanak",
+       "pos": "noun",
+       "note": "(m), gen sastanka"
+      },
+      {
+       "t": "inženjer",
+       "e": "engineer",
+       "ipa": "inˈʒěɲeːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "konobar",
+       "e": "waiter",
+       "ipa": "ˈkônobar",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "prodavac",
+       "e": "shop assistant",
+       "ipa": "proˈdǎʋats",
+       "pos": "noun",
+       "note": "(m), gen prodavca"
+      },
+      {
+       "t": "policajac",
+       "e": "police officer",
+       "ipa": "poliˈtsǎjats",
+       "pos": "noun",
+       "note": "(m), gen policajca"
+      },
+      {
+       "t": "kuvar",
+       "e": "cook",
+       "ipa": "ˈkûʋaːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "zaposlen",
+       "e": "employed",
+       "ipa": "ˈzâposlen",
+       "pos": "adj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Radim u velikoj kancelariji",
+       "e": "I work in a big office",
+       "ipa": "ˈrâdiːm u ˈʋělikoːj kantseˈlǎːriji"
+      },
+      {
+       "t": "Moj otac je inženjer",
+       "e": "My father is an engineer",
+       "ipa": "ˈmôj ˈǒtats je inˈʒěɲeːr"
+      },
+      {
+       "t": "Sastanak je u deset",
+       "e": "The meeting is at ten",
+       "ipa": "ˈsâstanak je u ˈdêset"
+      },
+      {
+       "t": "Ona traži novi posao",
+       "e": "She is looking for a new job",
+       "ipa": "ˈǒna ˈtrâʒiː ˈnôʋiː ˈpôsao"
+      }
+     ]
+    },
+    {
+     "name": "Big Numbers",
+     "tips": [
+      {
+       "h": "Tens and units stay separate words",
+       "b": "A compound number names the ten and then the unit as two separate words, with no linking word between them: dvadeset jedan, trideset pet, sto dvadeset.",
+       "eg": [
+        [
+         "dvadeset jedan",
+         "twenty-one"
+        ],
+        [
+         "trideset pet",
+         "thirty-five"
+        ],
+        [
+         "sto dvadeset",
+         "a hundred and twenty"
+        ]
+       ]
+      },
+      {
+       "h": "The last digit governs the noun",
+       "b": "A compound number governs its noun by the final digit alone. A number ending in one takes the nominative singular, one ending in two, three or four takes the count form, and every other ending takes the genitive plural.",
+       "eg": [
+        [
+         "dvadeset jedan dan",
+         "twenty-one days"
+        ],
+        [
+         "dvadeset dva dana",
+         "twenty-two days"
+        ],
+        [
+         "dvadeset pet dana",
+         "twenty-five days"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "dvanaest",
+       "e": "twelve",
+       "ipa": "ˈdʋǎːnaest",
+       "pos": "num"
+      },
+      {
+       "t": "petnaest",
+       "e": "fifteen",
+       "ipa": "ˈpětnaest",
+       "pos": "num"
+      },
+      {
+       "t": "dvadeset",
+       "e": "twenty",
+       "ipa": "ˈdʋâːdeset",
+       "pos": "num"
+      },
+      {
+       "t": "trideset",
+       "e": "thirty",
+       "ipa": "ˈtrîːdeset",
+       "pos": "num"
+      },
+      {
+       "t": "četrdeset",
+       "e": "forty",
+       "ipa": "tʃeˈtř̩deset",
+       "pos": "num"
+      },
+      {
+       "t": "pedeset",
+       "e": "fifty",
+       "ipa": "peˈděset",
+       "pos": "num"
+      },
+      {
+       "t": "šezdeset",
+       "e": "sixty",
+       "ipa": "ʃeˈzděset",
+       "pos": "num"
+      },
+      {
+       "t": "sedamdeset",
+       "e": "seventy",
+       "ipa": "sedamˈděset",
+       "pos": "num"
+      },
+      {
+       "t": "osamdeset",
+       "e": "eighty",
+       "ipa": "osamˈděset",
+       "pos": "num"
+      },
+      {
+       "t": "devedeset",
+       "e": "ninety",
+       "ipa": "deʋeˈděset",
+       "pos": "num"
+      },
+      {
+       "t": "sto",
+       "e": "hundred",
+       "ipa": "ˈstôː",
+       "pos": "num"
+      },
+      {
+       "t": "hiljada",
+       "e": "thousand",
+       "ipa": "ˈxîʎada",
+       "pos": "num"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ovde ima dvadeset ljudi",
+       "e": "There are twenty people here",
+       "ipa": "ˈôʋde ˈîma ˈdʋâːdeset ˈʎûdiː"
+      },
+      {
+       "t": "Moja baka ima osamdeset godina",
+       "e": "My grandmother is eighty years old",
+       "ipa": "ˈmǒja ˈbâka ˈîma osamˈděset ˈɡǒdiːna"
+      },
+      {
+       "t": "Knjiga ima sto strana",
+       "e": "The book has a hundred pages",
+       "ipa": "ˈkɲîɡa ˈîma ˈstôː ˈstrâːna"
+      },
+      {
+       "t": "April ima trideset dana",
+       "e": "April has thirty days",
+       "ipa": "ˈâpriːl ˈîma ˈtrîːdeset ˈdâːna"
+      }
+     ]
+    },
+    {
+     "name": "Money",
+     "tips": [
+      {
+       "h": "Prices count in the genitive",
+       "b": "A currency after two, three or four takes the count form, and after five and above the genitive plural: dva dinara, pet dinara, sto evra. The singular stands only after one.",
+       "eg": [
+        [
+         "jedan dinar",
+         "one dinar"
+        ],
+        [
+         "dva dinara",
+         "two dinars"
+        ],
+        [
+         "pet dinara",
+         "five dinars"
+        ],
+        [
+         "sto evra",
+         "a hundred euros"
+        ]
+       ]
+      },
+      {
+       "h": "The means of payment is instrumental",
+       "b": "What a sum is paid with stands in the instrumental with no preposition: plaćam karticom, plaćam gotovinom. The ending is the same one that marks a vehicle in autobusom.",
+       "eg": [
+        [
+         "karticom",
+         "by card"
+        ],
+        [
+         "gotovinom",
+         "in cash"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "novac",
+       "e": "money",
+       "ipa": "ˈnôʋats",
+       "pos": "noun",
+       "note": "(m), no plural"
+      },
+      {
+       "t": "dinar",
+       "e": "Serbian dinar",
+       "ipa": "ˈdînaːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "evro",
+       "e": "euro",
+       "ipa": "ˈêʋro",
+       "pos": "noun",
+       "note": "(m), gen pl evra"
+      },
+      {
+       "t": "cena",
+       "e": "price",
+       "ipa": "ˈtsěna",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "račun",
+       "e": "bill",
+       "ipa": "ˈrâtʃuːn",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "kusur",
+       "e": "change",
+       "ipa": "ˈkûsur",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "kartica",
+       "e": "card",
+       "ipa": "ˈkâːrtitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "gotovina",
+       "e": "cash",
+       "ipa": "ɡotoˈʋǐna",
+       "pos": "noun",
+       "note": "(f), no plural"
+      },
+      {
+       "t": "skup",
+       "e": "expensive",
+       "ipa": "ˈskûp",
+       "pos": "adj",
+       "note": "f skupa, n skupo"
+      },
+      {
+       "t": "jeftin",
+       "e": "cheap",
+       "ipa": "ˈjêftin",
+       "pos": "adj"
+      },
+      {
+       "t": "platiti",
+       "e": "to pay",
+       "ipa": "ˈplâtiti",
+       "pos": "verb"
+      },
+      {
+       "t": "koštati",
+       "e": "to cost",
+       "ipa": "ˈkôʃtati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Koliko ovo košta?",
+       "e": "How much does this cost?",
+       "ipa": "ˈkǒliko ˈôʋo ˈkôʃtaː"
+      },
+      {
+       "t": "Račun, molim vas",
+       "e": "The bill, please",
+       "ipa": "ˈrâtʃuːn ˈmǒlim ʋaːs"
+      },
+      {
+       "t": "Plaćam karticom, ne gotovinom",
+       "e": "I pay by card, not in cash",
+       "ipa": "ˈplâːtɕaːm ˈkâːrtitsom ˈnê ɡotoˈʋǐnom"
+      },
+      {
+       "t": "Ova jakna je preskupa",
+       "e": "This jacket is too expensive",
+       "ipa": "ˈǒʋaː ˈjâkna je ˈprêskupa"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "OUT AND ABOUT",
+   "subtitle": "Ordering a meal, shopping, pastimes and sport",
+   "skills": [
+    {
+     "name": "Restaurant",
+     "tips": [
+      {
+       "h": "Da with a present form",
+       "b": "After želim, hoću and mogu the second verb usually appears as da with a present form that agrees with the same subject: želim da naručim. A bare infinitive is also correct and sounds more formal.",
+       "eg": [
+        [
+         "Želim da naručim.",
+         "I would like to order."
+        ],
+        [
+         "Želim naručiti.",
+         "I would like to order."
+        ],
+        [
+         "Mogu da platim.",
+         "I can pay."
+        ]
+       ]
+      },
+      {
+       "h": "The polite request with bih",
+       "b": "Bih with the past participle forms the conditional, which softens a request. The participle agrees in gender with the speaker.",
+       "eg": [
+        [
+         "Želeo bih kafu.",
+         "I would like a coffee. (man speaking)"
+        ],
+        [
+         "Želela bih kafu.",
+         "I would like a coffee. (woman speaking)"
+        ],
+        [
+         "Hteo bih račun.",
+         "I would like the bill."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "restoran",
+       "e": "restaurant",
+       "ipa": "restoˈrâːn",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "kafić",
+       "e": "cafe",
+       "ipa": "ˈkâfitɕ",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "jelo",
+       "e": "dish",
+       "ipa": "ˈjêlo",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "jelovnik",
+       "e": "menu",
+       "ipa": "ˈjěloʋnik",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "ručak",
+       "e": "lunch",
+       "ipa": "ˈrûtʃak",
+       "pos": "noun",
+       "note": "(m), gen ručka"
+      },
+      {
+       "t": "večera",
+       "e": "dinner",
+       "ipa": "ˈʋětʃera",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "predjelo",
+       "e": "starter",
+       "ipa": "ˈprêdjelo",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "desert",
+       "e": "dessert",
+       "ipa": "ˈděsert",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "porudžbina",
+       "e": "order",
+       "ipa": "poˈrûdʒbina",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "napojnica",
+       "e": "tip",
+       "ipa": "ˈnâpojnitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "rezervacija",
+       "e": "reservation",
+       "ipa": "rezerˈʋǎːtsija",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "naručiti",
+       "e": "to order",
+       "ipa": "naˈrûtʃiti",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Želim da naručim jelo",
+       "e": "I would like to order a dish",
+       "ipa": "ˈʒêliːm da naˈrûtʃiːm ˈjêlo"
+      },
+      {
+       "t": "Jelovnik, molim vas",
+       "e": "The menu, please",
+       "ipa": "ˈjěloʋnik ˈmǒlim ʋaːs"
+      },
+      {
+       "t": "Imamo rezervaciju za dvoje",
+       "e": "We have a reservation for two",
+       "ipa": "ˈîmamo rezerˈʋǎːtsiju za ˈdʋôje"
+      },
+      {
+       "t": "Ovo jelo je odlično",
+       "e": "This dish is excellent",
+       "ipa": "ˈôʋo ˈjêlo je ˈôdlitʃno"
+      }
+     ]
+    },
+    {
+     "name": "Shopping",
+     "tips": [
+      {
+       "h": "Ovaj, taj and onaj",
+       "b": "Three demonstratives mark distance. Ovaj points to what is near the speaker, taj to what is near the listener and onaj to what is away from both. Each agrees with its noun: ovaj kaput, ova majica, ovo jelo.",
+       "eg": [
+        [
+         "ovaj kaput",
+         "this coat"
+        ],
+        [
+         "taj kaput",
+         "that coat of yours"
+        ],
+        [
+         "onaj kaput",
+         "that coat over there"
+        ]
+       ]
+      },
+      {
+       "h": "Buying and selling are perfective",
+       "b": "Kupiti and prodati are perfective and name the completed act. Kupovati and prodavati are the imperfective partners, used for a repeated or ongoing one.",
+       "eg": [
+        [
+         "Kupio sam jaknu.",
+         "I bought a jacket."
+        ],
+        [
+         "Kupujem jaknu.",
+         "I am buying a jacket."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "radnja",
+       "e": "store",
+       "ipa": "ˈrâdɲa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "tržni centar",
+       "e": "shopping centre",
+       "ipa": "ˈtr̩̂ʒniː ˈtsêntar",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "kupovina",
+       "e": "shopping",
+       "ipa": "kuˈpǒʋina",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "popust",
+       "e": "discount",
+       "ipa": "ˈpôpust",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "veličina",
+       "e": "size",
+       "ipa": "ʋeliˈtʃǐna",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "kesa",
+       "e": "bag",
+       "ipa": "ˈkêsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "proizvod",
+       "e": "product",
+       "ipa": "ˈprôizʋod",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "ovaj",
+       "e": "this",
+       "ipa": "ˈôʋaːj",
+       "pos": "det",
+       "note": "f ova, n ovo"
+      },
+      {
+       "t": "besplatno",
+       "e": "free of charge",
+       "ipa": "ˈbêsplatno",
+       "pos": "adv"
+      },
+      {
+       "t": "kupiti",
+       "e": "to buy",
+       "ipa": "ˈkûpiti",
+       "pos": "verb"
+      },
+      {
+       "t": "prodati",
+       "e": "to sell",
+       "ipa": "ˈprǒdati",
+       "pos": "verb"
+      },
+      {
+       "t": "probati",
+       "e": "to try",
+       "ipa": "ˈprôbati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Hoću da kupim jaknu",
+       "e": "I want to buy a jacket",
+       "ipa": "ˈxǒtɕu da ˈkûpiːm ˈjâknu"
+      },
+      {
+       "t": "Da li imate veću veličinu?",
+       "e": "Do you have a larger size?",
+       "ipa": "ˈdâ li ˈîmate ˈʋêːtɕuː ʋeliˈtʃǐnu"
+      },
+      {
+       "t": "Ova majica je na popustu",
+       "e": "This t-shirt is on sale",
+       "ipa": "ˈǒʋaː ˈmǎjitsa je na ˈpôpustu"
+      },
+      {
+       "t": "Mogu li da probam?",
+       "e": "May I try it on?",
+       "ipa": "ˈmôɡu li da ˈprôbaːm"
+      }
+     ]
+    },
+    {
+     "name": "Hobbies",
+     "tips": [
+      {
+       "h": "Two verbs for playing",
+       "b": "Svirati is used for a musical instrument and igrati for a game or a dance. Both take the accusative: sviram gitaru, igram fudbal.",
+       "eg": [
+        [
+         "Sviram gitaru.",
+         "I play the guitar."
+        ],
+        [
+         "Igram fudbal.",
+         "I play football."
+        ],
+        [
+         "Igram kolo.",
+         "I am dancing the kolo."
+        ]
+       ]
+      },
+      {
+       "h": "Voleti with da or with a noun",
+       "b": "A liked activity follows voleti as da with a present form: volim da čitam, volim da slušam muziku. A liked thing follows as a plain accusative: volim muziku.",
+       "eg": [
+        [
+         "Volim da čitam.",
+         "I like reading."
+        ],
+        [
+         "Volim muziku.",
+         "I like music."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "hobi",
+       "e": "hobby",
+       "ipa": "ˈxôbi",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "muzika",
+       "e": "music",
+       "ipa": "ˈmûzika",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "film",
+       "e": "movie",
+       "ipa": "ˈfîlm",
+       "pos": "noun",
+       "note": "(m), pl filmovi"
+      },
+      {
+       "t": "pesma",
+       "e": "song",
+       "ipa": "ˈpêsma",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "igra",
+       "e": "game",
+       "ipa": "ˈîɡra",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "slikanje",
+       "e": "painting",
+       "ipa": "ˈslîkaɲe",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "gitara",
+       "e": "guitar",
+       "ipa": "ɡiˈtǎːra",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "ples",
+       "e": "dance",
+       "ipa": "ˈplêːs",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "fotografija",
+       "e": "photograph",
+       "ipa": "fotoˈɡrǎːfija",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "slušati",
+       "e": "to listen",
+       "ipa": "ˈslûʃati",
+       "pos": "verb"
+      },
+      {
+       "t": "svirati",
+       "e": "to play an instrument",
+       "ipa": "ˈsʋîrati",
+       "pos": "verb"
+      },
+      {
+       "t": "igrati",
+       "e": "to play a game",
+       "ipa": "ˈîɡrati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Volim da slušam muziku",
+       "e": "I like listening to music",
+       "ipa": "ˈʋǒliːm da ˈslûʃaːm ˈmûziku"
+      },
+      {
+       "t": "On svira gitaru uveče",
+       "e": "He plays the guitar in the evening",
+       "ipa": "ˈôn ˈsʋîraː ɡiˈtǎːru ˈǔʋetʃe"
+      },
+      {
+       "t": "Gledamo film svake subote",
+       "e": "We watch a movie every Saturday",
+       "ipa": "ˈɡlêdaːmo ˈfîlm ˈsʋâke ˈsûbote"
+      },
+      {
+       "t": "Moj hobi je fotografija",
+       "e": "My hobby is photography",
+       "ipa": "ˈmôj ˈxôbi je fotoˈɡrǎːfija"
+      }
+     ]
+    },
+    {
+     "name": "Sports",
+     "tips": [
+      {
+       "h": "Se marks a reflexive verb",
+       "b": "A group of verbs carries the particle se, which follows the same rules as the other short forms and stands in second place: bavim se sportom, zovem se Ana. Se has no meaning of its own in these verbs.",
+       "eg": [
+        [
+         "Zovem se Ana.",
+         "My name is Ana."
+        ],
+        [
+         "Bavim se sportom.",
+         "I do sport."
+        ],
+        [
+         "Kako se zoveš?",
+         "What is your name?"
+        ]
+       ]
+      },
+      {
+       "h": "Baviti se takes the instrumental",
+       "b": "The activity pursued follows baviti se in the instrumental: bavim se plivanjem, bavi se košarkom. Igrati takes the accusative instead: igram košarku.",
+       "eg": [
+        [
+         "Bavim se plivanjem.",
+         "I swim as a sport."
+        ],
+        [
+         "Bavi se košarkom.",
+         "He plays basketball."
+        ],
+        [
+         "Igram košarku.",
+         "I am playing basketball."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "fudbal",
+       "e": "football",
+       "ipa": "ˈfûdbal",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "košarka",
+       "e": "basketball",
+       "ipa": "ˈkôʃarka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "tenis",
+       "e": "tennis",
+       "ipa": "ˈtêniːs",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "odbojka",
+       "e": "volleyball",
+       "ipa": "ˈôdbojka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "plivanje",
+       "e": "swimming",
+       "ipa": "ˈplîʋaɲe",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "trčanje",
+       "e": "running",
+       "ipa": "ˈtr̩̂tʃaɲe",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "utakmica",
+       "e": "match",
+       "ipa": "ˈûtakmitsa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "tim",
+       "e": "team",
+       "ipa": "ˈtîːm",
+       "pos": "noun",
+       "note": "(m), pl timovi"
+      },
+      {
+       "t": "igrač",
+       "e": "player",
+       "ipa": "ˈîɡraːtʃ",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "lopta",
+       "e": "ball",
+       "ipa": "ˈlôpta",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "pobeda",
+       "e": "victory",
+       "ipa": "ˈpôbeda",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "trenirati",
+       "e": "to train",
+       "ipa": "ˈtrěniːrati",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Igram fudbal svake nedelje",
+       "e": "I play football every Sunday",
+       "ipa": "ˈîɡraːm ˈfûdbal ˈsʋâke ˈnêdeʎe"
+      },
+      {
+       "t": "Naš tim je dobar",
+       "e": "Our team is good",
+       "ipa": "ˈnâʃ ˈtîːm je ˈdôbar"
+      },
+      {
+       "t": "Bavim se plivanjem",
+       "e": "I swim as a sport",
+       "ipa": "ˈbâʋiːm se ˈplîʋaɲem",
+       "lit": "I-occupy myself with-swimming"
+      },
+      {
+       "t": "Utakmica počinje u osam",
+       "e": "The match starts at eight",
+       "ipa": "ˈûtakmitsa ˈpǒtʃiɲeː u ˈǒsam"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "THE WORLD",
+   "subtitle": "Nature, the city, countries and further everyday verbs",
+   "skills": [
+    {
+     "name": "Nature",
+     "tips": [
+      {
+       "h": "Collective nouns for a mass",
+       "b": "Some nouns have a collective form in -će or -je that names a mass rather than a count: drvo, drveće; cvet, cveće; list, lišće. A collective is neuter singular and takes a singular verb.",
+       "eg": [
+        [
+         "jedno drvo",
+         "one tree"
+        ],
+        [
+         "drveće",
+         "trees, woodland"
+        ],
+        [
+         "cveće",
+         "flowers as a mass"
+        ]
+       ]
+      },
+      {
+       "h": "Neuter nouns that grow a syllable",
+       "b": "A group of neuter nouns adds -en- or -et- outside the nominative: ime, imena; vreme, vremena; dete, deteta. The added syllable appears in every other case and in the plural.",
+       "eg": [
+        [
+         "ime, imena",
+         "name, of a name"
+        ],
+        [
+         "vreme, vremena",
+         "time, of time"
+        ],
+        [
+         "dete, deteta",
+         "child, of a child"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "priroda",
+       "e": "nature",
+       "ipa": "ˈprîroda",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "sunce",
+       "e": "sun",
+       "ipa": "ˈsûːntse",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "mesec",
+       "e": "moon",
+       "ipa": "ˈmêsets",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "zvezda",
+       "e": "star",
+       "ipa": "ˈzʋěːzda",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "drvo",
+       "e": "tree",
+       "ipa": "ˈdr̩̂ʋo",
+       "pos": "noun",
+       "note": "(n), coll drveće"
+      },
+      {
+       "t": "cvet",
+       "e": "flower",
+       "ipa": "ˈtsʋêːt",
+       "pos": "noun",
+       "note": "(m), coll cveće"
+      },
+      {
+       "t": "reka",
+       "e": "river",
+       "ipa": "ˈrěka",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "jezero",
+       "e": "lake",
+       "ipa": "ˈjêzero",
+       "pos": "noun",
+       "note": "(n)"
+      },
+      {
+       "t": "šuma",
+       "e": "forest",
+       "ipa": "ˈʃûma",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "kamen",
+       "e": "stone",
+       "ipa": "ˈkâmeːn",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "trava",
+       "e": "grass",
+       "ipa": "ˈtrâːʋa",
+       "pos": "noun",
+       "note": "(f), no plural"
+      },
+      {
+       "t": "nebo",
+       "e": "sky",
+       "ipa": "ˈnêbo",
+       "pos": "noun",
+       "note": "(n)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "U šumi ima mnogo drveća",
+       "e": "There are many trees in the forest",
+       "ipa": "u ˈʃûmi ˈîma mˈnôɡo ˈdr̩̂ʋetɕaː"
+      },
+      {
+       "t": "Reka je hladna i duboka",
+       "e": "The river is cold and deep",
+       "ipa": "ˈrěka je ˈxlâdna i duˈbǒka"
+      },
+      {
+       "t": "Zvezde su na nebu",
+       "e": "The stars are in the sky",
+       "ipa": "ˈzʋêːzde su na ˈnêbu"
+      },
+      {
+       "t": "Ovaj cvet je žut",
+       "e": "This flower is yellow",
+       "ipa": "ˈôʋaːj ˈtsʋêːt je ˈʒûːt"
+      }
+     ]
+    },
+    {
+     "name": "City",
+     "tips": [
+      {
+       "h": "Place prepositions take the genitive",
+       "b": "Pored, kod, preko, iza, ispred and blizu are followed by the genitive: pored zgrade, kod semafora, preko reke. They state a position and keep the same case with a verb of motion.",
+       "eg": [
+        [
+         "pored zgrade",
+         "next to the building"
+        ],
+        [
+         "kod semafora",
+         "at the traffic light"
+        ],
+        [
+         "preko reke",
+         "across the river"
+        ]
+       ]
+      },
+      {
+       "h": "Short and long adjectives",
+       "b": "A masculine adjective has a short form for a first mention and a long form in -i for something already identified: nov most, novi most. An adjective inside a fixed name always takes the long form.",
+       "eg": [
+        [
+         "nov most",
+         "a new bridge"
+        ],
+        [
+         "novi most",
+         "the new bridge"
+        ],
+        [
+         "glavni trg",
+         "the main square"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "centar",
+       "e": "centre",
+       "ipa": "ˈtsêntar",
+       "pos": "noun",
+       "note": "(m), gen centra"
+      },
+      {
+       "t": "zgrada",
+       "e": "building",
+       "ipa": "ˈzɡrâda",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "most",
+       "e": "bridge",
+       "ipa": "ˈmôːst",
+       "pos": "noun",
+       "note": "(m), pl mostovi"
+      },
+      {
+       "t": "trotoar",
+       "e": "pavement",
+       "ipa": "trotoˈǎːr",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "semafor",
+       "e": "traffic light",
+       "ipa": "seˈmâfor",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "saobraćaj",
+       "e": "traffic",
+       "ipa": "saoˈbrǎtɕaːj",
+       "pos": "noun",
+       "note": "(m), no plural"
+      },
+      {
+       "t": "kvart",
+       "e": "neighbourhood",
+       "ipa": "ˈkʋâːrt",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "stanovnik",
+       "e": "inhabitant",
+       "ipa": "staˈnǒʋnik",
+       "pos": "noun",
+       "note": "(m), pl stanovnici"
+      },
+      {
+       "t": "gužva",
+       "e": "crowd",
+       "ipa": "ˈɡûʒʋa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "buka",
+       "e": "noise",
+       "ipa": "ˈbûka",
+       "pos": "noun",
+       "note": "(f), no plural"
+      },
+      {
+       "t": "parking",
+       "e": "car park",
+       "ipa": "ˈpârkiŋɡ",
+       "pos": "noun",
+       "note": "(m)"
+      },
+      {
+       "t": "glavni",
+       "e": "main",
+       "ipa": "ˈɡlâːʋniː",
+       "pos": "adj",
+       "note": "long form only"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Most je preko reke",
+       "e": "The bridge is over the river",
+       "ipa": "ˈmôːst je ˈprêko ˈrěke"
+      },
+      {
+       "t": "U centru grada ima gužve",
+       "e": "There is a crowd in the town centre",
+       "ipa": "u ˈtsêntru ˈɡrâːda ˈîma ˈɡûʒʋe"
+      },
+      {
+       "t": "Ova zgrada je vrlo stara",
+       "e": "This building is very old",
+       "ipa": "ˈǒʋaː ˈzɡrâda je ˈʋr̩̂lo ˈstâra"
+      },
+      {
+       "t": "Skrenite desno kod semafora",
+       "e": "Turn right at the traffic light",
+       "ipa": "ˈskrênite ˈdêsno kod seˈmâfora"
+      }
+     ]
+    },
+    {
+     "name": "Countries",
+     "tips": [
+      {
+       "h": "Country names ending in -ska",
+       "b": "Many country names are adjectives in form and decline as adjectives: Hrvatska, u Hrvatskoj; Nemačka, u Nemačkoj; Engleska, u Engleskoj. Names ending in -a decline as ordinary feminine nouns: Srbija, u Srbiji.",
+       "eg": [
+        [
+         "u Nemačkoj",
+         "in Germany"
+        ],
+        [
+         "u Srbiji",
+         "in Serbia"
+        ],
+        [
+         "iz Hrvatske",
+         "from Croatia"
+        ]
+       ]
+      },
+      {
+       "h": "Languages use the -ski adjective",
+       "b": "A language is named with the adjective in its bare masculine form and no separate word for language: srpski, engleski, nemački. Nationalities are separate nouns: Srbin, Srpkinja.",
+       "eg": [
+        [
+         "Govorim srpski.",
+         "I speak Serbian."
+        ],
+        [
+         "Govorim engleski.",
+         "I speak English."
+        ],
+        [
+         "Ona je Srpkinja.",
+         "She is Serbian."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "zemlja",
+       "e": "country",
+       "ipa": "ˈzêmʎa",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "Srbija",
+       "e": "Serbia",
+       "ipa": "ˈsr̩̂bija",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "Hrvatska",
+       "e": "Croatia",
+       "ipa": "ˈxř̩ʋaːtska",
+       "pos": "noun",
+       "note": "(f), declines as adj"
+      },
+      {
+       "t": "Bosna",
+       "e": "Bosnia",
+       "ipa": "ˈbôsna",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "Nemačka",
+       "e": "Germany",
+       "ipa": "ˈnêːmatʃka",
+       "pos": "noun",
+       "note": "(f), declines as adj"
+      },
+      {
+       "t": "Engleska",
+       "e": "England",
+       "ipa": "ˈêŋɡleːska",
+       "pos": "noun",
+       "note": "(f), declines as adj"
+      },
+      {
+       "t": "Italija",
+       "e": "Italy",
+       "ipa": "iˈtǎːlija",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "Francuska",
+       "e": "France",
+       "ipa": "ˈfrântsuska",
+       "pos": "noun",
+       "note": "(f), declines as adj"
+      },
+      {
+       "t": "Amerika",
+       "e": "America",
+       "ipa": "aˈmêrika",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "Rusija",
+       "e": "Russia",
+       "ipa": "ˈrûsija",
+       "pos": "noun",
+       "note": "(f)"
+      },
+      {
+       "t": "jezik",
+       "e": "language",
+       "ipa": "ˈjêzik",
+       "pos": "noun",
+       "note": "(m), pl jezici"
+      },
+      {
+       "t": "stranac",
+       "e": "foreigner",
+       "ipa": "ˈstrâːnats",
+       "pos": "noun",
+       "note": "(m), gen stranca"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ja sam iz Srbije",
+       "e": "I am from Serbia",
+       "ipa": "ˈjâ sam iz ˈsr̩̂bije"
+      },
+      {
+       "t": "Ona živi u Nemačkoj",
+       "e": "She lives in Germany",
+       "ipa": "ˈǒna ˈʒîʋiː u ˈnêːmatʃkoːj"
+      },
+      {
+       "t": "Govorim srpski i engleski",
+       "e": "I speak Serbian and English",
+       "ipa": "ˈɡǒʋoriːm ˈsr̩̂pski i ˈêŋɡleski"
+      },
+      {
+       "t": "Koji jezik govorite kod kuće?",
+       "e": "What language do you speak at home?",
+       "ipa": "ˈkǒjiː ˈjêzik ˈɡǒʋoriːte kod ˈkûːtɕe"
+      }
+     ]
+    },
+    {
+     "name": "More Verbs",
+     "tips": [
+      {
+       "h": "The past tense",
+       "b": "The past is the short present of biti with the participle in -o, -la or -lo, which agrees in gender and number with the subject: radio sam, radila sam, radili smo.",
+       "eg": [
+        [
+         "Radio sam.",
+         "I worked. (man speaking)"
+        ],
+        [
+         "Radila sam.",
+         "I worked. (woman speaking)"
+        ],
+        [
+         "Radili smo.",
+         "We worked."
+        ]
+       ]
+      },
+      {
+       "h": "The future with ću",
+       "b": "The future is the short form ću, ćeš, će, ćemo, ćete, će with the infinitive. When the verb stands first the two fuse into one word: radiću, doći ću.",
+       "eg": [
+        [
+         "Radiću sutra.",
+         "I will work tomorrow."
+        ],
+        [
+         "Doći ću sutra.",
+         "I will come tomorrow."
+        ],
+        [
+         "Ona će raditi.",
+         "She will work."
+        ]
+       ]
+      },
+      {
+       "h": "Voleti and moći",
+       "b": "Voleti covers both liking and loving and takes the accusative. Moći is followed by da with a present form, or by a bare infinitive.",
+       "eg": [
+        [
+         "Volim te.",
+         "I love you."
+        ],
+        [
+         "Volim kafu.",
+         "I like coffee."
+        ],
+        [
+         "Ne mogu da dođem.",
+         "I cannot come."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "moći",
+       "e": "to be able",
+       "ipa": "ˈmôtɕi",
+       "pos": "verb"
+      },
+      {
+       "t": "reći",
+       "e": "to say",
+       "ipa": "ˈrêːtɕi",
+       "pos": "verb"
+      },
+      {
+       "t": "doći",
+       "e": "to come",
+       "ipa": "ˈdôːtɕi",
+       "pos": "verb"
+      },
+      {
+       "t": "živeti",
+       "e": "to live",
+       "ipa": "ˈʒǐːʋeti",
+       "pos": "verb"
+      },
+      {
+       "t": "spavati",
+       "e": "to sleep",
+       "ipa": "ˈspâʋati",
+       "pos": "verb"
+      },
+      {
+       "t": "misliti",
+       "e": "to think",
+       "ipa": "ˈmîsliti",
+       "pos": "verb"
+      },
+      {
+       "t": "voleti",
+       "e": "to love",
+       "ipa": "ˈʋǒleti",
+       "pos": "verb"
+      },
+      {
+       "t": "dati",
+       "e": "to give",
+       "ipa": "ˈdâti",
+       "pos": "verb"
+      },
+      {
+       "t": "uzeti",
+       "e": "to take",
+       "ipa": "ˈûzeti",
+       "pos": "verb"
+      },
+      {
+       "t": "otvoriti",
+       "e": "to open",
+       "ipa": "oˈtʋǒriti",
+       "pos": "verb"
+      },
+      {
+       "t": "zatvoriti",
+       "e": "to close",
+       "ipa": "zaˈtʋǒriti",
+       "pos": "verb"
+      },
+      {
+       "t": "tražiti",
+       "e": "to look for",
+       "ipa": "ˈtrâʒiti",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Juče sam radio ceo dan",
+       "e": "Yesterday I worked all day",
+       "ipa": "ˈjûtʃe sam ˈrâdio ˈtsêːo ˈdâːn"
+      },
+      {
+       "t": "Doći ću sutra ujutru",
+       "e": "I will come tomorrow morning",
+       "ipa": "ˈdôːtɕi tɕu ˈsûtra ˈǔjutru"
+      },
+      {
+       "t": "Ne mogu da spavam",
+       "e": "I cannot sleep",
+       "ipa": "ˈnê ˈmôɡu da ˈspâʋaːm"
+      },
+      {
+       "t": "Otvorite prozor, molim vas",
+       "e": "Open the window, please",
+       "ipa": "oˈtʋǒrite ˈprôzor ˈmǒlim ʋaːs"
+      }
+     ]
+    }
+   ]
+  }
+ ]
 }

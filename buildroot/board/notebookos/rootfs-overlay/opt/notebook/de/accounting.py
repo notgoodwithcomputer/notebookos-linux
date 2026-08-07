@@ -28,6 +28,7 @@ import os
 import csv
 import json
 import time
+import re as _re
 import math
 
 import cairo
@@ -35,6 +36,7 @@ import cairo
 import nbapp
 import nbicons
 import nbprint
+import nbtransitions
 from nbi18n import _t  # noqa: E402
 
 # Auto-persist — the working ledger is flushed to
@@ -95,6 +97,9 @@ def _show_text(cr, x, y, text, size, bold=False):
     lay = _layout(cr, text, size, bold)
     cr.move_to(x, y - lay.get_baseline() / Pango.SCALE)
     PangoCairo.show_layout(cr, lay)
+
+
+_ISO_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _cents(v):
@@ -175,6 +180,11 @@ class Accounting(nbapp.AppWindow):
         super().__init__()
         self._install_css()
 
+        # Set before anything can arm a timer or touch a widget: the search
+        # debounce reads this to decide whether the window it belongs to is
+        # still there. Same gate contacts.py and journal.py carry.
+        self._closed = False
+
         # Restore the working ledger from the auto-persist config file. On first
         # run (no file) the ledger opens EMPTY — no seeded transactions.
         state = self._load_state()
@@ -240,9 +250,18 @@ class Accounting(nbapp.AppWindow):
             amt = self._num(t["amt"], None)
             if amt is None:
                 continue
-            out.append({"date": str(t.get("date", "")),
-                        "desc": str(t.get("desc", "")),
-                        "amt": _cents(amt)})
+            rec = {"date": str(t.get("date", "")),
+                   "desc": str(t.get("desc", "")),
+                   "amt": _cents(amt)}
+            # Carried through only when the file has one. An entry
+            # written before this existed gets NO iso rather than a
+            # guessed one: inferring a year for a row that says only
+            # "28 Jul" would be inventing data, and a ledger is the
+            # last place to do that.
+            iso = t.get("iso")
+            if isinstance(iso, str) and _ISO_RE.match(iso):
+                rec["iso"] = iso
+            out.append(rec)
         return out
 
     @staticmethod
@@ -306,7 +325,13 @@ class Accounting(nbapp.AppWindow):
             raw = list(raw.values())
         st["tx"] = self._parse_tx(raw)
         if isinstance(data, dict):
-            st["opening"] = self._num(data.get("opening", 0.0), 0.0)
+            # Quantised at the door like every amount (see _cents). The opening
+            # balance feeds BOTH routes to the balance — the running column
+            # accumulates from it a rounded step at a time, the headline rounds
+            # it into one raw sum — so a sub-cent opening carried in from a
+            # hand-edited or imported file made the two disagree on screen: a
+            # final running balance of $0.00 under a BALANCE of $0.01.
+            st["opening"] = _cents(self._num(data.get("opening", 0.0), 0.0))
 
         # PARSED, BUT NOT A LEDGER. Valid JSON of the wrong shape ({"tx": "..."},
         # a bare number, some other app's file) reads as an empty ledger, and
@@ -359,9 +384,26 @@ class Accounting(nbapp.AppWindow):
                     pass
 
     def _on_destroy(self, *_):
-        if self._search_timer:
-            GLib.source_remove(self._search_timer)
-            self._search_timer = 0
+        # Idempotent, and the gate is raised FIRST: "destroy" can reach this
+        # handler more than once (File ▸ Close on an already-closing window, a
+        # second teardown pass at Shut Down), and the final write below must
+        # happen exactly once — twice would just re-write the same ledger for
+        # nothing. Marking closed before the cancellation also means a timeout
+        # GLib had already dispatched finds a dead window and rebuilds nothing.
+        if self._closed:
+            return False
+        self._closed = True
+
+        # Clear the id before removing the source, so a failed removal still
+        # leaves nothing armed to fire against a destroyed widget tree.
+        sid = self._search_timer
+        self._search_timer = 0
+        if sid:
+            try:
+                GLib.source_remove(sid)
+            except Exception:
+                pass
+
         self._autosave()
         return False
 
@@ -436,8 +478,11 @@ class Accounting(nbapp.AppWindow):
             with open(os.path.join(DOCS_DIR, name), "w", newline="",
                       encoding="utf-8") as fh:
                 w = csv.writer(fh)
-                w.writerow(["Date", "Description", "Debit", "Credit",
-                            "Balance"])
+                # ISO first: it is what makes the export sortable and
+                # reconcilable. The short date is kept beside it so the
+                # sheet still reads the way the app looks.
+                w.writerow(["Date", "Shown as", "Description",
+                            "Debit", "Credit", "Balance"])
                 bal = self.opening
                 for t in self.tx:
                     bal = round(bal + t["amt"], 2)
@@ -445,7 +490,7 @@ class Accounting(nbapp.AppWindow):
                     # Bare numbers, no "$" and no thousands separators: a
                     # spreadsheet reads these as numbers it can add up, where
                     # "$1,234.56" arrives as text and every sum comes to zero.
-                    w.writerow([t["date"], t["desc"],
+                    w.writerow([t.get("iso", ""), t["date"], t["desc"],
                                 "%.2f" % -amt if amt < 0 else "",
                                 "%.2f" % amt if amt > 0 else "",
                                 "%.2f" % bal])
@@ -530,7 +575,7 @@ class Accounting(nbapp.AppWindow):
             self._cmoney(credit), self._cmoney(debit), len(self.tx)),
             10, False, MUTED)
         y += 14
-        ink("#ECE7DA")
+        ink("#EFEBE0")
         cr.set_line_width(1.0)
         cr.move_to(ML, y)
         cr.line_to(PW - MR, y)
@@ -577,7 +622,7 @@ class Accounting(nbapp.AppWindow):
             elif amt > 0:
                 right_at(cred_r, y, "+" + self._cmoney(amt), 10, False, CREDIT_C)
             right_at(bal_r, y, self._cmoney(bal), 10, False, "#3A362E")
-            ink("#F0ECE0")
+            ink("#EFEBE0")
             cr.set_line_width(0.6)
             cr.move_to(ML, y + 5)
             cr.line_to(PW - MR, y + 5)
@@ -703,7 +748,7 @@ class Accounting(nbapp.AppWindow):
 
         searchbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         searchbox.get_style_context().add_class("searchbox")
-        icon = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("search", 15, MUTED))
+        icon = nbicons.image("search", 15, MUTED)
         icon.set_valign(Gtk.Align.CENTER)
         icon.set_margin_start(10)
         searchbox.pack_start(icon, False, False, 0)
@@ -798,13 +843,17 @@ class Accounting(nbapp.AppWindow):
         self.addrow.get_style_context().add_class("addrow")
         self.addrow.connect("clicked", self._toggle_form)
         ar = Gtk.Box(spacing=10)
-        ar.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("plus", 15, MUTED)), False, False, 0)
+        ar.pack_start(nbicons.image("plus", 15, MUTED), False, False, 0)
         ar.pack_start(Gtk.Label(label=_t("Add entry"), xalign=0), False, False, 0)
         self.addrow.add(ar)
         addbox.pack_start(self.addrow, False, False, 0)
 
-        # Revealer with NONE transition — SLIDE stalls the swrast path.
+        # Built closed and unanimated: the starting state is not a transition,
+        # and a revealer that animated itself shut during construction would
+        # play a collapse nobody asked for. Every runtime open and close goes
+        # through nbtransitions.reveal, which is what decides the direction and
+        # the duration — including landing instantly on software rendering,
+        # where a slide used to stall the swrast path.
         self.form_reveal = Gtk.Revealer()
         self.form_reveal.set_transition_type(Gtk.RevealerTransitionType.NONE)
         self.form_reveal.add(self._form())
@@ -976,7 +1025,7 @@ class Accounting(nbapp.AppWindow):
     # ------------------------------------------------------------- behaviour
     def _toggle_form(self, *_):
         want = not self.form_reveal.get_reveal_child()
-        self.form_reveal.set_reveal_child(want)
+        nbtransitions.reveal(self.form_reveal, want)
         self._form_error("")        # a fresh form starts without a complaint
         if want:
             self._stamp_today()
@@ -987,7 +1036,7 @@ class Accounting(nbapp.AppWindow):
         try:
             self._stamp_today()
             self._form_error("")
-            self.form_reveal.set_reveal_child(True)
+            nbtransitions.reveal(self.form_reveal, True)
             self.f_desc.grab_focus()
         except Exception:
             pass
@@ -1066,7 +1115,16 @@ class Accounting(nbapp.AppWindow):
             return
         self._form_error("")
         amt = amt_n if self.fdir == "credit" else -amt_n
-        entry = {"date": time.strftime("%-d %b"), "desc": desc, "amt": amt}
+        # "iso" is the date a SPREADSHEET can use; "date" stays the short
+        # display string it has always been. Both, not one: the display
+        # column cannot hold a year — measured, "26 Sep 2026" is 61pt
+        # against the 58pt column the PDF gives it, so it would run into
+        # DESCRIPTION — but a ledger whose export carries no year cannot
+        # be sorted or reconciled across a year boundary, which is the
+        # part that actually costs somebody something.
+        entry = {"date": time.strftime("%-d %b"),
+                 "iso": time.strftime("%Y-%m-%d"),
+                 "desc": desc, "amt": amt}
         self.tx.append(entry)
         self._autosave()   # persist immediately — a committed entry must survive
         self.f_desc.set_text("")
@@ -1198,6 +1256,8 @@ class Accounting(nbapp.AppWindow):
         """Track the query eagerly, but coalesce keystroke bursts: rebuilding
         the table on every character is visible typing lag on the software
         renderer (the same debounce contacts.py uses)."""
+        if self._closed:
+            return   # the window is gone; nothing to filter and nothing to arm
         self.filter = entry.get_text().strip()
         self._terms = tuple(self.filter.lower().split())
         if self._search_timer:
@@ -1206,6 +1266,8 @@ class Accounting(nbapp.AppWindow):
 
     def _search_timeout(self):
         self._search_timer = 0
+        if self._closed:
+            return False   # window torn down inside the debounce — rebuild nothing
         self._shown = self._PAGE      # a new query starts at the top of its list
         self._refresh()
         return False                  # one-shot
@@ -1293,6 +1355,24 @@ class Accounting(nbapp.AppWindow):
         date = Gtk.Label(label=t["date"], xalign=0)
         date.get_style_context().add_class("txdate")
         date.set_size_request(self._GRID[0], -1)
+        # The date COLUMN is a fixed 80px; the string in it is not. `date` is
+        # loaded with str(t.get("date", "")) and no length clamp — unlike `desc`
+        # right below, which is both clamped and ellipsized — and
+        # set_size_request sets a MINIMUM, not a maximum, so the row simply grew
+        # to fit whatever was in the file. Measured with tools/data_stress_sweep:
+        # a 69-character date took the window's minimum width to 1268px and a
+        # 690-character one to 5309px against a 1024px panel. GTK cannot shrink a
+        # window below its minimum, so the debit, credit and balance columns went
+        # off the right of the screen and stayed there.
+        #
+        # Ellipsized, NOT truncated on load. A date this app did not write is
+        # still a fact about the user's file: it round-trips on save and the CSV
+        # export writes t["date"] verbatim, so clamping the store would quietly
+        # destroy the one copy of it. Only the drawing is bounded.
+        # max_width_chars(1) keeps the NATURAL width small so the column stays
+        # 80px at any window size; size_request above is what holds it open.
+        date.set_ellipsize(Pango.EllipsizeMode.END)
+        date.set_max_width_chars(1)
         box.pack_start(date, False, False, 0)
 
         desc = Gtk.Label(label=t["desc"], xalign=0)
@@ -1529,7 +1609,15 @@ class Accounting(nbapp.AppWindow):
             return
         amt = amt_n if self._edir == "credit" else -amt_n
         date = self._e_date.get_text().strip() or str(self.tx[idx]["date"])
-        self.tx[idx] = {"date": date, "desc": desc, "amt": amt}
+        # REBUILT, so anything not named here is dropped. "iso" is carried over
+        # explicitly: editing a description must not quietly cost the entry the
+        # only machine-readable date it has, and the editor exposes the SHORT
+        # date only — the user is retyping "6 Aug", not a year.
+        entry = {"date": date, "desc": desc, "amt": amt}
+        iso = self.tx[idx].get("iso")
+        if iso:
+            entry["iso"] = iso
+        self.tx[idx] = entry
         self._autosave()         # a committed edit must survive
         self._close_edit()
         self._refresh()
@@ -1666,12 +1754,25 @@ class Accounting(nbapp.AppWindow):
         W, H = alloc.width, alloc.height
         if W < 20 or H < 20:           # not-yet / degenerately allocated
             return False
+        # The screen's device scale. The cache surface used to be allocated at
+        # the LOGICAL allocation and then blitted into a context GTK had already
+        # scaled, so on a HiDPI panel the whole chart -- the balance line, the
+        # axis labels, the gridrules -- was upscaled and soft while the text in
+        # the table beside it was sharp. It is part of the cache key too, or a
+        # window dragged to a differently-scaled monitor would keep blitting the
+        # surface built for the old one.
+        sf = max(1, int(area.get_scale_factor() or 1))
         cache = self._chart_cache
-        if not (cache and cache[0] == W and cache[1] == H):
+        if not (cache and cache[0] == W and cache[1] == H
+                and len(cache) > 3 and cache[3] == sf):
             try:
-                surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+                surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W * sf, H * sf)
+                # With a device scale set, _paint_chart keeps drawing in LOGICAL
+                # W/H units and cairo maps them onto the finer grid -- so the
+                # chart code below is untouched.
+                surf.set_device_scale(sf, sf)
                 self._paint_chart(cairo.Context(surf), W, H)
-                cache = self._chart_cache = (W, H, surf)
+                cache = self._chart_cache = (W, H, surf, sf)
             except Exception:
                 # a surface hiccup must never blank the chart — paint direct
                 self._chart_cache = None
@@ -1699,7 +1800,7 @@ class Accounting(nbapp.AppWindow):
         # No cr.select_font_face: every string on this chart is drawn through
         # Pango, which carries its own font description.
         if len(vals) < 2:
-            cr.set_source_rgb(*nbicons._hex("#A39D8F"))
+            cr.set_source_rgb(*nbicons._hex("#9A9484"))
             # Drawn through Pango, not cairo's toy-font API. show_text() does
             # no per-glyph fallback, so this had to stay ASCII AND could not be
             # translated — it was the one English sentence left on an otherwise
@@ -1936,7 +2037,7 @@ class Accounting(nbapp.AppWindow):
                 return True
             try:
                 if self.form_reveal.get_reveal_child():
-                    self.form_reveal.set_reveal_child(False)
+                    nbtransitions.reveal(self.form_reveal, False)
                     self._form_error("")
                     return True
             except Exception:
@@ -1954,13 +2055,13 @@ class Accounting(nbapp.AppWindow):
         .sidebar { background: #F1EEE6; border-right: 1px solid #D7D2C5; }
         .sidebar *, .ledger * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .sidehead { padding: 24px 24px 18px; border-bottom: 1px solid #D7D2C5; }
-        .caption { font-size: 11px; letter-spacing: 2px; color: #A39D8F;
+        .caption { font-size: 11px; letter-spacing: 2px; color: #9A9484;
                    font-weight: 600; margin-bottom: 6px; }
         .balance { font-size: 34px; font-weight: 700; color: #1A1916; }
 
         .statlist { padding: 16px 24px 8px; }
-        .statrow { padding: 9px 0; border-bottom: 1px solid #E4DECF; }
-        .statcap { font-size: 11px; letter-spacing: 1.5px; color: #A39D8F;
+        .statrow { padding: 9px 0; border-bottom: 1px solid #D7D2C5; }
+        .statcap { font-size: 11px; letter-spacing: 1.5px; color: #9A9484;
                    font-weight: 600; }
         .statval { font-size: 15px; color: #1A1916; font-weight: 500; }
         .statval.credit { color: #4F6B45; }
@@ -1971,8 +2072,8 @@ class Accounting(nbapp.AppWindow):
         /* FIND: the sidebar's search field and its answer. Same boxed-field
            idiom as the Contacts search header, on the sidebar's beige. */
         .findbox { padding: 18px 24px 8px; }
-        .searchbox { background: #FCFBF8; border: 1px solid #C4BFB1;
-                     border-radius: 2px; min-height: 36px; }
+        .searchbox { background: #FCFBF8; border: 1px solid #C9C4B6;
+                     border-radius: 8px; min-height: 36px; }
         .searchentry { background: transparent; border: none; box-shadow: none;
                        font-size: 14px; color: #1A1916; }
         .findsum { padding: 11px 0 0; }
@@ -1986,23 +2087,23 @@ class Accounting(nbapp.AppWindow):
         .chartwrap .caption { margin-bottom: 10px; }
 
         .addrow { margin: 10px 48px 10px; padding: 13px 18px;
-                  border: 1px dashed #C9C4B6; border-radius: 3px;
+                  border: 1px dashed #C9C4B6; border-radius: 8px;
                   background: transparent; box-shadow: none; }
         .addrow label { font-size: 14px; color: #8A857A; }
-        .addrow:hover { border-color: #B0AA99; background: #FCFBF8; }
+        .addrow:hover { border-color: #B3AD9E; background: #FCFBF8; }
         .entryform { margin: 0 48px 12px; padding: 8px 14px; min-height: 52px;
-                     border: 1px solid #CFC9BA; border-radius: 2px;
+                     border: 1px solid #C9C4B6; border-radius: 8px;
                      background: #FCFBF8; }
         /* inline validation under the entry form: signage-red as an alert,
            sitting in the form's own gutter so it lines up with the fields */
         .formerr { color: #C8341E; font-size: 12px; font-weight: 600;
                    margin: 0 48px 10px; }
         .fdate { font-size: 13px; color: #8A857A; }
-        .finput { min-height: 36px; border: 1px solid #DCD7C9; border-radius: 2px;
+        .finput { min-height: 36px; border: 1px solid #C9C4B6; border-radius: 8px;
                   background: #FCFBF8; padding: 0 10px; font-size: 14px;
                   color: #1A1916; }
-        .finput:focus { border-color: #B8B2A2; }
-        .segbox { border: 1px solid #DCD7C9; border-radius: 2px; }
+        .finput:focus { border-color: #B3AD9E; }
+        .segbox { border: 1px solid #C9C4B6; border-radius: 0; }
         .seg { min-height: 34px; padding: 0 13px; font-size: 13px; font-weight: 600;
                color: #3A362E; background: #FCFBF8; border: none; border-radius: 0;
                box-shadow: none; }
@@ -2012,10 +2113,10 @@ class Accounting(nbapp.AppWindow):
         .segon:hover { background: #EAE3D2; }
         /* primary commit button: a solid darker-beige paper button (signage-red
            is reserved for the active marker and the destructive Delete) */
-        .addbtn { min-height: 36px; padding: 0 18px; background: #ECE7DA;
-                  color: #1A1916; border: 1px solid #C4BFB1; border-radius: 2px;
+        .addbtn { min-height: 36px; padding: 0 18px; background: #EFEBE0;
+                  color: #1A1916; border: 1px solid #C9C4B6; border-radius: 8px;
                   font-size: 13px; font-weight: 600; box-shadow: none; }
-        .addbtn:hover { background: #E2DBCB; border-color: #B7B0A0; }
+        .addbtn:hover { background: #EAE3D2; border-color: #B3AD9E; }
 
         .colhead label { font-size: 11px; letter-spacing: 1px; color: #8A857A;
                          font-weight: 600; }
@@ -2031,7 +2132,7 @@ class Accounting(nbapp.AppWindow):
         /* each row is a relief-less button so it is clickable + focusable;
            strip the button chrome so it reads as a plain ledger line. */
         .txrow { min-height: 52px; padding: 0; margin: 0;
-                 border: none; border-bottom: 1px solid #F0ECE0;
+                 border: none; border-bottom: 1px solid #EFEBE0;
                  border-radius: 0; background: transparent; box-shadow: none; }
         .txrow:hover { background: #F4F2EC; }
         .txrow:focus { background: #F1EEE6; }
@@ -2040,31 +2141,31 @@ class Accounting(nbapp.AppWindow):
         .txdebit { font-size: 15px; font-weight: 600; color: #A23B2B; }
         .txcredit { font-size: 15px; font-weight: 600; color: #4F6B45; }
         .txbal { font-size: 15px; color: #3A362E; }
-        .emptystate { padding: 60px 0; font-size: 14px; color: #A39D8F; }
+        .emptystate { padding: 60px 0; font-size: 14px; color: #9A9484; }
         /* paged-ledger footer: reads as the next ledger line, not as a button
            bolted onto the bottom of the table */
         .morerow { min-height: 62px; padding: 0; margin: 0; border: none;
                    border-radius: 0; background: transparent; box-shadow: none; }
         .morerow:hover { background: #F4F2EC; }
         .morelab { font-size: 14px; font-weight: 600; color: #3A362E; }
-        .morecount { font-size: 12px; color: #A39D8F; }
+        .morecount { font-size: 12px; color: #9A9484; }
 
         /* in-place row editor (drawn as an overlay card) */
-        .editcard { background: #FCFBF8; border: 1px solid #C4BFB1;
+        .editcard { background: #FCFBF8; border: 1px solid #C9C4B6;
                     padding: 26px 30px; }
         .editcard * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .edittitle { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                     font-size: 22px; font-weight: 600; color: #1A1916;
+                     font-size: 20px; font-weight: 600; color: #1A1916;
                      margin-bottom: 2px; }
         .editcard .caption { font-size: 10px; letter-spacing: 1.5px;
-                             color: #A39D8F; font-weight: 600;
+                             color: #9A9484; font-weight: 600;
                              margin-bottom: 0; }
         /* inline validation line in the editor: signage-red as an alert */
         .editerr { color: #C8341E; font-size: 12px; font-weight: 600; }
-        .savebtn { min-height: 36px; padding: 0 20px; background: #ECE7DA;
-                   color: #1A1916; border: 1px solid #C4BFB1; border-radius: 2px;
+        .savebtn { min-height: 36px; padding: 0 20px; background: #EFEBE0;
+                   color: #1A1916; border: 1px solid #C9C4B6; border-radius: 8px;
                    font-size: 13px; font-weight: 600; box-shadow: none; }
-        .savebtn:hover { background: #E2DBCB; border-color: #B7B0A0; }
+        .savebtn:hover { background: #EAE3D2; border-color: #B3AD9E; }
         .cancelbtn { min-height: 36px; padding: 0 14px; background: transparent;
                      color: #8A857A; border: none; box-shadow: none;
                      font-size: 13px; font-weight: 600; }
@@ -2072,39 +2173,39 @@ class Accounting(nbapp.AppWindow):
         /* Delete is destructive - signage-red as an alert. An outline in the
            editor (it only opens the confirm), solid-fill in the confirm card. */
         .delbtn { min-height: 36px; padding: 0 18px; background: transparent;
-                  color: #C8341E; border: 1px solid #E7C7C1; border-radius: 2px;
+                  color: #C8341E; border: 1px solid #E7C7C1; border-radius: 8px;
                   font-size: 13px; font-weight: 600; box-shadow: none; }
         .delbtn:hover { background: #C8341E; color: #FCFBF8;
                         border-color: #C8341E; }
 
         /* delete-confirm overlay: paper card, darker-beige border; the only
            red is the destructive primary button */
-        .confirmcard { background: #FCFBF8; border: 1px solid #C4BFB1;
+        .confirmcard { background: #FCFBF8; border: 1px solid #C9C4B6;
                        padding: 24px 28px 20px; }
         .confirmcard * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .confirmtitle { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                         font-size: 20px; font-weight: 600; color: #1A1916; }
-        .confirmmsg { font-size: 13px; color: #57534B; }
+        .confirmmsg { font-size: 13px; color: #6E695E; }
         .confirmdel { min-height: 36px; padding: 0 18px; background: #C8341E;
-                      color: #FCFBF8; border: 1px solid #C8341E; border-radius: 2px;
+                      color: #FCFBF8; border: 1px solid #C8341E; border-radius: 8px;
                       font-size: 13px; font-weight: 600; box-shadow: none; }
         .confirmdel:hover { background: #A82A18; border-color: #A82A18; }
 
         /* Reports > Ledger Summary overlay: serif title over aligned
            caption/value rows, values colour-coded like the sidebar stats */
-        .sumcard { background: #FCFBF8; border: 1px solid #C4BFB1;
+        .sumcard { background: #FCFBF8; border: 1px solid #C9C4B6;
                    padding: 26px 32px 20px; }
         .sumcard * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .sumtitle { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                    font-size: 22px; font-weight: 600; color: #1A1916;
+                    font-size: 20px; font-weight: 600; color: #1A1916;
                     margin-bottom: 10px; }
-        .sumrow { padding: 8px 0; border-bottom: 1px solid #EFEADD; }
-        .sumkey { font-size: 11px; letter-spacing: 1.5px; color: #A39D8F;
+        .sumrow { padding: 8px 0; border-bottom: 1px solid #EFEBE0; }
+        .sumkey { font-size: 11px; letter-spacing: 1.5px; color: #9A9484;
                   font-weight: 600; }
         .sumval { font-size: 16px; color: #1A1916; font-weight: 500; }
         .sumval.credit { color: #4F6B45; }
         .sumval.debit { color: #A23B2B; }
-        .sumval.strong { font-size: 19px; font-weight: 700; color: #1A1916; }
+        .sumval.strong { font-size: 20px; font-weight: 700; color: #1A1916; }
         /* Tabular figures: the ledger's money columns must align on the
            decimal point. The design language reserves the mono family for
            counters, so the figures (not the descriptions/dates) use it. The

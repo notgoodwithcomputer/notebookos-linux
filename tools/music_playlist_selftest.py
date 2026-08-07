@@ -21,7 +21,14 @@ import tempfile
 # defaults to the developer's real home, where the library scan walks every
 # file under it — which is why this test appeared to "hang" for minutes. A
 # selftest must never read or write the machine it is run on.
-os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="nbmusic-selftest-"))
+#
+# ASSIGNED, not setdefault. guestrun.sh — the documented way to run this —
+# exports NB_HOME itself, so setdefault never fired and every run shared one
+# home. The playlists this suite creates accumulated there: sixteen of them by
+# the time it was noticed, and "playlist list starts empty" had been failing
+# for a while on state its own earlier runs left behind. Isolation a caller can
+# accidentally switch off is not isolation.
+os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="nbmusic-selftest-")
 
 import gi
 gi.require_version("Gtk", "3.0")

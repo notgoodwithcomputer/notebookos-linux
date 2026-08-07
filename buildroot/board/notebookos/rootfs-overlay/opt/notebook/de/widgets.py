@@ -110,16 +110,35 @@ ACADEMICS_LEGACY = os.path.join(CFG_DIR, "academic.json")
 JOURNAL_FILE = os.path.join(CFG_DIR, "journal.json")
 ACCOUNTING_FILE = os.path.join(CFG_DIR, "accounting.json")
 MEALS_FILE = os.path.join(CFG_DIR, "mealplanner.json")
+BILLS_FILE = os.path.join(CFG_DIR, "bills.json")           # Bill Tracker
+CONTACTS_FILE = os.path.join(CFG_DIR, "contacts.json")     # Contacts
+EBOOK_FILE = os.path.join(CFG_DIR, "ebook.json")           # E-book Reader
+LANGUAGE_FILE = os.path.join(CFG_DIR, "language.json")     # Language
+NOVEL_FILE = os.path.join(CFG_DIR, "novel.json")           # Novel
 
-# The six app tiles, in the order they are laid out (left to right, top to
-# bottom) and the order Widget Settings lists them. `mod` is the app a click
-# opens. Tasks and the calendar are NOT here: they are pinned to the board and
-# cannot be switched off, because they are the two things the desktop is for.
+# The app tiles, in the order they are laid out (left to right, top to bottom)
+# and the order Widget Settings lists them. `mod` is the app a click opens.
+# Tasks and the calendar are NOT here: they are pinned to the board and cannot
+# be switched off, because they are the two things the desktop is for.
+#
+# THERE ARE ELEVEN OF THESE AND SIX SLOTS, and the difference is the point.
+# The grid stays 3x2 -- a fourth tile column takes every card on the board from
+# 454px wide to 359px (230 to 180 on a 1024 panel, where a payee no longer fits
+# on a row), and tiles left over in a fixed grid leave holes in it. What the
+# desktop is FOR differs from person to person, though, so the answer is not a
+# bigger board but a real choice of what goes on it: six of eleven, picked in
+# Widget Settings, which draws the board as the switches are flipped.
+#
+# The first six are what a new machine ships with (see TILE_DEFAULT_ON); the
+# rest are there to be chosen.
 TILE_ORDER = ("academics", "homework", "meals",
-              "workout", "journal", "accounting")
+              "workout", "journal", "bills",
+              "accounting", "birthdays", "reading", "language", "novel")
 TILE_APP = {"academics": "academics", "homework": "academics",
             "meals": "mealplanner", "workout": "workout",
-            "journal": "journal", "accounting": "accounting"}
+            "journal": "journal", "bills": "bills",
+            "accounting": "accounting", "birthdays": "contacts",
+            "reading": "ebook", "language": "language", "novel": "novel"}
 # The view the app should open ON, so clicking the Homework tile lands on
 # Homework instead of dropping you in the app to go and find it.
 TILE_ARG = {"academics": "schedule", "homework": "homework"}
@@ -128,15 +147,103 @@ TILE_ARG = {"academics": "schedule", "homework": "homework"}
 # not a thing you can open.
 TILE_APP_NAME = {"academics": "Academics", "homework": "Academics",
                  "meals": "Meal Planner", "workout": "Workout",
-                 "journal": "Journal", "accounting": "Accounting"}
+                 "journal": "Journal", "bills": "Bill Tracker",
+                 "accounting": "Accounting", "birthdays": "Contacts",
+                 "reading": "E-book Reader", "language": "Language",
+                 "novel": "Novel"}
 # English source strings; nbi18n translates them at _t() like any other label.
 TILE_TITLE = {"academics": "Classes", "homework": "Homework",
               "meals": "Meals", "workout": "Workout",
-              "journal": "Journal", "accounting": "Accounting"}
-# Every tile is on by default: the grid has exactly six slots for exactly six
-# tiles, so switching one off leaves a gap rather than tightening the board.
-# Widget Settings is for the person who wants that gap, not the default.
-TILE_DEFAULT_ON = {tid: True for tid in TILE_ORDER}
+              "journal": "Journal", "bills": "Bills",
+              "accounting": "Accounting", "birthdays": "Birthdays",
+              "reading": "Reading", "language": "Language",
+              "novel": "Novel"}
+# SIX ON, THE REST OFF, AND THE GRID IS EXACTLY FULL. Not "every tile on": the
+# board has six slots, so shipping more than six switched on would leave some
+# of them undrawable, and shipping fewer leaves a hole in a fixed grid.
+#
+# Which six is a judgement about a machine nobody has used yet, so it is the
+# six that need no setting up to say something true: a term timetable, what is
+# owed, today's meals, today's sets, whether today has been written. Accounting
+# is held back because Bills is on -- same subject, but only one of the two has
+# a DEADLINE, and a reminder tile is for what has to be done and by when. The
+# other four are chosen rather than shipped because they are worth a tile only
+# to someone who uses that app: a reader, a learner, a novelist, someone who
+# keeps birthdays. Widget Settings draws the board while the switches are
+# flipped, so swapping any of it is one click and no guesswork.
+SHIPPED_TILES = ("academics", "homework", "meals",
+                 "workout", "journal", "bills")
+TILE_DEFAULT_ON = {tid: tid in SHIPPED_TILES for tid in TILE_ORDER}
+
+
+def board_order(data):
+    """The order the tiles sit in, out of a parsed widgets.json.
+
+    Shared with Widget Settings so the writer and the reader of the store can
+    never disagree about what a stored order means. Anything the file does not
+    account for keeps its default position rather than vanishing: an order that
+    dropped a tile would take that tile off the desktop with no switch ever
+    having been touched, and nothing on screen would say why."""
+    seen, out = set(), []
+    stored = data.get("order") if isinstance(data, dict) else None
+    if isinstance(stored, list):
+        for tid in stored:
+            if tid in TILE_DEFAULT_ON and tid not in seen:
+                seen.add(tid)
+                out.append(tid)
+    for tid in TILE_ORDER:
+        if tid not in seen:
+            out.append(tid)
+    return out
+
+
+def adopt_bills(on, order):
+    """A board laid out before the Bill Tracker existed, brought forward.
+
+    The grid holds six tiles and there are now seven. Left alone, an existing
+    widgets.json names the old six, `bills` is appended after them, and the
+    seventh position is never drawn -- so installing the app would appear to
+    have added nothing to the desktop at all, with no switch off and nothing on
+    screen saying why. That is the exact failure the whole board is written to
+    avoid.
+
+    So Bills takes the slot Accounting held and Accounting moves to seventh,
+    switched off. Nothing else on the board moves. This is the same choice
+    TILE_DEFAULT_ON makes for a new machine, applied once to an old one, so the
+    two kinds of machine do not end up with different desktops."""
+    on = dict(on)
+    on["bills"] = True
+    on["accounting"] = False
+    order = [tid for tid in order if tid != "bills"]
+    if "accounting" in order:
+        order.insert(order.index("accounting"), "bills")
+    else:
+        order.append("bills")
+    return on, board_order({"order": order})
+
+
+def board_state(data):
+    """(which tiles are on, the order they sit in) out of a parsed widgets.json.
+
+    ONE reading of the file, shared by the desktop that draws the board and the
+    Widget Settings screen that writes it -- for the reason board_order exists:
+    they are separate processes that never talk, and a disagreement about what
+    the file means takes a tile off the desktop with nothing on screen saying
+    why. Never raises; anything the file does not account for keeps its
+    default."""
+    on = dict(TILE_DEFAULT_ON)
+    tiles = data.get("tiles") if isinstance(data, dict) else None
+    if isinstance(tiles, dict):
+        for tid in TILE_ORDER:
+            if tid in tiles:
+                on[tid] = bool(tiles[tid])
+    order = board_order(data)
+    # A store that names tiles but has never heard of this one was written by
+    # an older build. A store with no tiles section at all is not an upgrade,
+    # it is a first run, and the defaults above are already right for it.
+    if isinstance(tiles, dict) and "bills" not in tiles:
+        on, order = adopt_bills(on, order)
+    return on, order
 # Cards with a FIXED, small number of rows (today's three meals; today's
 # classes). Their rows expand to share the card, and are set a size larger,
 # instead of huddling at the top under a block of blank paper.
@@ -152,8 +259,19 @@ TILE_EMPTY = {
     "meals": ("No meals planned", "Plan meals in Meal Planner"),
     "workout": ("No exercises", "Add exercises in Workout"),
     "journal": ("No entries", "Write entries in Journal"),
+    "bills": ("No bills", "Add bills in Bill Tracker"),
     "accounting": ("No entries", "Add entries in Accounting"),
+    "birthdays": ("No birthdays", "Add birthdays in Contacts"),
+    "reading": ("No books", "Add books in E-book Reader"),
+    "language": ("No course started", "Start a course in Language"),
+    "novel": ("No chapters", "Write chapters in Novel"),
 }
+# How many tiles the board can draw at once. One number, exported, because the
+# board, Widget Settings and both their selftests all have to agree about it --
+# and with more tiles than slots, "how many fit" stopped being the same
+# question as "how many are there".
+def slot_count():
+    return TILE_COLS * TILE_ROWS
 # the desktop-home board belongs to the desktop, not on top of a running app.
 # A launcher drops this flag file while a fullscreen app owns the screen; we
 # hide while it exists and reappear when the desktop home returns.
@@ -200,9 +318,32 @@ TILE_ROWS = 2         # ...and 2 tall, which is exactly TILE_ORDER
 # final row becomes a muted "+N more" read-out; the complete list stays in the
 # app. The cap counts that read-out row, so the rendered height is bounded
 # either way.
+# How long a burst of store-change events is collected before the board is
+# rebuilt (see _queue_reload). Long enough to swallow the several events one
+# atomic save produces, short enough that a change made in an app still appears
+# on the desktop as it is switched back to.
+_RELOAD_COALESCE_MS = 180
+
 MAX_TASK_ROWS = 14
 MAX_AGENDA_ROWS = 8
 MAX_TILE_ROWS = 10
+
+# How wide a content row's VALUE cell may ask to be, in characters.
+#
+# IT MUST NOT BE 1, and this was a shipped bug for as long as any tile had
+# something to put there: the Homework card's due column rendered as three bare
+# ellipses on the desktop, because an ellipsizing GtkLabel with
+# max_width_chars(1) reports one character as its NATURAL width -- and a
+# pack_end child with expand=False is given exactly its natural width, so the
+# one character it got was the ellipsis. (max_width_chars(1) is right for the
+# NAME beside it, which is packed expand=True and only needs its runaway
+# natural width pinned down.) _card_shell learned this on the header summary
+# and left the same trap in the rows underneath it.
+#
+# 18 fits every value any tile produces -- "in 12 days", "Post in 3 days",
+# "$1,180.00" -- with room for a longer translation, while still stopping a
+# nonsense value from pushing the name off its own row.
+_VALUE_CHARS = 18
 
 # EVERY figure below is MEASURED, not estimated. Two tools keep them honest:
 #
@@ -259,7 +400,39 @@ WIDGETS_CSS = b"""
    never a decorative accent; signage red is reserved for today + alerts.
    EVERY card on this board is this card -- the six tiles and the pinned pair
    alike -- which is the whole reason the board reads as one thing. */
-.card { background: #F8F7F2; border: 1px solid #1A1916; }
+/* The desktop's own right-click menu. It carried this class for a long time
+   with no rule anywhere to match it, so the one menu the desktop owns rendered
+   in stock GTK grey on a board that is otherwise entirely papertone. Built to
+   the same frame as a card: warm paper, a near-black hairline, no rounding. */
+.boardmenu, .boardmenu menu { background: #F8F7F2; border: 1px solid #1A1916;
+    border-radius: 0; padding: 5px 0; }
+.boardmenu menuitem { padding: 7px 18px; min-height: 22px; }
+.boardmenu menuitem label { font-family: "Nimbus Sans","Helvetica",sans-serif;
+    font-size: 14px; color: #1A1916; }
+/* A hovered row is painted by the theme as a background-IMAGE, so a colour-only
+   rule here would leave it Adwaita blue. */
+.boardmenu menuitem:hover { background-image: none; background: #EFEBE0; }
+.boardmenu menuitem:hover label { color: #1A1916; }
+.boardmenu separator { background: #D7D2C5; margin: 4px 0; min-height: 1px; }
+
+.boardhit { padding: 0; margin: 0; border: none;
+    background: transparent; background-image: none; box-shadow: none;
+    min-width: 0; min-height: 0; }
+
+/* EACH CARD IS ITS OWN OBJECT ON THE DESK, and casts its own shadow.
+   The board is one window, so the compositor could only ever shadow the WHOLE
+   grid -- one soft rectangle around all eight cards, which read as a single
+   slab laid over the desktop rather than as eight separate sheets on it.
+   picom.conf now excludes this window by name (it is desktop furniture, like
+   the panel and the backdrop, not a floating window) and the elevation is
+   carried here instead, per card.
+   Two layers, the same language as Papertone's tooltips and menus: a tight
+   contact shadow plus a wide soft one. Weaker than either of those on purpose
+   -- a menu floats above a window, a card only rests on the desk, and it is
+   the lowest thing on the screen that is an object at all. */
+.card { background: #F8F7F2; border: 1px solid #1A1916;
+        box-shadow: 0 1px 2px rgba(26, 25, 22, 0.08),
+                    0 4px 12px rgba(26, 25, 22, 0.10); }
 .card .chead { padding: 11px 14px; border-bottom: 1px solid #1A1916; }
 .ctitle { font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 15px;
           font-weight: 700; letter-spacing: 0.02em; color: #1A1916; }
@@ -272,7 +445,7 @@ WIDGETS_CSS = b"""
 .cbody { padding: 3px 14px 7px 14px; }
 /* one content row: [lead][name..........][value], on a hairline so a card of
    them reads as a chart rather than as a paragraph of scraps. */
-.crow  { padding: 6px 0; border-bottom: 1px solid #E7E2D6; }
+.crow  { padding: 6px 0; border-bottom: 1px solid #D7D2C5; }
 .crow:last-child { border-bottom: 0; }
 .clead { font-family: "Nimbus Sans","Helvetica",sans-serif;
          font-size: 12px; font-weight: 600; color: #1A1916; }
@@ -285,6 +458,12 @@ WIDGETS_CSS = b"""
 .cval  { font-family: "Nimbus Sans","Helvetica",sans-serif;
          font-size: 12px; color: #6E695E; }
 .cval.hit { color: #4F7A3A; }
+/* ...and the opposite of a met goal: a deadline that has arrived or gone.
+   The signage red is otherwise reserved on this board for TODAY in the
+   calendar, which is the same kind of statement -- this is the day it is
+   about. A tile that painted every row red would be saying nothing, so only
+   a bill actually needing action gets it (see _read_bills). */
+.cval.alert { color: #C8341E; font-weight: 700; }
 /* the Journal card's single answer */
 .jmark { font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 15px; }
 .jmark.done { color: #4F7A3A; }
@@ -309,8 +488,9 @@ WIDGETS_CSS = b"""
    to its size request, so setting it here gave a 21px row squeezed against its
    own hairline while the "+N more" line below (a Box, which does honour it)
    stood a full 48px tall. */
-.taskrow  { border-bottom: 1px solid #E7E2D6; background: #F8F7F2; }
+.taskrow  { border-bottom: 1px solid #D7D2C5; background: #F8F7F2; }
 .taskrow:last-child { border-bottom: 0; }
+.taskrow:focus { outline: 2px solid #1A1916; outline-offset: -2px; }
 .taskrowbody { padding: 5px 0; }
 /* the "+N more" tail: a quieter line than a task row, not a full-height one */
 .moretail { padding: 10px 0; }
@@ -319,7 +499,7 @@ WIDGETS_CSS = b"""
    difference between their list text reads as a mistake. */
 .tasktext { font-family: "Nimbus Sans","Helvetica",sans-serif;
             font-size: 13px; color: #2A2620; }
-.tasktext.done { color: #A8A296; }
+.tasktext.done { color: #9A9484; }
 .emptytext { font-family: "Nimbus Sans","Helvetica",sans-serif;
              font-size: 14px; color: #6E695E; }
 /* the one line under an empty card's heading that says what to do about it:
@@ -331,7 +511,7 @@ WIDGETS_CSS = b"""
             font-size: 12px; color: #6E695E; }
 .calgrid { padding: 4px 12px 6px 12px; }
 .calwd  { font-family: "Nimbus Sans","Helvetica",sans-serif;
-          font-size: 9px; font-weight: 600; color: #6E695E; letter-spacing: 0.06em; }
+          font-size: 10px; font-weight: 600; color: #6E695E; letter-spacing: 0.06em; }
 /* min-width and min-height must stay EQUAL: today's marker is a 50% radius on
    this box, so an uneven pair turns the circle into an ellipse. */
 .calday { font-family: "Nimbus Sans","Helvetica",sans-serif;
@@ -341,11 +521,11 @@ WIDGETS_CSS = b"""
    where a day with an event is bold ink, and unlike a dot underneath the
    number it costs the week row no height at all. */
 .calday.hasev { font-weight: 700; color: #1A1916; }
-.calday.today { background: #C8341E; color: #FFFFFF; border-radius: 50%;
+.calday.today { background: #C8341E; color: #FCFBF8; border-radius: 50%;
                 font-weight: 700; }
 .agsec  { font-family: "Nimbus Sans","Helvetica",sans-serif;
           font-size: 11px; color: #6E695E; letter-spacing: 0.14em;
-          padding: 12px 14px 4px 14px; border-top: 1px solid #E7E2D6; }
+          padding: 12px 14px 4px 14px; border-top: 1px solid #D7D2C5; }
 .agrow  { padding: 6px 14px; }
 .agtime { font-family: "Nimbus Sans","Helvetica",sans-serif;
           font-size: 12px; font-weight: 600; color: #1A1916; }
@@ -604,8 +784,24 @@ class Widgets(Gtk.Window):
         # each is exactly two tiles plus the gap between them.
         # The pinned pair share ONE column now, so it is one tile wide, not two.
         self._col_w = self._tile_w
-        self.set_default_size(board_w, h)
-        self.move(BOARD_MARGIN, PANEL_H + BOARD_MARGIN)
+        # THE WINDOW CARRIES THE MARGIN; the cards do not move.
+        #
+        # This window used to be inset by BOARD_MARGIN on every side, so the
+        # outermost cards sat FLUSH against its edge -- and a CSS box-shadow
+        # cannot paint outside the toplevel it is in. The bottom row therefore
+        # had no shadow beneath it while the top row had one, which is a worse
+        # kind of wrong than no shadows at all.
+        #
+        # So the window now covers the whole desktop under the panel and the
+        # inset is applied to the board box INSIDE it (below). The content area
+        # is identical to the pixel, every card lands where it did, and there
+        # are now BOARD_MARGIN pixels of window for the outer shadows to fall
+        # on. Covering the extra frame costs nothing: desktopbg.py paints one
+        # fixed #DED4C2 field and .wcol is the same colour, so nothing is
+        # hidden.
+        self.set_default_size(board_w + 2 * BOARD_MARGIN,
+                              h + 2 * BOARD_MARGIN)
+        self.move(0, PANEL_H)
         self.get_style_context().add_class("wcol")
 
         self.tasks = self._load_tasks()
@@ -619,6 +815,13 @@ class Widgets(Gtk.Window):
         # board = [ 3x2 tile grid ][ Tasks over calendar ]
         board = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                         spacing=BOARD_GAP)
+        # The board's inset from the screen edges, applied here rather than by
+        # positioning the window (see set_default_size above): it is what
+        # leaves room inside the toplevel for the outer cards' shadows.
+        board.set_margin_start(BOARD_MARGIN)
+        board.set_margin_end(BOARD_MARGIN)
+        board.set_margin_top(BOARD_MARGIN)
+        board.set_margin_bottom(BOARD_MARGIN)
         self.add(board)
         self._board = board
 
@@ -675,16 +878,23 @@ class Widgets(Gtk.Window):
         # appears to do nothing until something else happens to open and close.
         # That reads exactly like the feature being broken, and did.
         self._store_monitors = []
+        # A monitor event NEVER rebuilds the board on the spot -- it asks for a
+        # rebuild and the burst is coalesced into one (see _queue_reload).
+        self._reload_pending = 0
         for path in (BOARD_FILE, WORKOUT_FILE, ACADEMICS_FILE, ACADEMICS_LEGACY,
                      JOURNAL_FILE, ACCOUNTING_FILE, MEALS_FILE, TASKS_FILE,
                      CAL_FILE):
             try:
                 mon = Gio.File.new_for_path(path).monitor_file(
                     Gio.FileMonitorFlags.NONE, None)
-                mon.connect("changed", lambda *_a: (self._reload(), False)[1])
+                mon.connect("changed",
+                            lambda *_a: (self._queue_reload(), False)[1])
                 self._store_monitors.append(mon)
             except Exception:
                 pass
+        # Drop a pending rebuild when the board goes away, so a coalescing
+        # timeout can never fire into a destroyed window.
+        self.connect("destroy", lambda *_a: self._cancel_reload())
         # Reconcile once after start: covers a flag already present when the
         # board (re)launches, which produces no future monitor event.
         GLib.timeout_add(500, lambda: (self._poll_home(), False)[1])
@@ -768,9 +978,48 @@ class Widgets(Gtk.Window):
         self.workout = self._load_workout()
         self.board = self._load_board()
 
+    def _queue_reload(self):
+        """Ask for a rebuild, at most one per burst of store changes.
+
+        ONE save is never one monitor event: an app writes its store through
+        nbapp.atomic_write_json (write a temp file, rename it into place), and
+        Gio reports that as a run of events on the watched path -- DELETED,
+        CREATED, CHANGED, ATTRIBUTE_CHANGED, CHANGES_DONE_HINT -- with the
+        polling backend adding its own. Rebuilding on each one tore down and
+        rebuilt all eight cards several times over for a single edit, and the
+        worst case was the board's OWN write: ticking a task on the desktop
+        writes tasks.json, which came straight back through this monitor and
+        rebuilt the list under the pointer -- undoing the in-place restyle
+        _toggle_task does precisely to avoid that. So the burst is collected
+        into a single rebuild a moment later; the source id is kept so a second
+        request inside the window joins the pending one instead of adding
+        another timeout."""
+        if self._reload_pending:
+            return True
+        self._reload_pending = GLib.timeout_add(
+            _RELOAD_COALESCE_MS, self._reload_now)
+        return True
+
+    def _reload_now(self):
+        self._reload_pending = 0
+        self._reload()
+        return False           # one-shot: the next burst arms a fresh timeout
+
+    def _cancel_reload(self):
+        """Drop a pending coalesced rebuild (the board is reloading for another
+        reason, or is going away)."""
+        pending, self._reload_pending = getattr(self, "_reload_pending", 0), 0
+        if pending:
+            try:
+                GLib.source_remove(pending)
+            except Exception:
+                pass
+
     def _reload(self):
         # Re-read every shared store and rebuild from it, so a task, an event, a
         # logged set or an assignment added in an app shows up on the board.
+        # Anything already queued is now redundant -- this IS that rebuild.
+        self._cancel_reload()
         self._safe(self._load_stores)
         self._safe(self._rebuild_tasks)
         self._safe(self._rebuild_calendar)
@@ -890,14 +1139,11 @@ class Widgets(Gtk.Window):
         buried in each app's menus. Never raises: a bad store falls back to the
         defaults rather than leaving the desktop empty."""
         on = dict(TILE_DEFAULT_ON)
+        self.board_order = board_order({})
         try:
             with open(BOARD_FILE) as fh:
                 data = json.load(fh)
-            tiles = data.get("tiles") if isinstance(data, dict) else None
-            if isinstance(tiles, dict):
-                for tid in TILE_ORDER:
-                    if tid in tiles:
-                        on[tid] = bool(tiles[tid])
+            on, self.board_order = board_state(data)
         except Exception:
             pass
         return on
@@ -912,7 +1158,8 @@ class Widgets(Gtk.Window):
         """Lay the switched-on tiles into the 3x2 grid, in reading order."""
         for child in self._tilegrid.get_children():
             self._tilegrid.remove(child)
-        on = [tid for tid in TILE_ORDER
+        order = getattr(self, "board_order", None) or list(TILE_ORDER)
+        on = [tid for tid in order
               if self.board.get(tid)][:TILE_COLS * TILE_ROWS]
         for slot, tid in enumerate(on):
             try:
@@ -1108,6 +1355,18 @@ class Widgets(Gtk.Window):
         if isinstance(value, (tuple, list)) and value and value[0] == "dots":
             row.pack_end(self._dots_cell(value[1], value[2], hit),
                          False, False, 0)
+        elif isinstance(value, (tuple, list)) and value and value[0] == "alert":
+            # The one row tone that means ACT ON THIS. `hit` cannot carry it:
+            # that flag is green (.cname.hit / .cval.hit) and means finished,
+            # which is the opposite thing. Reserved for a state a person is
+            # late for -- an accent that appears on every row means nothing.
+            al = Gtk.Label(label=str(value[1]), xalign=1)
+            actx = al.get_style_context()
+            actx.add_class("cval")
+            actx.add_class("alert")
+            al.set_ellipsize(Pango.EllipsizeMode.END)
+            al.set_max_width_chars(_VALUE_CHARS)
+            row.pack_end(al, False, False, 0)
         elif value:
             vl = Gtk.Label(label=str(value), xalign=1)
             vctx = vl.get_style_context()
@@ -1115,7 +1374,7 @@ class Widgets(Gtk.Window):
             if hit:
                 vctx.add_class("hit")
             vl.set_ellipsize(Pango.EllipsizeMode.END)
-            vl.set_max_width_chars(1)
+            vl.set_max_width_chars(_VALUE_CHARS)
             row.pack_end(vl, False, False, 0)
         return row
 
@@ -1416,6 +1675,166 @@ class Widgets(Gtk.Window):
         meta = _t("Nothing to do") if not n else _t("%d to do") % n
         return meta, rows, None
 
+    def _read_bills(self):
+        """What is owed, soonest first, and what it comes to this month.
+
+        Parsed by bills.read_bills / bills.due_info rather than re-read here,
+        the same arrangement the Meals tile has with mealplanner: the app owns
+        what its file means, so the tile and the app can never disagree about
+        which day a bill is due -- and this store's dates carry repeat rules
+        and a postal lead time, which is far too much meaning to copy.
+
+        A bill that has to be acted on now is marked, because the value column
+        is the only place on a tile where "overdue" and "due in three weeks"
+        can be told apart at a glance, and that difference is the whole reason
+        this tile is on the desktop."""
+        try:
+            import bills
+        except Exception:
+            return None
+        items = bills.read_bills(BILLS_FILE)
+        if not items:
+            return None
+        today = bills.today_key()
+        pairs = [(b, bills.due_info(b, today)) for b in items]
+        pairs.sort(key=lambda p: bills.sort_key(p[0], p[1]))
+        rows = []
+        for bill, info in pairs:
+            state = info["state"]
+            rows.append((None, bill["payee"],
+                         ("alert", state) if bills.needs_paying(info)
+                         else state, False))
+        return bills.money(bills.month_total(items, today)), rows, None
+
+    def _read_birthdays(self):
+        """Whose birthday is coming, and how soon.
+
+        The dates are read through contacts.days_until_birthday, which owns
+        what the app's free-text birthday field can hold (and what a 29
+        February birthday does in a common year). A birthday TODAY is marked
+        the way a met goal is: it is the one row here that is good news rather
+        than a countdown."""
+        try:
+            import contacts
+        except Exception:
+            return None
+        data = self._read_store(CONTACTS_FILE)
+        people = self._as_list(data.get("people"))
+        soon = []
+        for person in people:
+            if not isinstance(person, dict):
+                continue
+            name = str(person.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                days = contacts.days_until_birthday(person.get("bday"))
+            except Exception:
+                days = None
+            if days is None or days > contacts.BIRTHDAY_SOON:
+                continue
+            soon.append((days, name))
+        if not soon:
+            return None
+        soon.sort()
+        rows = [(None, name, self._when(days), days == 0)
+                for days, name in soon]
+        return _t("%d coming up") % len(soon), rows, None
+
+    def _read_reading(self):
+        """The shelf, and how far through each book is.
+
+        The book currently OPEN heads the list -- it is the one the card is
+        about -- and a finished book is marked, because on this board a mark
+        means a thing that is done."""
+        data = self._read_store(EBOOK_FILE)
+        books = []
+        for book in self._as_list(data.get("books")):
+            if not isinstance(book, dict):
+                continue
+            title = str(book.get("title") or "").strip()
+            if not title:
+                continue
+            try:
+                frac = min(max(float(book.get("frac") or 0.0), 0.0), 1.0)
+            except (TypeError, ValueError):
+                frac = 0.0
+            books.append({"title": title, "frac": frac,
+                          "path": str(book.get("path") or "")})
+        if not books:
+            return None
+        open_path = data.get("open")
+        open_path = open_path if isinstance(open_path, str) else ""
+        # Reading order: the open book, then the ones already started (furthest
+        # through first), then the ones not begun. A shelf sorted by title
+        # would bury the book actually being read halfway down the card.
+        books.sort(key=lambda b: (b["path"] != open_path or not open_path,
+                                  b["frac"] <= 0.0, -b["frac"], b["title"]))
+        rows = [(None, b["title"], "%d%%" % round(b["frac"] * 100),
+                 b["frac"] >= 0.999) for b in books]
+        return _t("%d books") % len(books), rows, None
+
+    def _read_language(self):
+        """Practised today, or not, and the streak riding on it.
+
+        ONE mark, like the Journal card beside it, because the store answers
+        exactly one question a desktop can use: has today's goal been met. The
+        XP under the mark says how far off it is when it has not."""
+        data = self._read_store(LANGUAGE_FILE)
+        try:
+            import language
+            goals, default = language.GOALS, language.DEFAULT_GOAL
+        except Exception:
+            goals, default = (10, 20, 30, 50), 20
+        goal = data.get("goal")
+        goal = goal if goal in goals else default
+
+        def _count(key):
+            value = data.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return 0
+            return max(0, int(value))
+        streak = _count("streak")
+        # day_xp belongs to the day stamped beside it. Without that check a
+        # learner who practised yesterday and not today reads as done, which is
+        # the one thing this card exists to get right.
+        today = time.strftime("%Y-%m-%d")
+        day_xp = _count("day_xp") if data.get("day") == today else 0
+        if not streak and not day_xp and not data.get("crowns"):
+            return None
+        done = day_xp >= goal
+        return (_t("%d day streak") % streak if streak else "", [], None, None,
+                {"done": done,
+                 "label": _t("Practised") if done else _t("Not practised"),
+                 "date": _t("%d of %d XP") % (day_xp, goal)})
+
+    def _read_novel(self):
+        """The manuscript, chapter by chapter, counted in words.
+
+        A word count is the only number a novel has that means anything from
+        outside it, and the card's job is to show the shape of the book without
+        opening it."""
+        data = self._read_store(NOVEL_FILE)
+        chapters = []
+        for i, chapter in enumerate(self._as_list(data.get("chapters"))):
+            if not isinstance(chapter, dict):
+                continue
+            body = chapter.get("body")
+            words = len(body.split()) if isinstance(body, str) else 0
+            title = str(chapter.get("title") or "").strip()
+            if not title:
+                num = chapter.get("num")
+                title = _t("Chapter %d") % (num if isinstance(num, int)
+                                            and not isinstance(num, bool)
+                                            else i + 1)
+            chapters.append((title, words))
+        if not chapters:
+            return None
+        total = sum(w for _t_, w in chapters)
+        rows = [(None, title, _t("%d words") % words, False)
+                for title, words in chapters]
+        return _t("%d words") % total, rows, None
+
     def _read_meals(self):
         """TODAY'S THREE MEALS as a chart -- breakfast, lunch and dinner, each
         with what is planned or an honest blank. Not just the next one: the
@@ -1707,28 +2126,47 @@ class Widgets(Gtk.Window):
         return task_cap, ag_cap
 
     def _clickable(self, child, mod, arg=None, tip=None):
-        """Wrap `child` so clicking it opens the app that owns this card.
+        """Wrap `child` so activating it opens the app that owns this card.
 
-        A WINDOWLESS EventBox (visible_window False): it is an input-only layer
-        over the already-painted card, so it adds no window that could scan out
-        black on the no-compositor framebuffer."""
-        hit = Gtk.EventBox()
-        hit.set_visible_window(False)
-        hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        A REAL Gtk.Button, not the windowless EventBox this used to be. An
+        EventBox answers a pointer and nothing else, so every way INTO an app
+        from this board -- a whole tile, the Tasks heading, an agenda line, a
+        "+N more" tail -- could only be reached with a mouse. A button is
+        activated by the keyboard as well (Space or Enter once it is tabbed to),
+        it takes the focus ring the rest of the OS uses, and it tells assistive
+        technology that this card is a control rather than decoration.
+
+        It is still an input-only layer laid over an already-painted card: a
+        GtkButton, like a windowless EventBox, is a no-window widget -- it
+        realizes an INPUT_ONLY child window and draws into its parent's -- so it
+        adds no window that could scan out black on the no-compositor
+        framebuffer.
+
+        Relief NONE plus the neutral `.boardhit` rules (see WIDGETS_CSS) leave
+        the button contributing nothing of its own: the papertone surface, the
+        hairline frame, the padding and every pixel of the geometry stay owned
+        by `child`, exactly as they were under the EventBox.
+
+        NOTE the board window sets accept_focus False (it is desktop furniture
+        and must never come forward), so these buttons are reachable from the
+        keyboard within the board, not from a window-manager focus switch."""
+        hit = Gtk.Button()
+        hit.set_relief(Gtk.ReliefStyle.NONE)
+        hit.get_style_context().add_class("boardhit")
         hit.add(child)
         if tip:
             hit.set_tooltip_text(tip)
-        hit.connect("button-press-event", self._on_open_press, mod, arg)
+        # "clicked" is the one signal both paths emit -- a primary-button press
+        # and release, and a keyboard activation. It already means "the primary
+        # button", so this wrapper no longer sets an event mask or sifts through
+        # pointer buttons by hand the way the EventBox had to.
+        hit.connect("clicked", self._on_open_clicked, mod, arg)
         return hit
 
-    def _on_open_press(self, _w, ev, mod, arg):
-        try:
-            if ev.button == 1:
-                self._launch(mod, arg)
-                return True
-        except Exception:
-            pass
-        return False
+    def _on_open_clicked(self, _w, mod, arg):
+        # _launch already degrades silently on a failed spawn, so there is
+        # nothing here to guard against.
+        self._launch(mod, arg)
 
     # -- Tasks card --
     def _tasks_card(self):
@@ -1800,6 +2238,8 @@ class Widgets(Gtk.Window):
             # catches a click anywhere on the row -- including on the checkbox.
             hit = Gtk.EventBox()
             hit.get_style_context().add_class("taskrow")
+            hit.set_can_focus(True)
+            hit.set_tooltip_text(_t("Toggle task"))
             hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
             row = Gtk.Box(spacing=12)
             row.get_style_context().add_class("taskrowbody")
@@ -1816,6 +2256,7 @@ class Widgets(Gtk.Window):
             self._task_labels[i] = lbl
             row.pack_start(lbl, True, True, 0)
             hit.connect("button-press-event", self._on_task_row_press, i)
+            hit.connect("key-press-event", self._on_task_row_key, i)
             self._tasklist.pack_start(hit, True, True, 0)
         if hidden:
             # "+3 more" is a promise that the rest is somewhere. Clicking it
@@ -1850,6 +2291,13 @@ class Widgets(Gtk.Window):
                 return True
         except Exception:
             pass
+        return False
+
+    def _on_task_row_key(self, _w, ev, idx):
+        """Give the framebuffer-safe row the semantics of a native button."""
+        if ev.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            self._toggle_task(idx)
+            return True
         return False
 
     @staticmethod

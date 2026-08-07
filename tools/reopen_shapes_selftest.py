@@ -309,7 +309,9 @@ elif app == "language":
     # The destroy handler saves unconditionally, which IS this app's
     # destructive path -- no user action needed to reach it. Earn some XP
     # through the real counter anyway so each cycle differs.
-    w._bump_streak_xp(5)
+    # _bump_streak_xp was renamed to _award_xp; the old name silently made
+    # every language case unrunnable, which this harness then counted as LOST.
+    w._award_xp(5)
     pump(0.1)
 
 elif app == "ebook":
@@ -417,7 +419,7 @@ def main():
     finally:
         shutil.rmtree(root, ignore_errors=True)
     print("")
-    print("%d shapes x %d open+edit+close cycles, %d survived, %d LOST"
+    print("%d shapes x %d open+edit+close cycles, %d survived, %d FAILED"
           % (total, CYCLES, total - len(bad), len(bad)))
     if bad:
         print("RESULT: SOME FAILED  (" + ", ".join(bad) + ")")

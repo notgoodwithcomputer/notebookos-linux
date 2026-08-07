@@ -92,6 +92,17 @@ def day(n):
     return time.strftime("%Y-%m-%d", time.localtime(time.time() - n * 86400))
 
 
+def laid_out(wmod, on):
+    """How many tiles the grid should hold for a given on/off map.
+
+    There are SEVEN tiles and six slots, so this is not len(TILE_ORDER) any
+    more and never was a safe thing to hard-code: switching a seventh tile on
+    must add nothing to the grid, and every count in this file has to agree
+    about that or the tests disagree with the board they are checking."""
+    return min(sum(1 for t in wmod.TILE_ORDER if on.get(t)),
+               wmod.TILE_COLS * wmod.TILE_ROWS)
+
+
 def full_home():
     """A home with something real in every store the board reads."""
     home = fresh_home()
@@ -122,8 +133,36 @@ def full_home():
                                     "September", "October", "November",
                                     "December")[now.tm_mon - 1], now.tm_year),
          "date": "today", "title": "An entry", "text": "x"}], "active": 0})
+    # The shape bills.py itself writes: whole cents, an anchor due date and
+    # the months between repeats. One overdue and one still to come, so the
+    # tile has both a marked row and a quiet one to render.
+    put(home, "bills.json", {"bills": [
+        {"id": "b1", "payee": "City Light", "account": "44-99", "amount": 8420,
+         "due": day(-2), "every": 1, "method": "mail", "lead": 5,
+         "address": "PO Box 1188", "phone": "", "note": "", "paid": []},
+        {"id": "b2", "payee": "Water Board", "account": "88-22", "amount": 4165,
+         "due": day(20), "every": 1, "method": "phone", "lead": 0,
+         "address": "", "phone": "555-0132", "note": "", "paid": []}]})
     put(home, "language.json", {"crowns": {"eo:0:0": 2}, "xp": 240,
-                                "streak": 4})
+                                "streak": 4, "goal": 20, "day_xp": 20,
+                                "day": time.strftime("%Y-%m-%d")})
+    # The shapes these apps themselves write. contacts keeps a free-text
+    # birthday field; ebook keeps a fraction through each book; novel keeps
+    # chapter bodies, which the card counts words in.
+    put(home, "contacts.json", {"people": [
+        {"name": "Ada Whitfield", "bday": time.strftime("%d %B"),
+         "phone": "555-0101"},
+        {"name": "Idris Mbeki", "bday": "3 January", "phone": "555-0102"}]})
+    put(home, "ebook.json", {"books": [
+        {"path": "/root/Documents/a.epub", "title": "The Long Winter",
+         "fmt": "epub", "pos": 40, "frac": 0.42, "total": 300},
+        {"path": "/root/Documents/b.epub", "title": "Sea Room",
+         "fmt": "epub", "pos": 0, "frac": 0.0, "total": 280}],
+        "open": "/root/Documents/a.epub"})
+    put(home, "novel.json", {"title": "The Salt Road", "active": 0,
+                             "chapters": [
+        {"num": 1, "title": "Landfall", "body": "word " * 120},
+        {"num": 2, "title": "The Crossing", "body": "word " * 45}]})
     put(home, "accounting.json", {"tx": [{"date": "2026-07-28", "amt": 12.5}],
                                   "opening": 0.0})
     put(home, "mealplanner.json", {"plan": {time.strftime("%Y-%m-%d"): {
@@ -259,7 +298,9 @@ import widgets as _w_readers
 READERS = _w_readers.TILE_ORDER
 FILES = {"academics": "academics.json", "homework": "academics.json",
          "workout": "workout.json", "journal": "journal.json",
-         "language": "language.json", "accounting": "accounting.json"}
+         "language": "language.json", "accounting": "accounting.json",
+         "bills": "bills.json", "birthdays": "contacts.json",
+         "reading": "ebook.json", "novel": "novel.json"}
 for damage, blob in (("missing", None),
                      ("unparseable", "{oh no"),
                      ("a bare list", "[1, 2, 3]"),
@@ -300,7 +341,7 @@ part = full_home()
 put(part, "accounting.json", "{truncated")
 wmod, b = board(part)
 check("a single bad store does not take the other tiles with it",
-      len(b._tilegrid.get_children()) == len(wmod.TILE_ORDER),
+      len(b._tilegrid.get_children()) == laid_out(wmod, b.board),
       len(b._tilegrid.get_children()))
 b.destroy()
 
@@ -342,11 +383,54 @@ for tid in ("homework", "workout", "journal"):
           "state" % tid, empty and bool(words), (words, empty))
 b._rebuild_tiles()
 check("...and the grid still holds every switched-on tile",
-      len(b._tilegrid.get_children()) == len(wmod.TILE_ORDER),
+      len(b._tilegrid.get_children()) == laid_out(wmod, b.board),
       len(b._tilegrid.get_children()))
 b.destroy()
 shutil.rmtree(live, ignore_errors=True)
 shutil.rmtree(part, ignore_errors=True)
+
+
+# A ROW'S VALUE CELL MUST RENDER ITS TEXT, not an ellipsis standing in for it.
+#
+# tile_words above reads the tile's content MODEL, which is why this went
+# unseen: the strings were all present and correct, and the widget that drew
+# them was one character wide. An ellipsizing label reports max_width_chars as
+# its natural width, and a pack_end child with expand=False gets exactly that
+# -- so the Homework card's due column shipped as three bare "..." marks.
+#
+# MEASURED INSIDE A REALISED WINDOW, and that is not a detail: a label that is
+# not in one resolves no font and answers 0 to every width question, so the
+# first version of this check compared 0 against 0 and passed against the
+# broken code it was written for. The invariant is stated against the OUTPUT --
+# a ten-character value must be drawn wider than a bare ellipsis is -- so no
+# particular choice of constant can satisfy it by accident.
+wmod, b = board(full_home())
+
+
+def drawn_value_width(spec):
+    """How wide the right-hand cell of a built content row is actually drawn."""
+    row = b._content_row(spec)
+    cells = [c for c in row.get_children() if isinstance(c, Gtk.Label)]
+    if not cells:
+        return 0
+    win = Gtk.OffscreenWindow()
+    win.add(row)
+    win.set_size_request(320, 40)
+    win.show_all()
+    while Gtk.events_pending():
+        Gtk.main_iteration()
+    got = cells[-1].get_allocated_width()
+    win.destroy()
+    return got
+
+
+_dots = drawn_value_width((None, "Some Payee", "\u2026", False))
+for _what, _value in (("a plain value", "in 12 days"),
+                      ("a marked value", ("alert", "Post now"))):
+    _got = drawn_value_width((None, "Some Payee", _value, False))
+    check("%s is drawn at its own width, not squeezed to an ellipsis" % _what,
+          _got > _dots, (_got, _dots))
+b.destroy()
 
 
 # -- 4. which tiles are on ---------------------------------------------------
@@ -354,11 +438,24 @@ plain = fresh_home()
 wmod, b = board(plain)
 check("with no board store the defaults decide",
       b.board == wmod.TILE_DEFAULT_ON, b.board)
-# Every tile ships ON. The board is a fixed 2x4 grid that fills the desktop,
-# so an off-by-default tile would leave a hole in it -- the opt-in rule came
-# from the old scrolling column, which no longer exists.
-check("every tile ships switched on",
-      all(b.board[t] for t in wmod.TILE_ORDER), b.board)
+# THE SHIPPED BOARD IS EXACTLY FULL. The grid is a fixed 3x2 that fills the
+# desktop, so a tile short of six leaves a hole in it and a seventh switched on
+# is simply never drawn. Both directions are checked, because either one on its
+# own passes on a board that is wrong the other way.
+slots = wmod.TILE_COLS * wmod.TILE_ROWS
+check("the shipped defaults fill the grid exactly",
+      sum(1 for t in wmod.TILE_ORDER if b.board[t]) == slots,
+      b.board)
+check("...and there are more tiles to choose from than the grid can hold",
+      len(wmod.TILE_ORDER) > slots, len(wmod.TILE_ORDER))
+check("...so the rest ship switched off, ready to be chosen",
+      sum(1 for t in wmod.TILE_ORDER if not b.board[t])
+      == len(wmod.TILE_ORDER) - slots, b.board)
+check("...and Bills is one of the six that ship", b.board["bills"] is True,
+      b.board)
+check("...and every switched-on tile is actually laid out",
+      len(b._tilegrid.get_children()) == slots,
+      len(b._tilegrid.get_children()))
 b.destroy()
 
 put(plain, "workout.json", {"show_widget": True, "exercises": [], "log": {}})
@@ -367,18 +464,52 @@ check("the Workout app's old desktop switch is carried over",
       b.board["workout"] is True, b.board)
 b.destroy()
 
-# "language" is not a tile any more; naming it must simply be ignored rather
-# than switching something else off by accident.
-put(plain, "widgets.json", {"tiles": {"journal": False, "language": False}})
+# A tile id this build does not have -- an older release's, or a hand edit --
+# must simply be ignored rather than switching something else off by accident.
+# ("language" used to be the example here; it is a real tile again, which is
+# exactly the kind of drift that makes a hard-coded name the wrong test.)
+put(plain, "widgets.json", {"tiles": {"journal": False, "weather": False}})
 wmod, b = board(plain)
 check("the board store switches a tile off", b.board["journal"] is False)
 check("...and leaves the tiles it does not mention alone",
-      b.board["accounting"] is True, b.board)
+      b.board["meals"] is True and b.board["workout"] is True, b.board)
 check("a switched-off tile is not laid out",
-      len(b._tilegrid.get_children()) == len(wmod.TILE_ORDER) - 1,
+      len(b._tilegrid.get_children()) == laid_out(wmod, b.board),
       len(b._tilegrid.get_children()))
 check("...and a stored tile that no longer exists is ignored",
-      "language" not in b.board, sorted(b.board))
+      "weather" not in b.board, sorted(b.board))
+b.destroy()
+
+# UPGRADING A DESKTOP THAT PREDATES THE BILL TRACKER. The store on such a
+# machine names the old six tiles and knows nothing about bills, so left alone
+# the new tile is appended seventh and never drawn -- installing the app would
+# look like it had done nothing to the desktop. See widgets.adopt_bills.
+OLD_SIX = ("academics", "homework", "meals", "workout", "journal",
+           "accounting")
+put(plain, "widgets.json", {"tiles": {t: True for t in OLD_SIX},
+                            "order": list(OLD_SIX)})
+wmod, b = board(plain)
+check("an upgraded board puts Bills on the desktop",
+      b.board["bills"] is True, b.board)
+check("...by standing Accounting down, not by growing the grid",
+      b.board["accounting"] is False
+      and len(b._tilegrid.get_children()) == wmod.TILE_COLS * wmod.TILE_ROWS,
+      (b.board, len(b._tilegrid.get_children())))
+check("...into the slot Accounting held, leaving the rest where they were",
+      b.board_order[:6] == list(OLD_SIX[:5]) + ["bills"], b.board_order)
+check("...and every other tile keeps the state it was saved with",
+      all(b.board[t] is True for t in OLD_SIX[:5]), b.board)
+b.destroy()
+
+# ...and it is a ONE-TIME move, not a rule that keeps re-asserting itself. A
+# store that names bills has been through Widget Settings, so whatever it says
+# is the owner's own choice and must survive an app restart.
+put(plain, "widgets.json",
+    {"tiles": dict({t: True for t in OLD_SIX}, bills=False),
+     "order": list(OLD_SIX) + ["bills"]})
+wmod, b = board(plain)
+check("a board that already knows about Bills is left exactly as saved",
+      b.board["bills"] is False and b.board["accounting"] is True, b.board)
 b.destroy()
 
 put(plain, "widgets.json", "{not json at all")
@@ -425,7 +556,11 @@ ws = widgetsettings.WidgetSettings()
 ws._set_all(True)
 wmod, b = board(rt)
 check("and switching them back on restores the board",
-      len(b._tilegrid.get_children()) == len(wmod.TILE_ORDER),
+      len(b._tilegrid.get_children()) == laid_out(wmod, b.board),
+      len(b._tilegrid.get_children()))
+check("...and never draws more tiles than the grid has slots for",
+      len(b._tilegrid.get_children())
+      == wmod.TILE_COLS * wmod.TILE_ROWS,
       len(b._tilegrid.get_children()))
 b.destroy()
 
@@ -439,6 +574,13 @@ nbapp.screen_size = lambda: (1024, 740)
 import widgets as _w                                            # noqa: E402,F811
 import widgetsettings                                           # noqa: E402,F811
 ws = widgetsettings.WidgetSettings()
+# From the SHIPPED board, not from whatever the block above left behind: the
+# checks below are about a row click on an ordinary desktop, and the previous
+# block deliberately leaves the store in the over-full state a hand edit can
+# produce -- where a tile switched off cannot be switched back on until room
+# is made. That rule has its own checks in widgetsettings_selftest.
+ws._set_all(False)
+ws._fill_board()
 was = ws.data["journal"]
 
 
@@ -498,7 +640,16 @@ def render(b):
     root = b.get_child()
     b.remove(root)
     off = Gtk.OffscreenWindow()
-    off.set_size_request((wmod.TILE_COLS * b._tile_w) + b._col_w + wmod.BOARD_GAP, b._avail_h)
+    # The REAL toplevel is the content area PLUS a BOARD_MARGIN frame on every
+    # side: the window covers the whole desktop under the panel and the board
+    # box is inset inside it, so the outermost cards have somewhere to cast a
+    # shadow (a CSS box-shadow cannot paint outside its toplevel). Sizing this
+    # window to the content alone made the margins eat into the grid instead,
+    # and every tile measured short.
+    off.set_size_request(
+        (wmod.TILE_COLS * b._tile_w) + b._col_w + wmod.BOARD_GAP
+        + 2 * wmod.BOARD_MARGIN,
+        b._avail_h + 2 * wmod.BOARD_MARGIN)
     off.add(root)
     off.show_all()
     pump()
@@ -535,9 +686,12 @@ for W, H in PANELS:
     rows = {}
     for a in allocs:
         rows.setdefault(a.y, []).append(a)
+    # Allocations are in WINDOW coordinates, and the board box is inset by
+    # BOARD_MARGIN, so the content floor is the margin plus the board height.
+    floor = b._avail_h + wmod.BOARD_MARGIN
     check("no tile is laid out below the bottom of the board at %dx%d" % (W, H),
-          all(a.y + a.height <= b._avail_h for a in allocs),
-          "board %d" % b._avail_h)
+          all(a.y + a.height <= floor for a in allocs),
+          "board %d, floor %d" % (b._avail_h, floor))
     # A last row that does not fill the grid is INDENTED, so every row still
     # ends flush against the column. The hole belongs on the far side, where
     # there is desktop, not beside the pinned cards where it reads as a gap.

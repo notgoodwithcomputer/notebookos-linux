@@ -135,6 +135,55 @@ check("the week total counts other days too, not just today",
       total >= 3, total)
 check("a day with no sets contributes nothing",
       app._day_totals(day_ago(400)) == (0, 3), app._day_totals(day_ago(400)))
+
+# The week is seven CALENDAR days, not seven 86400-second steps. Stepping a
+# timestamp slides an hour across a daylight-saving change: on the evening of
+# a fall-back Sunday the strip used to read Tue..Sun,Sun -- Monday's sets gone
+# from the week, every row under the wrong weekday name, and today counted
+# twice in SETS THIS WEEK. Checked in a zone that HAS the change, and pinned to
+# real dates so it does not quietly stop testing anything when the zone is UTC.
+_probe = [
+    # (label, local time tuple, expected Monday..Sunday)
+    ("the evening of a fall-back Sunday", (2026, 11, 1, 23, 30, 0),
+     ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30",
+      "2026-10-31", "2026-11-01"]),
+    ("a spring-forward week", (2026, 3, 8, 0, 30, 0),
+     ["2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05", "2026-03-06",
+      "2026-03-07", "2026-03-08"]),
+    ("an ordinary Wednesday", (2026, 7, 29, 9, 0, 0),
+     ["2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30", "2026-07-31",
+      "2026-08-01", "2026-08-02"]),
+]
+_tz = os.environ.get("TZ")
+try:
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    for label, tup, want in _probe:
+        ts = time.mktime(tup + (0, 0, -1))
+        got = wo._week_days(ts)
+        check("the week strip is seven calendar days: %s" % label,
+              got == want, got)
+    # ...and whatever the zone, a week is always 7 distinct consecutive days
+    ts = time.mktime((2026, 11, 1, 23, 30, 0, 0, 0, -1))
+    got = wo._week_days(ts)
+    ords = [wo._ordinal(d) for d in got]
+    check("no day is repeated or skipped in the strip",
+          None not in ords and ords == list(range(ords[0], ords[0] + 7)), got)
+    check("...and it starts on a Monday",
+          time.localtime(time.mktime((int(got[0][:4]), int(got[0][5:7]),
+                                      int(got[0][8:]), 12, 0, 0, 0, 0, -1))
+                         ).tm_wday == 0, got[0])
+    check("the day number round-trips back to its date key",
+          wo._day_from_ordinal(wo._ordinal("2024-02-29")) == "2024-02-29"
+          and wo._day_from_ordinal(0) == "1970-01-01"
+          and wo._day_from_ordinal(wo._ordinal("2026-12-31")) == "2026-12-31",
+          wo._day_from_ordinal(wo._ordinal("2024-02-29")))
+finally:
+    if _tz is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = _tz
+    time.tzset()
 shutil.rmtree(home, ignore_errors=True)
 
 

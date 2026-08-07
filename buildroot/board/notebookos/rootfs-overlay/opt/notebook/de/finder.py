@@ -11,15 +11,21 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, GObject, Pango  # noqa: E402
 
+import ctypes
+import errno
 import os
 import re
+import stat
 import time
 import shutil
 import subprocess
 import threading
+import tempfile
 
 import nbicons
 import nbapp  # for nudge_paint (swrast first-paint flush)
+import nbstate  # navigation generations + stable-identity restoration
+import nbtransitions  # direction vocabulary shared with the rest of the OS
 from nbi18n import _t  # noqa: E402
 
 # Whether the GPU stack is accelerated (a compositor is running). session.sh
@@ -32,6 +38,74 @@ from nbi18n import _t  # noqa: E402
 _ACCEL = os.environ.get("NB_ACCEL") == "1"
 
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ---- renameat2(RENAME_NOREPLACE): move onto a free name, or not at all ----
+#
+# Every move the Finder makes must refuse an occupied destination rather than
+# consume what stands there. Looking at the name and then renaming is two
+# moments, and the folder can gain that name in between — a download landing, a
+# second Finder window, an editor writing its file out — so the look answers
+# for a folder that no longer exists by the time the rename runs. The kernel
+# has the one-step version: renameat2 with RENAME_NOREPLACE either moves the
+# entry or fails with EEXIST, and nothing can slip between the two halves
+# because there are no halves. It works for files, directories and symlinks
+# alike (the link itself is moved, never followed).
+#
+# Python has no os.renameat2, so it is called through libc. glibc has exported
+# the symbol since 2.28 and the shipped image is x86_64 glibc (buildroot/.config),
+# so this is the normal path, not a best-effort one.
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1 << 0
+_libc = None
+
+
+def _libc_renameat2():
+    """The libc renameat2 entry point, resolved once and kept.
+
+    Raises OSError(ENOTSUP) if this libc does not export it. That is a refusal,
+    not a signal to try something else: the only alternatives are a
+    look-then-rename or shutil.move, and both answer an occupied name by
+    destroying what is there — the exact failure this whole path exists to
+    prevent. A move that cannot be made atomically is not made at all.
+    """
+    global _libc
+    if _libc is None:
+        try:
+            _libc = ctypes.CDLL(None, use_errno=True)
+        except OSError:
+            _libc = False
+    try:
+        fn = _libc.renameat2
+    except AttributeError:
+        fn = None
+    if fn is None:
+        raise OSError(errno.ENOTSUP,
+                      "renameat2 is not available in this C library")
+    fn.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                   ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    fn.restype = ctypes.c_int
+    return fn
+
+
+def _renameat2_noreplace(src, dst):
+    """renameat2(AT_FDCWD, src, AT_FDCWD, dst, RENAME_NOREPLACE).
+
+    Both names are passed as raw bytes (os.fsencode) because that is what the
+    kernel takes; the errno is read back through ctypes' own copy, which is why
+    the library is opened with use_errno=True — a bare ctypes call runs Python
+    code before errno could be read and would report someone else's failure.
+
+    The errno is raised as-is, so callers keep the distinctions they act on:
+    EEXIST arrives as FileExistsError (the name is taken), EXDEV as a plain
+    OSError the Paste path turns into a copy-then-delete across disks.
+    """
+    fn = _libc_renameat2()
+    ctypes.set_errno(0)
+    rc = fn(_AT_FDCWD, os.fsencode(src), _AT_FDCWD, os.fsencode(dst),
+            _RENAME_NOREPLACE)
+    if rc != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err), src, None, dst)
 
 # Apps that are NOT READY to be seen by a user, and are therefore kept out of
 # the Applications folder in the shipped image.
@@ -58,7 +132,8 @@ APP_MODULES = {
     "Journal": "journal", "Screenplay": "screenplay", "Tasks": "tasks",
     "Calendar": "calendar", "Cookbook": "cookbook",
     "Meal Planner": "mealplanner", "E-book Reader": "ebook",
-    "Calculator": "calculator", "Accounting": "accounting", "Contacts": "contacts",
+    "Calculator": "calculator", "Accounting": "accounting",
+    "Bill Tracker": "bills", "Contacts": "contacts",
     "Illustrator": "illustrator", "Sequencer": "sequencer",
     "Video Editor": "video", "Media Viewer": "media", "Music": "music",
     "Packages": "packages", "2048": "g2048",
@@ -66,6 +141,7 @@ APP_MODULES = {
     "Maps": "maps", "Workout": "workout",
     "Terminal": "terminal", "Settings": "settings",
     "System Monitor": "sysmon", "Install Notebook OS": "installer",
+    "USB Writer": "usbwriter",
 }
 
 # a few app modules have no same-named glyph in nbicons — alias to a fitting one
@@ -125,7 +201,11 @@ APP_KIND = {
     # kind rather than sharing one.
     "Meal Planner": "Cooking",
     "E-book Reader": "Reader", "Calculator": "Utility",
-    "Accounting": "Finance", "Contacts": "Utility",
+    # Two Finance apps, and the split is deliberate: Accounting is the cash book
+    # of what HAS happened, the Bill Tracker is what has to happen next and how
+    # to do it. Same Kind because that is where a person looks for either.
+    "Accounting": "Finance", "Bill Tracker": "Finance",
+    "Contacts": "Utility",
     "Illustrator": "Graphics",
     "Sequencer": "Audio", "Video Editor": "Video",
     "Media Viewer": "Media", "Music": "Music", "Packages": "System",
@@ -134,7 +214,7 @@ APP_KIND = {
     "Workout": "Health",
     "Terminal": "Utility",
     "Settings": "System", "System Monitor": "System",
-    "Install Notebook OS": "System",
+    "Install Notebook OS": "System", "USB Writer": "System",
 }
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -198,6 +278,11 @@ class _CopyCancelled(Exception):
     """Raised inside the copy worker when the user presses Cancel."""
 
 
+class _UndoStale(Exception):
+    """Raised when the item an Undo was recorded for is no longer the item at
+    that pathname. Undo names one concrete thing, not a name on disk."""
+
+
 def human(n):
     for u in ("B", "KB", "MB", "GB"):
         if n < 1024 or u == "GB":
@@ -241,7 +326,61 @@ def _unframe(scroller):
         child.set_shadow_type(Gtk.ShadowType.NONE)
 
 
-def display_name(name):
+def push_history(history, pos, rel):
+    """Record `rel` as the newest spot in a Back/Forward history.
+
+    Returns the new (history, position) pair. Everything after the current
+    position is dropped — once you go Back and then somewhere else, the branch
+    you left is not somewhere you can go Forward to any more — and navigating
+    to the folder you are already in does not add a second copy of it, so Back
+    never has to be pressed twice to leave one place.
+
+    Kept out of the window class (and free of GTK) so the Back/Forward
+    contract can be exercised headlessly by
+    `tools/shell_finder_ux_selftest.py`."""
+    hist = list(history[:pos + 1])
+    if not hist or hist[-1] != rel:
+        hist.append(rel)
+    return hist, len(hist) - 1
+
+
+def nav_direction(frm, to):
+    """The direction of a move from history slot `frm` to slot `to`.
+
+    Named in the OS-wide MEANING vocabulary (`nbtransitions.BACK` /
+    `FORWARD` / `CROSSFADE`) rather than in words of the Finder's own, so a
+    later view transition and this navigation agree on what "Back" is: a move
+    to a LOWER history slot. Staying on the same slot is a refresh in place,
+    which has no direction."""
+    if to < frm:
+        return nbtransitions.BACK
+    if to > frm:
+        return nbtransitions.FORWARD
+    return nbtransitions.CROSSFADE
+
+
+def restores_place(direction):
+    """Whether arriving with `direction` should put the person back where they
+    were in that folder — selection and scroll — rather than at the top.
+
+    A move through history (Back/Forward) and a refresh in place are RETURNS:
+    the folder was already on screen a moment ago and losing the spot reads as
+    the Finder forgetting what you were doing. A fresh navigation into a folder
+    (a double-click, a breadcrumb, a sidebar place) is an ARRIVAL and starts at
+    the top, which is where a person expects a folder they just opened to be."""
+    return direction in (nbtransitions.BACK, nbtransitions.FORWARD,
+                         nbtransitions.CROSSFADE)
+
+
+# The folders the OS itself provisions in Home, which the sidebar and the
+# breadcrumb already show translated (both are made of Buttons, which nbi18n
+# reaches). Only these, and only when they are the real one sitting directly
+# in Home — a folder the user made and called "Music" inside Documents is
+# their own word and stays exactly as they typed it.
+HOME_FOLDERS = frozenset(("Applications",) + PERSONA_DIRS)
+
+
+def display_name(name, rel=None):
     """What the user should READ for an item called `name`.
 
     Applications live on disk as "Calculator.app" so the launcher can recognise
@@ -251,10 +390,50 @@ def display_name(name):
     rename and remove all keep working against the file that exists.
 
     DISPLAY_NAMES handles the other case, a folder whose on-disk name is not
-    the one the product uses (".Trash" is the Trash everywhere else)."""
+    the one the product uses (".Trash" is the Trash everywhere else).
+
+    AND IT TRANSLATES THE APPLICATIONS. Every app name is already in all
+    seventeen catalogs — Settings is "Ajustes", "Настройки", "設定" — and every
+    one of them reached the screen in English anyway, because the Applications
+    folder is a Gtk.TreeView and nbi18n's automatic layer only walks Labels and
+    Buttons. So the one screen a non-English user opens first, and opens most,
+    was the one screen still entirely in English, in an OS otherwise fully
+    translated. Only .app entries are translated: a document called "Music.txt"
+    is the user's own words and must survive untouched, which is the same rule
+    nbi18n.set_verbatim exists for.
+
+    `rel` is the item's Home-relative path, and it is what limits the second
+    case: THE SIX FOLDERS THE OS PROVISIONS. The sidebar showed Documentos,
+    Música, Imágenes and the list beside it showed Documents, Music, Pictures
+    — the same six folders under two names, three centimetres apart on one
+    screen. Only a folder whose relative path IS its name is one of them, so
+    a folder the user made and called "Music" is never touched.
+
+    ONLY THE DISPLAY CHANGES. Everything that has to find the thing on disk —
+    launching (APP_MODULES is keyed on the real name), renaming, sorting,
+    icons, Kind — reads the store's raw value, not this. `search_names` below
+    is what keeps typing either name working."""
     if name in DISPLAY_NAMES:
-        return DISPLAY_NAMES[name]
-    return name[:-4] if name.endswith(".app") else name
+        return _t(DISPLAY_NAMES[name])
+    if name.endswith(".app"):
+        return _t(name[:-4])
+    if name in HOME_FOLDERS and rel == name:
+        return _t(name)
+    return name
+
+
+def search_names(name, rel=None):
+    """Every name an item can be FOUND by: what it is called on disk and what
+    it is called on screen.
+
+    A Spanish user typing "aju" must reach Ajustes, and one who knows the app
+    as Settings must still reach it by typing "set" — the app is called both,
+    and a search that knew only one of them would have made a translated name
+    worse than an untranslated one."""
+    disp = display_name(name, rel).lower()
+    raw = name.lower()
+    stem = raw[:-4] if raw.endswith(".app") else raw
+    return (disp, stem) if disp != stem else (disp,)
 
 
 def _unmount_esc(s):
@@ -321,11 +500,22 @@ def icon_for(name):
 
 
 def kind_for(name, isdir):
-    """Human 'Kind' descriptor (module-level twin; Finder._kind_for delegates)."""
+    """Human 'Kind' descriptor (module-level twin; Finder._kind_for delegates).
+
+    Translated here, at the one point that produces it. Kind is a column of a
+    Gtk.TreeView, so nbi18n's automatic layer never saw it and the whole
+    column read Game / Utility / Word Processor beside app names that were
+    themselves English — every word in the Applications folder, on a machine
+    set to Spanish. Every value is already in all seventeen catalogs.
+
+    Safe to translate at the source because nothing compares this: it is put
+    in the store, drawn in the Kind column, and shown in the info panel. The
+    "PNG File" fallback is built from the extension, which is not a word in
+    any language and is left as it is."""
     if isdir:
-        return "Folder"
+        return _t("Folder")
     if name.endswith(".app"):
-        return APP_KIND.get(name[:-4], "Application")
+        return _t(APP_KIND.get(name[:-4], "Application"))
     n = name.lower()
     ek = {".txt": "Text", ".md": "Text", ".writer": "Document",
           ".gba": "Game", ".gbc": "Game", ".gb": "Game", ".sgb": "Game",
@@ -339,9 +529,10 @@ def kind_for(name, isdir):
           ".mov": "Video", ".webm": "Video", ".avi": "Video"}
     for e, k in ek.items():
         if n.endswith(e):
-            return k
+            return _t(k)
     base, dot, ext = name.rpartition(".")
-    return (ext.upper() + " File") if dot and ext and base else "Document"
+    return (_t("%s File") % ext.upper()) if dot and ext and base \
+        else _t("Document")
 
 
 def list_dir(abspath, show_hidden=False):
@@ -365,7 +556,7 @@ def list_dir(abspath, show_hidden=False):
             mtime = st.st_mtime
             size_bytes = 0 if isdir else st.st_size
             size = size_text(nm, isdir, st.st_size)
-            date = time.strftime("%-d %b %Y", time.localtime(st.st_mtime))
+            date = _t(time.strftime("%-d %b %Y", time.localtime(st.st_mtime)))
         except (OSError, ValueError):
             size, date = "\u2014", "\u2014"
         out.append({"name": nm, "is_dir": isdir, "size_bytes": size_bytes,
@@ -471,9 +662,47 @@ class Finder(Gtk.Window):
         # left band of the desktop home; the widget column sits to the right
         self.move(40, panel_h + 16)
         self.get_style_context().add_class("finder")
+        # Install this app's stylesheet HERE, not only from the __main__ block.
+        #
+        # nbapp.AppWindow.__init__ does the same for every other app, but the
+        # Finder is its own Gtk.Window subclass and so was the one window whose
+        # CSS depended on being launched as a script. Anything that CONSTRUCTS a
+        # Finder instead -- the offscreen render harness (tools/appshot.py),
+        # construct_all, a future embedder -- got a Finder with none of its own
+        # styling, silently falling through to the bare theme.
+        #
+        # That is not a cosmetic problem for the app (the shipped desktop always
+        # goes through __main__, so users saw the right thing) but it is a
+        # serious one for the TOOLS: every screenshot of the Finder taken for a
+        # UI audit was of an unstyled window, so the sidebar rows rendered as
+        # bordered theme buttons rather than the flat rows they really are, and
+        # anyone reading those renders would go and "fix" a defect that does not
+        # exist. Measured: sbrow border-radius came out 8 (theme button) before
+        # this call and 2 (the .sbrow rule) after it.
+        # install_css() is idempotent, so constructing several Finders is free.
+        install_css()
         self.rel = start                       # current path relative to HOME
         self._history = [start]                # visited rel paths (back/fwd)
         self._hpos = 0                         # index of current spot in history
+        # One generation per SHOWN FOLDER. Every delayed callback that would
+        # write into the view (the coalesced filesystem-monitor reload, the
+        # idle scroll restore) carries the token of the folder it was posted
+        # for, so a reload triggered by a folder the user has since left cannot
+        # land on the one they are looking at now. Closed on destroy.
+        self._dirgen = nbstate.Generation("finder-dir")
+        self._dir_reload_id = 0                # pending coalesced reload source
+        self._dir_reload_token = None          # ...and the folder it speaks for
+        # Everything this window schedules for the rest of its life is recorded
+        # here so destroy can release it. Set before any of it can start: the
+        # repeating sources below are created while the UI is still being
+        # built, and a callback that outlives the window would keep the whole
+        # Finder alive and go on touching sidebar/visibility widgets.
+        self._closed = False                   # destroy ran: callbacks must stop
+        self._dev_poll_id = 0                  # repeating Devices re-read
+        self._app_poll_id = 0                  # fallback app-flag poll
+        self._app_flag_monitor = None          # Gio monitor, cancelled on destroy
+        self._places = {}                      # rel -> {"sel": rel path, "scroll"}
+        self._nav_dir = nbtransitions.NONE     # direction of the current move
         self._filter = ""                      # live search filter (substring)
         self._wide = []                        # search hits from the rest of Home
         self._wide_gen = 0                     # stamp: a stale scan can't land
@@ -487,6 +716,7 @@ class Finder(Gtk.Window):
         self._free = "—"                        # cached free-space status string
         self._sb_rows = []                     # (rel, button) for sidebar places
         self._clipboard = None                 # (abspath, is_cut) for copy/paste
+        self._inflight = set()                 # dests claimed by a running copy
         self._show_hidden = False               # View: show dotfiles
         self._view = "list"                     # "list" | "grid" view mode
         self._sort_col = 1                      # store column the list sorts by
@@ -545,9 +775,16 @@ class Finder(Gtk.Window):
         # gridicon at index 9 is the same glyph rendered LARGE for the icon view,
         # so list rows stay compact while the grid shows big, crisp icons — both
         # views share one model, so search/sort/load keep them in step)
-        self.store = Gtk.ListStore(GObject.TYPE_OBJECT, str, str, str, str,
+        # Columns 0 and 9 hold cairo SURFACES, not pixbufs. A pixbuf has no
+        # notion of display scale, so on a HiDPI panel every icon in the file
+        # list and the grid was a logical-size bitmap stretched by the
+        # compositor — soft icons beside sharp text, on exactly the machines
+        # bought for their screen. A surface carries a device scale and
+        # CellRendererPixbuf's `surface` property honours it.
+        # See nbicons.SURFACE_GTYPE for why the type cannot be TYPE_OBJECT.
+        self.store = Gtk.ListStore(nbicons.SURFACE_GTYPE, str, str, str, str,
                                    bool, GObject.TYPE_INT64, GObject.TYPE_DOUBLE,
-                                   str, GObject.TYPE_OBJECT)
+                                   str, nbicons.SURFACE_GTYPE)
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.set_headers_visible(True)
         self.tree.get_style_context().add_class("filelist")
@@ -564,15 +801,16 @@ class Finder(Gtk.Window):
         # Grid view: an icon grid over the SAME model, so search/sort/load all
         # keep it in step. Hidden until the toolbar's grid toggle selects it.
         self.iconview = Gtk.IconView(model=self.store)
-        # bind renderers via CellLayout (not set_pixbuf_column) because store
-        # col 0 is TYPE_OBJECT, which set_pixbuf_column rejects; the manual
-        # pixbuf renderer accepts it, exactly like the list view's Name column.
+        # bind renderers via CellLayout (not set_pixbuf_column) because the
+        # store's icon columns hold cairo SURFACES, which set_pixbuf_column
+        # rejects; binding the renderer's `surface` property by hand accepts
+        # them, exactly like the list view's Name column below.
         gpr = Gtk.CellRendererPixbuf()
         self.iconview.pack_start(gpr, False)
         # bind to store col 9 (the LARGE glyph), not col 0 (the 22px list glyph):
         # the grid view must show big icons, and reusing col 0 is what made them
         # render tiny on real hardware.
-        self.iconview.add_attribute(gpr, "pixbuf", 9)
+        self.iconview.add_attribute(gpr, "surface", 9)
         gtr = Gtk.CellRendererText()
         gtr.set_property("xalign", 0.5)
         # CENTER is 1; 2 is RIGHT. The name under a grid icon was right-ragged
@@ -653,6 +891,7 @@ class Finder(Gtk.Window):
         # F2 renames the selected item (window-level, so it works whichever
         # child — list, grid, or the search box — currently holds focus).
         self.connect("key-press-event", self._on_key_press)
+        self.connect("destroy", self._on_destroy_navigation)
 
         # matchbox occasionally leaves a freshly-mapped dialog's frame
         # unmapped when it appears before any input/restack event (its
@@ -671,7 +910,8 @@ class Finder(Gtk.Window):
         # inotify-backed GLib file monitor rather than stat-polling it ~2.5x a
         # second for the whole session (the old 400ms poll). monitor_file
         # reports CREATED/DELETED even for a path that doesn't exist yet.
-        self._app_flag_monitor = None
+        self._cancel_app_flag_monitor()
+        self._stop_source("_app_poll_id")
         try:
             _flag = Gio.File.new_for_path(nbapp.APP_FLAG)
             self._app_flag_monitor = _flag.monitor_file(
@@ -681,7 +921,8 @@ class Finder(Gtk.Window):
             # No file-monitor backend available: fall back to an occasional
             # poll. The flag flips only when an app opens/closes, so a slow
             # interval is plenty (vs. the old 400ms wake).
-            GLib.timeout_add_seconds(3, self._poll_app_flag)
+            self._app_poll_id = GLib.timeout_add_seconds(
+                3, self._poll_app_flag)
         # Reconcile once shortly after start too: covers a flag already present
         # when the Finder (re)launches, which has no future monitor event.
         GLib.timeout_add(500, self._reconcile_app_flag_once)
@@ -701,14 +942,21 @@ class Finder(Gtk.Window):
 
     def _on_app_flag_changed(self, *_):
         # GLib file-monitor callback: the flag file was created or removed.
+        # A cancelled monitor can still deliver a queued event, and a destroyed
+        # window must not be shown or hidden.
+        if getattr(self, "_closed", False):
+            return
         self._sync_app_flag()
 
     def _reconcile_app_flag_once(self):
-        self._sync_app_flag()
+        if not getattr(self, "_closed", False):
+            self._sync_app_flag()
         return False
 
     def _poll_app_flag(self):
         # Fallback path used only when no file monitor is available; repeats.
+        if getattr(self, "_closed", False):
+            return False
         self._sync_app_flag()
         return True
 
@@ -819,7 +1067,7 @@ class Finder(Gtk.Window):
         def _winmark(icon):
             img = Gtk.Image()
             try:
-                img.set_from_pixbuf(nbicons.pixbuf(icon, 11, "#4A463E"))
+                nbicons.set_image(img, icon, 11, "#3A362E")
             except Exception:
                 pass
             return img
@@ -974,8 +1222,8 @@ class Finder(Gtk.Window):
         # a plain English string here still translates.)
         if tip:
             b.set_tooltip_text(tip)
-        img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(name, 18,
-              "#3A362E" if sensitive else "#B8B3A6"))
+        img = nbicons.image(name, 18,
+              "#3A362E" if sensitive else "#B3AD9E")
         # Show the glyph HERE, not via the window's show_all: a caller that
         # sets no_show_all on the button (the Trash button, which only appears
         # outside the Trash) then reveals it with set_visible(True), and
@@ -990,8 +1238,7 @@ class Finder(Gtk.Window):
 
     def _set_nav(self, btn, name, on):
         btn.set_sensitive(on)
-        btn._img.set_from_pixbuf(
-            nbicons.pixbuf(name, 18, "#3A362E" if on else "#B8B3A6"))
+        nbicons.set_image(btn._img, name, 18, "#3A362E" if on else "#B3AD9E")
 
     def _navbar(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1116,7 +1363,7 @@ class Finder(Gtk.Window):
         self.view_list_btn = Gtk.Button()
         self.view_list_btn.get_style_context().add_class("viewbtn")
         self.view_list_btn.set_tooltip_text(_t("List view"))
-        li = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("viewlist", 16, "#1A1916"))
+        li = nbicons.image("viewlist", 16, "#1A1916")
         self.view_list_btn._img = li
         self.view_list_btn.add(li)
         self.view_list_btn.get_style_context().add_class("active")  # default
@@ -1124,7 +1371,7 @@ class Finder(Gtk.Window):
         self.view_grid_btn = Gtk.Button()
         self.view_grid_btn.get_style_context().add_class("viewbtn")
         self.view_grid_btn.set_tooltip_text(_t("Grid view"))
-        ge = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("viewgrid", 16, "#3A362E"))
+        ge = nbicons.image("viewgrid", 16, "#3A362E")
         self.view_grid_btn._img = ge
         self.view_grid_btn.add(ge)
         self.view_grid_btn.connect("clicked", lambda *_: self._set_view("grid"))
@@ -1141,8 +1388,7 @@ class Finder(Gtk.Window):
                 (self.view_grid_btn, "viewgrid", mode == "grid")):
             ctx = btn.get_style_context()
             (ctx.add_class if on else ctx.remove_class)("active")
-            btn._img.set_from_pixbuf(
-                nbicons.pixbuf(name, 16, "#1A1916" if on else "#3A362E"))
+            nbicons.set_image(btn._img, name, 16, "#1A1916" if on else "#3A362E")
         self._apply_view()
         self._save_prefs()
 
@@ -1169,11 +1415,38 @@ class Finder(Gtk.Window):
         sb.set_size_request(190, -1)
         self._sb = sb
         self._mounts_sig = None
+        self._ejecting = set()                 # mounts with a flush in flight
         self._fill_sidebar()
         # re-read mounted volumes periodically so a USB stick inserted after
-        # launch appears in Devices without restarting the Finder.
-        GLib.timeout_add_seconds(5, self._poll_devices)
+        # launch appears in Devices without restarting the Finder. Recorded so
+        # destroy can stop it; dropping any previous one keeps a rebuilt
+        # sidebar from leaving two pollers running against the same window.
+        self._stop_source("_dev_poll_id")
+        self._dev_poll_id = GLib.timeout_add_seconds(5, self._poll_devices)
         return sb
+
+    def _stop_source(self, attr):
+        # Remove a recorded repeating source and clear its field. Idempotent:
+        # safe on a source that never started, already fired, or was already
+        # removed, so destroy can run twice without raising.
+        sid = getattr(self, attr, 0)
+        if sid:
+            try:
+                GLib.source_remove(sid)
+            except Exception:
+                pass
+        setattr(self, attr, 0)
+
+    def _cancel_app_flag_monitor(self):
+        # Gio keeps a cancelled-or-not monitor alive on its own; without this
+        # the monitor (and the window it calls back into) survives destroy.
+        mon = getattr(self, "_app_flag_monitor", None)
+        if mon is not None:
+            try:
+                mon.cancel()
+            except Exception:
+                pass
+        self._app_flag_monitor = None
 
     def _fill_sidebar(self):
         for c in self._sb.get_children():
@@ -1196,7 +1469,7 @@ class Finder(Gtk.Window):
                 # button does FOR you, not the name of the write-out it runs.
                 ej.set_tooltip_text(
                     _t("Finish writing, then remove the drive safely"))
-                ej.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("eject", 13, "#6E695E")))
+                ej.add(nbicons.image("eject", 13, "#6E695E"))
                 ej.connect("clicked", lambda _b, m=rel: self._eject(m))
                 hb.pack_start(ej, False, False, 6)
                 self._sb.pack_start(hb, False, False, 0)
@@ -1212,8 +1485,25 @@ class Finder(Gtk.Window):
         # then sync (flush the write cache to the device) and unmount. sync is the
         # belt to the mount's -o sync suspenders: it also flushes any driver-side
         # buffering (exfat/ntfs) the mount option doesn't cover.
+        #
+        # Both of those run for as long as the stick needs — flushing a file that
+        # was just copied to a slow USB 2.0 drive is tens of seconds — so they go
+        # on a worker thread. Run from the button's own handler they held the main
+        # loop for that whole time: the window stopped redrawing and stopped
+        # answering the WM, so safely removing a drive (the one operation on this
+        # machine that exists to protect the user's files) looked like a crash and
+        # invited exactly the yank it is there to prevent. The result comes back
+        # through _eject_done on the main loop, where touching GTK is safe.
+        if mnt in self._ejecting:
+            return                         # already flushing this one; not twice
         if self.abspath(self.rel).startswith(mnt):
             self.load("")
+        self._ejecting.add(mnt)
+        threading.Thread(target=self._eject_job, args=(mnt,),
+                         daemon=True).start()
+
+    def _eject_job(self, mnt):
+        # Worker thread: no GTK here, only the two blocking commands.
         try:
             subprocess.run(["sync"], timeout=30)
         except Exception:
@@ -1224,14 +1514,21 @@ class Finder(Gtk.Window):
             err = (r.stderr or b"").decode(errors="replace").strip()
         except Exception as e:
             ok, err = False, str(e)
+        GLib.idle_add(self._eject_done, mnt, ok, err)
+
+    def _eject_done(self, mnt, ok, err):
+        self._ejecting.discard(mnt)
         if ok:
             self._flash_status(_t("Safe to remove the drive"))
         else:
             self._flash_status(_t("Could not eject: %s")
                                % (err or _t("the drive is in use")))
         self._fill_sidebar()
+        return False
 
     def _poll_devices(self):
+        if getattr(self, "_closed", False):
+            return False
         try:
             if tuple(d[2] for d in self._devices()) != self._mounts_sig:
                 self._fill_sidebar()
@@ -1276,7 +1573,7 @@ class Finder(Gtk.Window):
         if rel == self.rel:
             row.get_style_context().add_class("selected")
         box = Gtk.Box(spacing=12)
-        box.pack_start(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 18, "#3A362E")), False, False, 0)
+        box.pack_start(nbicons.image(icon, 18, "#3A362E"), False, False, 0)
         box.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
         row.add(box)
         if rel is not None:
@@ -1305,7 +1602,7 @@ class Finder(Gtk.Window):
         # in FIXED sizing so it may shrink below the widest name (GROW_ONLY, the
         # default, never shrinks) while still expanding to fill spare width.
         txt.set_property("ellipsize", Pango.EllipsizeMode.END)
-        col.pack_start(icon, False); col.add_attribute(icon, "pixbuf", 0)
+        col.pack_start(icon, False); col.add_attribute(icon, "surface", 0)
         col.pack_start(txt, True); col.add_attribute(txt, "text", 1)
         col.set_cell_data_func(txt, self._name_cell_data)
         col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
@@ -1389,8 +1686,14 @@ class Finder(Gtk.Window):
                 first = -first
             return first
         va, vb = model.get_value(a, col), model.get_value(b, col)
-        if col == 1:                               # name: case-insensitive
-            va, vb = va.lower(), vb.lower()
+        if col == 1:
+            # Name: case-insensitive, and sorted by what is ON SCREEN. The
+            # store holds the on-disk name, so sorting on that put a Spanish
+            # Applications folder in English alphabetical order — Ajustes
+            # under S, Calculadora under C only by coincidence — which reads
+            # as a list in no order at all.
+            va = display_name(va, model.get_value(a, 4)).lower()
+            vb = display_name(vb, model.get_value(b, 4)).lower()
         return (va > vb) - (va < vb)
 
     # ---- data ----
@@ -1404,6 +1707,20 @@ class Finder(Gtk.Window):
         return os.path.normpath(os.path.join(HOME, rel))
 
     def load(self, rel, record=True, keep_filter=False):
+        # Where the person was in the folder they are leaving, so a Back — or a
+        # refresh of this same folder — can put them back on the item they had
+        # selected rather than at the top of a re-read listing.
+        self._remember_place()
+        # A new folder is on screen from here on: every delayed callback posted
+        # for the previous one is now stale (see _dirgen).
+        self._dirgen.bump()
+        # Back/Forward stamp the direction before calling in; anything else is
+        # a refresh in place when it names the folder already on screen, and a
+        # fresh arrival when it does not.
+        direction = self._nav_dir
+        if direction == nbtransitions.NONE and rel == getattr(self, "rel", None):
+            direction = nbtransitions.CROSSFADE
+        self._nav_dir = nbtransitions.NONE     # consumed; the next move sets it
         # a real navigation clears any active search; a search-driven reload
         # keeps it (keep_filter=True).
         if not keep_filter and self._filter:
@@ -1463,7 +1780,8 @@ class Finder(Gtk.Window):
                     mtime = st.st_mtime
                     size_bytes = 0 if isdir else st.st_size
                     size = size_text(nm, isdir, st.st_size)
-                    date = time.strftime("%-d %b %Y", time.localtime(st.st_mtime))
+                    date = _t(time.strftime("%-d %b %Y",
+                                            time.localtime(st.st_mtime)))
                 except (OSError, ValueError):
                     # ValueError: %-d (glibc no-pad) is rejected by musl/uClibc;
                     # without this it would escape load() and break the listing.
@@ -1472,11 +1790,11 @@ class Finder(Gtk.Window):
                 # Two sizes of the SAME glyph: compact for the list rows, large
                 # for the grid cells. Both are memoized by nbicons, so a folder
                 # of many files sharing an icon still renders each size once.
-                entries.append((nbicons.pixbuf(ic, LIST_ICON_PX), nm, size, date,
+                entries.append((nbicons.surface(ic, LIST_ICON_PX), nm, size, date,
                                 os.path.join(rel, nm) if rel else nm,
                                 isdir, size_bytes, mtime,
                                 self._kind_for(nm, isdir),
-                                nbicons.pixbuf(ic, GRID_ICON_PX)))
+                                nbicons.surface(ic, GRID_ICON_PX)))
         except OSError:
             pass
         # Cache the raw (unfiltered) disk listing and free-space figure so a
@@ -1485,10 +1803,20 @@ class Finder(Gtk.Window):
         self._free = "—"
         try:
             stv = os.statvfs(full)
-            self._free = human(stv.f_bavail * stv.f_frsize) + " available"
+            # One catalog key, not a translated word glued onto a number:
+            # concatenation fixes English word order, and this line reads
+            # "quedan 14,7 GB" / "14,7 GB 사용 가능" in the languages that put
+            # it the other way round.
+            self._free = _t("%s available") % human(
+                stv.f_bavail * stv.f_frsize)
         except OSError:
             pass
         self._populate_store()
+
+        if restores_place(direction):
+            token = self._dirgen.token()
+            GLib.idle_add(self._dirgen.guard(
+                lambda: self._restore_place(rel), token))
 
         if record:
             del self._history[self._hpos + 1:]      # drop forward history
@@ -1523,21 +1851,89 @@ class Finder(Gtk.Window):
         # A single copy/save fires several events; coalesce them into one reload.
         if getattr(self, "_dir_reload_id", 0):
             GLib.source_remove(self._dir_reload_id)
-        self._dir_reload_id = GLib.timeout_add(350, self._dir_reload_fire)
+        self._dir_reload_token = self._dirgen.token()
+        self._dir_reload_id = GLib.timeout_add(
+            350, self._dir_reload_fire, self._dir_reload_token)
 
-    def _dir_reload_fire(self):
+    def _dir_reload_fire(self, token):
         self._dir_reload_id = 0
+        if not self._dirgen.valid(token):
+            return False
         if self._rename_active():
             # never yank an in-progress inline rename out from under the user;
             # the rename itself will trigger another change event when it lands.
-            self._dir_reload_id = GLib.timeout_add(700, self._dir_reload_fire)
+            self._dir_reload_id = GLib.timeout_add(
+                700, self._dir_reload_fire, token)
             return False
-        model, it = self._selected_iter()
-        sel = model.get_value(it, 1) if it is not None else None
         self.load(self.rel, record=False, keep_filter=True)
-        if sel:
-            self._select_name(sel)         # keep the selection across the refresh
         return False
+
+    def _active_scroller(self):
+        return self._grid_sw if self._view == "grid" else self._list_sw
+
+    def _remember_place(self):
+        """Remember this folder by stable item path and scroll fraction."""
+        rel = getattr(self, "rel", None)
+        if rel is None or not hasattr(self, "store"):
+            return
+        model, it = self._selected_iter()
+        selected = model.get_value(it, 4) if it is not None else None
+        fraction = 0.0
+        try:
+            adj = self._active_scroller().get_vadjustment()
+            span = adj.get_upper() - adj.get_page_size() - adj.get_lower()
+            if span > 0:
+                fraction = (adj.get_value() - adj.get_lower()) / span
+        except Exception:
+            pass
+        self._places[rel] = {"sel": selected,
+                             "scroll": nbstate.fraction(fraction)}
+
+    def _restore_place(self, rel):
+        """Restore only if `rel` is still the folder on screen."""
+        if rel != self.rel:
+            return False
+        place = self._places.get(rel, {})
+        selected = place.get("sel")
+        if selected is not None:
+            for row in self.store:
+                if row[4] == selected:
+                    path = row.path
+                    if self._view == "grid":
+                        self.iconview.select_path(path)
+                        self.iconview.scroll_to_path(path, False, 0, 0)
+                    else:
+                        self.tree.get_selection().select_path(path)
+                        self.tree.scroll_to_cell(path, None, False, 0, 0)
+                    break
+        try:
+            adj = self._active_scroller().get_vadjustment()
+            span = adj.get_upper() - adj.get_page_size() - adj.get_lower()
+            frac = nbstate.fraction(place.get("scroll"), 0.0)
+            adj.set_value(adj.get_lower() + span * frac)
+        except Exception:
+            pass
+        return False
+
+    def _on_destroy_navigation(self, *_):
+        # The one place that owns teardown. Destroy can arrive more than once
+        # (Gtk emits it, and a caller may destroy an already-closed window), so
+        # this is idempotent, and _closed is set FIRST: a repeating callback
+        # that fires between here and the last source_remove must drop out
+        # rather than touch widgets that are being torn down.
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        self._stop_source("_dev_poll_id")
+        self._stop_source("_app_poll_id")
+        self._cancel_app_flag_monitor()
+        self._dirgen.close()
+        if self._dir_reload_id:
+            try:
+                GLib.source_remove(self._dir_reload_id)
+            except Exception:
+                pass
+            self._dir_reload_id = 0
 
     def _rename_active(self):
         for r in (getattr(self, "_name_renderer", None),
@@ -1554,8 +1950,12 @@ class Finder(Gtk.Window):
         # self.store stays the filtered store (the finder selftests rely on it).
         self.store.clear()
         flt = self._filter
+        # Matched against BOTH names an item has (see search_names): an app
+        # translated on screen has to be findable by the word that is printed
+        # on it, and by the one it is called on disk.
         shown = [e for e in self._raw_entries
-                 if not flt or flt in e[1].lower()]
+                 if not flt or any(flt in n
+                                   for n in search_names(e[1], e[4]))]
         for e in shown:
             self.store.append(list(e))
         # Matches from the REST of Home, found by the background scan (see
@@ -1589,7 +1989,14 @@ class Finder(Gtk.Window):
             mtime = st.st_mtime
             size_bytes = 0 if isdir else st.st_size
             size = size_text(nm, isdir, st.st_size)
-            date = time.strftime("%-d %b %Y", time.localtime(st.st_mtime))
+            # _t around a strftime result is deliberate and is not a mistake:
+            # this image has no C locale, so strftime always writes English
+            # month names, and nbi18n has a rule for exactly that shape (see
+            # its _date_lookup) which turns "15 Jul 2026" into "15 июл 2026".
+            # The Date column put its value straight into the store, so every
+            # row of every folder carried an English month on a machine that
+            # was otherwise fully translated.
+            date = _t(time.strftime("%-d %b %Y", time.localtime(st.st_mtime)))
         except (OSError, ValueError):
             size, date = "—", "—"
         ic = "folder" if isdir else self._icon_for(nm)
@@ -1597,9 +2004,9 @@ class Finder(Gtk.Window):
             rel = os.path.relpath(path, HOME)
         except ValueError:
             rel = path
-        return [nbicons.pixbuf(ic, LIST_ICON_PX), nm, size, date, rel,
+        return [nbicons.surface(ic, LIST_ICON_PX), nm, size, date, rel,
                 isdir, size_bytes, mtime, self._kind_for(nm, isdir),
-                nbicons.pixbuf(ic, GRID_ICON_PX)]
+                nbicons.surface(ic, GRID_ICON_PX)]
 
     # ---- whole-Home search -------------------------------------------------
     def _schedule_wide_search(self):
@@ -1746,12 +2153,16 @@ class Finder(Gtk.Window):
 
     def go_back(self):
         if self._hpos > 0:
+            old = self._hpos
             self._hpos -= 1
+            self._nav_dir = nav_direction(old, self._hpos)
             self.load(self._history[self._hpos], record=False)
 
     def go_forward(self):
         if self._hpos < len(self._history) - 1:
+            old = self._hpos
             self._hpos += 1
+            self._nav_dir = nav_direction(old, self._hpos)
             self.load(self._history[self._hpos], record=False)
 
     def _on_search(self, entry):
@@ -1803,27 +2214,105 @@ class Finder(Gtk.Window):
             self._flash_status(_t("Select an item to move to Trash"))
             return
         src = self.abspath(model.get_value(it, 4))
-        if not os.path.exists(src):
+        # lexists on both sides: a dangling symlink is a real directory entry.
+        # exists() answers about the link's TARGET, so a link whose target had
+        # gone was declared "no longer exists" and could not be thrown away —
+        # the row stayed on screen and Move to Trash did nothing — while a
+        # dangling link already sitting in the Trash read as a free name and
+        # was silently overwritten by the item being trashed onto it.
+        if not os.path.lexists(src):
             self.load(self.rel, record=False, keep_filter=True)
             self._flash_status(_t("That item no longer exists"))
             return
         base = os.path.basename(src)
         dst = os.path.join(self._trash_dir(), base)
         n = 1
-        while os.path.exists(dst):
+        while os.path.lexists(dst):
             dst = os.path.join(self._trash_dir(), "%s (%d)" % (base, n))
             n += 1
-        try:
-            os.rename(src, dst)
-        except OSError:
+        # Record where the item belongs BEFORE moving it.  Moving first left a
+        # crash window (and an ordinary ENOSPC/read-only failure) where the
+        # item was safely in Trash but its only Put Back destination had never
+        # been written.  In that state Finder silently restored it to Home.
+        # A small orphaned record is harmless and removable; a moved item with
+        # no record has lost information, so the transaction is ordered this
+        # way around.
+        origin_file = self._record_origin(os.path.basename(dst), src)
+        if not origin_file:
             self._flash_status(_t("Could not move '%s' to Trash") % base)
             return
-        self._record_origin(os.path.basename(dst), src)
-        self._set_undo(_t("Move to Trash"), self._undo_move, dst, src,
-                       os.path.join(self._origins_dir(),
-                                    os.path.basename(dst)))
+        # The Trash lives under $NB_HOME, so throwing away something on a USB
+        # stick or a second disk is a real copy followed by a delete — the
+        # kernel answers a rename across filesystems with EXDEV. Without this
+        # branch that EXDEV fell into the `except OSError` below, so Move to
+        # Trash was offered on every row of every stick and could NEVER
+        # succeed on one: it always answered "Could not move ... to Trash".
+        # Paste's cut already owns the cross-disk machinery — staged copy,
+        # progress card, Cancel, identity-checked removal — so this hands the
+        # work to it rather than growing a second implementation beside it.
+        if not self._same_filesystem(src, os.path.dirname(dst)):
+            self._trash_across(src, dst, base, origin_file)
+            return
+        try:
+            self._rename_noreplace(src, dst)
+        except OSError:
+            try:
+                os.remove(origin_file)
+            except OSError:
+                pass
+            self._flash_status(_t("Could not move '%s' to Trash") % base)
+            return
+        self._set_undo_move(_t("Move to Trash"), dst, src, origin_file)
         self.load(self.rel, record=False, keep_filter=True)
         self._flash_undoable(_t("Moved “%s” to the Trash") % display_name(base))
+
+    def _trash_across(self, src, dst, base, origin_file):
+        """Move to Trash when the Trash is on a different filesystem.
+
+        Same shape as Paste's cross-disk cut, and the same reasoning: the
+        original is removed only AFTER the copy is safely written, and only if
+        it is still the same entry. A long copy off a stick is exactly the
+        window in which the original can be replaced by something else, and
+        removing by name at the end would throw away an item the user never
+        selected while the status line said it had been trashed.
+
+        No one-step Undo, again matching Paste: putting it back would be
+        another copy of the same length. The recourse is Put Back, which is
+        why the origin record is written before any of this starts.
+        """
+        identity = self._path_identity(src)
+
+        def done(ok):
+            if not ok:
+                # Nothing landed in the Trash, so the origin record it would
+                # have belonged to is removed too; leaving it would make a
+                # later item of the same name Put Back to the wrong folder.
+                try:
+                    os.remove(origin_file)
+                except OSError:
+                    pass
+                self.load(self.rel, record=False, keep_filter=True)
+                return
+            gone = False
+            if identity is not None and self._path_identity(src) == identity:
+                try:
+                    self._undo_remove(src, identity)
+                except (_UndoStale, OSError, shutil.Error):
+                    pass
+                gone = not os.path.lexists(src)
+            self.load(self.rel, record=False, keep_filter=True)
+            if gone:
+                self._flash_status(
+                    _t("Moved “%s” to the Trash") % display_name(base))
+            else:
+                # The copy IS in the Trash and is kept — it is now the safe
+                # copy. Say plainly that the original is still on the disk, so
+                # nobody assumes the stick has been tidied.
+                self._flash_status(
+                    _t("Copied “%s” to the Trash, but the original could not "
+                       "be removed.") % display_name(base))
+
+        self._copy(src, dst, done)
 
     # ---- undo (one step, for the actions that move or unmake something) ----
     def _set_undo(self, label, fn, *args):
@@ -1832,25 +2321,59 @@ class Finder(Gtk.Window):
         happens, without pretending to a history nothing else in the OS keeps."""
         self._undo = {"label": label, "fn": fn, "args": args}
 
-    def _undo_move(self, src, dst, origin_file=None):
+    def _set_undo_remove(self, label, path):
+        """Remember how to take back something this action just CREATED, bound
+        to the exact directory entry it created rather than to its name. A
+        pathname is not an identity: between the action and Ctrl+Z the new
+        folder or pasted copy can be deleted and something else — a real
+        document, a folder, a link — can take the name. Undoing by name then
+        destroys work nobody asked to lose, and says "Undone"."""
+        self._set_undo(label, self._undo_remove, path,
+                       self._path_identity(path))
+
+    def _set_undo_move(self, label, src, dst, origin_file=None):
+        """Remember how to put a moved/trashed/renamed item back, bound to the
+        item itself. The same replacement race applies to the source: undoing
+        by name alone would drag whatever now sits in the Trash (or under the
+        new name) into the original location."""
+        self._set_undo(label, self._undo_move, src, dst, origin_file,
+                       self._path_identity(src))
+
+    def _undo_move(self, src, dst, origin_file=None, identity=None):
         # put a moved/trashed item back where it came from
-        if os.path.exists(dst) or not os.path.exists(src):
+        if identity is not None and self._path_identity(src) != identity:
+            raise _UndoStale(src)
+        # lexists on both sides: a link is an item. Testing exists() refused to
+        # restore a symlink whose target had gone, and treated a dangling link
+        # sitting in the destination as free space to move onto.
+        if os.path.lexists(dst) or not os.path.lexists(src):
             raise OSError("gone")
         os.makedirs(os.path.dirname(dst) or HOME, exist_ok=True)
-        shutil.move(src, dst)
+        self._rename_noreplace(src, dst)
         if origin_file:
             try:
                 os.remove(origin_file)
             except OSError:
                 pass
 
-    def _undo_remove(self, path):
-        # take back something the last action CREATED (a duplicate, a pasted
-        # copy, a new folder). Only ever removes what we just made.
-        if os.path.isdir(path):
-            shutil.rmtree(path)
+    def _undo_remove(self, path, identity=None):
+        """Take back something the last action CREATED (a duplicate, a pasted
+        copy, a new folder). Only ever removes what we just made.
+
+        When an identity was recorded (every Undo goes through
+        `_set_undo_remove`), the entry standing at this pathname must still be
+        that exact inode of that exact kind; anything else is refused untouched.
+        A symlink is removed as itself — `os.path.isdir` answers about the
+        link's TARGET, so following it would walk out of the folder the action
+        touched and empty a live directory somewhere else.
+        """
+        if identity is not None and self._path_identity(path) != identity:
+            raise _UndoStale(path)
+        if os.path.islink(path) or not os.path.isdir(path):
+            if os.path.lexists(path):
+                os.remove(path)
         elif os.path.exists(path):
-            os.remove(path)
+            shutil.rmtree(path)
 
     def _do_undo(self):
         u = self._undo
@@ -1860,6 +2383,12 @@ class Finder(Gtk.Window):
         self._undo = None
         try:
             u["fn"](*u["args"])
+        except _UndoStale:
+            # Refused, not failed, and nothing was touched. Say which it was:
+            # "Could not undo that" would read as a glitch worth retrying.
+            self._flash_status(_t("That item changed. Nothing was undone."))
+            self.load(self.rel, record=False, keep_filter=True)
+            return
         except (OSError, shutil.Error):
             self._flash_status(_t("Could not undo that"))
             self.load(self.rel, record=False, keep_filter=True)
@@ -1881,7 +2410,11 @@ class Finder(Gtk.Window):
             return
         name = model.get_value(it, 1)
         path = self.abspath(model.get_value(it, 4))
-        if not os.path.exists(path):
+        if not os.path.lexists(path):
+            self.load(self.rel, record=False, keep_filter=True)
+            return
+        identity = self._path_identity(path)
+        if identity is None:
             self.load(self.rel, record=False, keep_filter=True)
             return
         # Name the thing being destroyed. "Are you sure?" over an unnamed item
@@ -1890,15 +2423,49 @@ class Finder(Gtk.Window):
             _t("Delete Immediately"),
             _t("Permanently erase “%s”? This cannot be undone.")
             % display_name(name),
-            _t("Delete"), lambda: self._delete_forever(path, name))
+            _t("Delete"),
+            lambda: self._delete_forever(path, name, identity))
 
-    def _delete_forever(self, path, name):
+    @staticmethod
+    def _path_identity(path):
+        """Stable identity of the exact directory entry being confirmed."""
         try:
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-            else:
+            st = os.lstat(path)
+            return st.st_dev, st.st_ino, stat.S_IFMT(st.st_mode)
+        except OSError:
+            return None
+
+    @staticmethod
+    def _purge_entry(path):
+        """Erase one directory entry for good. Returns True once it is gone.
+
+        A symlink is removed as itself: `os.path.isdir` answers about the
+        link's TARGET, so testing it first walked a link in the Trash into a
+        live folder somewhere else and deleted that folder's contents. Success
+        is decided by looking at the disk afterwards, not by the absence of an
+        exception, so a directory that only half-emptied reports honestly.
+        """
+        try:
+            if os.path.islink(path) or not os.path.isdir(path):
                 os.remove(path)
+            else:
+                shutil.rmtree(path)
         except (OSError, shutil.Error):
+            pass
+        return not os.path.lexists(path)
+
+    def _delete_forever(self, path, name, expected_identity=None):
+        # A confirmation names one concrete item, not whatever later happens
+        # to occupy the same pathname. Revalidate at the last possible moment
+        # so a refresh, external process, or remove/recreate race cannot turn
+        # "delete A" into "delete B" while the card is open.
+        if (expected_identity is not None
+                and self._path_identity(path) != expected_identity):
+            self._flash_status(
+                _t("That item changed. Nothing was deleted."))
+            self.load(self.rel, record=False, keep_filter=True)
+            return
+        if not self._purge_entry(path):
             self._flash_status(_t("Could not delete “%s”") % display_name(name))
             return
         try:
@@ -1918,11 +2485,14 @@ class Finder(Gtk.Window):
         return d
 
     def _record_origin(self, trashed_base, original):
+        path = os.path.join(self._origins_dir(), trashed_base)
         try:
-            with open(os.path.join(self._origins_dir(), trashed_base), "w") as fh:
-                fh.write(original)
-        except OSError:
-            pass
+            # The sidecar is part of the Trash transaction, not disposable
+            # cache: without it Put Back cannot return to the right folder.
+            nbapp.atomic_write_text(path, original)
+            return path
+        except (OSError, UnicodeError):
+            return None
 
     def _restore_selected(self):
         model, it = self._selected_iter()
@@ -1931,7 +2501,15 @@ class Finder(Gtk.Window):
             return
         name = model.get_value(it, 1)
         src = os.path.join(self._trash_dir(), name)
-        if not os.path.exists(src):
+        # lexists: the entry to put back is the link itself, not what it points
+        # at. exists() made Put Back return in silence for a dangling link —
+        # the row was listed, the command was offered, and nothing happened.
+        if not os.path.lexists(src):
+            # The row is stale — the entry went away behind our back. Say so
+            # and redraw: a Put Back that silently does nothing is a dead
+            # control, and the user is left staring at a row that is gone.
+            self.load(self.rel, record=False, keep_filter=True)
+            self._flash_status(_t("That item no longer exists"))
             return
         origin_file = os.path.join(self._origins_dir(), name)
         dest = ""
@@ -1948,56 +2526,149 @@ class Finder(Gtk.Window):
         except OSError:
             dest = os.path.join(HOME, name)
             parent = HOME
-        if os.path.exists(dest):
+        if self._taken(dest):
             dest = self._unique_path(parent, os.path.basename(dest), suffix=" copy")
+        # An item trashed off a stick came here by copy, and it goes home the
+        # same way. Before Move to Trash gained its cross-disk branch nothing
+        # could reach the Trash from another filesystem, so this case did not
+        # arise; adding that branch without this one would have moved the dead
+        # end rather than removed it — the item would be throwable away and
+        # then unputbackable.
+        if not self._same_filesystem(src, parent):
+            self._restore_across(src, dest, name, origin_file)
+            return
         try:
-            os.rename(src, dest)
+            self._rename_noreplace(src, dest)
+        except FileExistsError:
+            self._flash_status(
+                _t("An item named '%s' already exists")
+                % os.path.basename(dest))
+            self.load(self.rel, record=False, keep_filter=True)
+            return
         except OSError:
-            try:
-                shutil.move(src, dest)
-            except (OSError, shutil.Error):
-                return
+            self._flash_status(_t("Could not put that back"))
+            self.load(self.rel, record=False, keep_filter=True)
+            return
         try:
             os.remove(origin_file)
         except OSError:
             pass
         self.load(self.rel, record=False, keep_filter=True)
+        # Every other file command reports itself. Put Back moves an item to a
+        # folder the user is not looking at, so silence is the one case where
+        # confirmation matters most: the row leaves the Trash and nothing says
+        # where it went.
+        self._flash_status(_t("Put back “%s”") % display_name(name))
 
-    def _empty_trash(self):
+    def _restore_across(self, src, dest, name, origin_file):
+        """Put Back when the item's home folder is on a different filesystem.
+
+        The mirror of _trash_across, and ordered the same way round: the copy
+        lands at the destination first, and only then is the Trash copy
+        removed. If the removal does not happen the item exists twice, which
+        is recoverable; the reverse order would risk it existing nowhere.
+        """
+        identity = self._path_identity(src)
+
+        def done(ok):
+            if not ok:
+                self.load(self.rel, record=False, keep_filter=True)
+                return
+            gone = False
+            if identity is not None and self._path_identity(src) == identity:
+                try:
+                    self._undo_remove(src, identity)
+                except (_UndoStale, OSError, shutil.Error):
+                    pass
+                gone = not os.path.lexists(src)
+            if gone:
+                try:
+                    os.remove(origin_file)
+                except OSError:
+                    pass
+            self.load(self.rel, record=False, keep_filter=True)
+            if gone:
+                self._flash_status(_t("Put back “%s”") % display_name(name))
+            else:
+                self._flash_status(
+                    _t("Put back “%s”, but the copy in the Trash could not be "
+                       "removed.") % display_name(name))
+
+        self._copy(src, dest, done)
+
+    def _trash_snapshot(self):
+        """The Trash exactly as it is right now: (name, identity) per entry.
+
+        This is what a confirmation names. Identity is the lstat triple, so an
+        entry replaced under the same name afterwards is a different item and
+        is recognisable as one.
+        """
         trash = self._trash_dir()
         try:
-            names = os.listdir(trash)
+            names = sorted(n for n in os.listdir(trash) if n != ".origins")
         except OSError:
-            return
+            return []
+        snapshot = []
         for nm in names:
-            p = os.path.join(trash, nm)
-            if os.path.isdir(p):
-                for r, dirs, files in os.walk(p, topdown=False):
-                    for f in files:
-                        try: os.remove(os.path.join(r, f))
-                        except OSError: pass
-                    for d in dirs:
-                        try: os.rmdir(os.path.join(r, d))
-                        except OSError: pass
-                try: os.rmdir(p)
-                except OSError: pass
-            else:
-                try: os.remove(p)
-                except OSError: pass
+            identity = self._path_identity(os.path.join(trash, nm))
+            if identity is not None:
+                snapshot.append((nm, identity))
+        return snapshot
+
+    def _empty_trash(self, captured=None):
+        # Erase the entries the confirmation actually listed, and nothing else.
+        # Re-reading the directory here instead would destroy whatever arrived
+        # while the card was on screen — items nobody was ever shown, let alone
+        # agreed to lose.
+        if captured is None:
+            captured = self._trash_snapshot()
+        trash = self._trash_dir()
+        origins = self._origins_dir()
+        done = kept = failed = 0
+        for nm, identity in captured:
+            path = os.path.join(trash, nm)
+            current = self._path_identity(path)
+            if current is None:            # already gone; nothing left to erase
+                continue
+            if current != identity:        # a different item now wears the name
+                kept += 1
+                continue
+            if not self._purge_entry(path):
+                failed += 1
+                continue                   # its Put Back record still applies
+            done += 1
+            try:
+                os.remove(os.path.join(origins, nm))
+            except OSError:
+                pass
+        if kept or failed:
+            self._flash_status(self._empty_report(done, kept, failed), 4000)
         self.load(self.rel, record=False, keep_filter=True)
+
+    @staticmethod
+    def _empty_report(done, kept, failed):
+        # Say what is still in the Trash. Reporting a clean sweep that did not
+        # happen is how someone finds their file gone a week later.
+        parts = [_t("Emptied %d item%s.") % (done, "" if done == 1 else "s")]
+        if kept:
+            parts.append(_t("%d newer item%s stayed in the Trash.")
+                         % (kept, "" if kept == 1 else "s"))
+        if failed:
+            parts.append(_t("%d item%s could not be deleted.")
+                         % (failed, "" if failed == 1 else "s"))
+        return " ".join(parts)
 
     def _confirm_empty_trash(self):
         # Emptying the Trash erases its contents for good, so confirm first. The
         # actual purge stays in _empty_trash (driven by both this confirmation
         # and the headless selftests).
-        trash = self._trash_dir()
-        try:
-            items = [n for n in os.listdir(trash) if n != ".origins"]
-        except OSError:
-            items = []
-        if not items:
+        # Capture the entries here, while they are the ones on screen, and hand
+        # that exact list to the purge: what is named is what is erased.
+        captured = self._trash_snapshot()
+        if not captured:
             self._flash_status(_t("Trash is already empty"))
             return
+        items = [nm for nm, _identity in captured]
         n = len(items)
         # Name what is about to be destroyed. A bare count is not enough to
         # decide by: "3 items" could be junk or could be the tax return, and
@@ -2013,7 +2684,7 @@ class Finder(Gtk.Window):
                 _t("Permanently erase %d item%s from the Trash? This cannot "
                    "be undone.") % (n, "" if n == 1 else "s"),
                 listed),
-            _t("Empty Trash"), self._empty_trash)
+            _t("Empty Trash"), lambda: self._empty_trash(captured))
 
     def _confirm(self, title, message, ok_label, on_yes):
         # House-style modal confirmation for a destructive action. Reuses the
@@ -2047,13 +2718,34 @@ class Finder(Gtk.Window):
         cancel.connect("clicked", lambda *_: dlg.destroy())
         ok = Gtk.Button(label=ok_label)
         ok.get_style_context().add_class("finderinfodanger")
-        ok.connect("clicked", lambda *_: (dlg.destroy(), on_yes()))
+
+        def accepted(*_args):
+            cancel.set_sensitive(False)
+            ok.set_sensitive(False)
+            dlg.destroy()
+            on_yes()
+
+        ok.connect("clicked", self._once(accepted))
         btnrow.pack_start(cancel, False, False, 0)
         btnrow.pack_start(ok, False, False, 0)
         box.pack_start(btnrow, False, False, 0)
         area.add(box)
         dlg.connect("key-press-event", self._info_key)     # Esc cancels
         dlg.show_all()
+        # A stray Enter/Space must choose safety, never irreversible action.
+        cancel.grab_focus()
+
+    @staticmethod
+    def _once(callback):
+        """Return an activation callback that can commit at most once."""
+        fired = [False]
+
+        def run(*args):
+            if fired[0]:
+                return None
+            fired[0] = True
+            return callback(*args)
+        return run
 
     # ---- file operations (copy / cut / paste / new folder) ----
     def _selected_iter(self):
@@ -2071,24 +2763,82 @@ class Finder(Gtk.Window):
             return None
         return self.abspath(model.get_value(it, 4))
 
+    def _taken(self, path):
+        """Is this name already spoken for — by any directory entry, or by a copy that is
+        still running? A big copy creates its destination on a worker thread,
+        so between the click and the worker's first write the name still looks
+        free. A second Paste in that window chose the SAME destination: two
+        jobs wrote one file, and cancelling either one deleted the other's
+        finished copy while its own status line said "Copied here". lexists is
+        deliberate: a dangling symlink still owns its name and must not be
+        silently replaced by Rename, Paste, Duplicate, or Put Back."""
+        return os.path.lexists(path) or path in self._inflight
+
+    @staticmethod
+    def _rename_noreplace(src, dst):
+        """Move `src` to the name `dst` in the same folder tree, REFUSING an
+        occupied destination instead of quietly consuming what stands there.
+        Raises FileExistsError, having touched nothing, if the name is taken.
+
+        Looking at the name first (`_taken`) is necessary but not sufficient:
+        the look and the move are two separate moments, and the folder can gain
+        that name in between — a download landing, a second Finder window, an
+        editor writing its file out. Both of the obvious calls answer an
+        occupied name by destroying something. `os.rename` replaces the entry
+        outright, and `shutil.move` puts the item INSIDE a directory that
+        already has the name, so a file that was meant to sit beside a folder
+        disappears into it while the status line says "Moved here" — and the
+        Undo recorded afterwards then points at that whole folder.
+
+        So the whole move is one syscall that cannot succeed on a taken name —
+        see _renameat2_noreplace. Files, directories, and symlinks all go the
+        same way; an entry that is merely a dangling link still owns its name
+        and is refused, with neither side touched. If the destination is on
+        another filesystem the kernel says EXDEV, which Paste turns into the
+        copy-then-delete a cross-disk move really is.
+        """
+        _renameat2_noreplace(src, dst)
+
     def _unique_path(self, dest_dir, base, suffix=""):
         """A non-colliding path in dest_dir for `base`, optionally forcing a
         ' copy' style suffix (used by Duplicate / paste-into-same-folder)."""
         stem, ext = os.path.splitext(base)
         cand = os.path.join(dest_dir, base)
-        if not suffix and not os.path.exists(cand):
+        if not suffix and not self._taken(cand):
             return cand
         n = 1
         while True:
             tag = " copy" if n == 1 else " copy %d" % n
             cand = os.path.join(dest_dir, stem + tag + ext)
-            if not os.path.exists(cand):
+            if not self._taken(cand):
                 return cand
             n += 1
 
+    @staticmethod
+    def _stage_symlink(src, stage):
+        """Turn the private staging entry into a copy of the symlink `src`.
+
+        islink is asked before isdir, so a link to a live folder copies as a
+        link rather than being followed and materialised as a second, real
+        folder — and a link whose target is missing copies just the same.
+
+        `stage` was created empty by _copy (a mkstemp file, or a mkdtemp
+        directory when src's target is a folder) and is ours alone, so it can
+        be taken back out; the removal never follows the entry, so it cannot
+        reach into anything the link points at.
+        """
+        if os.path.isdir(stage) and not os.path.islink(stage):
+            os.rmdir(stage)                   # freshly made by mkdtemp: empty
+        else:
+            os.unlink(stage)
+        os.symlink(os.readlink(src), stage)
+
     def _do_copy(self, src, dst):
-        if os.path.isdir(src):
-            shutil.copytree(src, dst)
+        if os.path.islink(src):
+            self._stage_symlink(src, dst)
+        elif os.path.isdir(src):
+            # `dst` is the private staging directory reserved by _copy.
+            shutil.copytree(src, dst, dirs_exist_ok=True)
         else:
             shutil.copy2(src, dst)
 
@@ -2102,6 +2852,13 @@ class Finder(Gtk.Window):
     def _copy_size(self, src):
         """Bytes the copy will move (bounded walk for a folder)."""
         try:
+            # A link is copied as a link: its size is the length of the text it
+            # holds, never the size of what it points at. Asked first so a link
+            # to a huge folder is not walked, and so it stays under
+            # COPY_ASYNC_BYTES — copying one is a single syscall, with nothing
+            # for a progress bar to show.
+            if os.path.islink(src):
+                return os.lstat(src).st_size
             if os.path.isdir(src):
                 return self._dir_size(src)[0]
             return os.path.getsize(src)
@@ -2127,6 +2884,12 @@ class Finder(Gtk.Window):
             except OSError:
                 pass
 
+        if os.path.islink(src):
+            # _copy_size keeps links off this path (a link is always tiny), but
+            # the worker must not disagree with the synchronous copy about what
+            # a link is: open() here would follow it and write out its target.
+            self._stage_symlink(src, dst)
+            return
         if os.path.isdir(src):
             os.makedirs(dst, exist_ok=True)
             for root, _dirs, files in os.walk(src):
@@ -2167,8 +2930,9 @@ class Finder(Gtk.Window):
                 pass
             ok = not (state["cancelled"] or state["error"])
             if not ok:
-                # Leave nothing half-copied behind: dst is always a name that
-                # did not exist before, so removing it can only remove ours.
+                # Leave nothing half-copied behind. dst did not exist before
+                # this job, and _copy's claim on the name held for as long as
+                # the job ran, so removing it can only remove ours.
                 try:
                     self._undo_remove(dst)
                 except (OSError, shutil.Error):
@@ -2253,15 +3017,26 @@ class Finder(Gtk.Window):
         base = "untitled folder"
         path = os.path.join(dest, base)
         n = 2
-        while os.path.exists(path):
+        # _taken, not exists: a name is spoken for by ANY directory entry —
+        # including a dangling symlink, which exists() calls free — and by a
+        # copy still running to that name. Asking exists() here made New Folder
+        # pick a name it could not have, so makedirs failed EEXIST and the
+        # person was told the folder could not be created instead of getting
+        # "untitled folder 2"; and it could steal the destination a running
+        # copy had already claimed, breaking that copy later.
+        while self._taken(path):
             path = os.path.join(dest, "%s %d" % (base, n))
             n += 1
         try:
+            # makedirs and not a pre-flight check: the look above and the
+            # creation are two moments, so the folder can gain that name in
+            # between. mkdir cannot succeed on a taken name, so a lost race
+            # fails loudly here rather than consuming what stands there.
             os.makedirs(path)
         except OSError:
             self._flash_status(_t("Could not create a folder here"))
             return
-        self._set_undo(_t("New Folder"), self._undo_remove, path)
+        self._set_undo_remove(_t("New Folder"), path)
         # A freshly-made folder never matches an active search query, so
         # keeping the filter would hide it — and repeated clicks would silently
         # pile up invisible "untitled folder 2, 3, …". Clear the filter (the
@@ -2302,7 +3077,10 @@ class Finder(Gtk.Window):
         if not self._clipboard:
             return
         src, is_cut = self._clipboard
-        if not os.path.exists(src):
+        # lexists: the item on the clipboard is the entry the user selected. A
+        # symlink whose target is gone is still that entry, and Paste copies
+        # the link itself, so exists() refused a paste it could have made.
+        if not os.path.lexists(src):
             self._clipboard = None
             self._flash_status(_t("That item no longer exists"))
             return
@@ -2311,22 +3089,39 @@ class Finder(Gtk.Window):
         dst = os.path.join(dest_dir, base)
         # pasting into the source's own folder (or a name clash) -> " copy"
         same_dir = os.path.dirname(src) == dest_dir
-        if os.path.exists(dst) or (same_dir and not is_cut):
+        if self._taken(dst) or (same_dir and not is_cut):
             dst = self._unique_path(dest_dir, base, suffix=" copy")
         if is_cut and self._same_filesystem(src, dest_dir):
             # same disk: a move is a rename, so it is instant however big it is
             try:
-                shutil.move(src, dst)
-            except (OSError, shutil.Error):
+                self._rename_noreplace(src, dst)
+            except FileExistsError:
+                # The name was free when it was chosen and is not free now.
+                # Nothing was moved: keep the cut on the clipboard so the user
+                # can paste it somewhere else, and say what actually happened
+                # rather than "Moved here" over an item that never moved.
                 self._update_paste()
-                self._flash_status(_t("Could not paste here"))
+                self.load(self.rel, record=False, keep_filter=True)
+                self._flash_status(
+                    _t("An item named '%s' already exists")
+                    % os.path.basename(dst))
                 return
-            self._clipboard = None          # cut is one-shot
-            self._update_paste()
-            self._set_undo(_t("Move"), self._undo_move, dst, src)
-            self.load(self.rel, record=False, keep_filter=True)
-            self._flash_undoable(_t("Moved “%s” here") % display_name(base))
-            return
+            except (OSError, shutil.Error) as exc:
+                if getattr(exc, "errno", None) != errno.EXDEV:
+                    self._update_paste()
+                    self._flash_status(_t("Could not paste here"))
+                    return
+                # Not one filesystem after all (_same_filesystem answers
+                # "unknown" as "same"): fall through to the copy-then-delete
+                # path below, which is what a cross-disk move really is.
+            else:
+                self._clipboard = None      # cut is one-shot
+                self._update_paste()
+                self._set_undo_move(_t("Move"), dst, src)
+                self.load(self.rel, record=False, keep_filter=True)
+                self._flash_undoable(
+                    _t("Moved “%s” here") % display_name(base))
+                return
         if is_cut:
             # A move to ANOTHER disk — a USB stick, nearly always — is really a
             # full copy followed by a delete, so it costs exactly what a copy
@@ -2335,24 +3130,48 @@ class Finder(Gtk.Window):
             # the original is only removed once the new one is safely written.
             self._clipboard = None
             self._update_paste()
+            # Remember WHICH entry was cut, not just where it sat. This copy
+            # runs for as long as a USB stick takes, and in that time the
+            # original can be deleted and a different document, folder, or
+            # link can take its name. Removing by name at the end would erase
+            # that replacement — something the user never cut — and call it
+            # "Moved". The original is removed only if it is still the same
+            # entry; anything else is left exactly where it stands.
+            origin = self._path_identity(src)
 
             def moved(ok):
-                if ok:
+                if not ok:
+                    self.load(self.rel, record=False, keep_filter=True)
+                    return
+                gone = False
+                stale = origin is None or self._path_identity(src) != origin
+                if not stale:
                     try:
-                        self._undo_remove(src)
-                    except (OSError, shutil.Error):
+                        self._undo_remove(src, origin)
+                    except (_UndoStale, OSError, shutil.Error):
                         pass
+                    gone = not os.path.lexists(src)
                 self.load(self.rel, record=False, keep_filter=True)
-                if ok:
+                if gone:
                     self._flash_status(_t("Moved “%s” here")
                                        % display_name(base))
+                elif stale:
+                    # The copy is finished and kept — it is the only remaining
+                    # record of what was cut, so it is not thrown away.
+                    self._flash_status(
+                        _t("Copied “%s” here. The original changed, so it was "
+                           "left alone.") % display_name(base))
+                else:
+                    self._flash_status(
+                        _t("Copied “%s” here, but the original could not be "
+                           "removed.") % display_name(base))
             self._copy(src, dst, moved)
             return
         self._update_paste()
 
         def done(ok):
             if ok:
-                self._set_undo(_t("Paste"), self._undo_remove, dst)
+                self._set_undo_remove(_t("Paste"), dst)
             self.load(self.rel, record=False, keep_filter=True)
             if ok:
                 self._flash_undoable(_t("Copied “%s” here") % display_name(base))
@@ -2371,23 +3190,97 @@ class Finder(Gtk.Window):
         """Copy, choosing the quiet path or the visible one. A small file is
         instant, so a progress card would only flash; anything big enough to be
         noticed gets one, with Cancel."""
-        big = self._copy_size(src) > COPY_ASYNC_BYTES
-        if big and self.get_mapped():
-            self._copy_async(src, dst, on_done)
-            return
-        try:
-            self._do_copy(src, dst)
-        except (OSError, shutil.Error) as exc:
+        # Claim the destination for as long as this job owns it. The claim is
+        # what makes the cleanup below safe to describe as "only removes ours":
+        # while it stands, no other Paste or Duplicate can choose this name.
+        self._inflight.add(dst)
+        stage = None
+
+        def settled(ok):
+            self._inflight.discard(dst)
+            on_done(ok)
+
+        def clean_stage():
+            if not stage or not os.path.lexists(stage):
+                return
             try:
-                self._undo_remove(dst)      # never leave a half-copy behind
+                self._undo_remove(stage)
             except (OSError, shutil.Error):
                 pass
-            # on_done first: it reloads the view, which rewrites the status bar
-            # (an earlier flash was overwritten before anyone could read it).
-            on_done(False)
+
+        def commit(ok):
+            """Publish the staged copy, or remove every trace of it."""
+            if not ok:
+                clean_stage()
+                settled(False)
+                return
+            try:
+                # Finder's own concurrent operations are excluded by the
+                # _inflight claim, but nothing outside Finder is: a download
+                # landing, an editor writing out, another program's move can
+                # create `dst` at any moment, including between a look and a
+                # rename. Looking first and then calling os.replace was exactly
+                # that gap — an item that arrived in the window was destroyed,
+                # and the status line said the copy had been made. Publication
+                # is therefore the single syscall that cannot overwrite: it
+                # either puts the finished copy at the name or fails with
+                # EEXIST, having touched neither side. There is deliberately no
+                # userspace check-then-replace fallback; a fallback would be
+                # the race, reintroduced on whichever path took it.
+                self._rename_noreplace(stage, dst)
+            except FileExistsError:
+                # Someone else got the name. Their item stands untouched; only
+                # our own private staging entry is removed. No Undo and no
+                # "Copied here" — the copy is not published, and the message
+                # says which name was taken.
+                clean_stage()
+                settled(False)
+                self._flash_status(
+                    _t("An item named '%s' already exists")
+                    % os.path.basename(dst))
+                return
+            except OSError as exc:
+                clean_stage()
+                settled(False)
+                self._flash_status(self._copy_error_text(exc))
+                return
+            settled(True)
+
+        # Copy into a hidden sibling first. The final name therefore denotes
+        # either no file or the complete committed result—never the first 40%
+        # of a PDF while a worker is still filling it. Same-directory rename is
+        # atomic on the destination filesystem, including removable media.
+        dest_dir = os.path.dirname(dst) or "."
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            # Keep the prefix short: a legal 255-byte destination basename
+            # must not become illegal merely because staging decorates it.
+            prefix = ".nbcopy-"
+            if os.path.isdir(src):
+                stage = tempfile.mkdtemp(prefix=prefix, dir=dest_dir)
+            else:
+                fd, stage = tempfile.mkstemp(prefix=prefix, dir=dest_dir)
+                os.close(fd)
+        except OSError as exc:
+            clean_stage()
+            settled(False)
             self._flash_status(self._copy_error_text(exc))
             return
-        on_done(True)
+
+        big = self._copy_size(src) > COPY_ASYNC_BYTES
+        if big and self.get_mapped():
+            self._copy_async(src, stage, commit)
+            return
+        try:
+            self._do_copy(src, stage)
+        except (OSError, shutil.Error) as exc:
+            clean_stage()
+            # on_done first: it reloads the view, which rewrites the status bar
+            # (an earlier flash was overwritten before anyone could read it).
+            settled(False)
+            self._flash_status(self._copy_error_text(exc))
+            return
+        commit(True)
 
     def _update_paste(self):
         # There is no toolbar Paste button any more (paste_btn is None); the
@@ -2455,6 +3348,17 @@ class Finder(Gtk.Window):
         except (ValueError, TypeError):
             return
         stem = name if is_dir else (os.path.splitext(name)[0] or name)
+        # RENAMING EDITS THE FILE, so the field opens on the file's own name.
+        # The cell shows an app translated ("Ajustes"), and the editor is
+        # seeded from the cell: committing that unchanged would have renamed
+        # Settings.app to Ajustes.app, which APP_MODULES does not know, and
+        # the app would stop launching for the rest of the machine's life —
+        # from pressing F2 and Enter without typing anything.
+        if not is_dir and name.endswith(".app"):
+            try:
+                editable.set_text(stem)
+            except Exception:                                  # noqa: BLE001
+                pass
 
         def _select():
             try:
@@ -2472,8 +3376,9 @@ class Finder(Gtk.Window):
         somewhere else carries a quiet note of the folder it came from —
         without it, a whole-Home search is a list of names with no answer to
         the question the user actually asked, which is *where is it*."""
-        name = display_name(model.get_value(it, 1))
-        where = self._result_location(model.get_value(it, 4))
+        rel = model.get_value(it, 4)
+        name = display_name(model.get_value(it, 1), rel)
+        where = self._result_location(rel)
         if where:
             # In the list the note trails the name on the same line; in the
             # grid the cell is only ~130px wide, so trailing it there wrapped
@@ -2500,8 +3405,9 @@ class Finder(Gtk.Window):
         return _t("in %s") % (display_name(base) if base else _t("Home"))
 
     def _on_name_edited(self, _renderer, path_str, new_text):
-        # commit an inline rename: os.rename the item, then reload and keep the
-        # renamed item selected. Shared by the list and grid renderers (both
+        # commit an inline rename: move the item onto the new name (refusing an
+        # occupied one), then reload and keep the renamed item selected. Shared
+        # by the list and grid renderers (both
         # drive self.store, so the path string maps straight to a store row).
         self._end_rename_mode()
         new_name = (new_text or "").strip()
@@ -2526,15 +3432,19 @@ class Finder(Gtk.Window):
             self._flash_status(_t("A name cannot contain a slash"))
             return
         new_abs = os.path.join(os.path.dirname(old_abs), new_name)
-        if os.path.exists(new_abs):
+        if self._taken(new_abs):
             self._flash_status(_t("An item named '%s' already exists") % new_name)
             return
         try:
-            os.rename(old_abs, new_abs)
+            self._rename_noreplace(old_abs, new_abs)
+        except FileExistsError:
+            self._flash_status(_t("An item named '%s' already exists") % new_name)
+            self.load(self.rel, record=False, keep_filter=True)
+            return
         except OSError:
             self._flash_status(_t("Could not rename '%s'") % old_name)
             return
-        self._set_undo(_t("Rename"), self._undo_move, new_abs, old_abs)
+        self._set_undo_move(_t("Rename"), new_abs, old_abs)
         self.load(self.rel, record=False, keep_filter=True)
         self._select_name(new_name)
 
@@ -2546,7 +3456,9 @@ class Finder(Gtk.Window):
         if not p:
             self._flash_status(_t("Select an item to duplicate"))
             return
-        if not os.path.exists(p):
+        # lexists: see _paste. Duplicating a link copies the link, so whether
+        # its target is still there has no bearing on whether this can run.
+        if not os.path.lexists(p):
             self.load(self.rel, record=False, keep_filter=True)
             self._flash_status(_t("That item no longer exists"))
             return
@@ -2555,7 +3467,7 @@ class Finder(Gtk.Window):
 
         def done(ok):
             if ok:
-                self._set_undo(_t("Duplicate"), self._undo_remove, dst)
+                self._set_undo_remove(_t("Duplicate"), dst)
             self.load(self.rel, record=False, keep_filter=True)
             if ok:
                 self._select_name(os.path.basename(dst))
@@ -2786,8 +3698,7 @@ class Finder(Gtk.Window):
             rb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             mod = APP_MODULES.get(disp)
             icname = (ICON_ALIAS.get(mod, mod) if mod else "packages")
-            rb.pack_start(Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf(icname, 24, "#3A362E")), False, False, 0)
+            rb.pack_start(nbicons.image(icname, 24, "#3A362E"), False, False, 0)
             lbl = Gtk.Label(label=disp, xalign=0)
             lbl.get_style_context().add_class("finderinfoval")
             rb.pack_start(lbl, True, True, 0)
@@ -2912,13 +3823,13 @@ class Finder(Gtk.Window):
             return
         hit = None
         for row in self.store:
-            nm = display_name(row[1]).lower()
-            if nm.startswith(want):
+            if any(nm.startswith(want)
+                   for nm in search_names(row[1], row[4])):
                 hit = row
                 break
         if hit is None:
             for row in self.store:
-                if want in display_name(row[1]).lower():
+                if any(want in nm for nm in search_names(row[1], row[4])):
                     hit = row
                     break
         if hit is None:
@@ -3001,8 +3912,8 @@ class Finder(Gtk.Window):
             size_txt = "%s  ·  %s bytes" % (human(st.st_size),
                                             format(st.st_size, ","))
         try:
-            modified = time.strftime("%d %b %Y, %H:%M",
-                                     time.localtime(st.st_mtime))
+            modified = _t(time.strftime("%d %b %Y, %H:%M",
+                                        time.localtime(st.st_mtime)))
         except ValueError:
             modified = "—"
         icon = "folder" if is_dir else self._icon_for(name)
@@ -3023,7 +3934,7 @@ class Finder(Gtk.Window):
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         head.get_style_context().add_class("finderinfohead")
         head.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 44, "#3A362E")),
+            nbicons.image(icon, 44, "#3A362E"),
             False, False, 0)
         htext = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         htext.set_valign(Gtk.Align.CENTER)
@@ -3131,7 +4042,7 @@ class Finder(Gtk.Window):
             # the item was deleted elsewhere since this listing was read: don't
             # silently do nothing — refresh the view and say what happened.
             self.load(self.rel, record=False, keep_filter=True)
-            self._flash_status(_t("'%s' no longer exists") % name)
+            self._flash_status(_t("'%s' no longer exists") % display_name(name))
             return
         if os.path.isdir(full):
             self.load(rel)
@@ -3176,6 +4087,18 @@ class Finder(Gtk.Window):
     def launch_app(self, display_name, file_arg=None):
         mod = APP_MODULES.get(display_name)
         if not mod:
+            # An item named "<something>.app" that no installed app claims.
+            # The everyday way to make one is to RENAME an app: _on_name_edited
+            # puts the ".app" suffix back (so the file stays an app) while the
+            # stem it is keyed on changes, and "Adding Machine.app" is not in
+            # APP_MODULES. Returning here made double-clicking that icon do
+            # nothing, silently, for the rest of the machine's life — the dead
+            # control Article II forbids. Say it instead, in the same words
+            # _launch_module uses for an app module the image does not carry.
+            #
+            # The .app file is a stub; its CONTENTS are never read or run, so
+            # an unknown one can name a module but never become one.
+            self._flash_status(_t("That app is not available"))
             return
         self._launch_module(mod, file_arg=file_arg)
 
@@ -3298,33 +4221,33 @@ FINDER_CSS = b"""
 .finder .navbar { background: #FCFBF8; border-bottom: 1px solid #C9C4B6;
                   padding: 10px 16px; }
 .finder .navbtn { min-width: 32px; min-height: 32px; padding: 0;
-                  background: #FCFBF8; border: 1px solid #C9C4B6; border-radius: 2px;
+                  background: #FCFBF8; border: 1px solid #C9C4B6; border-radius: 8px;
                   box-shadow: none; }
 .finder .navbtn:hover { background: #F1EEE6; }
 /* a disabled nav arrow (back/fwd/up at an end) dims to the mockup's greyed
    face + border, so it reads as inactive instead of keeping the live swatch */
-.finder .navbtn:disabled { background: #F4F2EC; border-color: #DCD7C9; }
+.finder .navbtn:disabled { background: #F4F2EC; border-color: #D7D2C5; }
 .finder .navsep { color: #C9C4B6; min-width: 1px; margin: 4px 2px; }
 .finder .toolbtn { padding: 5px 12px; background: #FCFBF8; color: #2A2620;
-                   border: 1px solid #C9C4B6; border-radius: 2px; box-shadow: none;
+                   border: 1px solid #C9C4B6; border-radius: 8px; box-shadow: none;
                    font-size: 13px; margin: 0 1px; }
 .finder .toolbtn:hover { background: #F1EEE6; }
-.finder .toolbtn:disabled { color: #B8B3A6; background: #F4F2EC; }
+.finder .toolbtn:disabled { color: #B3AD9E; background: #F4F2EC; }
 .finder .crumb { font-size: 13px; color: #3A362E; padding: 3px 10px;
                  background: #FCFBF8; border: 1px solid #C9C4B6;
-                 border-radius: 3px; box-shadow: none; margin: 0 1px; }
+                 border-radius: 8px; box-shadow: none; margin: 0 1px; }
 .finder .crumb:hover { background: #F1EEE6; }
-.finder .crumb.active { background: #E6DFCE; color: #1A1916; font-weight: 600;
+.finder .crumb.active { background: #EAE3D2; color: #1A1916; font-weight: 600;
                         border-color: #C9C4B6; }
 .finder .viewswitch { margin: 0 2px; }
 .finder .viewbtn { min-width: 30px; min-height: 30px; padding: 0 5px;
                    background: #FCFBF8; color: #3A362E; border: 1px solid #C9C4B6;
                    border-radius: 0; box-shadow: none; margin: 0; }
-.finder .viewbtn:first-child { border-radius: 2px 0 0 2px; }
-.finder .viewbtn:last-child { border-radius: 0 2px 2px 0; border-left-width: 0; }
+.finder .viewbtn:first-child { border-radius: 8px 0 0 8px; }
+.finder .viewbtn:last-child { border-radius: 0 8px 8px 0; border-left-width: 0; }
 .finder .viewbtn:hover { background: #F1EEE6; }
-.finder .viewbtn.active { background: #E6DFCE; border-color: #C9C4B6; }
-.finder .filegrid { background: #F8F7F2; font-size: 13.5px; padding: 6px; }
+.finder .viewbtn.active { background: #EAE3D2; border-color: #C9C4B6; }
+.finder .filegrid { background: #F8F7F2; font-size: 13px; padding: 6px; }
 .finder .filegrid:selected, .finder .filegrid .cell:selected {
                  background: #EAE3D2; color: #2A2620; }
 .finder .sidebar { background: #EFEBE0; border-right: 1px solid #D7D2C5;
@@ -3332,9 +4255,9 @@ FINDER_CSS = b"""
 .finder .sbheader { font-size: 11px; color: #8A857A; font-weight: 600;
                     letter-spacing: 0.08em; padding: 12px 8px 6px; }
 .finder .sbrow { padding: 7px 12px; background: transparent; border: none;
-                 border-radius: 2px; box-shadow: none; margin: 1px 0;
-                 font-size: 14.5px; color: #2A2620; }
-.finder .sbrow:hover { background: #E3DCCB; }
+                 border-radius: 6px; box-shadow: none; margin: 1px 0;
+                 font-size: 14px; color: #2A2620; }
+.finder .sbrow:hover { background: #F0EADC; }
 .finder .sbrow.selected { background: #EAE3D2; border-left: 3px solid #C8341E;
                           font-weight: 600; }
 /* Eject, beside a removable volume: a quiet glyph on the sidebar surface. With
@@ -3342,8 +4265,8 @@ FINDER_CSS = b"""
    sidebar as a bordered near-white chip among flat, borderless rows. */
 .finder .sbeject { background: transparent; border: none; box-shadow: none;
                    padding: 3px 5px; min-width: 20px; min-height: 20px;
-                   border-radius: 2px; }
-.finder .sbeject:hover { background: #E3DCCB; }
+                   border-radius: 6px; }
+.finder .sbeject:hover { background: #EAE3D2; }
 .finder .filelist { background: #F8F7F2; font-size: 14px; }
 /* Selected row: the warm selection tone, matching the grid view and the rest
    of the system. It used to carry `border-left: 3px solid #C8341E` for the
@@ -3363,48 +4286,48 @@ FINDER_CSS = b"""
                  font-size: 11px; font-weight: 600; border-radius: 0;
                  letter-spacing: 0.08em; padding: 6px 10px;
                  border: none; border-bottom: 1px solid #D7D2C5; }
-.finder .filelist header button:hover { background: #ECE7DB; }
+.finder .filelist header button:hover { background: #EFEBE0; }
 /* The sort-direction triangle GTK draws at the end of the active column: keep
    it small and muted so it whispers which column is sorted instead of sitting
    as a big dark wedge in the middle of the wide Name column. */
 .finder .filelist header button arrow,
 .finder header button arrow {
-                 color: #B7B1A3; opacity: 0.4;
+                 color: #B3AD9E; opacity: 0.4;
                  min-width: 10px; min-height: 10px; }
 /* .statusbar is Papertone's - see the theme. Finder used its own paler
    ink and a larger size than every other status strip. */
 /* bottom-right resize grip: opaque (black-safe with no compositor), a hairline
    corner tab that reads as a drag handle */
-.finder .resizegrip { background: #ECE8DD; border-top: 1px solid #C9C4B6;
+.finder .resizegrip { background: #EFEBE0; border-top: 1px solid #C9C4B6;
                       border-left: 1px solid #C9C4B6; }
-.finder .resizegrip:hover { background: #E3DCCB; }
+.finder .resizegrip:hover { background: #EAE3D2; }
 /* empty-folder / no-search-result message, centered over the empty view */
-.finder .emptystate { color: #A29C8E; font-size: 15px; font-weight: 500; }
+.finder .emptystate { color: #9A9484; font-size: 15px; font-weight: 500; }
 /* inline rename: the Name cell's entry, active-red to signal it is live */
 .finder .filelist entry, .finder .filegrid entry {
-                 background: #FFFFFF; color: #1A1916; caret-color: #C8341E;
-                 border: 1px solid #C8341E; border-radius: 2px; padding: 1px 4px; }
+                 background: #FCFBF8; color: #1A1916; caret-color: #C8341E;
+                 border: 1px solid #C8341E; border-radius: 8px; padding: 1px 4px; }
 /* right-click context menu */
-.findermenu { background: #FCFBF8; border: 1px solid #C4BFB1; padding: 4px 0; }
-.findermenu menuitem { padding: 5px 18px; color: #2A2620; font-size: 13.5px; }
+.findermenu { background: #FCFBF8; border: 1px solid #C9C4B6; padding: 4px 0; }
+.findermenu menuitem { padding: 5px 18px; color: #2A2620; font-size: 13px; }
 .findermenu menuitem:hover { background: #EAE3D2; color: #1A1916; }
 .findermenu separator { background: #D7D2C5; min-height: 1px; margin: 4px 0; }
 /* Get Info dialog */
-.finderinfo { background: #F8F7F2; border: 1px solid #C4BFB1; }
+.finderinfo { background: #F8F7F2; border: 1px solid #C9C4B6; }
 .finderinfobox { padding: 22px 24px 18px; }
 .finderinfohead { margin-bottom: 14px; }
 .finderinfoname { font-size: 17px; font-weight: 700; color: #1A1916; }
-.finderinfokind { font-size: 12.5px; color: #8A857A; }
+.finderinfokind { font-size: 12px; color: #8A857A; }
 .finderinfosep { background: #D7D2C5; min-height: 1px; margin-bottom: 14px; }
 .finderinfogrid { margin-bottom: 18px; }
-.finderinfokey { font-size: 12.5px; color: #8A857A; font-weight: 600; }
+.finderinfokey { font-size: 12px; color: #8A857A; font-weight: 600; }
 .finderinfoval { font-size: 13px; color: #2A2620; }
 /* A button's own `color` does NOT reach its label: Papertone's `* { color: ink }`
    matches the label node directly, and a direct match beats an inherited value,
    so every light-on-dark button in this file has to name its label too. Without
    this the Done button was ink on ink - a black slab with no visible text. */
 .finderinfobtn { padding: 6px 20px; background: #1A1916; color: #F4F2EC;
-                 border: 1px solid #1A1916; border-radius: 2px; box-shadow: none;
+                 border: 1px solid #1A1916; border-radius: 8px; box-shadow: none;
                  font-size: 13px; }
 .finderinfobtn label, .finderinfobtn:hover label { color: #F4F2EC; }
 .finderinfobtn:hover { background: #2A2620; }
@@ -3415,9 +4338,9 @@ FINDER_CSS = b"""
    up as bare theme chrome with no row padding and the Restore buttons flush
    against its border. */
 .restorescroll { background: #FCFBF8; border: 1px solid #D7D2C5;
-                 border-radius: 2px; }
+                 border-radius: 12px; }
 .restorelist { background: #FCFBF8; }
-.restorelist row { padding: 8px 12px; border-bottom: 1px solid #EDE9DF;
+.restorelist row { padding: 8px 12px; border-bottom: 1px solid #EFEBE0;
                  background: #FCFBF8; }
 .restorelist row:last-child { border-bottom: none; }
 /* copy progress: the theme's papertone trough with the ink fill, given a
@@ -3427,14 +4350,14 @@ FINDER_CSS = b"""
 .finderprogress progress { min-height: 7px; border-radius: 4px; }
 /* confirm dialog: a light Cancel and a signage-red destructive primary */
 .finderinfocancel { padding: 6px 18px; background: #FCFBF8; color: #2A2620;
-                 border: 1px solid #C4BFB1; border-radius: 2px; box-shadow: none;
+                 border: 1px solid #C9C4B6; border-radius: 8px; box-shadow: none;
                  font-size: 13px; }
-.finderinfocancel:hover { background: #ECE8DD; }
+.finderinfocancel:hover { background: #F1EEE6; }
 .finderinfodanger { padding: 6px 20px; background: #C8341E; color: #F8F7F2;
-                 border: 1px solid #A82B18; border-radius: 2px; box-shadow: none;
+                 border: 1px solid #B12D19; border-radius: 8px; box-shadow: none;
                  font-size: 13px; font-weight: 600; }
 .finderinfodanger label, .finderinfodanger:hover label { color: #F8F7F2; }
-.finderinfodanger:hover { background: #B32E1A; }
+.finderinfodanger:hover { background: #B12D19; }
 /* The context menu is a real popup toplevel: without a rule for its decoration
    node the compositor's shadow frame renders as theme grey around the card. */
 .findermenu decoration { background: #FCFBF8; box-shadow: none; }

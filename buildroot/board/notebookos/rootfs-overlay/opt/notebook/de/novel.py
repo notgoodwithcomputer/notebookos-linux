@@ -38,6 +38,7 @@ from nbi18n import _t  # noqa: E402
 PAGE_W = nbprint.HALF_W_PT          # 396 pt
 PAGE_H = nbprint.HALF_H_PT          # 612 pt
 MARGIN_X = 52                        # left/right text margin
+TOC_NUMERAL_W = 34    # the Contents' numeral column
 BODY_TOP = 58                        # first body line on a continuation page
 BODY_BOT = PAGE_H - 60               # last usable y (folio sits below this)
 COL_W = PAGE_W - 2 * MARGIN_X        # text column width (292 pt)
@@ -61,17 +62,35 @@ F_SUBHEAD = _SERIF + " Bold 13"
 F_CHNUM = _SANS + " 8.5"
 F_CHTITLE = _SERIF + " 22"
 F_TITLE = _SERIF + " 30"
+# The author on the cover: the title's face, much smaller, so the two
+# read as one piece of setting rather than two unrelated labels.
+F_AUTHOR = _SERIF + " 13"
 F_TOCHEAD = _SERIF + " 20"
 F_TOCROW = _SERIF + " 11.5"
 F_TOCPART = _SANS + " 8.5"
 F_FOLIO = _SANS + " 8.5"
 
 # Canonical papertone hexes used by the PDF renderer.
-C_BG = "#FCFBF8"
-C_INK = "#1A1916"
-C_SEC = "#6E695E"
-C_MUT = "#9A9484"
-C_RED = "#C8341E"
+# The PRINTED page's palette — used only by the page model and _draw_page,
+# which back Export to PDF and Zine Print and nothing on screen.
+#
+# Every value here is NEUTRAL on purpose. These pages exist to come out of a
+# printer, and a warm off-white or a warm near-black is not free: a colour
+# printer reproduces #FCFBF8 and #1A1916 as composites, laying down cyan,
+# magenta and yellow on every sheet to make what should be bare paper and plain
+# black text. The page ground is now the paper itself, the ink is black, and the
+# two greys are true greys, so a page costs black only.
+#
+# The screen's own papertone and signage red are unaffected — they are written
+# literally in the CSS and the save chip, not taken from here.
+C_BG = "#FFFFFF"       # bare paper: no full-bleed wash on every sheet
+C_INK = "#000000"
+C_SEC = "#555555"
+C_MUT = "#777777"
+# Was signage red (#C8341E). The rules under the title and each chapter heading
+# were the only colour on the page, and a decorative bar is the last thing worth
+# opening a colour cartridge for.
+C_RULE = "#000000"
 
 # Session recovery: the full manuscript (title, every chapter, the active
 # index, the bound file path) is written to $NB_HOME/.config/notebook/novel.json
@@ -92,6 +111,27 @@ DOCS_DIR = os.path.join(HOME, "Documents")
 # comparisons, so a manuscript saved on an English install is still recognised
 # as untitled when it is opened on a translated one.)
 UNTITLED_EN = "Untitled Novel"
+
+
+def roman(n):
+    """1 -> "I", 4 -> "IV", 40 -> "XL". Chapter headings and the Contents both
+    call this, so the numeral beside a chapter is the same in each place.
+    Falls back to the plain number outside the range it can express, which is
+    better than a heading that says nothing."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return ""
+    if not 1 <= n < 4000:
+        return str(n)
+    out = []
+    for value, sym in ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+                       (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+                       (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+        while n >= value:
+            out.append(sym)
+            n -= value
+    return "".join(out)
 
 
 def _untitled():
@@ -119,6 +159,22 @@ class Novel(nbapp.AppWindow):
         # instead of re-summing every chapter on each keystroke.
         self._total_words = 0
         self._save_timer = None
+        # Does the model on screen still differ from the copy in the
+        # session-recovery file? Set the moment an edit is made and cleared
+        # only by a write that actually reached the disk, so the close guard
+        # below can tell "everything is durable" from "the last save failed and
+        # this window is the only place that work exists". _save_error keeps
+        # the exception behind a failure so the guard can say why.
+        self._recovery_dirty = False
+        self._save_error = None
+        # Set once the user has accepted a close that cannot be saved, so the
+        # final flush honours what the button promised and the guard does not
+        # ask twice.
+        self._discarded = False
+        # The confirm card the close guard is currently showing, if any. Held
+        # so a second close attempt re-uses the open card instead of stacking
+        # another one on top of it.
+        self._closeprompt = None
         # Set while a structural rewrite edits a chapter buffer programmatically
         # (e.g. re-sequencing headings after a delete). It suppresses _on_change
         # so such an edit — possibly of a NON-active buffer — is never
@@ -171,7 +227,10 @@ class Novel(nbapp.AppWindow):
         self.undo = nbapp.UndoHistory(self._undo_snapshot, self._undo_restore)
         self.undo.reset()
 
-        # Flush the final edit when the window goes away so nothing is lost.
+        # Flush the final edit when the window goes away so nothing is lost —
+        # and, one step earlier, refuse to go away at all while the last save
+        # is still refused by the disk (see _on_delete).
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", self._on_destroy)
         if not saved:
             # First run: persist the seed so the "Saved" state is truthful and
@@ -195,6 +254,8 @@ class Novel(nbapp.AppWindow):
                     nbapp.SEP,
                     ("Save    Ctrl+S", self._on_file_save),
                     ("Save As…    Ctrl+Shift+S", self._on_file_save_as),
+                    nbapp.SEP,
+                    ("Author…", self._on_set_author),
                     nbapp.SEP,
                     ("Export to PDF…", self._on_export_pdf),
                     ("Zine Print…", self._on_zine_print),
@@ -279,7 +340,9 @@ class Novel(nbapp.AppWindow):
         # The manuscript title is click-to-rename (same idiom as a part header),
         # so it is a real, editable field rather than a frozen label — its value
         # round-trips through persistence and seeds the Save As filename.
-        title_ev = Gtk.EventBox()
+        title_ev = Gtk.Button()
+        title_ev.set_relief(Gtk.ReliefStyle.NONE)
+        title_ev.get_style_context().add_class("nvflatbtn")
         title_ev.get_style_context().add_class("nvtitlebtn")
         title_ev.set_tooltip_text(_t("Rename manuscript"))
         title = Gtk.Label(xalign=0)
@@ -319,9 +382,12 @@ class Novel(nbapp.AppWindow):
         # stored, displayed and saved-as "Notas". Every write goes through
         # _set_title (verbatim), every read through self._title.
         self._set_title(_untitled())
+        # Whose book it is, printed under the title on the cover.
+        # Empty until set, and an empty author prints nothing at
+        # all rather than a blank line or a placeholder name.
+        self._author = ""
         title_ev.add(title)
-        title_ev.connect("button-press-event",
-                         lambda *_a: (self._rename_manuscript(), True)[1])
+        title_ev.connect("clicked", lambda *_a: self._rename_manuscript())
         head.pack_start(title_ev, False, False, 0)
 
         # Plain running word total for the manuscript. No goal / progress bar:
@@ -360,7 +426,7 @@ class Novel(nbapp.AppWindow):
         inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
         inner.set_halign(Gtk.Align.CENTER)
         inner.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 16, "#2A2620")),
+            nbicons.image("plus", 16, "#2A2620"),
             False, False, 0)
         inner.pack_start(Gtk.Label(label=_t("New Chapter")), False, False, 0)
         newbtn.add(inner)
@@ -415,8 +481,7 @@ class Novel(nbapp.AppWindow):
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("nvfmtbtn")
             b.set_tooltip_text(tip)
-            b.add(Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf(icon, 19, "#2A2620")))
+            b.add(nbicons.image(icon, 19, "#2A2620"))
             b.connect("clicked", self._on_fmt, cmd)
             fbar.pack_start(b, False, False, 2)
 
@@ -652,7 +717,7 @@ class Novel(nbapp.AppWindow):
         q = Gtk.TextTag(name="quote")
         q.set_property("style", Pango.Style.ITALIC)
         q.set_property("left-margin", 26)
-        q.set_property("foreground", "#615C51")
+        q.set_property("foreground", "#6E695E")
         tt.add(q)
         for name, prop, val in (("bold", "weight", Pango.Weight.BOLD),
                                 ("italic", "style", Pango.Style.ITALIC),
@@ -788,28 +853,27 @@ class Novel(nbapp.AppWindow):
         return "PART {} — {}".format(ordw, name) if name else "PART {}".format(ordw)
 
     def _part_header(self, pi):
-        ev = Gtk.EventBox()
+        ev = Gtk.Button()
+        ev.set_relief(Gtk.ReliefStyle.NONE)
+        ev.get_style_context().add_class("nvflatbtn")
         ev.get_style_context().add_class("nvparthdr")
         ev.set_tooltip_text(_t("Rename part"))
         lab = Gtk.Label(label=self._part_label(pi), xalign=0)
         lab.get_style_context().add_class("nvpart")
         lab.set_ellipsize(Pango.EllipsizeMode.END)
         ev.add(lab)
-        ev.connect("button-press-event",
-                   lambda *_a, idx=pi: (self._rename_part(idx), True)[1])
+        ev.connect("clicked", lambda *_a, idx=pi: self._rename_part(idx))
         return ev
 
     def _chapter_row(self, i, ch):
         act = (i == self.active)
-        ev = Gtk.EventBox()
-        # The hover tint stays on the EventBox: only the widget the pointer is
-        # actually over gets GTK's PRELIGHT flag, and GTK3 does not propagate it
-        # to children, so a :hover rule on the inner box would never fire. The
-        # box sits flush inside the EventBox, so the tint lands in the same
-        # place; the active row paints its own fill on top of it.
+        ev = Gtk.Button()
+        ev.set_relief(Gtk.ReliefStyle.NONE)
+        ev.get_style_context().add_class("nvflatbtn")
         ev.get_style_context().add_class("nvrowhit")
-        ev.connect("button-press-event",
-                   lambda *_a, idx=i: self._select_chapter(idx))
+        ev.set_tooltip_text(_t("Open chapter %s: %s") %
+                            (ch["num"], ch["title"]))
+        ev.connect("clicked", lambda *_a, idx=i: self._select_chapter(idx))
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=13)
         # .nvrow lives on the BOX, not on the EventBox: a GtkEventBox paints a
         # CSS background but ignores CSS padding and margin, so with the class
@@ -950,6 +1014,9 @@ class Novel(nbapp.AppWindow):
         # rather than in _on_change also covers the paragraph-style path, which
         # emits no "changed" signal of its own.
         self.undo.touch()
+        # From here until a write succeeds, this window holds the only copy of
+        # the edit. See _on_delete.
+        self._recovery_dirty = True
         self.save_lbl.set_markup(
             '<span foreground="#C8341E">● </span>Editing…')
         if self._save_timer:
@@ -1081,7 +1148,7 @@ class Novel(nbapp.AppWindow):
 
     def _parse_state(self, data):
         """Validate a decoded manuscript document into a normalized state dict
-        {title, parts, chapters:[{num,title,body,ranges,part}], active,
+        {title, author, parts, chapters:[{num,title,body,ranges,part}], active,
         doc_path}, or None when it is not a usable manuscript. Shared by the
         session-recovery loader and the File ▸ Open path."""
         if not isinstance(data, dict):
@@ -1123,7 +1190,16 @@ class Novel(nbapp.AppWindow):
         dp = data.get("doc_path")
         if not isinstance(dp, str) or not dp:
             dp = None
+        # The author has to be carried through HERE. _restore reads it off the
+        # state dict this builds, so leaving it out did not merely fail to show
+        # the name — it set self._author back to "" on every load, and the very
+        # next autosave wrote that empty author over the stored one. A name set
+        # through File ▸ Author… survived only until the app was closed, and the
+        # copy on disk was gone one debounce later. (The undo path already
+        # worked, because it restores a _serialize() dict directly.)
+        au = data.get("author", "")
         return {"title": str(data.get("title", _untitled())),
+                "author": au if isinstance(au, str) else "",
                 "parts": parts, "chapters": chapters, "active": active,
                 "doc_path": dp}
 
@@ -1132,6 +1208,7 @@ class Novel(nbapp.AppWindow):
         session-recovery writer and the File ▸ Save / Save As writers."""
         return {
             "title": self._title,
+            "author": self._author,
             "active": self.active,
             "doc_path": self.doc_path,
             "parts": [{"name": p.get("name", "")} for p in self.parts],
@@ -1144,12 +1221,21 @@ class Novel(nbapp.AppWindow):
 
     def _save_state(self):
         """Persist the whole editable model to the session-recovery file.
-        Never raises — a failed write must not crash the editor. True on OK."""
+        Never raises — a failed write must not crash the editor. True on OK.
+
+        The two flags are what make the close guard possible: until a write
+        actually returns, the manuscript exists nowhere but this window, and
+        _recovery_dirty is the only record of that. It is cleared HERE, on the
+        write that reached the disk, and nowhere else."""
         try:
             nbapp.atomic_write_json(NOVEL_FILE, self._serialize())
-            return True
-        except Exception:
+        except Exception as exc:
+            self._save_error = exc
+            self._recovery_dirty = True
             return False
+        self._save_error = None
+        self._recovery_dirty = False
+        return True
 
     # ---- undo / redo ----
     # The snapshot IS the autosave document: one serialise covers every chapter's
@@ -1188,6 +1274,8 @@ class Novel(nbapp.AppWindow):
         outgoing = self.chapters
         self.chapters = []
         self._set_title(state["title"])
+        _a = state.get("author", "")
+        self._author = _a if isinstance(_a, str) else ""
         # Copied, not adopted: an undo snapshot is restored through here too, and
         # the live self.parts is later appended to and renamed in place — which
         # would edit the stored history out from under itself.
@@ -1223,9 +1311,55 @@ class Novel(nbapp.AppWindow):
         keep = self.view.get_buffer()      # noqa: F841 — held across the swap
         self.view.set_buffer(buf)
 
+    def _on_delete(self, *_a):
+        """Close guard: never destroy this window while it is the only place
+        the manuscript exists.
+
+        Every exit route — Esc, Ctrl+W, the red logo dot — goes through
+        AppWindow.close(), which emits delete-event, so this one handler covers
+        all of them. _on_destroy's final flush is not enough on its own: by the
+        time destroy runs the window is already going away, so a flush that
+        fails there has nowhere to report and nothing to stop. The failure that
+        matters is a full or read-only disk, where every autosave since the
+        last good write has been silently refused and only this window still
+        holds the afternoon's work.
+
+        Returning True vetoes the close and keeps the window (and the work) on
+        screen; False lets it proceed."""
+        if not self._recovery_dirty:
+            return False              # already durable: close, no questions
+        # One retry, silent when it works: a full disk is often a passing
+        # condition, and a close that just saves is better than a card.
+        if self._save_state():
+            return False
+        # The retry failed too. If the card is already up, leave it up rather
+        # than building a second one over it — a repeated Esc must not stack
+        # cards or re-enter this path.
+        if (self._closeprompt is not None
+                and self._closeprompt is getattr(self, "_prompt_layer", None)):
+            return True
+        self._confirm(
+            _t("Your last changes are not saved"),
+            _t(nbapp.save_failure_reason(self._save_error, NOVEL_FILE))
+            + " " + _t("Closing now loses the writing since the last save. "
+                       "Make room and close again to try once more."),
+            _t("Close Without Saving"), self._discard_and_close)
+        self._closeprompt = getattr(self, "_prompt_layer", None)
+        return True
+
+    def _discard_and_close(self):
+        """The user accepted the loss. Destroy directly: destroy does not emit
+        delete-event, so the guard cannot ask a second time."""
+        self._discarded = True
+        self._closeprompt = None
+        self.destroy()
+
     def _on_destroy(self, *_):
         # Final flush on window close so the last (possibly still-debounced)
-        # edit is written before we exit.
+        # edit is written before we exit. Timers are removed HERE and not in
+        # the guard above: a vetoed close leaves the window alive and still
+        # typing, and an editor whose autosave timer had been cancelled out
+        # from under it would stop saving entirely.
         self.undo.cancel()
         for attr in ("_save_timer", "_page_timer"):
             tid = getattr(self, attr, None)
@@ -1235,7 +1369,10 @@ class Novel(nbapp.AppWindow):
                 except Exception:
                     pass
                 setattr(self, attr, None)
-        self._save_state()
+        # "Close Without Saving" said it would not save. Honour that rather
+        # than quietly writing the work the user just chose to let go.
+        if not self._discarded:
+            self._save_state()
         return False
 
     # ============================ FILE MENU ============================
@@ -1523,11 +1660,31 @@ class Novel(nbapp.AppWindow):
         return paras
 
     def _measure_ctx(self):
-        """A throwaway cairo context for measuring text during pagination —
-        a RecordingSurface needs no file and no printer."""
+        """A throwaway cairo context for measuring text during pagination.
+
+        It MUST be a PDF surface, because that is what the pages are finally
+        drawn on. Pagination measures each paragraph's line positions here and
+        stores a clip window per fragment; _draw_page then re-lays the same
+        paragraph out on the real PDF surface and clips to that window. If the
+        two surfaces disagree about line height by even a fraction, the window
+        lands on the wrong lines — text is sliced through the middle, some lines
+        never appear, and the rest looks like it has overflowed the page.
+
+        They DID disagree. This used to measure on a RecordingSurface, which
+        takes cairo's default font options with metric hinting ON and so snaps
+        each line to a whole pixel; a PDF surface turns metric hinting off and
+        keeps fractions. Measured on the shipped book font, one line was 17.00pt
+        while measuring and 15.50pt while drawing — over a 14-line paragraph the
+        window was out by 21pt, most of a line. It went unnoticed because a
+        one-line paragraph is 17 vs 15.5 and still looks fine.
+
+        Measuring on the same KIND of surface makes the two identical by
+        construction, rather than by keeping two sets of font options in step.
+        The surface writes nowhere (PDFSurface accepts no filename) and the
+        page size only has to match the real one so nothing wraps differently.
+        """
         import cairo
-        surf = cairo.RecordingSurface(cairo.Content.COLOR_ALPHA, None)
-        return cairo.Context(surf)
+        return cairo.Context(cairo.PDFSurface(None, PAGE_W, PAGE_H))
 
     def _mk_layout(self, cr, markup, font, width, align=None):
         """Build a Pango layout identically for measuring and drawing, so page
@@ -1629,7 +1786,28 @@ class Novel(nbapp.AppWindow):
             ("text", self._esc(title), F_TITLE, 40, ty, PAGE_W - 80,
              "c", C_INK))
         tp["items"].append(
-            ("rule", (PAGE_W - 60) / 2.0, ty + th + 20, 60, 2, C_RED))
+            ("rule", (PAGE_W - 60) / 2.0, ty + th + 20, 60, 2, C_RULE))
+        # The author, under the rule. Nothing is drawn when no name is set —
+        # an empty line or a stand-in name on a cover is worse than a cover
+        # that simply carries the title.
+        author = (self._author or "").strip()
+        if author:
+            tp["items"].append(
+                ("text", self._esc(author), F_AUTHOR, 40, ty + th + 44,
+                 PAGE_W - 80, "c", C_SEC))
+
+        # --- 1b. the back of the cover, deliberately blank ------------------
+        # Folded, page 1 is the front cover and page 2 is whatever is printed on
+        # its reverse. Left to the flow, that reverse was the first page of the
+        # book — so opening the cover landed straight in the text, and on a
+        # short manuscript the imposition put the closing page there instead.
+        # Every printed book leaves the cover's verso empty; so does this. It is
+        # a real page in the model (not a special case at imposition time), so
+        # Export to PDF and Zine Print stay identical, the count stays a
+        # multiple the fold can use, and every page number below counts it.
+        #
+        # folio=False: a blank leaf carries no page number.
+        new_page(folio=False)
 
         # --- 2. Table of Contents (reserve the pages; fill after body) -----
         show_parts = self._parts_visible()
@@ -1671,8 +1849,11 @@ class Novel(nbapp.AppWindow):
                     ("text", self._esc(self._part_label(ch.get("part", 0))),
                      F_TOCPART, MARGIN_X, top, COL_W, "l", C_MUT))
                 top += 15
+            # Just the numeral. It used to read "CHAPTER 4" directly above a
+            # heading that already says "Chapter 4", so the page said the same
+            # thing twice in two type sizes.
             pg["items"].append(
-                ("text", "CHAPTER " + str(ch["num"]), F_CHNUM, MARGIN_X,
+                ("text", roman(ch["num"]), F_CHNUM, MARGIN_X,
                  top, COL_W, "l", C_SEC))
             top += 18
             ctitle = (ch.get("title", "").strip()
@@ -1683,7 +1864,7 @@ class Novel(nbapp.AppWindow):
                 ("frag", self._esc(ctitle), F_CHTITLE, MARGIN_X, top, COL_W,
                  0, chh))
             top += chh + 12
-            pg["items"].append(("rule", MARGIN_X, top, 40, 2, C_RED))
+            pg["items"].append(("rule", MARGIN_X, top, 40, 2, C_RULE))
             top += 24
             state["y"] = top
             for style, markup in self._chapter_paras(ch):
@@ -1697,7 +1878,7 @@ class Novel(nbapp.AppWindow):
                     ("text", "Contents", F_TOCHEAD, MARGIN_X, BODY_TOP,
                      COL_W, "l", C_INK))
                 pg["items"].append(
-                    ("rule", MARGIN_X, BODY_TOP + 34, 40, 2, C_RED))
+                    ("rule", MARGIN_X, BODY_TOP + 34, 40, 2, C_RULE))
             for row, y in rowpage:
                 kind, text, ref = row
                 if kind == "part":
@@ -1705,9 +1886,20 @@ class Novel(nbapp.AppWindow):
                         ("text", self._esc(text), F_TOCPART, MARGIN_X, y + 6,
                          COL_W, "l", C_MUT))
                 else:
+                    # The chapter's numeral leads the row, so Contents and the
+                    # chapter opener name the chapter the same way. Set in the
+                    # quieter secondary ink and given a fixed column so the
+                    # titles line up under each other whatever the numeral.
+                    ci_ = ref
+                    numeral = roman(self.chapters[ci_]["num"]) \
+                        if 0 <= ci_ < len(self.chapters) else ""
                     pg["items"].append(
-                        ("text", self._esc(text), F_TOCROW, MARGIN_X, y,
-                         COL_W - 34, "l", C_INK))
+                        ("text", numeral, F_TOCROW, MARGIN_X, y,
+                         TOC_NUMERAL_W, "l", C_SEC))
+                    pg["items"].append(
+                        ("text", self._esc(text), F_TOCROW,
+                         MARGIN_X + TOC_NUMERAL_W, y,
+                         COL_W - 34 - TOC_NUMERAL_W, "l", C_INK))
                     num = chapter_start.get(ref)
                     if num:
                         pg["items"].append(
@@ -1789,6 +1981,21 @@ class Novel(nbapp.AppWindow):
             pass
 
     # ---- publish route (a): Export to PDF -----------------------------
+    def _on_set_author(self):
+        """File ▸ Author… — the name printed under the title on the cover."""
+        self._close_style()
+        self._close_prompt()
+        self._prompt_text("Author", self._author, "Name", "Set",
+                          self._commit_author)
+
+    def _commit_author(self, name):
+        # Undo-able and persisted, exactly like naming a part.
+        self.undo.checkpoint("Set the author")
+        self._author = (name or "").strip()
+        self._save_state()
+        self.undo.commit()
+        self._render_pages = None       # the cover changed; re-impose on demand
+
     def _on_export_pdf(self):
         """File ▸ Export to PDF — write the whole book at 5.5x8.5 as plain
         sequential pages (title, Contents, chapters) to a shareable PDF."""
@@ -1805,6 +2012,24 @@ class Novel(nbapp.AppWindow):
         if not name.lower().endswith(".pdf"):
             name += ".pdf"
         path = os.path.join(DOCS_DIR, name)
+        # Exporting twice under one name is an ordinary thing to do — the name
+        # defaults to the book's title, so the second export offers the same one
+        # back. It used to destroy the first PDF without a word. Ask, using the same three strings as
+        # Novel's Save As -- one wording for "you are about to overwrite",
+        # already carried by all seventeen catalogs.
+        if os.path.exists(path):
+            self._confirm(
+                _t("Replace file?"),
+                _t("“%s” already exists in Documents. Replace it?")
+                % name,
+                _t("Replace"), lambda: self._write_export_pdf(path))
+            return
+        self._write_export_pdf(path)
+
+    def _write_export_pdf(self, path):
+        """Render the book to `path`. Split from _commit_export_pdf so the
+        replace-an-existing-file question can be answered before anything is
+        written."""
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
             count = self._prepare_render()
@@ -1830,7 +2055,8 @@ class Novel(nbapp.AppWindow):
         count = self._page_count
 
         def make_pdf(path):
-            return nbprint.booklet_pdf(path, count, self._draw_page)
+            return nbprint.booklet_pdf(path, count, self._draw_page,
+                                        fold_line=True)
         nbprint.print_booklet(self, make_pdf, "Novel")
 
     # ============================ FORMATTING ============================
@@ -2179,8 +2405,10 @@ class Novel(nbapp.AppWindow):
         """A small in-window text-entry card (naming a part, a Save As filename,
         …). `on_ok` is called with the trimmed entry text; cancel/scrim/Esc
         dismiss it."""
+        return_focus = self.get_focus()
         self._close_style()
         self._close_prompt()
+        self._prompt_return_focus = return_focus
         W, H = self._live_size()
         layer = Gtk.Fixed()
         scrim = Gtk.EventBox()
@@ -2235,11 +2463,23 @@ class Novel(nbapp.AppWindow):
     def _close_prompt(self):
         layer = getattr(self, "_prompt_layer", None)
         if layer is not None:
+            return_focus = getattr(self, "_prompt_return_focus", None)
             try:
                 self._overlay.remove(layer)
             except Exception:
                 pass
             self._prompt_layer = None
+            self._prompt_return_focus = None
+            # The prompt's Entry/Cancel button has just been removed. Without
+            # restoring the widget that invoked it, GTK leaves no focus owner:
+            # typing and shortcuts appear dead until the writer clicks back in
+            # the manuscript. Restore after removal, and tolerate an invoker
+            # that was itself replaced while the card was open.
+            if return_focus is not None:
+                try:
+                    return_focus.grab_focus()
+                except Exception:
+                    pass
             return True
         return False
 
@@ -2248,8 +2488,10 @@ class Novel(nbapp.AppWindow):
         `on_ok` runs only when the user accepts; cancel / scrim / Esc dismiss
         it and change nothing. Shares _prompt_text's overlay idiom and the
         _prompt_layer / _close_prompt lifecycle (no popup window)."""
+        return_focus = self.get_focus()
         self._close_style()
         self._close_prompt()
+        self._prompt_return_focus = return_focus
         W, H = self._live_size()
         layer = Gtk.Fixed()
         scrim = Gtk.EventBox()
@@ -2388,46 +2630,48 @@ class Novel(nbapp.AppWindow):
            below the sidebar's beige header. Name the viewport node itself. */
         .nvsidescroll, .nvsidescroll viewport { background: #F1EEE6; }
         .nvhead { padding: 26px 26px 22px; border-bottom: 1px solid #D7D2C5; }
-        .nveyebrow { font-size: 11px; letter-spacing: 2px; color: #A39D8F;
+        .nveyebrow { font-size: 11px; letter-spacing: 2px; color: #9A9484;
                      font-weight: 700; margin-bottom: 10px; }
         .nvtitle { font-family: "Newsreader","Liberation Serif",serif;
-                   font-size: 25px; color: #1A1916; margin-bottom: 14px; }
-        .nvtitlebtn { border-radius: 2px; }
-        .nvtitlebtn:hover { background: #E6DFCE; }
+                   font-size: 24px; color: #1A1916; margin-bottom: 14px; }
+        .nvflatbtn { padding: 0; border: none; background: transparent;
+                     background-image: none; box-shadow: none; }
+        .nvtitlebtn { border-radius: 8px; }
+        .nvtitlebtn:hover { background: #EAE3D2; }
         .nvstatrow { margin-bottom: 2px; }
         .nvtotal { font-size: 13px; color: #6E695E; }
 
         .nvchaplist { padding: 18px 14px; }
-        .nvpart { font-size: 11px; letter-spacing: 1.7px; color: #A39D8F;
+        .nvpart { font-size: 11px; letter-spacing: 1.7px; color: #9A9484;
                   font-weight: 700; padding: 0 10px; margin: 6px 0 10px; }
         .nvparthdr { margin: 4px 0 2px; }
-        .nvparthdr:hover { background: #E6DFCE; border-radius: 2px; }
-        .nvrow { padding: 11px 10px; border-radius: 2px; margin-bottom: 2px;
+        .nvparthdr:hover { background: #EAE3D2; border-radius: 6px; }
+        .nvrow { padding: 11px 10px; border-radius: 6px; margin-bottom: 2px;
                  border-left: 3px solid transparent; }
-        .nvrowhit:hover { background: #E6DFCE; border-radius: 2px; }
+        .nvrowhit:hover { background: #EAE3D2; border-radius: 6px; }
         .nvrow.active { background: #EAE3D2; border-left: 3px solid #C8341E; }
-        .nvnum { font-size: 13px; color: #9A958A; border: 1px solid #D7D2C5;
+        .nvnum { font-size: 13px; color: #9A9484; border: 1px solid #D7D2C5;
                  border-radius: 50%; }
         /* Active chapter marker: a soft warm disc (the OS's selected-control
            tone), not a black slab. The row already signals "active" with its
            red edge + beige fill, so the number just firms up in ink on a gently
            deeper disc rather than inverting to black-on-white. */
-        .nvnum.active { background: #E0D8C4; color: #1A1916; font-weight: 600;
+        .nvnum.active { background: #DED4C2; color: #1A1916; font-weight: 600;
                         border: 1px solid #B3AD9E; }
         .nvrowtitle { font-size: 15px; color: #1A1916; font-weight: 500; }
-        .nvrowwords { font-size: 12px; color: #9A958A; margin-top: 2px; }
+        .nvrowwords { font-size: 12px; color: #9A9484; margin-top: 2px; }
 
         .nvfoot { border-top: 1px solid #D7D2C5; padding: 14px 18px; }
-        .nvnewbtn { min-height: 40px; border: 1px solid #C4BFB1;
-                    border-radius: 2px; background: #FCFBF8; color: #2A2620;
+        .nvnewbtn { min-height: 40px; border: 1px solid #C9C4B6;
+                    border-radius: 8px; background: #FCFBF8; color: #2A2620;
                     box-shadow: none; }
-        .nvnewbtn:hover { background: #ECE8DD; }
+        .nvnewbtn:hover { background: #F1EEE6; }
         .nvnewbtn label { font-size: 15px; font-weight: 500; color: #2A2620; }
 
         .nvformatbar { min-height: 54px; padding: 0 36px; background: #FCFBF8;
-                       border-bottom: 1px solid #E6E1D4; }
+                       border-bottom: 1px solid #D7D2C5; }
         .nvstylebtn { min-height: 34px; padding: 0 13px;
-                      border: 1px solid #DCD7C9; border-radius: 2px;
+                      border: 1px solid #C9C4B6; border-radius: 8px;
                       background: #FCFBF8; box-shadow: none; }
         .nvstylebtn:hover { background: #F1EEE6; }
         .nvstylelab { font-family: "Newsreader","Liberation Serif",serif;
@@ -2452,7 +2696,7 @@ class Novel(nbapp.AppWindow):
                          font-size: 20px; color: #1A1916; }
         .nvpromptmsg { font-size: 14px; color: #6E695E; }
         .nvpromptentry { font-size: 15px; padding: 7px 10px; color: #1A1916;
-                         border: 1px solid #C4BFB1; border-radius: 2px;
+                         border: 1px solid #C9C4B6; border-radius: 8px;
                          background: #FCFBF8; }
         .nvpromptentry:focus { border: 1px solid #1A1916; }
         /* The label needs its OWN colour rule. The theme's `* { color: ink }`
@@ -2463,7 +2707,7 @@ class Novel(nbapp.AppWindow):
         .nvpromptok, .nvpromptok label { color: #FCFBF8; font-size: 14px;
                       font-weight: 600; }
         .nvpromptok { min-height: 34px; padding: 0 18px; border: 1px solid #1A1916;
-                      border-radius: 2px; background: #1A1916;
+                      border-radius: 8px; background: #1A1916;
                       box-shadow: none; }
         .nvpromptok:hover { background: #2A2620; }
         /* Destructive variant. Ink is the primary action everywhere in this app
@@ -2472,53 +2716,53 @@ class Novel(nbapp.AppWindow):
            exactly this, and Journal's Delete Entry already uses it. Only
            _confirm() adds .danger; _prompt_text stays ink. */
         .nvpromptok.danger { background: #C8341E; border-color: #C8341E; }
-        .nvpromptok.danger:hover { background: #A62A17; border-color: #A62A17; }
+        .nvpromptok.danger:hover { background: #B12D19; border-color: #B12D19; }
         .nvpromptcancel { min-height: 34px; padding: 0 16px; color: #2A2620;
-                          border: 1px solid #C4BFB1; border-radius: 2px;
+                          border: 1px solid #C9C4B6; border-radius: 8px;
                           background: #FCFBF8; box-shadow: none; font-size: 14px; }
-        .nvpromptcancel:hover { background: #ECE8DD; }
-        .nvpromptempty { font-size: 13px; color: #A39D8F; }
+        .nvpromptcancel:hover { background: #F1EEE6; }
+        .nvpromptempty { font-size: 13px; color: #9A9484; }
         .nvfileitem { padding: 8px 12px; background: transparent; border: none;
-                      box-shadow: none; border-radius: 2px; }
+                      box-shadow: none; border-radius: 6px; }
         .nvfileitem:hover { background: #EAE3D2; }
         .nvfileitemlab { font-family: "Newsreader","Liberation Serif",serif;
                          font-size: 15px; color: #1A1916; }
         .nvfileitem:hover .nvfileitemlab { color: #1A1916; }
         .nvfmtbtn { min-width: 34px; min-height: 34px; padding: 0; border: none;
-                    border-radius: 2px; background: transparent;
+                    border-radius: 8px; background: transparent;
                     box-shadow: none; color: #2A2620; font-size: 17px; }
         .nvfmtbtn:hover { background: #EFEBE0; }
         .nvfmtbtn.bold { font-weight: 700; }
         .nvfmtbtn.ital { font-style: italic;
                          font-family: "Newsreader","Liberation Serif",serif; }
         .nvfmtbtn.under { text-decoration-line: underline; font-size: 16px; }
-        .nvsep { color: #DCD7C9; min-width: 1px; }
-        .nvfindbar { background: #F4F2EC; border-bottom: 1px solid #E6E1D4;
+        .nvsep { color: #D7D2C5; min-width: 1px; }
+        .nvfindbar { background: #F4F2EC; border-bottom: 1px solid #D7D2C5;
                      padding: 8px 36px; }
         .nvfindentry { font-size: 13px; color: #1A1916; background: #FCFBF8;
-                       border: 1px solid #C4BFB1; border-radius: 2px;
+                       border: 1px solid #C9C4B6; border-radius: 8px;
                        box-shadow: none; min-height: 30px; }
         .nvfindentry:focus { border: 1px solid #8A857A; }
         .nvfindbtn { min-height: 30px; padding: 0 12px; font-size: 13px;
                      color: #2A2620; background: #FCFBF8;
-                     border: 1px solid #D7D2C5; border-radius: 2px;
+                     border: 1px solid #D7D2C5; border-radius: 8px;
                      box-shadow: none; }
-        .nvfindbtn:hover { background: #ECE8DD; }
+        .nvfindbtn:hover { background: #F1EEE6; }
         .nvfindcount { font-size: 13px; color: #6E695E; }
         .nvcount { font-size: 13px; color: #8A857A; }
         .nvsave { font-size: 13px; color: #8A857A; }
 
         .nvcanvas { background: #FCFBF8; }
         .nvpage { padding: 80px 24px 160px; }
-        .nvcaneyebrow { font-size: 12px; letter-spacing: 2px; color: #A39D8F;
+        .nvcaneyebrow { font-size: 12px; letter-spacing: 2px; color: #9A9484;
                         font-weight: 700; margin-bottom: 24px; }
         .nvbody { font-family: "Newsreader","Liberation Serif",serif;
                   font-size: 20px; color: #2A2620; background: #FCFBF8;
                   caret-color: #C8341E; }
         .nvbody text { background: #FCFBF8; }
-        .nvbody text selection { background-color: #F1D9D2; color: #1A1916; }
+        .nvbody text selection { background-color: #EAE3D2; color: #1A1916; }
         .nvplaceholder { font-family: "Newsreader","Liberation Serif",serif;
-                         font-size: 20px; font-style: italic; color: #A39D8F; }
+                         font-size: 20px; font-style: italic; color: #9A9484; }
         """
         prov = Gtk.CssProvider()
         try:

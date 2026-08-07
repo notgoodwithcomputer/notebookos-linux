@@ -54,6 +54,7 @@ if GST_OK:
         GstPbutils = None
 
 import nbapp
+import nbstate
 import nbicons
 from nbi18n import _t  # noqa: E402
 
@@ -159,6 +160,12 @@ class Music(nbapp.AppWindow):
         self._play_img = None
         self._play_ev = None       # the play/pause control (its tooltip flips)
         self._nowlbl = None
+        # Music's status channel. It had none at all, so a track that would not
+        # decode failed in complete silence: the play glyph went back to Play
+        # and nothing anywhere said why. The now-playing line is the one label
+        # a listener is already reading, so a failure borrows it for a moment.
+        self._flash_serial = 0     # so a later message wins the restore race
+        self._flashing = False     # while set, refreshes leave the label alone
         self.lbl_total = None
         self.lbl_elapsed = None
         # --- GStreamer engine state (all None/0 until _build_engine) ---
@@ -166,6 +173,11 @@ class Music(nbapp.AppWindow):
         self._loaded_path = None   # file path currently loaded into the pipeline
         self._duration_ns = 0      # cached duration of the loaded track (ns)
         self._poll_id = 0          # GLib.timeout source id for progress polling
+        # set once the window is gone: the pipeline's bus messages are
+        # dispatched from the main loop, so one posted just before teardown is
+        # still delivered afterwards. Nothing may start audio or arm a timer
+        # from that point on (see _on_eos / _start_poll).
+        self._closed = False
         self._user_seeking = False  # true while the user drags the seek bar
         self._seek = None          # the progress/seek Gtk.Scale
         # a drill-down "scope" (("album", name) or ("artist", name)) opened by
@@ -176,6 +188,17 @@ class Music(nbapp.AppWindow):
         self._scope_origin = None      # which sidebar view the scope drilled from
         # playlists restored from disk, applied once the sidebar exists
         self._loaded_playlists = []
+        # What was open when the library was last closed: a library view id, or
+        # a playlist NAME. Both are read by _load and applied by
+        # _restore_selection once the sidebar rows actually exist — a playlist
+        # is restored by its name, never by its row position, because playlists
+        # are created, renamed and deleted between sessions.
+        self._saved_view = "songs"
+        self._saved_playlist = None
+        # True only while _restore_selection is putting the sidebar back, so
+        # restoring cannot be mistaken for the user changing something (see
+        # _save).
+        self._restoring = nbstate.RestoreScope()
 
         # library model — a list of track dicts: {title, artist, album, time}
         # enumerated from Home / Music at launch (see _load_library). Nothing is
@@ -188,7 +211,12 @@ class Music(nbapp.AppWindow):
         self._lengths = {}
         self._tags = {}       # path -> [key, title, artist, album] from the file
         self._art_img = None  # the playbar's artwork image, set once built
-        self._art_cache = {}  # path -> Pixbuf | False (False = looked, none)
+        # (path, logical size, device scale) -> Pixbuf | False (False = looked,
+        # found none). The scale is in the key because the SAME cover at the
+        # same layout size is a different number of real pixels on a 1x and a
+        # 2x screen; keying on path alone would hand a window moved between
+        # monitors the raster built for the other one.
+        self._art_cache = {}
         self._by_path = {}    # path -> track dict, for the scan's callbacks
         self._time_labels = {}   # path -> the Time labels currently on screen
         self._tag_labels = {}    # path -> [(label, field)] so real tags can
@@ -225,7 +253,7 @@ class Music(nbapp.AppWindow):
             self._disable_engine_controls()
         self._refresh_transport()
 
-        self._select("songs")
+        self._restore_selection()
         # A song handed in as argv[1] (the Finder opens audio files this way)
         # is cued and played on launch, so double-clicking a track in the file
         # manager actually plays it rather than just opening the library.
@@ -320,8 +348,7 @@ class Music(nbapp.AppWindow):
         newpl.set_relief(Gtk.ReliefStyle.NONE)
         newpl.get_style_context().add_class("newplaylist")
         nprow = Gtk.Box(spacing=9)
-        nprow.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("plus", 15, "#1A1916")), False, False, 0)
+        nprow.pack_start(nbicons.image("plus", 15, "#1A1916"), False, False, 0)
         nprow.pack_start(Gtk.Label(label=_t("New Playlist")), False, False, 0)
         newpl.add(nprow)
         newpl.connect("clicked", self._new_playlist)
@@ -358,8 +385,7 @@ class Music(nbapp.AppWindow):
         btn.set_relief(Gtk.ReliefStyle.NONE)
         btn.get_style_context().add_class("viewrow")
         row = Gtk.Box(spacing=12)
-        row.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf(glyph, 18, "#1A1916")), False, False, 0)
+        row.pack_start(nbicons.image(glyph, 18, "#1A1916"), False, False, 0)
         name = Gtk.Label(label=label, xalign=0)
         row.pack_start(name, True, True, 0)
         count = Gtk.Label(label="0")
@@ -379,8 +405,7 @@ class Music(nbapp.AppWindow):
         btn.get_style_context().add_class("viewrow")
         btn.get_style_context().add_class("playlistrow")
         row = Gtk.Box(spacing=12)
-        row.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("viewlist", 18, "#1A1916")), False, False, 0)
+        row.pack_start(nbicons.image("viewlist", 18, "#1A1916"), False, False, 0)
         name_lbl = Gtk.Label(label=name, xalign=0)
         # a playlist the user named "Long Drive Home Through The Mountains"
         # asked for its full 325px as a MINIMUM, which dragged the whole sidebar
@@ -473,6 +498,28 @@ class Music(nbapp.AppWindow):
         row.show_all()
         return row
 
+    def _restore_selection(self):
+        """Reopen on whatever was open last time.
+
+        Runs after the library scan AND after _restore_playlists, so the row
+        being selected exists: restoration by identity is only honest once the
+        content it names is on screen. A saved playlist that has since been
+        deleted (or a store that never held one) falls back to the saved
+        library view, and that falls back to Songs — the library always opens
+        on something."""
+        with self._restoring:
+            try:
+                name = self._saved_playlist
+                i = nbstate.identity_index(self._playlists, name)
+                if i >= 0 and i < len(self._playlist_rows):
+                    self._select_playlist(self._playlist_rows[i], name)
+                    return
+                self._select(nbstate.choice(
+                    self._saved_view, [v[0] for v in self.VIEWS], "songs"))
+            except Exception:
+                # a damaged store must never keep the library from opening
+                self._select("songs")
+
     def _restore_playlists(self):
         # recreate saved playlists in the sidebar (called after it is built)
         try:
@@ -515,8 +562,7 @@ class Music(nbapp.AppWindow):
         searchbox = Gtk.Box(spacing=8)
         searchbox.get_style_context().add_class("searchbox")
         searchbox.set_valign(Gtk.Align.CENTER)
-        searchbox.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("search", 15, "#9A9484")), False, False, 0)
+        searchbox.pack_start(nbicons.image("search", 15, "#9A9484"), False, False, 0)
         entry = Gtk.Entry()
         entry.set_has_frame(False)
         entry.set_placeholder_text(_t("Search library"))
@@ -596,8 +642,7 @@ class Music(nbapp.AppWindow):
         empty.set_valign(Gtk.Align.CENTER)
         empty.set_halign(Gtk.Align.CENTER)
         empty.set_vexpand(True)
-        empty.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("music", 52, "#C9C4B6")), False, False, 0)
+        empty.pack_start(nbicons.image("music", 52, "#C9C4B6"), False, False, 0)
         t = Gtk.Label(label=_t("Library empty"))
         t.get_style_context().add_class("empty-title")
         empty.pack_start(t, False, False, 0)
@@ -643,7 +688,7 @@ class Music(nbapp.AppWindow):
         btn.get_style_context().add_class("plact")
         btn.set_valign(Gtk.Align.CENTER)
         btn.set_tooltip_text(tooltip)
-        btn.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(glyph, 16, "#6E695E")))
+        btn.add(nbicons.image(glyph, 16, "#6E695E"))
         btn.connect("clicked", cb)
         return btn
 
@@ -674,7 +719,7 @@ class Music(nbapp.AppWindow):
         # vertical twin of the artwork's hexpand=False fix below).
         bar.set_vexpand(False)
 
-        # transport — keep the event boxes so they can be disabled when the
+        # transport — keep the three buttons so they can be disabled when the
         # audio engine is unavailable
         trans = Gtk.Box(spacing=12)
         trans.set_valign(Gtk.Align.CENTER)
@@ -696,7 +741,7 @@ class Music(nbapp.AppWindow):
         art.set_size_request(52, 52)
         art.set_valign(Gtk.Align.CENTER)
         art.set_halign(Gtk.Align.CENTER)
-        img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("music", 22, "#C9C4B6"))
+        img = nbicons.image("music", 22, "#C9C4B6")
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
         # kept so _show_cover can swap in the cued track's embedded artwork;
@@ -767,8 +812,7 @@ class Music(nbapp.AppWindow):
         vol = Gtk.Box(spacing=10)
         vol.set_valign(Gtk.Align.CENTER)
         vol.set_size_request(190, -1)
-        vol.pack_start(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("vol", 16, "#6E695E")), False, False, 0)
+        vol.pack_start(nbicons.image("vol", 16, "#6E695E"), False, False, 0)
         self.vol = Gtk.Scale.new_with_range(
             Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.vol.set_draw_value(False)
@@ -790,38 +834,39 @@ class Music(nbapp.AppWindow):
         return bar
 
     def _round(self, glyph, size, big=False):
-        # transport control — clickable, drives the shared playback state
-        box = Gtk.Box()
-        box.get_style_context().add_class("roundbtn")
+        # Transport control. This was a windowless Gtk.Box wrapped in an
+        # input-only Gtk.EventBox listening for button-press-event, which made
+        # prev/play/next MOUSE-ONLY: no Tab stop, no Space/Enter, and nothing
+        # for assistive tech to announce, because an EventBox carries no button
+        # role for nbapp's tooltip-derived naming to attach to. A native button
+        # supplies all of that, and "clicked" fires for pointer and keyboard
+        # alike. Relief NONE plus .roundbtn keeps the existing flat, circular
+        # Papertone treatment at exactly `size` (see the CSS, which strips the
+        # theme's padding, minimum size, pressed background image and shadow).
+        button = Gtk.Button()
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.get_style_context().add_class("roundbtn")
         if big:
-            box.get_style_context().add_class("roundbig")
-        box.set_size_request(size, size)
+            button.get_style_context().add_class("roundbig")
+        button.set_size_request(size, size)
         # keep the control a fixed circle (not stretched to the taller play
         # button) and vertically centred within the transport row
-        box.set_valign(Gtk.Align.CENTER)
-        box.set_halign(Gtk.Align.CENTER)
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_halign(Gtk.Align.CENTER)
         # transport glyphs render in active ink (not the pale #C9C4B6
         # placeholder tone) so prev/play/next read as live controls
-        img = Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf(glyph, 19 if big else 16, "#1A1916"))
+        img = nbicons.image(glyph, 19 if big else 16, "#1A1916")
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
-        img.set_vexpand(True)
-        box.pack_start(img, True, True, 0)
+        button.add(img)
         # see the artwork note in _playbar: hexpand here propagates out to the
         # transport group and unbalances the whole bar.
-        box.set_hexpand(False)
+        button.set_hexpand(False)
         if glyph == "play":
-            # keep the play glyph so it can flip to a stop icon while playing
+            # keep the play glyph so it can flip to the pause icon while playing
             self._play_img = img
-        # a windowless Box can't receive clicks — wrap it in an input-only
-        # EventBox (no visible window, so the round styling is untouched)
-        ev = Gtk.EventBox()
-        ev.set_visible_window(False)
-        ev.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        ev.connect("button-press-event", lambda _w, _e: self._on_transport(glyph))
-        ev.add(box)
-        return ev
+        button.connect("clicked", lambda _w: self._on_transport(glyph))
+        return button
 
     def _refresh_transport(self):
         # reflect self._playing in the play glyph + now-playing label
@@ -832,12 +877,10 @@ class Music(nbapp.AppWindow):
             # It must be the PAUSE bars, not a stop square: the button pauses
             # the pipeline and keeps the position, and a square reads as "stop
             # and go back to the beginning" to anyone who isn't guessing.
-            self._play_img.set_from_pixbuf(
-                nbicons.pixbuf("pause" if playing else "play", 19, "#1A1916"))
+            nbicons.set_image(self._play_img, "pause" if playing else "play", 19, "#1A1916")
         if self._play_ev is not None:
             self._play_ev.set_tooltip_text(_t("Pause") if playing else "Play")
-        if self._nowlbl is not None:
-            self._nowlbl.set_text(self._nowtext())
+        self._refresh_now_label()
         if self.lbl_total is not None:
             self.lbl_total.set_text(self._nowtotal())
 
@@ -904,6 +947,10 @@ class Music(nbapp.AppWindow):
         if self.lbl_elapsed is not None:
             self.lbl_elapsed.set_text("0:00")
         self._set_seek_value(0)
+        # A track that really starts cancels whatever message was showing: the
+        # last failure is over, and leaving it up would caption the wrong song.
+        self._flashing = False
+        self._flash_serial += 1
         path = track.get("path") if track else None
         if not (self._engine_ok() and path and os.path.isfile(path)):
             # nothing to decode — leave the row cued but not playing
@@ -916,6 +963,14 @@ class Music(nbapp.AppWindow):
                     pass
             self._refresh_transport()
             self._mark_playing_row()
+            # A file the library lists but the disk no longer has is the common
+            # case here (a track deleted or a stick pulled since the last scan),
+            # and it used to leave the row cued and mute with nothing said. The
+            # no-engine case says its own piece through _nowtext, so it is not
+            # overwritten.
+            if self._engine_ok() and track:
+                self._flash(_t("“%s” is no longer where the library found it")
+                            % self._track_label(path))
             return
         try:
             self._player.set_state(Gst.State.NULL)
@@ -929,6 +984,11 @@ class Music(nbapp.AppWindow):
             # decode/pipeline failure — fall back to a cued-but-silent state
             self._playing = False
             self._loaded_path = None
+            self._refresh_transport()
+            self._mark_playing_row()
+            self._flash(_t("“%s” can’t be played — the file may be damaged")
+                        % self._track_label(path))
+            return
         self._refresh_transport()
         self._mark_playing_row()
 
@@ -1048,23 +1108,105 @@ class Music(nbapp.AppWindow):
             pass
 
     def _on_eos(self, _bus, _msg):
-        # a track finished — advance per shuffle/repeat
+        # A track finished — advance per shuffle/repeat.
+        #
+        # Only when playback is still live. Bus messages are queued on the main
+        # loop, so an EOS posted as the last samples drained can be delivered
+        # AFTER playback was already stopped (a decode error) or after the
+        # window was destroyed — and advancing then puts the pipeline straight
+        # back to PLAYING, so the machine keeps making noise with no Music
+        # window to stop it from, and re-arms the progress timer on widgets
+        # that are gone. Nothing is loaded once playback stopped, which is what
+        # tells this message apart from a real end-of-track.
+        if self._closed or self._loaded_path is None:
+            return
         try:
             self._advance(auto=True, direction=1)
         except Exception:
             pass
 
-    def _on_error(self, _bus, _msg):
+    def _on_error(self, _bus, msg):
         # a decode/pipeline error — stop cleanly rather than wedge on the track
+        if self._closed:
+            return
+        # Say so. This used to stop in silence: the play glyph flipped back and
+        # the track simply never started, which is indistinguishable from a
+        # broken button. The name is read BEFORE _stop_playback, which clears
+        # the loaded path.
+        name = self._track_label(self._loaded_path)
         try:
             self._stop_playback()
         except Exception:
             pass
+        self._flash(self._play_failure(msg) % name)
+
+    def _track_label(self, path):
+        """What to call a track in a message: its title if the library knows
+        one, else the filename. Never the full path — a message is not a place
+        to print where the OS keeps things."""
+        if path:
+            for t in self.songs:
+                if t.get("path") == path and t.get("title"):
+                    return t["title"]
+            return os.path.splitext(os.path.basename(path))[0]
+        return _t("That track")
+
+    @staticmethod
+    def _play_failure(msg):
+        """One plain sentence for why a track would not play, with a "%s" for
+        its name.
+
+        Never the GError's own text. That is developer English, never
+        translated, and reads "Your GStreamer installation is missing a
+        plug-in." or "This appears to be a text file." — the machinery talking
+        about itself. The error DOMAIN separates the only two causes a listener
+        can act on differently, which is all that needs to reach them:
+
+            gst-resource-error-quark   the file is not readable where it was
+            gst-stream-error-quark     it is readable but cannot be decoded
+        """
+        domain = ""
+        try:
+            err, _debug = msg.parse_error()
+            domain = getattr(err, "domain", "") or ""
+        except Exception:
+            pass
+        if "resource" in domain:
+            return _t("“%s” is no longer where the library found it")
+        return _t("“%s” can’t be played — the file may be damaged")
+
+    def _flash(self, msg, restore_ms=4000):
+        """Borrow the now-playing line for a transient message, then give it
+        back. Finder's _flash_status pattern, on the label this app already
+        keeps current."""
+        if self._closed or self._nowlbl is None:
+            return
+        self._flash_serial += 1
+        self._flashing = True
+        serial = self._flash_serial
+        self._nowlbl.set_text(msg)
+        GLib.timeout_add(restore_ms, self._unflash, serial)
+
+    def _unflash(self, serial):
+        # A newer message (or a track that started playing) owns the label now.
+        if serial != self._flash_serial:
+            return False
+        self._flashing = False
+        self._refresh_now_label()
+        return False
+
+    def _refresh_now_label(self):
+        """Put the live now-playing text back, unless a message is showing."""
+        if self._closed or self._nowlbl is None or self._flashing:
+            return
+        self._nowlbl.set_text(self._nowtext())
 
     # ---------------- progress polling + seek + volume ----------------
     def _start_poll(self):
         """Begin (or keep) the ~300ms progress poll that advances the elapsed/
         total timecodes and the seek bar from the pipeline's own clock."""
+        if self._closed:
+            return
         if self._poll_id == 0:
             self._poll_id = GLib.timeout_add(300, self._on_poll)
 
@@ -1165,15 +1307,14 @@ class Music(nbapp.AppWindow):
         if tip:
             btn.set_tooltip_text(tip)
         btn._glyph = glyph
-        btn._img = Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf(glyph, 16, "#1A1916"))
+        btn._img = nbicons.image(glyph, 16, "#1A1916")
         btn.add(btn._img)
         btn.connect("toggled", self._on_toggle)
         return btn
 
     def _on_toggle(self, btn):
         color = "#FCFBF8" if btn.get_active() else "#1A1916"
-        btn._img.set_from_pixbuf(nbicons.pixbuf(btn._glyph, 16, color))
+        nbicons.set_image(btn._img, btn._glyph, 16, color)
 
     # ---------------- view switching ----------------
     def _select(self, vid):
@@ -1240,9 +1381,18 @@ class Music(nbapp.AppWindow):
     def _track_from_path(self, path):
         """Derive a track dict from a file path. Honours the common
         'Artist - Title.ext' file convention and an Artist/Album/track folder
-        layout; anything unknown reads as Unknown Artist / Album. Duration is
-        left blank (no tag reader is available), which the row and playback bar
-        render honestly as a dash / 0:00."""
+        layout; anything unknown reads as Unknown Artist / Album.
+
+        This is the FIRST guess, not the final answer: the Discoverer runs over
+        every file afterwards and replaces title/artist/album with the real
+        tags (see _info_tags) and fills in the duration. Until it lands the row
+        shows a dash rather than a made-up length, which is why the value
+        starts blank here.
+
+        (This docstring used to say "no tag reader is available". One arrived;
+        the sentence did not keep up, and a comment that describes a limitation
+        the code no longer has sends the next reader to build something that
+        already exists.)"""
         base = os.path.splitext(os.path.basename(path))[0].strip()
         artist, title = "", base
         if " - " in base:
@@ -1473,10 +1623,24 @@ class Music(nbapp.AppWindow):
         return True
 
     def _cover_pixbuf(self, path, size=52):
-        """The track's cover as a Pixbuf, or None. Cached in memory per path."""
-        if path in self._art_cache:
-            got = self._art_cache[path]
+        """The track's cover, scaled for the SCREEN's real pixel density.
+
+        `size` stays in logical units — it is a layout number and every caller
+        should keep thinking in those — but the pixbuf is decoded at size*scale
+        so a 2x panel gets a genuinely 104px cover rather than a 52px one that
+        the compositor stretches. Album art sits right beside the track title,
+        which is sharp, and a soft square next to sharp text is the exact
+        contrast that reads as cheap.
+
+        The on-disk cache is capped at COVER_MAX (256px) on its longest side, so
+        there is real detail available to scale from at 2x and this costs
+        nothing but the decode. Cached in memory per (path, size, scale)."""
+        sf = nbicons.scale_factor()
+        key = (path, size, sf)
+        if key in self._art_cache:
+            got = self._art_cache[key]
             return got or None
+        px = max(1, size * sf)
         pb = None
         try:
             f = self._cover_file(path)
@@ -1487,11 +1651,11 @@ class Music(nbapp.AppWindow):
                 ldr.close()
                 raw = ldr.get_pixbuf()
                 if raw is not None:
-                    pb = raw.scale_simple(size, size,
+                    pb = raw.scale_simple(px, px,
                                           GdkPixbuf.InterpType.BILINEAR)
         except Exception:                                      # noqa: BLE001
             pb = None
-        self._art_cache[path] = pb or False
+        self._art_cache[key] = pb or False
         return pb
 
     def _show_cover(self, track):
@@ -1508,9 +1672,13 @@ class Music(nbapp.AppWindow):
             pb = None
         try:
             if pb is not None:
-                img.set_from_pixbuf(pb)
+                # The pixbuf is already at DEVICE resolution (see
+                # _cover_pixbuf), so it must be handed over as a surface
+                # carrying the scale -- set_from_pixbuf would place those extra
+                # pixels as logical ones and draw the cover at twice its size.
+                nbicons.set_image_pixbuf(img, pb)
             else:
-                img.set_from_pixbuf(nbicons.pixbuf("music", 22, "#C9C4B6"))
+                nbicons.set_image(img, "music", 22, "#C9C4B6")
         except Exception:                                      # noqa: BLE001
             pass
 
@@ -1600,8 +1768,7 @@ class Music(nbapp.AppWindow):
             self._refresh_filter()
             self.songrows.show_all()
 
-            if self._nowlbl is not None:
-                self._nowlbl.set_text(self._nowtext())
+            self._refresh_now_label()
             if self.lbl_total is not None:
                 self.lbl_total.set_text(self._nowtotal())
         except Exception:
@@ -1759,13 +1926,11 @@ class Music(nbapp.AppWindow):
         trail.set_size_request(30, 30)
         if in_playlist is not None:
             trail.set_tooltip_text(_t("Remove from Playlist"))
-            trail.add(Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf("trash", 14, "#9A9484")))
+            trail.add(nbicons.image("trash", 14, "#9A9484"))
             trail.connect("clicked", self._on_remove_clicked, s, in_playlist)
         else:
             trail.set_tooltip_text(_t("Add to Playlist"))
-            trail.add(Gtk.Image.new_from_pixbuf(
-                nbicons.pixbuf("plus", 14, "#9A9484")))
+            trail.add(nbicons.image("plus", 14, "#9A9484"))
             trail.connect("clicked", self._on_add_clicked, s)
         box.pack_start(trail, False, False, 0)
 
@@ -2152,6 +2317,15 @@ class Music(nbapp.AppWindow):
             # be strict about the shapes: a garbage file whose "playlists" is a
             # string (or "tracks" a list) must not iterate characters or crash —
             # it just yields no saved playlists
+            # What was open last time. A view id that this build no longer has
+            # (or a number, or nothing at all) falls back to Songs; the saved
+            # playlist is kept as a bare name and only honoured in
+            # _restore_selection if a playlist by that name still exists.
+            self._saved_view = nbstate.choice(
+                data.get("view"), [v[0] for v in self.VIEWS], "songs")
+            saved_pl = data.get("playlist")
+            self._saved_playlist = (saved_pl.strip() or None
+                                    if isinstance(saved_pl, str) else None)
             names = data.get("playlists")
             tracks = data.get("tracks")
             if not isinstance(names, list):
@@ -2196,7 +2370,13 @@ class Music(nbapp.AppWindow):
 
     def _save(self):
         """Persist playlists + their track lists to music.json. Called on every
-        mutation and on destroy. Never crashes the app on an I/O error."""
+        mutation and on destroy. Never crashes the app on an I/O error.
+
+        A write is skipped while _restore_selection is running: putting the
+        sidebar back walks the same setters a click walks, and restoration must
+        never be recorded as a change the user made."""
+        if self._restoring.active:
+            return
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
             # only keep lengths for files still in the library, so the cache
@@ -2213,6 +2393,12 @@ class Music(nbapp.AppWindow):
                 # next launch shows real names immediately instead of the
                 # filename guess until the discovery pass catches up
                 "tags": {p: v for p, v in self._tags.items() if p in live},
+                # Where the library was left. Only a real library view is
+                # stored — an album/artist drill-down ("scope") is a transient
+                # place inside one, not somewhere to reopen on.
+                "view": nbstate.choice(self.view, [v[0] for v in self.VIEWS],
+                                       "songs"),
+                "playlist": self._current_playlist or "",
             }
             nbapp.atomic_write_json(CFG_FILE, data)
         except Exception:
@@ -2220,7 +2406,11 @@ class Music(nbapp.AppWindow):
 
     def _on_destroy(self, *_):
         # tear the engine down cleanly: stop the poll, the length scan and the
-        # pipeline
+        # pipeline. The flag goes up FIRST, so a bus message still queued on
+        # the main loop cannot restart any of them behind us.
+        self._closed = True
+        self._playing = False
+        self._loaded_path = None
         try:
             if self._poll_id:
                 GLib.source_remove(self._poll_id)
@@ -2605,17 +2795,17 @@ class Music(nbapp.AppWindow):
         .sidebar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .sidehead { font-size: 11px; letter-spacing: 0.14em; color: #9A9484;
                     font-weight: 700; padding: 0 12px; margin-bottom: 10px; }
-        .viewrow { padding: 9px 12px; border-radius: 2px; font-size: 15px;
+        .viewrow { padding: 9px 12px; border-radius: 6px; font-size: 15px;
                    color: #1A1916; font-weight: 500; margin-bottom: 2px;
                    background: transparent; border: none; box-shadow: none; }
-        .viewrow:hover { background: #E9E4D7; }
+        .viewrow:hover { background: #EFEBE0; }
         /* THE ONE SIGNAGE RED on this window means SELECTED: the view or
            playlist whose tracks the main pane is showing. It is the same 3px
            accent edge Tasks/Academics/Journal/Cookbook/Contacts/Packages use
            for a selected row, so a person who has learned it once reads it
            here. Nothing else on this screen may borrow it: now-playing and an
            engaged shuffle/repeat are INK (see below). */
-        .viewrow.active { background: #ECE7DB;
+        .viewrow.active { background: #EAE3D2;
                           box-shadow: inset 3px 0 0 #C8341E; }
         .viewcount { font-size: 13px; color: #9A9484; }
         .empty-mini { padding: 6px 12px; font-size: 13px; color: #9A9484; }
@@ -2626,19 +2816,19 @@ class Music(nbapp.AppWindow):
            transparent: an unpainted viewport renders black here). */
         .plscroll, .plscroll viewport { background-color: #F1EEE6;
                                         border: none; box-shadow: none; }
-        .newplaylist { padding: 8px 12px; border-radius: 2px; font-size: 14px;
+        .newplaylist { padding: 8px 12px; border-radius: 6px; font-size: 14px;
                        color: #1A1916; background: transparent; border: none;
                        box-shadow: none; }
-        .newplaylist:hover { background: #E9E4D7; }
+        .newplaylist:hover { background: #EFEBE0; }
         .sidefoot { font-size: 12px; color: #9A9484; padding: 0 12px; }
 
         /* ---- main pane ---- */
         .mainpane { background: #FCFBF8; }
         .mainpane * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .mainhead { padding: 30px 36px 18px 36px; }
-        .viewtitle { font-size: 26px; font-weight: 700; color: #1A1916; }
+        .viewtitle { font-size: 24px; font-weight: 700; color: #1A1916; }
         .searchbox { background: #FCFBF8; border: 1px solid #C9C4B6;
-                     border-radius: 2px; padding: 0 11px; min-height: 34px; }
+                     border-radius: 8px; padding: 0 11px; min-height: 34px; }
         .searchentry { background: transparent; border: none; box-shadow: none;
                        font-size: 13px; color: #1A1916; padding: 0; }
         .colhead { padding: 0 36px; min-height: 34px;
@@ -2660,7 +2850,7 @@ class Music(nbapp.AppWindow):
            edge in two panes made one colour say two things. Ink reads as
            emphasis (the track the transport is driving) and cannot be confused
            with the selection it sits beside. */
-        .songlist row.playing { background: #ECE7DB;
+        .songlist row.playing { background: #EAE3D2;
                                 box-shadow: inset 3px 0 0 #1A1916; }
         .songrow { padding: 11px 36px; border-bottom: 1px solid #EFEBE0; }
         .s-title { font-size: 14px; color: #1A1916; }
@@ -2672,23 +2862,23 @@ class Music(nbapp.AppWindow):
         /* per-row add-to-playlist button - quiet until hovered */
         .addbtn { min-width: 30px; min-height: 30px; padding: 0; border: none;
                   background: transparent; box-shadow: none; border-radius: 50%; }
-        .addbtn:hover { background: #ECE7DB; }
+        .addbtn:hover { background: #F1EEE6; }
         .m-title { font-size: 15px; font-weight: 600; color: #1A1916; }
         .m-sub { font-size: 12px; color: #9A9484; }
         .m-right { font-size: 13px; color: #9A9484; }
         /* drillable album/artist rows: a touch stronger on hover to read as
            tappable (they open a filtered track list) */
-        .songlist row.metarow:hover { background: #ECE7DB; }
+        .songlist row.metarow:hover { background: #EFEBE0; }
         .listempty { padding: 40px 12px; font-size: 13px; color: #9A9484; }
         /* Empty-state CTA -> the OS paper-outline create/CTA treatment (matching
            GBA SDK's "Open the example game", Calendar's New Event, Novel's New
            Chapter, Cookbook's New Recipe). Opening the Music folder is a mild
            setup action, not an alert, so it stays on paper; the one signage red
            on this window is reserved for the SELECTED sidebar view/playlist. */
-        .openfolder { background: #F8F7F2; border: 1px solid #C4BFB1;
-                      border-radius: 2px; color: #2A2620; font-size: 14px;
+        .openfolder { background: #F8F7F2; border: 1px solid #C9C4B6;
+                      border-radius: 8px; color: #2A2620; font-size: 14px;
                       font-weight: 600; padding: 9px 20px; box-shadow: none; }
-        .openfolder:hover { background: #ECE8DD; border-color: #C4BFB1; }
+        .openfolder:hover { background: #F1EEE6; border-color: #C9C4B6; }
 
         /* ---- playback bar: seated on a hairline, not a black rule ---- */
         .playbar { background: #F4F2EC; border-top: 1px solid #C9C4B6;
@@ -2698,8 +2888,28 @@ class Music(nbapp.AppWindow):
            (#F4F2EC) and border token (#C9C4B6) so nothing on the bar reads as a
            slightly-off swatch (prev/next were a lighter #D7D2C5 border than the
            bar + the big play button) */
+        /* These are real buttons now (keyboard-activatable, named for
+           assistive tech), so the theme would otherwise stack its own padding,
+           minimum size, pressed background IMAGE and shadow on top of the
+           38/48px circle and the control would grow and stop being flat. A
+           colour-only override loses to the pressed state because that state is
+           painted as an image, so `background-image: none` is load-bearing on
+           every state, not tidiness. Zeroing the chrome leaves the border, fill
+           and radius as the entire appearance. The focus ring is deliberately
+           NOT touched: it is what shows Tab has landed on the control. */
         .roundbtn { border: 1px solid #C9C4B6; background: #F4F2EC;
+                    background-image: none; box-shadow: none; padding: 0;
+                    margin: 0; min-width: 0; min-height: 0;
                     border-radius: 50%; }
+        .roundbtn:hover { background: #EAE3D2; border-color: #B3AD9E;
+                          background-image: none; box-shadow: none; }
+        .roundbtn:active, .roundbtn:checked {
+                          background: #EAE3D2; border-color: #B3AD9E;
+                          background-image: none; box-shadow: none; }
+        /* disabled = the "Media engine unavailable" state: same flat circle on
+           a fainter edge, never the theme's shaded button face */
+        .roundbtn:disabled { background: #F4F2EC; border-color: #D7D2C5;
+                             background-image: none; box-shadow: none; }
         .roundbig { border: 1px solid #C9C4B6; border-radius: 50%; }
         .artwork { border: 1px solid #C9C4B6; background: #EFEBE0; }
         .nowplaying { font-size: 14px; color: #6E695E; }
@@ -2708,40 +2918,40 @@ class Music(nbapp.AppWindow):
            matching the volume slider's language (no signage red) */
         .seekbar { padding: 0; }
         .seekbar trough { background: #D7D2C5; min-height: 4px;
-                          border-radius: 3px; border: none; }
-        .seekbar highlight { background: #1A1916; border-radius: 3px; }
+                          border-radius: 100px; border: none; }
+        .seekbar highlight { background: #1A1916; border-radius: 100px; }
         .seekbar slider { background: #1A1916; border: none;
                           border-radius: 50%; min-width: 12px;
                           min-height: 12px; margin: -5px; }
-        .seekbar:disabled trough { background: #E1DCCF; }
+        .seekbar:disabled trough { background: #EAE3D2; }
         .seekbar:disabled slider { background: #C9C4B6; }
         /* shuffle/repeat sit on the same toolbar face (#F4F2EC) + border
            (#C9C4B6) as the transport buttons; the near-white #FCFBF8 face made
            them read as a different swatch from the bar and the round controls */
         .togglebtn { border: 1px solid #C9C4B6; background: #F4F2EC;
-                     border-radius: 2px; min-width: 34px; min-height: 34px;
+                     border-radius: 8px; min-width: 34px; min-height: 34px;
                      padding: 0; box-shadow: none; }
-        .togglebtn:hover { background: #ECE7DB; }
+        .togglebtn:hover { background: #EFEBE0; }
         /* an engaged shuffle/repeat is an ENGAGED CONTROL, not a selection and
            not an alert -> an ink chip. Two solid red chips on the playbar were
            the loudest thing on the window while meaning the least, and made a
            third thing out of the one signage red. */
         .togglebtn:checked { background: #1A1916; border-color: #1A1916; }
-        .togglebtn:checked:hover { background: #33302A; border-color: #33302A; }
+        .togglebtn:checked:hover { background: #2A2620; border-color: #2A2620; }
         .volslider trough { background: #D7D2C5; min-height: 4px;
-                            border-radius: 3px; border: none; }
-        .volslider highlight { background: #1A1916; border-radius: 3px; }
+                            border-radius: 100px; border: none; }
+        .volslider highlight { background: #1A1916; border-radius: 100px; }
         .volslider slider { background: #1A1916; border: none;
                             border-radius: 50%; min-width: 14px;
                             min-height: 14px; margin: -6px; }
 
         /* ---- header playlist actions (rename / delete) ---- */
         .plact { min-width: 30px; min-height: 30px; padding: 0; border: none;
-                 background: transparent; box-shadow: none; border-radius: 2px; }
-        .plact:hover { background: #ECE7DB; }
+                 background: transparent; box-shadow: none; border-radius: 8px; }
+        .plact:hover { background: #F1EEE6; }
 
         /* ---- in-window dialogs (New/Rename/Delete playlist) ---- */
-        .mdlg { background: #F8F7F2; border: 1px solid #C4BFB1;
+        .mdlg { background: #F8F7F2; border: 1px solid #C9C4B6;
                 padding: 24px 28px; }
         .mdlg * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .mdlg-title { font-size: 17px; font-weight: 700; color: #1A1916; }
@@ -2749,18 +2959,18 @@ class Music(nbapp.AppWindow):
         /* inline validation note -> the one signage red (an alert) */
         .mdlg-error { font-size: 12px; color: #C8341E; }
         .mdlg-entry { background: #FCFBF8; border: 1px solid #C9C4B6;
-                      border-radius: 2px; padding: 7px 10px; font-size: 14px;
+                      border-radius: 8px; padding: 7px 10px; font-size: 14px;
                       color: #1A1916; box-shadow: none; }
-        .mdlg-entry:focus { border-color: #B5B0A3; }
-        .mdlg-btn { min-height: 34px; padding: 0 18px; border-radius: 2px;
+        .mdlg-entry:focus { border-color: #B3AD9E; }
+        .mdlg-btn { min-height: 34px; padding: 0 18px; border-radius: 8px;
                     border: 1px solid #C9C4B6; background: #FCFBF8;
                     color: #1A1916; font-size: 14px; box-shadow: none; }
-        .mdlg-btn:hover { background: #ECE7DB; }
+        .mdlg-btn:hover { background: #F1EEE6; }
         /* a DESTRUCTIVE confirm (Delete playlist) is the one signage red, as
            Papertone legislates for button.destructive-action */
         .mdlg-primary { background: #C8341E; border-color: #C8341E;
                         color: #FCFBF8; font-weight: 600; }
-        .mdlg-primary:hover { background: #B12C18; border-color: #B12C18; }
+        .mdlg-primary:hover { background: #B12D19; border-color: #B12D19; }
         /* a NON-destructive primary (Create / Rename a playlist) is dark ink,
            exactly as Papertone paints button.suggested-action and as Academics
            and Cookbook paint theirs. Red on a "name your playlist" prompt read
@@ -2768,7 +2978,7 @@ class Music(nbapp.AppWindow):
         .mdlg-ink { background: #1A1916; border-color: #1A1916;
                     color: #FCFBF8; font-weight: 600; }
         .mdlg-ink label { color: #FCFBF8; }
-        .mdlg-ink:hover { background: #33302A; border-color: #33302A; }
+        .mdlg-ink:hover { background: #2A2620; border-color: #2A2620; }
         """
         prov = Gtk.CssProvider()
         try:

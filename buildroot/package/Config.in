@@ -2376,6 +2376,7 @@ endif
 	source "package/connman-gtk/Config.in"
 	source "package/brlaser/Config.in"
 	source "package/captdriver/Config.in"
+	source "package/ippusb/Config.in"
 	source "package/splix/Config.in"
 	source "package/conntrack-tools/Config.in"
 	source "package/corkscrew/Config.in"

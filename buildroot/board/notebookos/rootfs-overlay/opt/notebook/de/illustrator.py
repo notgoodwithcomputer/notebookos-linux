@@ -26,13 +26,30 @@ reading the surface back.
 
 LAYOUT
 ------
-A left dock (tools, the palette, recent colours), a ribbon (brush size, zoom,
-mirror, active colour), the canvas on a slate mat, the Layers panel on the
-right, a status bar below. The document is a small pixel canvas (64x64 by
-default, any size up to 2048 via Image > Canvas Size) shown at an INTEGER zoom
-with FILTER_NEAREST, so one image pixel is a hard square block of screen
-pixels; a pixel grid appears from 8x up. Painting divides the event coordinate
-by the zoom, so the mapping is exact at every level.
+One left dock, the canvas on a slate mat, the Layers panel on the right, a
+status bar below. There is no ribbon: the dock reads top to bottom as the
+sentence a drawing tool is used in — PICK A TOOL, SET IT UP, CHOOSE A COLOUR —
+and everything that decides what a stroke looks like lives in it. What used to
+be a fifth band across the top was brush size and mirror (both stroke settings,
+so they belong beside the tool), the active colour (which sat at the far right
+while the palette that feeds it sat at the far left), and zoom — a VIEW control
+whose percentage the status bar was already printing, so it now lives there as
+a stepper instead of being shown twice. Dropping the band gave the canvas 76 px
+of height back, which is most of a laptop panel's spare room.
+
+The tools are named, not just drawn. Eight 26 px unlabelled icons is a memory
+test, and three of the eight (pencil, brush, eyedropper) are the same diagonal
+implement at 16 px — so the toolbox is a 2-column grid of icon-plus-name and
+the status bar spells out what a drag with the current tool does, which is also
+the only place Shift's constrain-to-45/square/circle was ever going to be
+discovered.
+
+The document is a small pixel canvas (64x64 by default, any size up to 2048 via
+Image > Canvas Size) shown at an INTEGER zoom with FILTER_NEAREST, so one image
+pixel is a hard square block of screen pixels; a pixel grid appears from 8x up.
+Painting divides the event coordinate by the zoom, so the mapping is exact at
+every level. The brush footprint is outlined under the pointer at that same
+mapping, so the pixels a click is about to change are visible before it lands.
 
 File I/O is PNG under $NB_HOME/Pictures. A PNG is adopted at its own size and
 never resampled, so save -> open is pixel-for-pixel identical.
@@ -62,11 +79,24 @@ DEFAULT_CW, DEFAULT_CH = 64, 64
 # per pixel. At 1024x1024 (1M pixels) that is about a second; at 2048x2048 it
 # was four and a half, which is a frozen window. Nothing this app is for — a
 # sprite, a tile, an icon — comes close to the cap.
-MIN_DIM, MAX_DIM = 1, 1024
-PANEL_W = 272     # layers panel
-DOCK_W = 248      # left dock: tools + palette + recent colours
+# The canvas size Image > Canvas Size will accept. MAX_DIM was 1024 while the
+# module docstring above promised 2048 and the dialog offered no limit at all,
+# so asking for anything larger silently produced a 1024 canvas with nothing on
+# screen to say why — which is indistinguishable from resizing being broken.
+# 2048 is the documented figure and what the entry now accepts; a layer at that
+# size is 16MB of ARGB32, which is why it is a limit at all rather than free.
+MIN_DIM, MAX_DIM = 1, 2048
+# The two side columns. The dock grew (it absorbed the ribbon) and the Layers
+# panel shrank: at 272 it was the widest column in the window while holding one
+# row of text, and the canvas is what both of them are there to serve.
+PANEL_W = 240     # layers panel
+DOCK_W = 252      # left dock: tools, tool settings, colour
 # Brush size is a pixel count, not a preset.
 SIZE_MIN, SIZE_MAX = 1, 64
+# Five tips to click, so going from a 1 px pencil to a 16 px block is one press
+# rather than fifteen. They are DRAWN at their relative size in the current
+# brush shape, which is also the only place the round/square tip is visible.
+SIZE_RAMP = (1, 2, 4, 8, 16)
 # Zoom is always an INTEGER magnification: at 2.5x a nearest-neighbour blit
 # gives some image pixels 2 screen pixels and some 3, which reads as a wobble
 # in the artwork rather than as a zoom level.
@@ -97,15 +127,40 @@ PICS_DIR = os.path.join(NB_HOME, "Pictures")
 CFG_FILE = os.path.join(NB_HOME, ".config", "notebook", "illustrator.json")
 RECENT_MAX = 16
 
+# (id, name) in the order the toolbox lays them out, reading across two
+# columns: the two that draw, the two that remove and flood, then the three
+# shapes and the sampler.
 TOOLS = [
-    ("pencil", "Pencil"), ("brush", "Brush"), ("eraser", "Eraser"),
-    ("fill", "Fill"), ("picker", "Colour Picker"), ("line", "Line"),
-    ("rect", "Rectangle"), ("ellipse", "Ellipse"),
+    ("pencil", "Pencil"), ("brush", "Brush"),
+    ("eraser", "Eraser"), ("fill", "Fill"),
+    ("line", "Line"), ("rect", "Rectangle"),
+    ("ellipse", "Ellipse"), ("picker", "Eyedropper"),
 ]
-# The two freehand tools differ only in the shape of the tip, and that is the
-# thing worth saying on hover.
-TOOL_HINTS = {"pencil": "Pencil — square tip", "brush": "Brush — round tip"}
+# "Colour Picker" was the eyedropper's name, and beside a 112-swatch panel
+# called Palette it read as the thing you pick a colour FROM. Eyedropper is
+# what it is: it lifts a colour off the artwork.
 TOOL_NAMES = dict(TOOLS)
+
+# What a drag with each tool does, printed in the status bar the moment the
+# tool is chosen. This is the ONLY place Shift's constrain is discoverable —
+# it was in no tooltip, no menu and no label, so the app had three modifier
+# behaviours (45-degree lines, squares, circles) that nothing announced.
+TOOL_HINTS = {
+    "pencil":  "Drag to draw. Square tip, hard edges.",
+    "brush":   "Drag to draw. Round tip, hard edges.",
+    "eraser":  "Drag to rub back to transparent.",
+    "fill":    "Click an area to flood it with the colour.",
+    "line":    "Drag end to end. Hold Shift for 45° steps.",
+    "rect":    "Drag corner to corner. Hold Shift for a square.",
+    "ellipse": "Drag corner to corner. Hold Shift for a circle.",
+    "picker":  "Click the artwork to take that colour.",
+}
+# Which tools each setting in the dock actually reaches, so a setting that
+# cannot affect the current tool is dimmed rather than silently inert. The
+# flood fill takes neither a brush nor a mirror; the eyedropper takes nothing.
+SIZE_TOOLS = {"pencil", "brush", "eraser", "line", "rect", "ellipse"}
+SHAPE_TOOLS = {"line", "rect", "ellipse"}
+MIRROR_TOOLS = SIZE_TOOLS
 
 # Single-key tool shortcuts. The letter is surfaced in each tool's tooltip so
 # it is discoverable; [ / ] step the brush size by one pixel, + / - / 0 / 1
@@ -473,11 +528,22 @@ class Illustrator(nbapp.AppWindow):
 
     def __init__(self):
         super().__init__()
+        # Set before anything can arm a source or touch a widget: every
+        # deferred callback below reads this to decide whether the window it
+        # belongs to is still there. Each owned source keeps its id here so it
+        # can be cancelled — a token alone stops the WRONG state from being
+        # applied, but not a stale closure from running against dead widgets.
+        self._closed = False
+        self._recentre_src = 0     # pending zoom recentre idle (0 = none)
+        self._fit_src = 0          # pending first fit-to-window idle
+        self._chip_restore_src = 0  # pending flash auto-restore timeout
+
         self._install_css()
         self._build_checker_pattern()
 
         self.cw, self.ch = DEFAULT_CW, DEFAULT_CH
         self.tool = "pencil"
+        self._prev_tool = "pencil"   # what the Eyedropper returns to
         self.size = 1
         self.zoom = 8
         self.grid = True
@@ -520,15 +586,36 @@ class Illustrator(nbapp.AppWindow):
         # self.close(), which emits delete-event): when there are unsaved
         # changes, offer Save / Discard / Cancel before the window is destroyed.
         self.connect("delete-event", self._on_delete)
+        # Separate from the guard above: delete-event decides WHETHER to close,
+        # destroy is the close actually happening (including the routes that
+        # bypass the guard — the prompt's Discard/Save, File ▸ Close, Shut
+        # Down). Teardown of the deferred sources belongs on this one.
+        self.connect("destroy", self._on_destroy)
 
         self._tool_btns = {}
-
-        self.content.pack_start(self._ribbon(), False, False, 0)
 
         # --- workspace: dock + canvas mat + layers panel ---
         work = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         work.set_vexpand(True)
-        work.pack_start(self._dock(), False, False, 0)
+        # The dock is what sets this window's MINIMUM HEIGHT — it is the
+        # tallest of the three columns — so it scrolls rather than pushing the
+        # window past the panel it has to live on. Measured at 1024x740: the
+        # dock wants 605px in English but 665px in Chinese, because CJK line
+        # metrics are taller, and 763px total is 23px more than the shortest
+        # laptop screen this OS supports. That clipped the bottom of the dock
+        # in Chinese, Japanese and Korean, and the same arithmetic breaks every
+        # language once the accessibility large-text setting is on. Scrolling
+        # is the only fix that holds for text sizes nobody has measured yet.
+        # Horizontal policy NEVER, so the column keeps its full width and only
+        # the vertical bar can ever appear.
+        self._dock_box = self._dock()
+        self.dock_scroll = Gtk.ScrolledWindow()
+        self.dock_scroll.set_policy(Gtk.PolicyType.NEVER,
+                                    Gtk.PolicyType.AUTOMATIC)
+        self.dock_scroll.set_propagate_natural_width(True)
+        self.dock_scroll.get_style_context().add_class("dockscroll")
+        self.dock_scroll.add(self._dock_box)
+        work.pack_start(self.dock_scroll, False, False, 0)
 
         # The canvas is a fixed-size document shown at an integer zoom. With
         # room it sits centred in the papertone field; on a smaller real panel
@@ -579,7 +666,7 @@ class Illustrator(nbapp.AppWindow):
         # --- status bar ---
         self.content.pack_start(self._statusbar(), False, False, 0)
         self._new_scratch()
-        self._sync_ribbon()
+        self._sync_controls()
         self._refresh_status()
 
     def _on_canvas_realize(self, w):
@@ -593,92 +680,11 @@ class Illustrator(nbapp.AppWindow):
         except Exception:
             pass     # a cursor name the X server lacks is not worth a crash
 
-    # ---------------- ribbon ----------------
-    def _ribbon(self):
-        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        bar.get_style_context().add_class("ribbon")
-
-        # --- brush size, in pixels ---
-        scol = self._group("Size")
-        srow = Gtk.Box(spacing=4)
-        srow.pack_start(self._mark_btn("minus", _t("Smaller brush  ([)"),
-                                       lambda *_: self._step_size(-1)),
-                        False, False, 0)
-        self.size_lbl = Gtk.Label(label="")
-        self.size_lbl.get_style_context().add_class("numfield")
-        self.size_lbl.set_size_request(66, 30)
-        srow.pack_start(self.size_lbl, False, False, 0)
-        srow.pack_start(self._mark_btn("plus", _t("Larger brush  (])"),
-                                       lambda *_: self._step_size(1)),
-                        False, False, 0)
-        scol.pack_start(srow, False, False, 0)
-        bar.pack_start(scol, False, False, 0)
-        bar.pack_start(self._vsep(), False, False, 0)
-
-        # --- zoom ---
-        zcol = self._group("Zoom")
-        zrow = Gtk.Box(spacing=4)
-        # The same minus / plus marks the size stepper uses, not the two
-        # magnifier icons: at 15px a magnifying glass with a plus in it and one
-        # with a minus in it are the same picture, and which button zoomed in
-        # was a guess. The caption and the per-cent readout say which stepper
-        # this is.
-        zrow.pack_start(self._mark_btn("minus", _t("Zoom out  (-)"),
-                                       lambda *_: self._step_zoom(-1)),
-                        False, False, 0)
-        self.zoom_lbl = Gtk.Label(label="")
-        self.zoom_lbl.get_style_context().add_class("numfield")
-        self.zoom_lbl.set_size_request(58, 30)
-        zrow.pack_start(self.zoom_lbl, False, False, 0)
-        zrow.pack_start(self._mark_btn("plus", _t("Zoom in  (+)"),
-                                       lambda *_: self._step_zoom(1)),
-                        False, False, 0)
-        zrow.pack_start(self._mark_btn("fit", _t("Fit to window  (0)"),
-                                       lambda *_: self._zoom_fit()),
-                        False, False, 0)
-        zcol.pack_start(zrow, False, False, 0)
-        bar.pack_start(zcol, False, False, 0)
-        bar.pack_start(self._vsep(), False, False, 0)
-
-        # --- mirror (symmetry) ---
-        mcol = self._group("Mirror")
-        mrow = Gtk.Box(spacing=4)
-        self.symx_btn = self._mark_btn("symx", _t("Mirror left and right"),
-                                       lambda *_: self._toggle_sym("x"))
-        self.symy_btn = self._mark_btn("symy", _t("Mirror top and bottom"),
-                                       lambda *_: self._toggle_sym("y"))
-        mrow.pack_start(self.symx_btn, False, False, 0)
-        mrow.pack_start(self.symy_btn, False, False, 0)
-        mcol.pack_start(mrow, False, False, 0)
-        bar.pack_start(mcol, False, False, 0)
-        bar.pack_start(self._vsep(), False, False, 0)
-
-        # --- active colour ---
-        ccol = self._group("Colour")
-        crow = Gtk.Box(spacing=10)
-        crow.set_valign(Gtk.Align.CENTER)
-        self.chip = Gtk.DrawingArea()
-        self.chip.set_size_request(38, 30)
-        self.chip.get_style_context().add_class("chip")
-        self.chip.set_tooltip_text(
-            _t("Active colour. Click to sample from the canvas."))
-        self.chip.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        self.chip.connect("draw", self._draw_chip)
-        self.chip.connect("button-press-event", self._on_chip_press)
-        crow.pack_start(self.chip, False, False, 0)
-        custom = Gtk.Button(label=_t("Custom Colour…"))
-        custom.set_relief(Gtk.ReliefStyle.NONE)
-        custom.get_style_context().add_class("custombtn")
-        custom.set_valign(Gtk.Align.CENTER)
-        custom.set_tooltip_text(_t("Mix a colour"))
-        custom.connect("clicked", self._open_color_chooser)
-        crow.pack_start(custom, False, False, 0)
-        ccol.pack_start(crow, False, False, 0)
-        bar.pack_start(ccol, False, False, 0)
-        return bar
-
-    def _group(self, caption):
-        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    # ---------------- small shared pieces ----------------
+    def _group(self, caption, spacing=6):
+        """A captioned column. _set_dim greys a whole group by class, so the
+        caption is reached through CSS descent and needs no handle here."""
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=spacing)
         col.pack_start(self._caption(caption), False, False, 0)
         return col
 
@@ -687,17 +693,17 @@ class Illustrator(nbapp.AppWindow):
         lbl.get_style_context().add_class("caption")
         return lbl
 
-    def _vsep(self):
-        s = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        s.get_style_context().add_class("vsep")
-        s.set_valign(Gtk.Align.CENTER)
-        s.set_size_request(1, 44)
+    def _hsep(self):
+        """A hairline rule between the dock's three sections."""
+        s = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        s.get_style_context().add_class("hsep")
         return s
 
-    def _mark_btn(self, kind, tip, cb):
-        """A button carrying one of this app's own cairo-drawn marks. The
-        shipped face has no glyph for a minus sign or a mirror arrow, and a
-        missing glyph is an invisible button on real hardware."""
+    def _mark_btn(self, kind, tip, cb, label=None):
+        """A button carrying one of this app's own cairo-drawn marks, and
+        optionally a word beside it. The shipped face has no glyph for a minus
+        sign or a mirror arrow, and a missing glyph is an invisible button on
+        real hardware."""
         b = Gtk.Button()
         b.set_relief(Gtk.ReliefStyle.NONE)
         b.get_style_context().add_class("stepbtn")
@@ -706,10 +712,18 @@ class Illustrator(nbapp.AppWindow):
         da.set_size_request(15, 15)
         da._kind = kind
         da.connect("draw", self._draw_mark)
-        box = Gtk.Box()
+        box = Gtk.Box(spacing=6)
         box.set_halign(Gtk.Align.CENTER)
         box.set_valign(Gtk.Align.CENTER)
         box.add(da)
+        if label:
+            # a mark that names itself: Outline / Filled are a CHOICE, and two
+            # unlabelled boxes would be one more pair to decode
+            lbl = Gtk.Label(label=_t(label))
+            lbl.get_style_context().add_class("marklabel")
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            box.add(lbl)
+            b.get_style_context().add_class("wide")
         b.add(box)
         b.connect("clicked", cb)
         return b
@@ -719,7 +733,10 @@ class Illustrator(nbapp.AppWindow):
         h = area.get_allocated_height()
         if w <= 0 or h <= 0:
             return False
-        cr.set_source_rgb(*_rgb("#1A1916"))
+        # A mark is painted, not styled, so a dimmed group's CSS never reaches
+        # it: the Outline and Filled boxes stayed full ink beside their own
+        # greyed-out words. Effective sensitivity is what the group sets.
+        cr.set_source_rgb(*_rgb("#1A1916" if area.is_sensitive() else "#B3AD9E"))
         cr.set_line_width(1.6)
         k = area._kind
         cx, cy = round(w / 2.0) - 0.5, round(h / 2.0) - 0.5
@@ -736,6 +753,13 @@ class Illustrator(nbapp.AppWindow):
             cr.stroke()
             cr.rectangle(cx - 2.5, cy - 2.5, 6, 6)
             cr.fill()
+        elif k in ("outline", "filled"):
+            # the two ways a shape can come out, drawn as the thing itself: a
+            # hollow box and a solid one. The word beside it says which; the
+            # mark is what makes the pair readable at a glance.
+            cr.set_line_width(1.4)
+            cr.rectangle(2.2, 3.2, w - 4.4, h - 6.4)
+            cr.fill() if k == "filled" else cr.stroke()
         elif k in ("symx", "symy"):
             # a dashed axis with a solid arrowhead facing away on either side:
             # two shapes reflected across a line is what the button does
@@ -765,30 +789,165 @@ class Illustrator(nbapp.AppWindow):
                 cr.fill()
         return False
 
-    # ---------------- left dock: tools, palette, recent ----------------
+    # ---------------- left dock ----------------
     def _dock(self):
-        dock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        """The whole of "what a stroke will look like", in one column, in the
+        order it is decided: which tool, how it is set up, what colour."""
+        dock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         dock.get_style_context().add_class("dock")
         dock.set_size_request(DOCK_W, -1)
 
-        dock.pack_start(self._caption("Tools"), False, False, 0)
-        trow = Gtk.Box(spacing=2)
-        for tid, name in TOOLS:
+        dock.pack_start(self._toolbox(), False, False, 0)
+        dock.pack_start(self._hsep(), False, False, 0)
+        dock.pack_start(self._tool_settings(), False, False, 0)
+        dock.pack_start(self._hsep(), False, False, 0)
+        dock.pack_start(self._colour_section(), False, False, 0)
+        return dock
+
+    def _toolbox(self):
+        """The eight tools, NAMED, two to a row.
+
+        They used to be eight 26 px icon buttons in one strip. Three of the
+        eight are the same diagonal implement at that size — pencil, brush and
+        the eyedropper — so which button did what was a hover-one-at-a-time
+        exercise, and picking the eyedropper by mistake meant the next click
+        changed the colour instead of drawing. The name is the fix; the icon is
+        now the fast recognition mark rather than the only evidence."""
+        box = self._group("Tools", spacing=8)
+        grid = Gtk.Grid()
+        grid.set_row_spacing(4)
+        grid.set_column_spacing(4)
+        grid.set_column_homogeneous(True)
+        for i, (tid, name) in enumerate(TOOLS):
             b = Gtk.Button()
             b.set_relief(Gtk.ReliefStyle.NONE)
+            # the tooltip carries the hint and the single-key shortcut, so the
+            # keyboard route is discoverable from the button that does the same
             b.set_tooltip_text("%s  (%s)" % (_t(TOOL_HINTS.get(tid, name)),
                                              TOOL_KEYS[tid]))
             b.get_style_context().add_class("toolbtn")
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(tid, 16, "#6E695E"))
-            b.add(img)
+            inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
+            img = nbicons.image(tid, 17, "#6E695E")
+            inner.pack_start(img, False, False, 0)
+            lbl = Gtk.Label(label=_t(name), xalign=0)
+            lbl.get_style_context().add_class("toolname")
+            # a long translation ("Cuentagotas", "Пипетка") shortens rather
+            # than widening the dock and squeezing the canvas
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            inner.pack_start(lbl, True, True, 0)
+            b.add(inner)
             b._img = img
             b._tid = tid
             b.connect("clicked", self._pick_tool, tid)
             self._tool_btns[tid] = b
-            trow.pack_start(b, False, False, 0)
-        dock.pack_start(trow, False, False, 0)
+            grid.attach(b, i % 2, i // 2, 1, 1)
+        box.pack_start(grid, False, False, 0)
+        return box
 
-        dock.pack_start(self._caption("Palette"), False, False, 0)
+    def _tool_settings(self):
+        """Brush size, shape fill, mirror — the three things that change what
+        the CURRENT tool puts down.
+
+        Each group stays put and dims when the active tool cannot use it, so
+        the dock never reflows under the pointer and a dimmed group is itself
+        the answer to "why did the size not matter?". Shape fill in particular
+        was Image > Fill Shapes / Outline Shapes — a menu item whose label
+        inverted, so the only way to learn whether the next rectangle would be
+        solid was to open a menu and read the label backwards."""
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+
+        # --- brush size ---
+        self.size_grp = self._group("Brush size")
+        srow = Gtk.Box(spacing=4)
+        srow.pack_start(self._mark_btn("minus", _t("Smaller brush  ([)"),
+                                       lambda *_: self._step_size(-1)),
+                        False, False, 0)
+        self.size_lbl = Gtk.Label(label="")
+        self.size_lbl.get_style_context().add_class("numfield")
+        self.size_lbl.set_size_request(60, 30)
+        srow.pack_start(self.size_lbl, True, True, 0)
+        srow.pack_start(self._mark_btn("plus", _t("Larger brush  (])"),
+                                       lambda *_: self._step_size(1)),
+                        False, False, 0)
+        self.size_grp.pack_start(srow, False, False, 0)
+
+        # the tips themselves, at their relative sizes and in the CURRENT
+        # shape: the ramp is the size shortcut and the tip preview at once
+        self.ramp_area = Gtk.DrawingArea()
+        self.ramp_area.set_size_request(-1, self.RAMP_H)
+        self.ramp_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.ramp_area.set_has_tooltip(True)
+        self.ramp_area.connect("draw", self._draw_ramp)
+        self.ramp_area.connect("button-press-event", self._on_ramp_press)
+        self.ramp_area.connect("query-tooltip", self._ramp_tooltip)
+        self.size_grp.pack_start(self.ramp_area, False, False, 0)
+        col.pack_start(self.size_grp, False, False, 0)
+
+        # --- shape fill / mirror, side by side ---
+        pair = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        self.shape_grp = self._group("Shapes")
+        frow = Gtk.Box(spacing=4)
+        self.outline_btn = self._mark_btn(
+            "outline", _t("Draw shapes as an outline"),
+            lambda *_: self._set_fill_shapes(False), label="Outline")
+        self.filled_btn = self._mark_btn(
+            "filled", _t("Draw shapes filled in"),
+            lambda *_: self._set_fill_shapes(True), label="Filled")
+        frow.pack_start(self.outline_btn, True, True, 0)
+        frow.pack_start(self.filled_btn, True, True, 0)
+        self.shape_grp.pack_start(frow, False, False, 0)
+        pair.pack_start(self.shape_grp, True, True, 0)
+
+        self.mirror_grp = self._group("Mirror")
+        mrow = Gtk.Box(spacing=4)
+        self.symx_btn = self._mark_btn("symx", _t("Mirror left and right"),
+                                       lambda *_: self._toggle_sym("x"))
+        self.symy_btn = self._mark_btn("symy", _t("Mirror top and bottom"),
+                                       lambda *_: self._toggle_sym("y"))
+        mrow.pack_start(self.symx_btn, False, False, 0)
+        mrow.pack_start(self.symy_btn, False, False, 0)
+        self.mirror_grp.pack_start(mrow, False, False, 0)
+        pair.pack_start(self.mirror_grp, False, False, 0)
+        col.pack_start(pair, False, False, 0)
+        return col
+
+    def _colour_section(self):
+        """The active colour, where the colours it comes from are.
+
+        The well used to sit at the far right of the ribbon and the palette
+        feeding it at the far left of the dock, about a thousand pixels apart —
+        and clicking the well silently switched the active tool to the
+        eyedropper, so a click on the colour swatch stopped the pencil drawing
+        and made the next canvas click steal a colour instead. It opens the
+        mixer now, which is what a click on a colour swatch means everywhere
+        else; the eyedropper is a named tool with its own key."""
+        box = self._group("Colour", spacing=8)
+
+        wellrow = Gtk.Box(spacing=10)
+        wellrow.set_valign(Gtk.Align.CENTER)
+        self.chip = Gtk.DrawingArea()
+        self.chip.set_size_request(40, 30)
+        self.chip.get_style_context().add_class("chip")
+        self.chip.set_tooltip_text(_t("Mix a colour"))
+        self.chip.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.chip.connect("draw", self._draw_chip)
+        self.chip.connect("button-press-event", self._on_chip_press)
+        wellrow.pack_start(self.chip, False, False, 0)
+        # the colour has a NAME, from the same vocabulary the 112 swatches
+        # hover with, so the well says which colour it is holding
+        self.color_lbl = Gtk.Label(label="", xalign=0)
+        self.color_lbl.get_style_context().add_class("colorname")
+        self.color_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        wellrow.pack_start(self.color_lbl, True, True, 0)
+        box.pack_start(wellrow, False, False, 0)
+
+        mix = Gtk.Button(label=_t("Mix Colour…"))
+        mix.set_relief(Gtk.ReliefStyle.NONE)
+        mix.get_style_context().add_class("custombtn")
+        mix.set_tooltip_text(_t("Mix a colour"))
+        mix.connect("clicked", self._open_color_chooser)
+        box.pack_start(mix, False, False, 0)
+
         # ONE DrawingArea for all 112 swatches, not 112 buttons: the grid is
         # painted in a single draw handler, a click is arithmetic, and the
         # hover name comes from query-tooltip. 112 widgets each with their own
@@ -800,13 +959,13 @@ class Illustrator(nbapp.AppWindow):
         self.pal_area.connect("draw", self._draw_palette)
         self.pal_area.connect("button-press-event", self._on_palette_press)
         self.pal_area.connect("query-tooltip", self._palette_tooltip)
-        dock.pack_start(self.pal_area, False, False, 0)
+        box.pack_start(self.pal_area, False, False, 0)
 
         # A caption over an empty strip reads as something that failed to load,
         # so the recent row appears only once there is a colour in it.
         self.recent_cap = self._caption("Recent")
         self.recent_cap.set_no_show_all(True)
-        dock.pack_start(self.recent_cap, False, False, 0)
+        box.pack_start(self.recent_cap, False, False, 0)
         self.recent_area = Gtk.DrawingArea()
         self.recent_area.set_size_request(self._pal_w(), self.SW)
         self.recent_area.set_no_show_all(True)
@@ -815,9 +974,85 @@ class Illustrator(nbapp.AppWindow):
         self.recent_area.connect("draw", self._draw_recent)
         self.recent_area.connect("button-press-event", self._on_recent_press)
         self.recent_area.connect("query-tooltip", self._recent_tooltip)
-        dock.pack_start(self.recent_area, False, False, 0)
+        box.pack_start(self.recent_area, False, False, 0)
         self._sync_recent()
-        return dock
+        return box
+
+    # ---- the brush-size ramp ----
+    RAMP_H = 30
+
+    def _ramp_cells(self):
+        """(x, w) of each ramp cell, from the strip's live width."""
+        w = max(1, self.ramp_area.get_allocated_width())
+        n = len(SIZE_RAMP)
+        step = w / float(n)
+        return [(i * step, step) for i in range(n)]
+
+    def _draw_ramp(self, area, cr):
+        """Five tips in one framed strip, so it reads as a single segmented
+        control in the same idiom as the number field above it rather than as
+        five dots adrift in the dock."""
+        w = area.get_allocated_width()
+        h = area.get_allocated_height()
+        if w <= 0 or h <= 0:
+            return False
+        dim = not area.is_sensitive()
+        cr.set_source_rgb(*_rgb("#F4F2EC" if dim else "#FCFBF8"))
+        cr.rectangle(0, 0, w, h)
+        cr.fill()
+        square = self._brush_shape() == "square"
+        cells = self._ramp_cells()
+        for i, (x, cw) in enumerate(cells):
+            n = SIZE_RAMP[i]
+            sel = (n == self.size)
+            if sel:
+                cr.set_source_rgb(*_rgb("#EFEBE0" if dim else "#EAE3D2"))
+                cr.rectangle(x, 0, cw, h)
+                cr.fill()
+            # the biggest tip nearly fills its cell and the rest are drawn in
+            # proportion, so the strip reads small-to-large at a glance
+            d = max(3.0, min(cw, h) * 0.62 * (n / float(SIZE_RAMP[-1])) ** 0.58)
+            cx, cy = x + cw / 2.0, h / 2.0
+            if dim:
+                cr.set_source_rgb(*_rgb("#C9C4B6"))
+            else:
+                cr.set_source_rgb(*_rgb("#1A1916" if sel else "#6E695E"))
+            if square:
+                cr.rectangle(round(cx - d / 2.0), round(cy - d / 2.0),
+                             round(d), round(d))
+            else:
+                cr.arc(cx, cy, d / 2.0, 0, 2 * math.pi)
+            cr.fill()
+        cr.set_line_width(1)
+        cr.set_source_rgb(*_rgb("#D7D2C5" if dim else "#C9C4B6"))
+        for x, _cw in cells[1:]:
+            cr.move_to(round(x) + 0.5, 3)
+            cr.line_to(round(x) + 0.5, h - 3)
+        cr.stroke()
+        cr.rectangle(0.5, 0.5, w - 1, h - 1)
+        cr.stroke()
+        return False
+
+    def _ramp_at(self, x, y):
+        if y < 0 or y >= self.RAMP_H:
+            return None
+        for i, (cx, cw) in enumerate(self._ramp_cells()):
+            if cx <= x < cx + cw:
+                return SIZE_RAMP[i]
+        return None
+
+    def _on_ramp_press(self, _w, ev):
+        n = self._ramp_at(ev.x, ev.y)
+        if n is not None:
+            self._set_size(n)
+        return True
+
+    def _ramp_tooltip(self, _w, x, y, _kb, tip):
+        n = self._ramp_at(x, y)
+        if n is None:
+            return False
+        tip.set_text(_t("%d px") % n)
+        return True
 
     def _sync_recent(self):
         on = bool(self._recent)
@@ -948,8 +1183,7 @@ class Illustrator(nbapp.AppWindow):
         self.up_btn.set_relief(Gtk.ReliefStyle.NONE)
         self.up_btn.get_style_context().add_class("liconbtn")
         self.up_btn.set_tooltip_text(_t("Bring layer forward"))
-        self.up_btn.add(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("up", 15, "#1A1916")))
+        self.up_btn.add(nbicons.image("up", 15, "#1A1916"))
         self.up_btn.connect("clicked", lambda *_: self._move_layer(1))
         head.pack_start(self.up_btn, False, False, 0)
 
@@ -957,8 +1191,7 @@ class Illustrator(nbapp.AppWindow):
         self.down_btn.set_relief(Gtk.ReliefStyle.NONE)
         self.down_btn.get_style_context().add_class("liconbtn")
         self.down_btn.set_tooltip_text(_t("Send layer back"))
-        self.down_btn.add(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("down", 15, "#1A1916")))
+        self.down_btn.add(nbicons.image("down", 15, "#1A1916"))
         self.down_btn.connect("clicked", lambda *_: self._move_layer(-1))
         head.pack_start(self.down_btn, False, False, 0)
 
@@ -966,7 +1199,7 @@ class Illustrator(nbapp.AppWindow):
         add.set_relief(Gtk.ReliefStyle.NONE)
         add.get_style_context().add_class("liconbtn")
         add.set_tooltip_text(_t("New layer"))
-        add.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 15, "#1A1916")))
+        add.add(nbicons.image("plus", 15, "#1A1916"))
         add.connect("clicked", lambda *_: self._add_layer())
         head.pack_start(add, False, False, 0)
 
@@ -974,8 +1207,7 @@ class Illustrator(nbapp.AppWindow):
         self.del_btn.set_relief(Gtk.ReliefStyle.NONE)
         self.del_btn.get_style_context().add_class("liconbtn")
         self.del_btn.set_tooltip_text(_t("Delete layer"))
-        self.del_btn.add(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("trash", 15, "#1A1916")))
+        self.del_btn.add(nbicons.image("trash", 15, "#1A1916"))
         self.del_btn.connect("clicked", lambda *_: self._delete_layer())
         head.pack_start(self.del_btn, False, False, 0)
         panel.pack_start(head, False, False, 0)
@@ -1036,8 +1268,7 @@ class Illustrator(nbapp.AppWindow):
                                  else _t("Show this layer"))
             col = "#1A1916" if ly.visible else "#9A9484"
             try:
-                eye.add(Gtk.Image.new_from_pixbuf(
-                    nbicons.pixbuf("eye" if ly.visible else "eyeoff", 15, col)))
+                eye.add(nbicons.image("eye" if ly.visible else "eyeoff", 15, col))
             except GLib.Error:
                 eye.add(Gtk.Image())
             eye.connect("clicked", self._toggle_visible, idx)
@@ -1045,6 +1276,10 @@ class Illustrator(nbapp.AppWindow):
 
             name = Gtk.Label(label=ly.name, xalign=0)
             name.get_style_context().add_class("lname")
+            if not ly.visible:
+                # the struck-through eye was the only sign, and at 15px it is
+                # a small one for a layer that is contributing nothing
+                name.get_style_context().add_class("hidden")
             # the panel is a fixed column; a long name must ellipsize rather
             # than widen it and squeeze the canvas
             name.set_ellipsize(Pango.EllipsizeMode.END)
@@ -1057,6 +1292,19 @@ class Illustrator(nbapp.AppWindow):
             self._op_labels[idx] = op
             row.add(inner)
             self.layer_list.pack_start(row, False, False, 0)
+
+        # A single row above 400 px of nothing says the panel is empty rather
+        # than that the document has one layer. One line of what the + does,
+        # dropped as soon as there is a second layer to see the effect on.
+        if len(self.layers) == 1:
+            hint = Gtk.Label(
+                label=_t("Add a layer to draw over the Background without "
+                         "changing it."),
+                xalign=0)
+            hint.get_style_context().add_class("lempty")
+            hint.set_line_wrap(True)
+            hint.set_max_width_chars(24)
+            self.layer_list.pack_start(hint, False, False, 0)
 
         # the bottom layer is the one the document always keeps, so it cannot be
         # deleted or sent further back; the top one has nowhere forward to go
@@ -1082,41 +1330,99 @@ class Illustrator(nbapp.AppWindow):
 
     # ---------------- status bar ----------------
     def _statusbar(self):
-        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        """Left: what the current tool does. Middle: where the pointer is.
+        Right: the document's size, the zoom stepper, the save state.
+
+        Zoom lives here rather than in a band across the top because the
+        status bar was already printing the percentage — the app showed the
+        zoom level twice and made it adjustable in neither place without
+        crossing the window. The readout IS the control now."""
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         bar.get_style_context().add_class("statusbar")
+        # The tool hint is the widest thing here and the least costly to clip,
+        # so it ellipsizes instead of pushing the zoom stepper off the end of
+        # a 1024 px panel.
         self.st_tool = Gtk.Label(xalign=0)
         self.st_tool.get_style_context().add_class("stlabel")
+        self.st_tool.set_ellipsize(Pango.EllipsizeMode.END)
         bar.pack_start(self.st_tool, False, False, 0)
         self.st_pos = Gtk.Label(xalign=0.5)
         self.st_pos.get_style_context().add_class("stlabel")
         bar.set_center_widget(self.st_pos)
-        self.st_size = Gtk.Label(xalign=1)
-        self.st_size.get_style_context().add_class("stlabel")
-        bar.pack_end(self.st_size, False, False, 0)
-        # Save state lives here, beside the document's own facts, the way
-        # Writer does it.
+
+        # Save state at the far right, beside the document's own facts, the
+        # way Writer does it.
         self.save_lbl = Gtk.Label()
         self.save_lbl.get_style_context().add_class("savestate")
         self._render_chip()
         bar.pack_end(self.save_lbl, False, False, 0)
+
+        zrow = Gtk.Box(spacing=3)
+        zrow.set_valign(Gtk.Align.CENTER)
+        # The same minus / plus marks the brush stepper uses, not the two
+        # magnifier icons: at 15px a magnifying glass with a plus in it and one
+        # with a minus in it are the same picture, and which button zoomed in
+        # was a guess. The per-cent readout between them says which stepper
+        # this is.
+        zrow.pack_start(self._mark_btn("minus", _t("Zoom out  (-)"),
+                                       lambda *_: self._step_zoom(-1)),
+                        False, False, 0)
+        self.zoom_lbl = Gtk.Label(label="", xalign=0.5)
+        self.zoom_lbl.get_style_context().add_class("stlabel")
+        self.zoom_lbl.set_size_request(46, -1)
+        zrow.pack_start(self.zoom_lbl, False, False, 0)
+        zrow.pack_start(self._mark_btn("plus", _t("Zoom in  (+)"),
+                                       lambda *_: self._step_zoom(1)),
+                        False, False, 0)
+        zrow.pack_start(self._mark_btn("fit", _t("Fit to window  (0)"),
+                                       lambda *_: self._zoom_fit()),
+                        False, False, 0)
+        bar.pack_end(zrow, False, False, 0)
+
+        self.st_size = Gtk.Label(xalign=1)
+        self.st_size.get_style_context().add_class("stlabel")
+        bar.pack_end(self.st_size, False, False, 0)
         return bar
 
     def _refresh_status(self):
-        tname = _t(TOOL_NAMES.get(self.tool, ""))
+        """Cheap: this runs on every motion event. Only the labels that can
+        change per pixel are touched; the zoom readout is driven by
+        _sync_controls, which runs when the zoom actually changes."""
         ly = self.layers[self.active]
-        name = ly.name if ly.visible else ly.name + _t(" (hidden)")
-        self.st_tool.set_text("%s · %s" % (tname, name))
-        if self._cursor:
+        if not ly.visible:
+            # A hidden active layer swallows every stroke, which is the app's
+            # most confusing state. Say so where the tool hint goes, rather
+            # than only flashing it after a click has already done nothing.
+            self.st_tool.set_text(
+                _t('"%s" is hidden — strokes will not show') % ly.name)
+        else:
+            self.st_tool.set_text("%s — %s" % (
+                _t(TOOL_NAMES.get(self.tool, "")),
+                _t(TOOL_HINTS.get(self.tool, ""))))
+        # While a shape is being dragged the useful number is its SIZE, not the
+        # corner the pointer sits on: a 12x8 rectangle is what is being drawn,
+        # and nothing on screen was saying so.
+        if self._preview is not None:
+            _tl, a, b = self._preview
+            self.st_pos.set_text(self._dims(abs(b[0] - a[0]) + 1,
+                                            abs(b[1] - a[1]) + 1))
+        elif self._cursor:
             self.st_pos.set_text("%d, %d" % self._cursor)
         else:
             self.st_pos.set_text("")
-        # A count as "Layers: 3" rather than "3 layers": the plural sentence
-        # cannot be rebuilt by the catalog once it has been substituted into a
-        # longer status line, so it stayed English in every language.
-        self.st_size.set_text(
-            "\u2066%d × %d\u2069 px · %s: %d · %d%%"
-            % (self.cw, self.ch, _t("Layers"), len(self.layers),
-               self.zoom * 100))
+        # The layer COUNT is gone — the Layers panel is open beside this bar
+        # listing them — and so is the zoom, now that the stepper to the left
+        # of this label carries it instead of printing it a second time.
+        # one key, no leading space: " px" on its own is a PADDED catalog key,
+        # which never matches and silently leaves the unit in English
+        self.st_size.set_text(_t("%s px") % self._dims(self.cw, self.ch))
+
+    @staticmethod
+    def _dims(w, h):
+        """W x H, isolated LTR. In a right-to-left interface two numbers either
+        side of a neutral separator are reordered, and a 320x180 canvas was
+        offering itself as 180x320."""
+        return "\u2066%d × %d\u2069" % (w, h)
 
     # ---------------- chrome painting ----------------
     def _draw_chip(self, area, cr):
@@ -1143,9 +1449,9 @@ class Illustrator(nbapp.AppWindow):
         t = 8
         tile = cairo.ImageSurface(cairo.FORMAT_ARGB32, t * 2, t * 2)
         tc = cairo.Context(tile)
-        tc.set_source_rgb(*_rgb("#F8F6F0"))
+        tc.set_source_rgb(*_rgb("#F8F7F2"))
         tc.paint()
-        tc.set_source_rgb(*_rgb("#E4DFD0"))
+        tc.set_source_rgb(*_rgb("#EAE3D2"))
         tc.rectangle(t, 0, t, t)   # top-right
         tc.rectangle(0, t, t, t)   # bottom-left
         tc.fill()
@@ -1181,7 +1487,101 @@ class Illustrator(nbapp.AppWindow):
         cr.restore()
         if self.grid and z >= GRID_FROM:
             self._draw_grid(cr, z)
+        self._draw_brush_cursor(cr, z)
         return False
+
+    def _cursor_rect(self):
+        """The image-pixel box the pointer is currently over, brush included,
+        as (x, y, w, h) — or None when the pointer is off the canvas.
+
+        Shared by the painter and the damage code so the outline is erased
+        from exactly where it was drawn."""
+        if self._cursor is None:
+            return None
+        cx, cy = self._cursor
+        if self.tool not in SIZE_TOOLS:
+            return (cx, cy, 1, 1)      # fill and eyedropper act on one pixel
+        runs = brush_runs(self.size, self._brush_shape())
+        dy0 = min(r[0] for r in runs)
+        dy1 = max(r[0] for r in runs)
+        dx0 = min(r[1] for r in runs)
+        dx1 = max(r[2] for r in runs)
+        return (cx + dx0, cy + dy0, dx1 - dx0 + 1, dy1 - dy0 + 1)
+
+    def _draw_brush_cursor(self, cr, z):
+        """Outline the pixels the next click would change.
+
+        A crosshair says where the pointer is; it does not say how much of the
+        artwork a 12 px brush is about to cover, and at 100% zoom a size-8 tip
+        landed nowhere near where it looked like it would. The footprint is
+        drawn from the SAME brush_runs the stamp uses, so the outline and the
+        paint can never disagree.
+
+        Suppressed while a shape is being dragged: the shape preview already
+        shows what will commit, and a second box around the pointer competes
+        with it."""
+        if self._cursor is None or self._preview is not None:
+            return
+        runs = (brush_runs(self.size, self._brush_shape())
+                if self.tool in SIZE_TOOLS else ((0, 0, 0),))
+        cx, cy = self._cursor
+        cr.save()
+        # A light wash first, then a dark hairline on top of it, so the
+        # footprint stays visible over artwork of any colour.
+        for dy, dx0, dx1 in runs:
+            cr.rectangle((cx + dx0) * z, (cy + dy) * z, (dx1 - dx0 + 1) * z, z)
+        cr.set_source_rgba(1, 1, 1, 0.34)
+        cr.fill()
+        # ...and the hairline traces the OUTSIDE only. Stroking the same
+        # rectangles would rule a line between every pair of rows, so a round
+        # 12 px tip came out as a stack of bars rather than a disc.
+        pts = self._brush_outline(runs)
+        if pts:
+            x0, y0 = pts[0]
+            cr.move_to((cx + x0) * z + 0.5, (cy + y0) * z + 0.5)
+            for x, y in pts[1:]:
+                cr.line_to((cx + x) * z + 0.5, (cy + y) * z + 0.5)
+            cr.close_path()
+            cr.set_line_width(1)
+            cr.set_source_rgba(0.10, 0.10, 0.09, 0.62)
+            cr.stroke()
+        cr.restore()
+
+    @staticmethod
+    def _brush_outline(runs):
+        """The boundary of a brush footprint, as one closed polygon in image
+        pixels relative to the cursor.
+
+        Every brush this app has is ROW-CONVEX — brush_runs emits exactly one
+        run per row, for a full box or for the box's inscribed disc — so the
+        boundary is the left edges walked down and the right edges walked back
+        up. Returns () for anything that does not fit that shape, and the
+        caller falls back to leaving the outline off rather than drawing a
+        wrong one."""
+        if not runs:
+            return ()
+        rows = sorted(runs)
+        for a, b in zip(rows, rows[1:]):
+            if b[0] != a[0] + 1:
+                return ()            # a gap between rows: not row-convex
+        left, right = [], []
+        for dy, dx0, _dx1 in rows:                 # down the left edges
+            left.append((dx0, dy))
+            left.append((dx0, dy + 1))
+        for dy, _dx0, dx1 in reversed(rows):       # back up the right edges
+            right.append((dx1 + 1, dy + 1))
+            right.append((dx1 + 1, dy))
+        # The rows are walked in reverse HERE rather than reversing the
+        # finished list: that flipped each row's own pair of points too, and
+        # the outline came back as a zigzag crossing itself down one side.
+        return tuple(left) + tuple(right)
+
+    def _dmg_cursor(self, rect=None):
+        """Repaint where the brush outline is, or was. `rect` is a previous
+        footprint to clear as well as the current one."""
+        for r in (rect, self._cursor_rect()):
+            if r is not None:
+                self._dmg(r)
 
     def _draw_grid(self, cr, z):
         """One hairline per image-pixel boundary, and a heavier one every 8, so
@@ -1335,22 +1735,60 @@ class Illustrator(nbapp.AppWindow):
 
     # ---------------- interaction ----------------
     def _pick_tool(self, _b, tid):
+        # what the Eyedropper hands the tool back to when it has sampled
+        if tid == "picker" and self.tool != "picker":
+            self._prev_tool = self.tool
+        was = self._cursor_rect()
         self.tool = tid
-        self._sync_ribbon()
+        self._sync_controls()
         self._refresh_status()
+        # the pointer outline is the brush's footprint, and the brush just
+        # changed shape (round tip, square tip, or a single pixel)
+        self._dmg_cursor(was)
 
     def _step_size(self, delta):
-        n = max(SIZE_MIN, min(SIZE_MAX, self.size + delta))
-        if n != self.size:
-            self.size = n
-            self._sync_ribbon()
+        self._set_size(self.size + delta)
+
+    def _set_size(self, n):
+        """The one way the brush size changes, so the ramp, the readout and the
+        outline under the pointer all move together."""
+        n = max(SIZE_MIN, min(SIZE_MAX, int(n)))
+        if n == self.size:
+            return
+        was = self._cursor_rect()
+        self.size = n
+        self._sync_controls()
+        self._dmg_cursor(was)
 
     def _pick_color(self, _b, c):
         self.color = c.upper()
         self._remember(self.color)
-        self._sync_ribbon()
+        self._sync_controls()
 
-    def _sync_ribbon(self):
+    def _set_fill_shapes(self, on):
+        """Shapes come out solid or hollow. Two buttons that show which is
+        active, rather than one menu item that named the OTHER one."""
+        if on == self.fill_shapes:
+            return
+        self.fill_shapes = on
+        self._sync_controls()
+
+    @staticmethod
+    def _set_dim(widget, on):
+        """Dim or undim a group: the CSS class carries the whole look, and
+        set_sensitive stops its buttons responding to a click that could not
+        have done anything anyway."""
+        sc = widget.get_style_context()
+        if on:
+            sc.remove_class("dim")
+        else:
+            sc.add_class("dim")
+        widget.set_sensitive(on)
+
+    def _sync_controls(self):
+        """Put every control in the dock and the status bar in step with the
+        app's state. One place, so the selected tool, the highlighted swatch,
+        the tip ramp and the readouts can never disagree."""
         for tid, b in self._tool_btns.items():
             sc = b.get_style_context()
             if tid == self.tool:
@@ -1358,18 +1796,32 @@ class Illustrator(nbapp.AppWindow):
             else:
                 sc.remove_class("sel")
             try:
-                b._img.set_from_pixbuf(nbicons.pixbuf(
-                    tid, 16, "#FCFBF8" if tid == self.tool else "#6E695E"))
+                nbicons.set_image(
+                    b._img, tid, 17,
+                    "#FCFBF8" if tid == self.tool else "#6E695E")
             except GLib.Error:
                 pass
-        for btn, on in ((self.symx_btn, self.sym_x), (self.symy_btn, self.sym_y)):
+        for btn, on in ((self.symx_btn, self.sym_x),
+                        (self.symy_btn, self.sym_y),
+                        (self.outline_btn, not self.fill_shapes),
+                        (self.filled_btn, self.fill_shapes)):
             sc = btn.get_style_context()
             if on:
                 sc.add_class("sel")
             else:
                 sc.remove_class("sel")
+        # A setting the current tool cannot reach goes quiet instead of sitting
+        # there looking live: the flood fill takes no brush and no mirror, the
+        # eyedropper takes nothing at all, and only the three shape tools care
+        # whether a shape is filled. Nothing moves — the groups keep their
+        # places, so the dock never reflows under the pointer.
+        self._set_dim(self.size_grp, self.tool in SIZE_TOOLS)
+        self._set_dim(self.shape_grp, self.tool in SHAPE_TOOLS)
+        self._set_dim(self.mirror_grp, self.tool in MIRROR_TOOLS)
         self.size_lbl.set_text(_t("%d px") % self.size)
         self.zoom_lbl.set_text("%d%%" % (self.zoom * 100))
+        self.color_lbl.set_text(mix_name(self.color))
+        self.ramp_area.queue_draw()
         self.chip.queue_draw()
         self.pal_area.queue_draw()
         self.recent_area.queue_draw()
@@ -1379,10 +1831,12 @@ class Illustrator(nbapp.AppWindow):
             self.sym_x = not self.sym_x
         else:
             self.sym_y = not self.sym_y
-        self._sync_ribbon()
+        self._sync_controls()
 
     # ---- zoom ----
     def _set_zoom(self, z):
+        if self._closed:
+            return
         z = max(ZOOM_MIN, min(ZOOM_MAX, int(z)))
         if z == self.zoom:
             return
@@ -1395,17 +1849,27 @@ class Illustrator(nbapp.AppWindow):
         self.zoom = z
         self.canvas.set_size_request(self.cw * z, self.ch * z)
         self.canvas.queue_draw()
-        self._sync_ribbon()
+        self._sync_controls()
         self._refresh_status()
 
         def _recentre():
+            # Give up ownership first: whatever happens below, this source is
+            # already spent and must never be handed to source_remove again.
+            self._recentre_src = 0
+            if self._closed:
+                return False       # the adjustments belong to a dead window
             ha.set_value(max(0, min(ha.get_upper() - ha.get_page_size(),
                                     cx * z - ha.get_page_size() / 2.0)))
             va.set_value(max(0, min(va.get_upper() - va.get_page_size(),
                                     cy * z - va.get_page_size() / 2.0)))
             return False
 
-        GLib.idle_add(_recentre)
+        # Only the NEWEST centre is worth applying. Held down, Ctrl+scroll or
+        # the zoom buttons run _set_zoom several times before the main loop
+        # goes idle once; without this the viewport visibly chased each stale
+        # centre in turn over the following frames.
+        self._cancel_source("_recentre_src")
+        self._recentre_src = GLib.idle_add(_recentre)
 
     def _step_zoom(self, delta):
         steps = [s for s in ZOOM_STEPS]
@@ -1415,6 +1879,10 @@ class Illustrator(nbapp.AppWindow):
         self._set_zoom(steps[max(0, min(len(steps) - 1, i + delta))])
 
     def _zoom_fit(self):
+        # Reachable from the View menu and from a queued idle, either of which
+        # can be delivered after the window has gone.
+        if self._closed:
+            return
         alloc = self.mat.get_allocation()
         aw = alloc.width - 12 if alloc.width > 20 else 0
         ah = alloc.height - 12 if alloc.height > 20 else 0
@@ -1428,9 +1896,21 @@ class Illustrator(nbapp.AppWindow):
     def _on_mat_allocate(self, *_a):
         # The first real allocation is the first moment the window's size is
         # known, so that is when the document is fitted to it.
+        if self._closed:
+            return
         if not self._fitted:
             self._fitted = True
-            GLib.idle_add(self._zoom_fit)
+            # _fitted makes this a one-time arm, so there is never a second
+            # source to coalesce with; the id is kept only so a close that
+            # lands before the main loop goes idle can cancel it.
+            self._fit_src = GLib.idle_add(self._fit_idle)
+
+    def _fit_idle(self):
+        self._fit_src = 0
+        if self._closed:
+            return False
+        self._zoom_fit()
+        return False
 
     def _on_scroll(self, _w, ev):
         if not (ev.state & Gdk.ModifierType.CONTROL_MASK):
@@ -1510,8 +1990,14 @@ class Illustrator(nbapp.AppWindow):
 
     def _on_motion(self, _w, ev):
         p = self._pos(ev)
+        was = self._cursor_rect()
         self._cursor = p if self._inside(p) else None
         self._refresh_status()
+        # Erase the outline from where it was and paint it where it is. Both
+        # rects are brush-sized, so this is a couple of hundred pixels per
+        # motion event even at a high zoom — nothing like a full repaint.
+        if self._cursor_rect() != was:
+            self._dmg_cursor(was)
         if not self._drawing:
             return False
         self._shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
@@ -1563,8 +2049,12 @@ class Illustrator(nbapp.AppWindow):
         return True
 
     def _on_leave(self, _w, _ev):
+        # take the brush outline with the pointer, or it is left stranded on
+        # the artwork after the hand has gone
+        was = self._cursor_rect()
         self._cursor = None
         self._refresh_status()
+        self._dmg_cursor(was)
         return False
 
     def _stroke_seg(self, ly, a, b):
@@ -1903,9 +2393,14 @@ class Illustrator(nbapp.AppWindow):
             b = min(255, (b * 255 + a // 2) // a)
         self.color = "#%02X%02X%02X" % (r, g, b)
         self._remember(self.color)
-        self.tool = "pencil"
-        self._sync_ribbon()
+        # Sampling is a detour, so it hands the tool back — but to whatever was
+        # being drawn with, not always the Pencil. Taking a colour mid-stroke
+        # with the 12 px Brush used to leave a 1 px Pencil in its place, and
+        # the next drag came out as a hairline.
+        self.tool = self._prev_tool if self._prev_tool in TOOL_NAMES else "pencil"
+        self._sync_controls()
         self._refresh_status()
+        self._dmg_cursor()
 
     # ---------------- colour history ----------------
     def _load_recent(self):
@@ -1950,9 +2445,13 @@ class Illustrator(nbapp.AppWindow):
             pass          # a colour history is never worth an error on screen
 
     def _on_chip_press(self, _w, _ev):
-        # The active-colour well doubles as an eyedropper shortcut: clicking it
-        # arms the Colour Picker so the next canvas click samples a new colour.
-        self._pick_tool(None, "picker")
+        # A click on the active-colour well opens the mixer, which is what a
+        # click on a colour swatch means. It used to ARM THE EYEDROPPER: the
+        # pencil silently stopped drawing and the next click on the artwork
+        # took a colour instead of putting one down, with nothing on screen to
+        # say the tool had changed. The eyedropper is a named button with a
+        # key of its own; it does not need a trapdoor here as well.
+        self._open_color_chooser()
         return True
 
     def _open_color_chooser(self, *_):
@@ -1987,15 +2486,25 @@ class Illustrator(nbapp.AppWindow):
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         body.pack_start(well, False, False, 0)
+        # The mixed colour NAMES itself as the sliders move, from the same
+        # vocabulary the 112 swatches hover with. Three numbers from 0 to 255
+        # are how the colour is built, not what it is.
+        name_lbl = Gtk.Label(label=mix_name(self.color), xalign=0)
+        name_lbl.get_style_context().add_class("colorname")
+        body.pack_start(name_lbl, False, False, 0)
 
         sliders = []          # filled below; a recent chip drives them
+
+        def _repaint():
+            well.queue_draw()
+            name_lbl.set_text(mix_name("#%02X%02X%02X" % tuple(mix["rgb"])))
 
         def _load_mix(hex_):
             """Put a previously used colour back on the sliders."""
             mix["rgb"] = list(_rgb255(hex_))
             for i, sc in enumerate(sliders):
                 sc.set_value(mix["rgb"][i])
-            well.queue_draw()
+            _repaint()
 
         # Colours used before, newest first, so a blue found once never has to
         # be found again. Only shown when there is something to show.
@@ -2034,7 +2543,7 @@ class Illustrator(nbapp.AppWindow):
 
             def _moved(scale, i=idx):
                 mix["rgb"][i] = int(round(scale.get_value()))
-                well.queue_draw()
+                _repaint()
 
             sc.connect("value-changed", _moved)
             sliders.append(sc)
@@ -2240,13 +2749,35 @@ class Illustrator(nbapp.AppWindow):
 
     def _canvas_size_prompt(self):
         """Pick a canvas size: a preset, or any width and height."""
-        state = {"w": self.cw, "h": self.ch}
+        state = {"w": str(self.cw), "h": str(self.ch)}
         fields = {}
 
+        # `state` holds what the user has typed, kept in step with the entries
+        # by their own "changed" signal. _apply MUST read this and never the
+        # widgets: the prompt's buttons dismiss the card BEFORE running their
+        # callback, which destroys the entries inside it, and a destroyed
+        # GtkEntry returns "" from get_text(). That is why Canvas Size did
+        # nothing at all — every value read back empty, so the old code fell
+        # back to the size the document already had and _resize_canvas returned
+        # early on (w, h) == (cw, ch). The colour mixer above is right for the
+        # same reason: it reads mix["rgb"], not its sliders.
+        buttons = {}
+
+        def _mark():
+            """Ring the preset the entries currently hold, so the grid says
+            where the document IS and not only where it could go."""
+            for (w, h), btn in buttons.items():
+                sc = btn.get_style_context()
+                if (str(w), str(h)) == (state["w"].strip(), state["h"].strip()):
+                    sc.add_class("sel")
+                else:
+                    sc.remove_class("sel")
+
         def _set(w, h):
-            state["w"], state["h"] = w, h
+            state["w"], state["h"] = str(w), str(h)
             fields["w"].set_text(str(w))
             fields["h"].set_text(str(h))
+            _mark()
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         grid = Gtk.Grid()
@@ -2258,10 +2789,11 @@ class Illustrator(nbapp.AppWindow):
             # Isolated LTR: in a right-to-left interface two numbers either
             # side of a neutral separator are reordered, and "320 x 180"
             # was offering the user a 180x320 canvas.
-            b = Gtk.Button(label="\u2066%d × %d\u2069" % (w, h))
+            b = Gtk.Button(label=self._dims(w, h))
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("presetbtn")
             b.connect("clicked", lambda _b, w=w, h=h: _set(w, h))
+            buttons[(w, h)] = b
             grid.attach(b, i % 4, i // 4, 1, 1)
         body.pack_start(grid, False, False, 0)
 
@@ -2276,22 +2808,46 @@ class Illustrator(nbapp.AppWindow):
             e.set_width_chars(6)
             e.set_max_length(4)
             e.get_style_context().add_class("sizeentry")
+            # keep `state` current as it is typed — see _set above
+            def _typed(ent, k=key):
+                state[k] = ent.get_text()
+                _mark()
+
+            e.connect("changed", _typed)
             row.pack_start(e, False, False, 0)
             fields[key] = e
             body.pack_start(row, False, False, 0)
+        _mark()
 
         def _apply():
-            def _num(entry, fallback):
+            # A number outside the range, or not a number at all, is REPORTED.
+            # It used to be quietly replaced — typing 2048 gave a 1024 canvas
+            # and typing "big" gave the size it already had, both without a
+            # word, so the dialog looked like it had ignored the request.
+            raw = {k: str(state[k]).strip() for k in ("w", "h")}
+            vals, bad = {}, []
+            for k, cap in (("w", "Width"), ("h", "Height")):
                 try:
-                    return int(entry.get_text().strip())
+                    n = int(raw[k])
                 except ValueError:
-                    return fallback
-            self._resize_canvas(_num(fields["w"], self.cw),
-                                _num(fields["h"], self.ch))
+                    bad.append(_t(cap))
+                    continue
+                if not (MIN_DIM <= n <= MAX_DIM):
+                    bad.append(_t(cap))
+                    continue
+                vals[k] = n
+            if bad:
+                self._flash_save(
+                    _t("%s must be a number from %d to %d")
+                    % (" / ".join(bad), MIN_DIM, MAX_DIM))
+                return
+            self._resize_canvas(vals["w"], vals["h"])
 
         self._overlay_prompt(
             _t("Canvas size"),
-            _t("Artwork keeps its position from the top-left corner."),
+            _t("Artwork keeps its position from the top-left corner. "
+               "Width and height can be %d to %d pixels.")
+            % (MIN_DIM, MAX_DIM),
             [("Cancel", "ilpromptcancel", None),
              (_t("Resize"), "ilpromptok", _apply)],
             content=body)
@@ -2431,8 +2987,18 @@ class Illustrator(nbapp.AppWindow):
             return False
         if not path.lower().endswith(".png"):
             path += ".png"          # the document is always a PNG on disk
-        self._path = path
-        return self._file_save()
+        # Save As is a two-phase operation: the new filename becomes this
+        # document's identity only after bytes reached it.  Assigning _path
+        # first meant ENOSPC/read-only media abandoned the previous valid path
+        # and bound the window to a file that did not exist; the next Ctrl+S
+        # retried that failed destination instead of the document the person
+        # still had open.
+        if self._write_png(path):
+            self._path = path
+            self._mark_saved()
+            return True
+        self._flash_save(_t("Could not save image"))
+        return False
 
     def _choose_file(self, save):
         """Finder-style in-app picker under $NB_HOME/Pictures; path or None."""
@@ -2506,12 +3072,21 @@ class Illustrator(nbapp.AppWindow):
         except Exception:
             pass
 
+    def _supersede_flash(self):
+        """A durable chip state has just been established, so any transient
+        flash is over: bump the token (the pending restore must not repaint an
+        older state) AND drop the timer itself, since a callback that is
+        guaranteed to do nothing is only a callback waiting to outlive the
+        window."""
+        self._flash_token += 1
+        self._cancel_source("_chip_restore_src")
+
     def _mark_saved(self):
         """Green 'Saved HH:MM' chip — shown only once the PNG is on disk."""
         self._dirty = False
         self._chip_state = "saved"
         self._saved_time = time.strftime("%H:%M")
-        self._flash_token += 1     # cancel any pending flash auto-restore
+        self._supersede_flash()    # cancel any pending flash auto-restore
         self._render_chip()
 
     def _mark_unsaved(self):
@@ -2520,19 +3095,21 @@ class Illustrator(nbapp.AppWindow):
         flips the status bar honestly."""
         self._dirty = True
         self._chip_state = "unsaved"
-        self._flash_token += 1
+        self._supersede_flash()
         self._render_chip()
 
     def _mark_empty(self):
         """Grey 'Empty canvas' chip — the first-run / File > New empty state."""
         self._dirty = False
         self._chip_state = "empty"
-        self._flash_token += 1
+        self._supersede_flash()
         self._render_chip()
 
     def _flash_save(self, text):
         """Surface a transient notice in the save chip, then restore the real
         save state after a moment so it never keeps showing a stale message."""
+        if self._closed:
+            return
         self._flash_token += 1
         token = self._flash_token
         try:
@@ -2542,9 +3119,16 @@ class Illustrator(nbapp.AppWindow):
                 % GLib.markup_escape_text(text))
         except Exception:
             return
-        GLib.timeout_add(2600, self._restore_chip, token)
+        # One armed restore at a time: back-to-back flashes replace it rather
+        # than leaving the earlier one to fire into a window that may be gone.
+        self._cancel_source("_chip_restore_src")
+        self._chip_restore_src = GLib.timeout_add(2600, self._restore_chip,
+                                                  token)
 
     def _restore_chip(self, token):
+        self._chip_restore_src = 0
+        if self._closed:
+            return False
         # Only restore if no newer flash or state change happened meanwhile.
         if token == self._flash_token:
             self._render_chip()
@@ -2580,7 +3164,11 @@ class Illustrator(nbapp.AppWindow):
                 ("Actual Size    Ctrl+0", lambda: self._set_zoom(1)),
                 ("Fit in Window    Ctrl+9", self._zoom_fit),
                 nbapp.SEP,
-                ("Hide Pixel Grid" if self.grid else "Show Pixel Grid",
+                # A tick on the SETTING, not "Hide Pixel Grid" on the action.
+                # The grid only draws from 8x up, so below that the old label
+                # offered to hide a grid that was not on screen — and after
+                # pressing it, offered to show one that still would not be.
+                (("✓ " if self.grid else "    ") + _t("Pixel Grid    G"),
                  self._toggle_grid),
                 nbapp.SEP,
                 ("Hide Active Layer" if vis else "Show Active Layer",
@@ -2588,14 +3176,25 @@ class Illustrator(nbapp.AppWindow):
                 ("Show All Layers", self._show_all_layers),
             ]
         if name == "Image":
+            # Shape fill is a TOOL setting and now lives in the dock beside
+            # the shape tools, where it can be seen without opening anything.
+            # The menu keeps the pair as two ticked choices rather than the
+            # one item it was: that item named the state it would move TO
+            # ("Fill Shapes" while shapes were outlines), so reading the menu
+            # told you the opposite of what the next rectangle would do.
+            # Translated before the mark is glued on — the menu builder looks
+            # the WHOLE label up, and "✓ Fill Shapes" matches no catalog key.
+            mark = ("    ", "✓ ") if self.fill_shapes else ("✓ ", "    ")
             return [
                 ("Canvas Size…", self._canvas_size_prompt),
                 nbapp.SEP,
                 ("Flip Horizontal", lambda: self._flip(True)),
                 ("Flip Vertical", lambda: self._flip(False)),
                 nbapp.SEP,
-                ("Outline Shapes" if self.fill_shapes else "Fill Shapes",
-                 self._toggle_fill_shapes),
+                (mark[0] + _t("Outline Shapes"),
+                 lambda: self._set_fill_shapes(False)),
+                (mark[1] + _t("Fill Shapes"),
+                 lambda: self._set_fill_shapes(True)),
             ]
         if name == "Layer":
             return [
@@ -2616,9 +3215,6 @@ class Illustrator(nbapp.AppWindow):
                 ("Opacity  25%", lambda: self.op_scale.set_value(25)),
             ]
         return super().menu_items(name)
-
-    def _toggle_fill_shapes(self):
-        self.fill_shapes = not self.fill_shapes
 
     # ---------------- keyboard ----------------
     def _on_key(self, w, ev):
@@ -2689,6 +3285,34 @@ class Illustrator(nbapp.AppWindow):
         return super()._on_key(w, ev)
 
     # ---------------- close guard ----------------
+    def _cancel_source(self, attr):
+        """Drop an owned GLib source. The id is cleared BEFORE the removal, so
+        even a removal that raises (already dispatched, already removed) leaves
+        nothing behind that a later cancel could hand to source_remove twice."""
+        sid = getattr(self, attr, 0)
+        setattr(self, attr, 0)
+        if sid:
+            try:
+                GLib.source_remove(sid)
+            except Exception:
+                pass
+
+    def _on_destroy(self, *_):
+        # Idempotent: "destroy" can reach this more than once (File ▸ Close on
+        # an already-closing window, a second teardown pass at Shut Down). The
+        # gate is raised FIRST so that a source GLib has ALREADY dispatched —
+        # which source_remove can no longer stop — finds a dead window and
+        # returns without touching a widget. This runs after delete-event has
+        # had its say; the unsaved-work prompt vetoes the destroy, so reaching
+        # here at all means the close is going through.
+        if self._closed:
+            return False
+        self._closed = True
+        self._cancel_source("_recentre_src")
+        self._cancel_source("_fit_src")
+        self._cancel_source("_chip_restore_src")
+        return False
+
     def _on_delete(self, *_):
         # Both Esc and the red logo dot reach here via self.close(). When there
         # are unsaved changes, veto the destroy and show the save-prompt; the
@@ -2819,40 +3443,62 @@ class Illustrator(nbapp.AppWindow):
     # ---------------- css ----------------
     def _install_css(self):
         css = b"""
-        .ribbon *, .dock *, .lpanel *, .statusbar * {
+        .dock *, .lpanel *, .statusbar * {
             font-family: "Nimbus Sans","Helvetica",sans-serif; }
 
-        /* ---- ribbon (top bar: size, zoom, mirror, colour) ---- */
-        .ribbon { background: #F1EEE6; border-bottom: 1px solid #C9C4B6;
-                  padding: 12px 18px; min-height: 76px; }
         .caption { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
                    font-weight: 700; }
-        .vsep { background: #D7D2C5; }
 
         .stepbtn { min-width: 30px; min-height: 30px; padding: 0;
                    background: #FCFBF8; border: 1px solid #C9C4B6;
-                   border-radius: 2px; box-shadow: none; }
+                   border-radius: 8px; box-shadow: none; }
         .stepbtn:hover { background: #F4F2EC; }
-        .stepbtn.sel { background: #E6DFCE; border-color: #A9A392; }
-        /* the pixel/percent readouts: a number in a field, not a button */
+        .stepbtn.sel { background: #EAE3D2; border-color: #B3AD9E; }
+        /* a mark that carries a word (Outline / Filled) needs room for it */
+        .stepbtn.wide { padding: 0 9px; }
+        .marklabel { font-size: 12px; color: #1A1916; }
+        /* the pixel readout: a number in a field, not a button */
         .numfield { font-size: 13px; color: #1A1916; background: #FCFBF8;
-                    border: 1px solid #C9C4B6; border-radius: 2px; }
+                    border: 1px solid #C9C4B6; border-radius: 8px; }
         .chip { border: none; }
 
-        /* ---- left dock: tools, palette, recent ---- */
-        .dock { background: #F1EEE6; border-right: 1px solid #C9C4B6;
-                padding: 14px 12px; }
-        .toolbtn { min-width: 26px; min-height: 26px; padding: 0;
+        /* A settings group the current tool cannot use. It keeps its place;
+           nothing in the dock moves when the tool changes. It goes quiet, so
+           a dimmed group is itself the answer to "why is the size ignored?".
+           The caption is matched directly: the theme sets a colour on label
+           nodes, so a colour on the container never reaches its text. */
+        .dim .caption, .dim label, .dim .marklabel { color: #B3AD9E; }
+        .dim .numfield { color: #B3AD9E; background: #F4F2EC;
+                         border-color: #D7D2C5; }
+        .dim .stepbtn { background: #F4F2EC; border-color: #D7D2C5; }
+        .dim .stepbtn.sel { background: #EFEBE0; border-color: #D7D2C5; }
+
+        /* ---- left dock: tools, tool settings, colour ---- */
+        /* The dock sits in a scroller, so the papertone field and the rule
+           against the canvas go on the SCROLLER and its viewport as well.
+           Otherwise the strip beside a scrollbar comes up in the theme's
+           default background, exactly as the canvas mat has to do. */
+        .dockscroll, .dockscroll viewport { background: #F1EEE6; }
+        .dockscroll { border-right: 1px solid #C9C4B6; }
+        .dock { background: #F1EEE6; padding: 10px 12px; }
+        .hsep { background: #D7D2C5; min-height: 1px; }
+        /* Tool buttons carry a NAME, so they are rows rather than 26px
+           squares: three of the eight icons are the same diagonal implement at
+           that size and the word is what tells them apart. */
+        .toolbtn { min-height: 30px; padding: 0 8px;
                    background: #FCFBF8; border: 1px solid #C9C4B6;
-                   border-radius: 2px; box-shadow: none; }
+                   border-radius: 8px; box-shadow: none; }
         .toolbtn:hover { background: #F4F2EC; }
+        .toolname { font-size: 12px; color: #1A1916; }
         .toolbtn.sel { background: #C8341E; border-color: #C8341E; }
         .toolbtn.sel:hover { background: #B12C18; border-color: #B12C18; }
+        .toolbtn.sel .toolname { color: #FCFBF8; font-weight: 600; }
         .swatch { padding: 0; margin: 0; min-width: 22px; min-height: 22px;
                   background: transparent; border: none; box-shadow: none; }
+        .colorname { font-size: 12px; color: #1A1916; }
         .custombtn { min-height: 30px; padding: 2px 10px; font-size: 12px;
                      color: #1A1916; background: #FCFBF8;
-                     border: 1px solid #C9C4B6; border-radius: 2px;
+                     border: 1px solid #C9C4B6; border-radius: 8px;
                      box-shadow: none; }
         .custombtn:hover { background: #F4F2EC; }
         .savestate { font-size: 12px; color: #6E695E; }
@@ -2872,15 +3518,19 @@ class Illustrator(nbapp.AppWindow):
                   font-weight: 700; }
         .liconbtn { min-width: 26px; min-height: 26px; padding: 0; margin-left: 5px;
                     background: #FCFBF8; border: 1px solid #C9C4B6;
-                    border-radius: 2px; box-shadow: none; }
+                    border-radius: 8px; box-shadow: none; }
         .liconbtn:hover { background: #F4F2EC; }
         .liconbtn.disabled { background: #F1EEE6; border-color: #D7D2C5; }
         .llist { padding: 8px 10px; }
-        .lrow { padding: 8px 10px; border-radius: 2px; box-shadow: none;
+        .lrow { padding: 8px 10px; border-radius: 6px; box-shadow: none;
                 background: transparent; border: none; }
         .lrow:hover { background: #F4F2EC; }
         .lrow.active { background: #FCFBF8; box-shadow: inset 3px 0 0 #C8341E; }
+        /* one line under a one-row list, so the panel reads as a document with
+           one layer rather than as a panel that failed to fill */
+        .lempty { font-size: 12px; color: #9A9484; padding: 10px 10px 0 10px; }
         .lname { font-size: 14px; color: #1A1916; }
+        .lname.hidden { color: #9A9484; }
         .lrow.active .lname { font-weight: 600; }
         .lopacity { font-size: 11px; color: #9A9484; }
         .eyebtn { min-width: 26px; min-height: 26px; padding: 0;
@@ -2888,8 +3538,8 @@ class Illustrator(nbapp.AppWindow):
         .lfoot { padding: 16px 16px; border-top: 1px solid #D7D2C5; }
         .opacity { padding: 0; }
         .opacity trough { min-height: 4px; background: #D7D2C5;
-                          border: none; border-radius: 2px; }
-        .opacity highlight { background: #1A1916; border-radius: 2px; }
+                          border: none; border-radius: 100px; }
+        .opacity highlight { background: #1A1916; border-radius: 100px; }
         .opacity slider { min-width: 16px; min-height: 16px; margin: -7px;
                           background: #1A1916; border: none; border-radius: 50%; }
 
@@ -2908,25 +3558,27 @@ class Illustrator(nbapp.AppWindow):
                     padding: 26px 30px; min-width: 330px; }
         .ilprompt * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .ilprompttitle { font-family: "Newsreader","Liberation Serif",serif;
-                         font-size: 21px; color: #1A1916; }
+                         font-size: 20px; color: #1A1916; }
         .ilpromptbody { font-size: 14px; color: #6E695E; }
         .mixname { font-size: 13px; color: #1A1916; }
         .presetbtn { min-height: 28px; padding: 0 8px; font-size: 12px;
                      color: #1A1916; background: #FCFBF8;
-                     border: 1px solid #C9C4B6; border-radius: 2px;
+                     border: 1px solid #C9C4B6; border-radius: 8px;
                      box-shadow: none; }
         .presetbtn:hover { background: #F4F2EC; }
+        .presetbtn.sel { background: #EAE3D2; border-color: #B3AD9E;
+                         font-weight: 600; }
         .sizeentry { min-height: 28px; font-size: 13px; }
         .ilpromptok { min-height: 34px; padding: 0 18px; border: 1px solid #1A1916;
-                      border-radius: 2px; background: #1A1916; color: #FCFBF8;
+                      border-radius: 8px; background: #1A1916; color: #FCFBF8;
                       box-shadow: none; font-size: 14px; font-weight: 600; }
         .ilpromptok:hover { background: #2A2620; }
         .ilpromptcancel { min-height: 34px; padding: 0 16px; color: #2A2620;
-                          border: 1px solid #C4BFB1; border-radius: 2px;
+                          border: 1px solid #C9C4B6; border-radius: 8px;
                           background: #FCFBF8; box-shadow: none; font-size: 14px; }
-        .ilpromptcancel:hover { background: #ECE8DD; }
+        .ilpromptcancel:hover { background: #F4F2EC; }
         .ilpromptdiscard { min-height: 34px; padding: 0 16px; color: #C8341E;
-                           border: 1px solid #E0B3AA; border-radius: 2px;
+                           border: 1px solid #E0B3AA; border-radius: 8px;
                            background: #FCFBF8; box-shadow: none; font-size: 14px; }
         .ilpromptdiscard:hover { background: #F6E7E3; }
 

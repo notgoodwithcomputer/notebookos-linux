@@ -1,262 +1,6101 @@
 {
-  "code": "es",
-  "name": "Spanish",
-  "from": "English",
-  "units": [
+ "code": "es",
+ "name": "Spanish",
+ "from": "English",
+ "note": "Latin American Spanish: ustedes for every plural you, c and z as s",
+ "alphabet": [
+  {
+   "c": "ñ",
+   "ipa": "ɲ",
+   "e": "ny, as in canyon: niño"
+  },
+  {
+   "c": "ll",
+   "ipa": "ʝ",
+   "e": "y, as in yes: llave"
+  },
+  {
+   "c": "j",
+   "ipa": "x",
+   "e": "a rasped h, as in loch: jugo"
+  },
+  {
+   "c": "g",
+   "ipa": "x",
+   "e": "the same rasped h before e and i: gente"
+  },
+  {
+   "c": "gu",
+   "ipa": "ɡ",
+   "e": "hard g before e and i, the u silent: guerra"
+  },
+  {
+   "c": "qu",
+   "ipa": "k",
+   "e": "k, the u silent: queso"
+  },
+  {
+   "c": "h",
+   "ipa": "∅",
+   "e": "written, never pronounced: hola"
+  },
+  {
+   "c": "rr",
+   "ipa": "r",
+   "e": "a rolled r: perro"
+  },
+  {
+   "c": "r",
+   "ipa": "ɾ",
+   "e": "one tap between vowels: pero"
+  },
+  {
+   "c": "z",
+   "ipa": "s",
+   "e": "s in Latin America: zapato"
+  },
+  {
+   "c": "c",
+   "ipa": "s",
+   "e": "s before e and i in Latin America: cinco"
+  },
+  {
+   "c": "v",
+   "ipa": "b",
+   "e": "the same sound as b: vaca"
+  },
+  {
+   "c": "b",
+   "ipa": "β",
+   "e": "a soft b, lips not quite closed: lobo"
+  },
+  {
+   "c": "d",
+   "ipa": "ð",
+   "e": "th, as in this, between vowels: nada"
+  }
+ ],
+ "units": [
+  {
+   "title": "BASICS",
+   "subtitle": "Greetings, the people around a name, and the numbers up to twelve",
+   "skills": [
     {
-      "title": "BASICS",
-      "skills": [
-        {
-          "name": "Greetings",
-          "words": [
-            {"t": "hola", "e": "hello", "ipa": "ˈo.la"},
-            {"t": "adiós", "e": "goodbye", "ipa": "a.ˈðjos"},
-            {"t": "gracias", "e": "thank you", "ipa": "ˈɡɾa.sjas"},
-            {"t": "por favor", "e": "please", "ipa": "poɾ fa.ˈβoɾ"},
-            {"t": "sí", "e": "yes", "ipa": "si"},
-            {"t": "no", "e": "no", "ipa": "no"},
-            {"t": "perdón", "e": "sorry", "ipa": "peɾ.ˈðon"},
-            {"t": "buenos días", "e": "good morning", "ipa": "ˈbwe.nos ˈði.as"},
-            {"t": "buenas noches", "e": "good night", "ipa": "ˈbwe.nas ˈno.tʃes"}
-          ],
-          "phrases": [
-            {"t": "¿Cómo estás?", "e": "How are you?", "ipa": "ˈko.mo es.ˈtas"},
-            {"t": "Me llamo Ana", "e": "My name is Ana", "ipa": "me ˈʝa.mo ˈa.na"}
-          ]
-        },
-        {
-          "name": "People",
-          "words": [
-            {"t": "yo", "e": "I", "ipa": "ʝo"},
-            {"t": "tú", "e": "you", "ipa": "tu"},
-            {"t": "él", "e": "he", "ipa": "el"},
-            {"t": "ella", "e": "she", "ipa": "ˈe.ʝa"},
-            {"t": "nosotros", "e": "we", "ipa": "no.ˈso.tɾos"},
-            {"t": "ellos", "e": "they", "ipa": "ˈe.ʝos"},
-            {"t": "hombre", "e": "man", "ipa": "ˈom.bɾe"},
-            {"t": "mujer", "e": "woman", "ipa": "mu.ˈxeɾ"},
-            {"t": "niño", "e": "boy", "ipa": "ˈni.ɲo"},
-            {"t": "niña", "e": "girl", "ipa": "ˈni.ɲa"}
-          ],
-          "phrases": [
-            {"t": "Él es un hombre", "e": "He is a man", "ipa": "el es un ˈom.bɾe"}
-          ]
-        },
-        {
-          "name": "Numbers",
-          "words": [
-            {"t": "uno", "e": "one", "ipa": "ˈu.no"},
-            {"t": "dos", "e": "two", "ipa": "dos"},
-            {"t": "tres", "e": "three", "ipa": "tɾes"},
-            {"t": "cuatro", "e": "four", "ipa": "ˈkwa.tɾo"},
-            {"t": "cinco", "e": "five", "ipa": "ˈsiŋ.ko"},
-            {"t": "seis", "e": "six", "ipa": "seis"},
-            {"t": "siete", "e": "seven", "ipa": "ˈsje.te"},
-            {"t": "ocho", "e": "eight", "ipa": "ˈo.tʃo"},
-            {"t": "nueve", "e": "nine", "ipa": "ˈnwe.βe"},
-            {"t": "diez", "e": "ten", "ipa": "djes"}
-          ],
-          "phrases": [
-            {"t": "Tengo dos hermanos", "e": "I have two brothers", "ipa": "ˈteŋ.ɡo dos eɾ.ˈma.nos"}
-          ]
-        }
-      ]
+     "name": "Greetings",
+     "tips": [
+      {
+       "h": "Two ways to say you",
+       "b": "Spanish has two singular words for the person addressed. Tú goes with friends, family and children; usted goes with strangers, older people and anyone owed formality. The verb ending changes with the choice.",
+       "eg": [
+        [
+         "¿Cómo estás?",
+         "How are you? (familiar)"
+        ],
+        [
+         "¿Cómo está usted?",
+         "How are you? (polite)"
+        ]
+       ]
+      },
+      {
+       "h": "Greetings follow the clock",
+       "b": "Buenos días runs until midday, buenas tardes from midday until dark, and buenas noches from dark onward. All three are plural in Spanish.",
+       "eg": [
+        [
+         "Buenos días",
+         "Good morning"
+        ],
+        [
+         "Buenas tardes",
+         "Good afternoon"
+        ],
+        [
+         "Buenas noches",
+         "Good night"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "hola",
+       "e": "hello",
+       "ipa": "ˈo.la",
+       "pos": "interj"
+      },
+      {
+       "t": "adiós",
+       "e": "goodbye",
+       "ipa": "a.ˈðjos",
+       "pos": "interj"
+      },
+      {
+       "t": "gracias",
+       "e": "thank you",
+       "ipa": "ˈɡɾa.sjas",
+       "pos": "interj"
+      },
+      {
+       "t": "por favor",
+       "e": "please",
+       "ipa": "poɾ fa.ˈβoɾ",
+       "pos": "interj"
+      },
+      {
+       "t": "perdón",
+       "e": "sorry",
+       "ipa": "peɾ.ˈðon",
+       "pos": "interj"
+      },
+      {
+       "t": "mucho gusto",
+       "e": "nice to meet you",
+       "ipa": "ˈmu.tʃo ˈɡus.to",
+       "pos": "interj"
+      },
+      {
+       "t": "hasta luego",
+       "e": "see you later",
+       "ipa": "ˈas.ta ˈlwe.ɣo",
+       "pos": "interj"
+      },
+      {
+       "t": "buenos días",
+       "e": "good morning",
+       "ipa": "ˈbwe.nos ˈði.as",
+       "pos": "interj"
+      },
+      {
+       "t": "buenas tardes",
+       "e": "good afternoon",
+       "ipa": "ˈbwe.nas ˈtaɾ.ðes",
+       "pos": "interj"
+      },
+      {
+       "t": "buenas noches",
+       "e": "good night",
+       "ipa": "ˈbwe.nas ˈno.tʃes",
+       "pos": "interj"
+      },
+      {
+       "t": "sí",
+       "e": "yes",
+       "ipa": "ˈsi",
+       "pos": "adv"
+      },
+      {
+       "t": "no",
+       "e": "no",
+       "ipa": "ˈno",
+       "pos": "adv"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Hola, me llamo Ana",
+       "e": "Hello, my name is Ana",
+       "ipa": "ˈo.la me ˈʝa.mo ˈa.na",
+       "lit": "hello, myself I-call Ana"
+      },
+      {
+       "t": "¿Cómo está usted?",
+       "e": "How are you?",
+       "ipa": "ˈko.mo es.ˈta us.ˈteð",
+       "lit": "how are you (polite)"
+      },
+      {
+       "t": "Buenos días, señora",
+       "e": "Good morning, madam",
+       "ipa": "ˈbwe.nos ˈði.as se.ˈɲo.ɾa"
+      },
+      {
+       "t": "Muchas gracias, hasta luego",
+       "e": "Thank you very much, see you later",
+       "ipa": "ˈmu.tʃas ˈɡɾa.sjas ˈas.ta ˈlwe.ɣo"
+      }
+     ]
     },
     {
-      "title": "PEOPLE",
-      "skills": [
-        {
-          "name": "Family",
-          "words": [
-            {"t": "padre", "e": "father", "ipa": "ˈpa.ðɾe"},
-            {"t": "madre", "e": "mother", "ipa": "ˈma.ðɾe"},
-            {"t": "hijo", "e": "son", "ipa": "ˈi.xo"},
-            {"t": "hija", "e": "daughter", "ipa": "ˈi.xa"},
-            {"t": "hermano", "e": "brother", "ipa": "eɾ.ˈma.no"},
-            {"t": "hermana", "e": "sister", "ipa": "eɾ.ˈma.na"},
-            {"t": "familia", "e": "family", "ipa": "fa.ˈmi.lja"},
-            {"t": "amigo", "e": "friend", "ipa": "a.ˈmi.ɣo"}
-          ],
-          "phrases": [
-            {"t": "Ella es mi amiga", "e": "She is my friend", "ipa": "ˈe.ʝa es mi a.ˈmi.ɣa"}
-          ]
-        },
-        {
-          "name": "Colors",
-          "words": [
-            {"t": "rojo", "e": "red", "ipa": "ˈro.xo"},
-            {"t": "azul", "e": "blue", "ipa": "a.ˈsul"},
-            {"t": "verde", "e": "green", "ipa": "ˈbeɾ.ðe"},
-            {"t": "amarillo", "e": "yellow", "ipa": "a.ma.ˈɾi.ʝo"},
-            {"t": "negro", "e": "black", "ipa": "ˈne.ɣɾo"},
-            {"t": "blanco", "e": "white", "ipa": "ˈblaŋ.ko"}
-          ],
-          "phrases": [
-            {"t": "La manzana es roja", "e": "The apple is red", "ipa": "la man.ˈsa.na es ˈro.xa"}
-          ]
-        }
-      ]
+     "name": "People",
+     "tips": [
+      {
+       "h": "Every noun has a gender",
+       "b": "A Spanish noun is masculine or feminine, and the article shows which: el for masculine, la for feminine. Most nouns ending in -o are masculine and most ending in -a are feminine. The gender is listed beside each noun in this course.",
+       "eg": [
+        [
+         "el niño",
+         "the boy"
+        ],
+        [
+         "la niña",
+         "the girl"
+        ],
+        [
+         "el hombre",
+         "the man"
+        ],
+        [
+         "la mujer",
+         "the woman"
+        ]
+       ]
+      },
+      {
+       "h": "Subject pronouns are optional",
+       "b": "The verb ending already names the subject, so yo, tú and él are dropped unless the sentence needs contrast or emphasis.",
+       "eg": [
+        [
+         "Hablo español",
+         "I speak Spanish"
+        ],
+        [
+         "Yo hablo español",
+         "I speak Spanish, not him"
+        ]
+       ]
+      },
+      {
+       "h": "Ustedes covers every plural you",
+       "b": "Latin America uses ustedes for any group, formal or not. The form vosotros belongs to Spain and does not appear in this course.",
+       "eg": [
+        [
+         "¿Cómo están ustedes?",
+         "How are you all?"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "yo",
+       "e": "I",
+       "ipa": "ˈʝo",
+       "pos": "pron"
+      },
+      {
+       "t": "tú",
+       "e": "you",
+       "ipa": "ˈtu",
+       "pos": "pron",
+       "note": "familiar singular"
+      },
+      {
+       "t": "usted",
+       "e": "you (formal)",
+       "ipa": "us.ˈteð",
+       "pos": "pron",
+       "note": "polite singular"
+      },
+      {
+       "t": "él",
+       "e": "he",
+       "ipa": "ˈel",
+       "pos": "pron"
+      },
+      {
+       "t": "ella",
+       "e": "she",
+       "ipa": "ˈe.ʝa",
+       "pos": "pron"
+      },
+      {
+       "t": "nosotros",
+       "e": "we",
+       "ipa": "no.ˈso.tɾos",
+       "pos": "pron"
+      },
+      {
+       "t": "ustedes",
+       "e": "you all",
+       "ipa": "us.ˈte.ðes",
+       "pos": "pron",
+       "note": "any plural group"
+      },
+      {
+       "t": "ellos",
+       "e": "they",
+       "ipa": "ˈe.ʝos",
+       "pos": "pron"
+      },
+      {
+       "t": "hombre",
+       "e": "man",
+       "ipa": "ˈom.bɾe",
+       "pos": "noun",
+       "note": "el hombre (m)"
+      },
+      {
+       "t": "mujer",
+       "e": "woman",
+       "ipa": "mu.ˈxeɾ",
+       "pos": "noun",
+       "note": "la mujer (f)"
+      },
+      {
+       "t": "niño",
+       "e": "boy",
+       "ipa": "ˈni.ɲo",
+       "pos": "noun",
+       "note": "el niño (m)"
+      },
+      {
+       "t": "niña",
+       "e": "girl",
+       "ipa": "ˈni.ɲa",
+       "pos": "noun",
+       "note": "la niña (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Él es un hombre",
+       "e": "He is a man",
+       "ipa": "ˈel es un ˈom.bɾe"
+      },
+      {
+       "t": "Ella es una mujer",
+       "e": "She is a woman",
+       "ipa": "ˈe.ʝa es ˈu.na mu.ˈxeɾ"
+      },
+      {
+       "t": "Yo soy una niña",
+       "e": "I am a girl",
+       "ipa": "ˈʝo ˈsoi ˈu.na ˈni.ɲa"
+      },
+      {
+       "t": "¿Cómo se llama usted?",
+       "e": "What is your name?",
+       "ipa": "ˈko.mo se ˈʝa.ma us.ˈteð",
+       "lit": "how yourself do-you-call"
+      }
+     ]
     },
     {
-      "title": "EVERYDAY",
-      "skills": [
-        {
-          "name": "Food",
-          "words": [
-            {"t": "agua", "e": "water", "ipa": "ˈa.ɣwa"},
-            {"t": "pan", "e": "bread", "ipa": "pan"},
-            {"t": "leche", "e": "milk", "ipa": "ˈle.tʃe"},
-            {"t": "manzana", "e": "apple", "ipa": "man.ˈsa.na"},
-            {"t": "carne", "e": "meat", "ipa": "ˈkaɾ.ne"},
-            {"t": "café", "e": "coffee", "ipa": "ka.ˈfe"},
-            {"t": "queso", "e": "cheese", "ipa": "ˈke.so"}
-          ],
-          "phrases": [
-            {"t": "Yo como pan", "e": "I eat bread", "ipa": "ʝo ˈko.mo pan"},
-            {"t": "Bebo agua", "e": "I drink water", "ipa": "ˈbe.βo ˈa.ɣwa"}
-          ]
-        },
-        {
-          "name": "Verbs",
-          "words": [
-            {"t": "ser", "e": "to be", "ipa": "seɾ"},
-            {"t": "tener", "e": "to have", "ipa": "te.ˈneɾ"},
-            {"t": "ir", "e": "to go", "ipa": "iɾ"},
-            {"t": "ver", "e": "to see", "ipa": "beɾ"},
-            {"t": "hablar", "e": "to speak", "ipa": "a.ˈβlaɾ"},
-            {"t": "aprender", "e": "to learn", "ipa": "a.pɾen.ˈdeɾ"},
-            {"t": "comer", "e": "to eat", "ipa": "ko.ˈmeɾ"},
-            {"t": "beber", "e": "to drink", "ipa": "be.ˈβeɾ"}
-          ],
-          "phrases": [
-            {"t": "Aprendo español", "e": "I learn Spanish", "ipa": "a.ˈpɾen.do es.pa.ˈɲol"},
-            {"t": "¿Hablas español?", "e": "Do you speak Spanish?", "ipa": "ˈa.βlas es.pa.ˈɲol"}
-          ]
-        },
-        {
-          "name": "Describing",
-          "words": [
-            {"t": "grande", "e": "big", "ipa": "ˈɡɾan.de"},
-            {"t": "pequeño", "e": "small", "ipa": "pe.ˈke.ɲo"},
-            {"t": "bueno", "e": "good", "ipa": "ˈbwe.no"},
-            {"t": "bonito", "e": "beautiful", "ipa": "bo.ˈni.to"},
-            {"t": "nuevo", "e": "new", "ipa": "ˈnwe.βo"},
-            {"t": "caliente", "e": "hot", "ipa": "ka.ˈljen.te"},
-            {"t": "frío", "e": "cold", "ipa": "ˈfɾi.o"}
-          ],
-          "phrases": [
-            {"t": "Una casa grande", "e": "A big house", "ipa": "ˈu.na ˈka.sa ˈɡɾan.de"}
-          ]
-        }
-      ]
+     "name": "Phrases",
+     "tips": [
+      {
+       "h": "Questions carry an opening mark",
+       "b": "A written question begins with ¿ and ends with ?. The opening mark shows where the question starts inside a longer sentence.",
+       "eg": [
+        [
+         "¿Cómo estás?",
+         "How are you?"
+        ],
+        [
+         "Ana, ¿dónde vives?",
+         "Ana, where do you live?"
+        ]
+       ]
+      },
+      {
+       "h": "Joining words",
+       "b": "Y joins two things, o offers a choice, and pero contrasts them. Y becomes e before a word beginning with the i sound, and o becomes u before the o sound.",
+       "eg": [
+        [
+         "pan y queso",
+         "bread and cheese"
+        ],
+        [
+         "café o té",
+         "coffee or tea"
+        ],
+        [
+         "padre e hijo",
+         "father and son"
+        ]
+       ]
+      },
+      {
+       "h": "Muy and mucho",
+       "b": "Muy modifies an adjective or an adverb and never changes shape. Mucho modifies a verb, or counts a noun and then agrees with it.",
+       "eg": [
+        [
+         "muy bien",
+         "very well"
+        ],
+        [
+         "Trabajo mucho",
+         "I work a lot"
+        ],
+        [
+         "muchas gracias",
+         "many thanks"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "bien",
+       "e": "well",
+       "ipa": "ˈbjen",
+       "pos": "adv"
+      },
+      {
+       "t": "mal",
+       "e": "badly",
+       "ipa": "ˈmal",
+       "pos": "adv"
+      },
+      {
+       "t": "muy",
+       "e": "very",
+       "ipa": "ˈmuj",
+       "pos": "adv"
+      },
+      {
+       "t": "mucho",
+       "e": "a lot",
+       "ipa": "ˈmu.tʃo",
+       "pos": "adv"
+      },
+      {
+       "t": "también",
+       "e": "also",
+       "ipa": "tam.ˈbjen",
+       "pos": "adv"
+      },
+      {
+       "t": "tal vez",
+       "e": "maybe",
+       "ipa": "tal ˈbes",
+       "pos": "adv"
+      },
+      {
+       "t": "ya",
+       "e": "already",
+       "ipa": "ˈʝa",
+       "pos": "adv"
+      },
+      {
+       "t": "todavía",
+       "e": "still",
+       "ipa": "to.ða.ˈβi.a",
+       "pos": "adv"
+      },
+      {
+       "t": "claro",
+       "e": "of course",
+       "ipa": "ˈkla.ɾo",
+       "pos": "interj"
+      },
+      {
+       "t": "lo siento",
+       "e": "I am sorry",
+       "ipa": "lo ˈsjen.to",
+       "pos": "interj"
+      },
+      {
+       "t": "con permiso",
+       "e": "excuse me",
+       "ipa": "kom peɾ.ˈmi.so",
+       "pos": "interj"
+      },
+      {
+       "t": "de nada",
+       "e": "not at all",
+       "ipa": "de ˈna.ða",
+       "pos": "interj",
+       "note": "answer to gracias"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Muy bien, gracias",
+       "e": "Very well, thank you",
+       "ipa": "ˈmuj ˈbjen ˈɡɾa.sjas"
+      },
+      {
+       "t": "Lo siento mucho",
+       "e": "I am very sorry",
+       "ipa": "lo ˈsjen.to ˈmu.tʃo"
+      },
+      {
+       "t": "Con permiso, por favor",
+       "e": "Excuse me, please",
+       "ipa": "kom peɾ.ˈmi.so poɾ fa.ˈβoɾ"
+      },
+      {
+       "t": "Ella está muy mal",
+       "e": "She is very unwell",
+       "ipa": "ˈe.ʝa es.ˈta ˈmuj ˈmal"
+      }
+     ]
     },
     {
-      "title": "GETTING AROUND",
-      "skills": [
-        {
-          "name": "Places",
-          "words": [
-            {"t": "casa", "e": "house", "ipa": "ˈka.sa"},
-            {"t": "escuela", "e": "school", "ipa": "es.ˈkwe.la"},
-            {"t": "tienda", "e": "store", "ipa": "ˈtjen.da"},
-            {"t": "ciudad", "e": "city", "ipa": "sju.ˈðað"},
-            {"t": "calle", "e": "street", "ipa": "ˈka.ʝe"},
-            {"t": "mercado", "e": "market", "ipa": "meɾ.ˈka.ðo"},
-            {"t": "baño", "e": "bathroom", "ipa": "ˈba.ɲo"},
-            {"t": "puerta", "e": "door", "ipa": "ˈpweɾ.ta"}
-          ],
-          "phrases": [
-            {"t": "La escuela es grande", "e": "The school is big", "ipa": "la es.ˈkwe.la es ˈɡɾan.de"},
-            {"t": "Voy a la escuela", "e": "I go to the school", "ipa": "boi a la es.ˈkwe.la"}
-          ]
-        },
-        {
-          "name": "Time",
-          "words": [
-            {"t": "hoy", "e": "today", "ipa": "oi"},
-            {"t": "mañana", "e": "tomorrow", "ipa": "ma.ˈɲa.na"},
-            {"t": "ahora", "e": "now", "ipa": "a.ˈo.ɾa"},
-            {"t": "día", "e": "day", "ipa": "ˈdi.a"},
-            {"t": "noche", "e": "night", "ipa": "ˈno.tʃe"},
-            {"t": "semana", "e": "week", "ipa": "se.ˈma.na"},
-            {"t": "hora", "e": "hour", "ipa": "ˈo.ɾa"},
-            {"t": "año", "e": "year", "ipa": "ˈa.ɲo"}
-          ],
-          "phrases": [
-            {"t": "La semana tiene siete días", "e": "The week has seven days", "ipa": "la se.ˈma.na ˈtje.ne ˈsje.te ˈdi.as"},
-            {"t": "Hoy como en casa", "e": "Today I eat at home", "ipa": "oi ˈko.mo en ˈka.sa"}
-          ]
-        },
-        {
-          "name": "Travel",
-          "words": [
-            {"t": "coche", "e": "car", "ipa": "ˈko.tʃe"},
-            {"t": "tren", "e": "train", "ipa": "tɾen"},
-            {"t": "avión", "e": "airplane", "ipa": "a.ˈβjon"},
-            {"t": "aquí", "e": "here", "ipa": "a.ˈki"},
-            {"t": "allí", "e": "there", "ipa": "a.ˈʝi"},
-            {"t": "lejos", "e": "far", "ipa": "ˈle.xos"},
-            {"t": "cerca", "e": "near", "ipa": "ˈseɾ.ka"}
-          ],
-          "phrases": [
-            {"t": "El coche es nuevo", "e": "The car is new", "ipa": "el ˈko.tʃe es ˈnwe.βo"},
-            {"t": "El avión es grande", "e": "The airplane is big", "ipa": "el a.ˈβjon es ˈɡɾan.de"}
-          ]
-        }
-      ]
-    },
-    {
-      "title": "THE WORLD",
-      "skills": [
-        {
-          "name": "Animals",
-          "words": [
-            {"t": "perro", "e": "dog", "ipa": "ˈpe.ro"},
-            {"t": "gato", "e": "cat", "ipa": "ˈɡa.to"},
-            {"t": "pájaro", "e": "bird", "ipa": "ˈpa.xa.ɾo"},
-            {"t": "caballo", "e": "horse", "ipa": "ka.ˈβa.ʝo"},
-            {"t": "pez", "e": "fish", "ipa": "pes"},
-            {"t": "vaca", "e": "cow", "ipa": "ˈba.ka"},
-            {"t": "pollo", "e": "chicken", "ipa": "ˈpo.ʝo"}
-          ],
-          "phrases": [
-            {"t": "Tengo un perro", "e": "I have a dog", "ipa": "ˈteŋ.ɡo un ˈpe.ro"},
-            {"t": "El gato bebe leche", "e": "The cat drinks milk", "ipa": "el ˈɡa.to ˈbe.βe ˈle.tʃe"}
-          ]
-        },
-        {
-          "name": "Nature",
-          "words": [
-            {"t": "sol", "e": "sun", "ipa": "sol"},
-            {"t": "luna", "e": "moon", "ipa": "ˈlu.na"},
-            {"t": "árbol", "e": "tree", "ipa": "ˈaɾ.βol"},
-            {"t": "flor", "e": "flower", "ipa": "floɾ"},
-            {"t": "lluvia", "e": "rain", "ipa": "ˈʝu.βja"},
-            {"t": "mar", "e": "sea", "ipa": "maɾ"},
-            {"t": "cielo", "e": "sky", "ipa": "ˈsje.lo"}
-          ],
-          "phrases": [
-            {"t": "El cielo es azul", "e": "The sky is blue", "ipa": "el ˈsje.lo es a.ˈsul"},
-            {"t": "Veo el sol y la luna", "e": "I see the sun and the moon", "ipa": "ˈbe.o el sol i la ˈlu.na"}
-          ]
-        },
-        {
-          "name": "More Verbs",
-          "words": [
-            {"t": "hacer", "e": "to do", "ipa": "a.ˈseɾ"},
-            {"t": "querer", "e": "to want", "ipa": "ke.ˈɾeɾ"},
-            {"t": "poder", "e": "to be able", "ipa": "po.ˈðeɾ"},
-            {"t": "decir", "e": "to say", "ipa": "de.ˈsiɾ"},
-            {"t": "venir", "e": "to come", "ipa": "be.ˈniɾ"},
-            {"t": "comprar", "e": "to buy", "ipa": "kom.ˈpɾaɾ"},
-            {"t": "vivir", "e": "to live", "ipa": "bi.ˈβiɾ"}
-          ],
-          "phrases": [
-            {"t": "Quiero aprender español", "e": "I want to learn Spanish", "ipa": "ˈkje.ɾo a.pɾen.ˈdeɾ es.pa.ˈɲol"},
-            {"t": "Quiero comer pan", "e": "I want to eat bread", "ipa": "ˈkje.ɾo ko.ˈmeɾ pan"}
-          ]
-        }
-      ]
+     "name": "Numbers",
+     "tips": [
+      {
+       "h": "Uno shortens before a noun",
+       "b": "Uno counts on its own, but before a masculine noun it becomes un and before a feminine noun una. The other numbers keep one form.",
+       "eg": [
+        [
+         "un libro",
+         "one book"
+        ],
+        [
+         "una mesa",
+         "one table"
+        ],
+        [
+         "Tengo uno",
+         "I have one"
+        ]
+       ]
+      },
+      {
+       "h": "Age is counted with tener",
+       "b": "Spanish states age with tener and años: a person has years. Ser is never used for age.",
+       "eg": [
+        [
+         "Tengo diez años",
+         "I am ten years old"
+        ],
+        [
+         "¿Cuántos años tiene?",
+         "How old is he?"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "uno",
+       "e": "one",
+       "ipa": "ˈu.no",
+       "pos": "num"
+      },
+      {
+       "t": "dos",
+       "e": "two",
+       "ipa": "ˈdos",
+       "pos": "num"
+      },
+      {
+       "t": "tres",
+       "e": "three",
+       "ipa": "ˈtɾes",
+       "pos": "num"
+      },
+      {
+       "t": "cuatro",
+       "e": "four",
+       "ipa": "ˈkwa.tɾo",
+       "pos": "num"
+      },
+      {
+       "t": "cinco",
+       "e": "five",
+       "ipa": "ˈsiŋ.ko",
+       "pos": "num"
+      },
+      {
+       "t": "seis",
+       "e": "six",
+       "ipa": "ˈseis",
+       "pos": "num"
+      },
+      {
+       "t": "siete",
+       "e": "seven",
+       "ipa": "ˈsje.te",
+       "pos": "num"
+      },
+      {
+       "t": "ocho",
+       "e": "eight",
+       "ipa": "ˈo.tʃo",
+       "pos": "num"
+      },
+      {
+       "t": "nueve",
+       "e": "nine",
+       "ipa": "ˈnwe.βe",
+       "pos": "num"
+      },
+      {
+       "t": "diez",
+       "e": "ten",
+       "ipa": "ˈdjes",
+       "pos": "num"
+      },
+      {
+       "t": "once",
+       "e": "eleven",
+       "ipa": "ˈon.se",
+       "pos": "num"
+      },
+      {
+       "t": "doce",
+       "e": "twelve",
+       "ipa": "ˈdo.se",
+       "pos": "num"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Tengo dos hermanos",
+       "e": "I have two brothers",
+       "ipa": "ˈteŋ.ɡo dos eɾ.ˈma.nos"
+      },
+      {
+       "t": "Somos cuatro en casa",
+       "e": "There are four of us at home",
+       "ipa": "ˈso.mos ˈkwa.tɾo eŋ ˈka.sa",
+       "lit": "we-are four in house"
+      },
+      {
+       "t": "Ella tiene siete años",
+       "e": "She is seven years old",
+       "ipa": "ˈe.ʝa ˈtje.ne ˈsje.te ˈa.ɲos",
+       "lit": "she has seven years"
+      },
+      {
+       "t": "Cinco y siete son doce",
+       "e": "Five and seven are twelve",
+       "ipa": "ˈsiŋ.ko i ˈsje.te son ˈdo.se"
+      }
+     ]
     }
-  ]
+   ]
+  },
+  {
+   "title": "EVERYDAY",
+   "subtitle": "Food, drink, colour, and the members of a household",
+   "skills": [
+    {
+     "name": "Food",
+     "tips": [
+      {
+       "h": "The article is part of the noun",
+       "b": "A noun is worth learning with its article, because the article is the only visible mark of gender on many words. El pan and la carne give no clue in their endings.",
+       "eg": [
+        [
+         "el pan",
+         "the bread"
+        ],
+        [
+         "la carne",
+         "the meat"
+        ],
+        [
+         "el arroz",
+         "the rice"
+        ],
+        [
+         "la fruta",
+         "the fruit"
+        ]
+       ]
+      },
+      {
+       "h": "Making a noun plural",
+       "b": "A noun ending in a vowel adds -s; a noun ending in a consonant adds -es. The article turns plural with it: el becomes los, la becomes las.",
+       "eg": [
+        [
+         "la manzana",
+         "the apple"
+        ],
+        [
+         "las manzanas",
+         "the apples"
+        ],
+        [
+         "el arroz",
+         "the rice"
+        ],
+        [
+         "los panes",
+         "the loaves"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "comida",
+       "e": "food",
+       "ipa": "ko.ˈmi.ða",
+       "pos": "noun",
+       "note": "la comida (f)"
+      },
+      {
+       "t": "pan",
+       "e": "bread",
+       "ipa": "ˈpan",
+       "pos": "noun",
+       "note": "el pan (m)"
+      },
+      {
+       "t": "carne",
+       "e": "meat",
+       "ipa": "ˈkaɾ.ne",
+       "pos": "noun",
+       "note": "la carne (f)"
+      },
+      {
+       "t": "queso",
+       "e": "cheese",
+       "ipa": "ˈke.so",
+       "pos": "noun",
+       "note": "el queso (m)"
+      },
+      {
+       "t": "manzana",
+       "e": "apple",
+       "ipa": "man.ˈsa.na",
+       "pos": "noun",
+       "note": "la manzana (f)"
+      },
+      {
+       "t": "arroz",
+       "e": "rice",
+       "ipa": "a.ˈros",
+       "pos": "noun",
+       "note": "el arroz (m)"
+      },
+      {
+       "t": "huevo",
+       "e": "egg",
+       "ipa": "ˈwe.βo",
+       "pos": "noun",
+       "note": "el huevo (m)"
+      },
+      {
+       "t": "pollo",
+       "e": "chicken",
+       "ipa": "ˈpo.ʝo",
+       "pos": "noun",
+       "note": "el pollo (m)"
+      },
+      {
+       "t": "pescado",
+       "e": "fish",
+       "ipa": "pes.ˈka.ðo",
+       "pos": "noun",
+       "note": "el pescado (m)"
+      },
+      {
+       "t": "fruta",
+       "e": "fruit",
+       "ipa": "ˈfɾu.ta",
+       "pos": "noun",
+       "note": "la fruta (f)"
+      },
+      {
+       "t": "verdura",
+       "e": "vegetable",
+       "ipa": "beɾ.ˈðu.ɾa",
+       "pos": "noun",
+       "note": "la verdura (f)"
+      },
+      {
+       "t": "sopa",
+       "e": "soup",
+       "ipa": "ˈso.pa",
+       "pos": "noun",
+       "note": "la sopa (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Como pan con queso",
+       "e": "I eat bread with cheese",
+       "ipa": "ˈko.mo ˈpan koŋ ˈke.so"
+      },
+      {
+       "t": "La sopa está caliente",
+       "e": "The soup is hot",
+       "ipa": "la ˈso.pa es.ˈta ka.ˈljen.te"
+      },
+      {
+       "t": "Quiero arroz con pollo",
+       "e": "I want rice with chicken",
+       "ipa": "ˈkje.ɾo a.ˈros kom ˈpo.ʝo"
+      },
+      {
+       "t": "La fruta es buena",
+       "e": "The fruit is good",
+       "ipa": "la ˈfɾu.ta es ˈbwe.na"
+      }
+     ]
+    },
+    {
+     "name": "Drinks",
+     "tips": [
+      {
+       "h": "El agua is feminine",
+       "b": "A feminine noun beginning with a stressed a takes el in the singular, to keep two a sounds apart. The adjective stays feminine, and the plural returns to las.",
+       "eg": [
+        [
+         "el agua fría",
+         "the cold water"
+        ],
+        [
+         "las aguas",
+         "the waters"
+        ]
+       ]
+      },
+      {
+       "h": "Beber and tomar",
+       "b": "Beber names the act of drinking. Tomar covers the same ground in most of Latin America and is the more common choice in speech.",
+       "eg": [
+        [
+         "Bebo agua",
+         "I drink water"
+        ],
+        [
+         "Tomo café",
+         "I drink coffee"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "agua",
+       "e": "water",
+       "ipa": "ˈa.ɣwa",
+       "pos": "noun",
+       "note": "el agua (f)"
+      },
+      {
+       "t": "leche",
+       "e": "milk",
+       "ipa": "ˈle.tʃe",
+       "pos": "noun",
+       "note": "la leche (f)"
+      },
+      {
+       "t": "café",
+       "e": "coffee",
+       "ipa": "ka.ˈfe",
+       "pos": "noun",
+       "note": "el café (m)"
+      },
+      {
+       "t": "té",
+       "e": "tea",
+       "ipa": "ˈte",
+       "pos": "noun",
+       "note": "el té (m)"
+      },
+      {
+       "t": "jugo",
+       "e": "juice",
+       "ipa": "ˈxu.ɣo",
+       "pos": "noun",
+       "note": "el jugo (m)"
+      },
+      {
+       "t": "vino",
+       "e": "wine",
+       "ipa": "ˈbi.no",
+       "pos": "noun",
+       "note": "el vino (m)"
+      },
+      {
+       "t": "cerveza",
+       "e": "beer",
+       "ipa": "seɾ.ˈβe.sa",
+       "pos": "noun",
+       "note": "la cerveza (f)"
+      },
+      {
+       "t": "refresco",
+       "e": "soda",
+       "ipa": "re.ˈfɾes.ko",
+       "pos": "noun",
+       "note": "el refresco (m)"
+      },
+      {
+       "t": "hielo",
+       "e": "ice",
+       "ipa": "ˈʝe.lo",
+       "pos": "noun",
+       "note": "el hielo (m)"
+      },
+      {
+       "t": "vaso",
+       "e": "glass",
+       "ipa": "ˈba.so",
+       "pos": "noun",
+       "note": "el vaso (m)"
+      },
+      {
+       "t": "taza",
+       "e": "cup",
+       "ipa": "ˈta.sa",
+       "pos": "noun",
+       "note": "la taza (f)"
+      },
+      {
+       "t": "botella",
+       "e": "bottle",
+       "ipa": "bo.ˈte.ʝa",
+       "pos": "noun",
+       "note": "la botella (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Bebo agua con hielo",
+       "e": "I drink water with ice",
+       "ipa": "ˈbe.βo ˈa.ɣwa koŋ ˈʝe.lo"
+      },
+      {
+       "t": "Una taza de café",
+       "e": "A cup of coffee",
+       "ipa": "ˈu.na ˈta.sa ðe ka.ˈfe"
+      },
+      {
+       "t": "El jugo está frío",
+       "e": "The juice is cold",
+       "ipa": "el ˈxu.ɣo es.ˈta ˈfɾi.o"
+      },
+      {
+       "t": "Quiero un vaso de leche",
+       "e": "I want a glass of milk",
+       "ipa": "ˈkje.ɾo un ˈba.so ðe ˈle.tʃe"
+      }
+     ]
+    },
+    {
+     "name": "Colors",
+     "tips": [
+      {
+       "h": "Colours follow the noun",
+       "b": "A Spanish adjective normally stands after the noun it describes, the reverse of English order.",
+       "eg": [
+        [
+         "la casa blanca",
+         "the white house"
+        ],
+        [
+         "un carro rojo",
+         "a red car"
+        ],
+        [
+         "los zapatos negros",
+         "the black shoes"
+        ]
+       ]
+      },
+      {
+       "h": "Adjectives agree with the noun",
+       "b": "An adjective ending in -o has four forms: rojo, roja, rojos, rojas. An adjective ending in -e or in a consonant changes only for number: verde, verdes, azul, azules.",
+       "eg": [
+        [
+         "la manzana roja",
+         "the red apple"
+        ],
+        [
+         "las flores amarillas",
+         "the yellow flowers"
+        ],
+        [
+         "los ojos azules",
+         "the blue eyes"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "rojo",
+       "e": "red",
+       "ipa": "ˈro.xo",
+       "pos": "adj"
+      },
+      {
+       "t": "azul",
+       "e": "blue",
+       "ipa": "a.ˈsul",
+       "pos": "adj"
+      },
+      {
+       "t": "verde",
+       "e": "green",
+       "ipa": "ˈbeɾ.ðe",
+       "pos": "adj"
+      },
+      {
+       "t": "amarillo",
+       "e": "yellow",
+       "ipa": "a.ma.ˈɾi.ʝo",
+       "pos": "adj"
+      },
+      {
+       "t": "negro",
+       "e": "black",
+       "ipa": "ˈne.ɣɾo",
+       "pos": "adj"
+      },
+      {
+       "t": "blanco",
+       "e": "white",
+       "ipa": "ˈblaŋ.ko",
+       "pos": "adj"
+      },
+      {
+       "t": "gris",
+       "e": "gray",
+       "ipa": "ˈɡɾis",
+       "pos": "adj"
+      },
+      {
+       "t": "marrón",
+       "e": "brown",
+       "ipa": "ma.ˈron",
+       "pos": "adj"
+      },
+      {
+       "t": "naranja",
+       "e": "orange",
+       "ipa": "na.ˈɾaŋ.xa",
+       "pos": "adj",
+       "note": "one form only"
+      },
+      {
+       "t": "rosado",
+       "e": "pink",
+       "ipa": "ro.ˈsa.ðo",
+       "pos": "adj"
+      },
+      {
+       "t": "morado",
+       "e": "purple",
+       "ipa": "mo.ˈɾa.ðo",
+       "pos": "adj"
+      },
+      {
+       "t": "oscuro",
+       "e": "dark",
+       "ipa": "os.ˈku.ɾo",
+       "pos": "adj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La manzana es roja",
+       "e": "The apple is red",
+       "ipa": "la man.ˈsa.na es ˈro.xa"
+      },
+      {
+       "t": "Tengo un gato negro",
+       "e": "I have a black cat",
+       "ipa": "ˈteŋ.ɡo uŋ ˈɡa.to ˈne.ɣɾo"
+      },
+      {
+       "t": "Las flores son amarillas",
+       "e": "The flowers are yellow",
+       "ipa": "las ˈflo.ɾes son a.ma.ˈɾi.ʝas"
+      },
+      {
+       "t": "El cielo es azul",
+       "e": "The sky is blue",
+       "ipa": "el ˈsje.lo es a.ˈsul"
+      }
+     ]
+    },
+    {
+     "name": "Family",
+     "tips": [
+      {
+       "h": "A masculine plural covers both",
+       "b": "The masculine plural names a mixed group: los hermanos is brothers, or brothers and sisters together. Los padres means the parents.",
+       "eg": [
+        [
+         "los hermanos",
+         "the siblings"
+        ],
+        [
+         "los padres",
+         "the parents"
+        ],
+        [
+         "los hijos",
+         "the children"
+        ]
+       ]
+      },
+      {
+       "h": "My, your, his and her",
+       "b": "Mi, tu and su stand before the noun and agree only in number: mi hermano, mis hermanos. Su covers his, her, their and the possessive of usted.",
+       "eg": [
+        [
+         "mi madre",
+         "my mother"
+        ],
+        [
+         "mis hijos",
+         "my children"
+        ],
+        [
+         "su familia",
+         "his family"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "familia",
+       "e": "family",
+       "ipa": "fa.ˈmi.lja",
+       "pos": "noun",
+       "note": "la familia (f)"
+      },
+      {
+       "t": "padre",
+       "e": "father",
+       "ipa": "ˈpa.ðɾe",
+       "pos": "noun",
+       "note": "el padre (m)"
+      },
+      {
+       "t": "madre",
+       "e": "mother",
+       "ipa": "ˈma.ðɾe",
+       "pos": "noun",
+       "note": "la madre (f)"
+      },
+      {
+       "t": "hijo",
+       "e": "son",
+       "ipa": "ˈi.xo",
+       "pos": "noun",
+       "note": "el hijo (m)"
+      },
+      {
+       "t": "hija",
+       "e": "daughter",
+       "ipa": "ˈi.xa",
+       "pos": "noun",
+       "note": "la hija (f)"
+      },
+      {
+       "t": "hermano",
+       "e": "brother",
+       "ipa": "eɾ.ˈma.no",
+       "pos": "noun",
+       "note": "el hermano (m)"
+      },
+      {
+       "t": "hermana",
+       "e": "sister",
+       "ipa": "eɾ.ˈma.na",
+       "pos": "noun",
+       "note": "la hermana (f)"
+      },
+      {
+       "t": "abuelo",
+       "e": "grandfather",
+       "ipa": "a.ˈβwe.lo",
+       "pos": "noun",
+       "note": "el abuelo (m)"
+      },
+      {
+       "t": "abuela",
+       "e": "grandmother",
+       "ipa": "a.ˈβwe.la",
+       "pos": "noun",
+       "note": "la abuela (f)"
+      },
+      {
+       "t": "esposo",
+       "e": "husband",
+       "ipa": "es.ˈpo.so",
+       "pos": "noun",
+       "note": "el esposo (m)"
+      },
+      {
+       "t": "esposa",
+       "e": "wife",
+       "ipa": "es.ˈpo.sa",
+       "pos": "noun",
+       "note": "la esposa (f)"
+      },
+      {
+       "t": "amigo",
+       "e": "friend",
+       "ipa": "a.ˈmi.ɣo",
+       "pos": "noun",
+       "note": "el amigo (m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ella es mi amiga",
+       "e": "She is my friend",
+       "ipa": "ˈe.ʝa es mi a.ˈmi.ɣa"
+      },
+      {
+       "t": "Mi padre tiene dos hermanas",
+       "e": "My father has two sisters",
+       "ipa": "mi ˈpa.ðɾe ˈtje.ne dos eɾ.ˈma.nas"
+      },
+      {
+       "t": "Somos una familia grande",
+       "e": "We are a big family",
+       "ipa": "ˈso.mos ˈu.na fa.ˈmi.lja ˈɡɾan.de"
+      },
+      {
+       "t": "Mi abuela vive aquí",
+       "e": "My grandmother lives here",
+       "ipa": "mi a.ˈβwe.la ˈbi.βe a.ˈki"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "ACTIONS",
+   "subtitle": "The present tense, describing words, questions, and how to say no",
+   "skills": [
+    {
+     "name": "Verbs",
+     "tips": [
+      {
+       "h": "Three infinitive endings",
+       "b": "Every Spanish verb ends in -ar, -er or -ir. The ending is dropped and a personal ending is added in its place. For an -ar verb such as hablar the present tense runs -o, -as, -a, -amos, -an.",
+       "eg": [
+        [
+         "yo hablo",
+         "I speak"
+        ],
+        [
+         "tú hablas",
+         "you speak"
+        ],
+        [
+         "él habla",
+         "he speaks"
+        ],
+        [
+         "nosotros hablamos",
+         "we speak"
+        ]
+       ]
+      },
+      {
+       "h": "The -er and -ir endings",
+       "b": "An -er verb takes -o, -es, -e, -emos, -en. An -ir verb matches it except in the nosotros form, which ends -imos. The ustedes and ellos form ends -en for both.",
+       "eg": [
+        [
+         "yo como",
+         "I eat"
+        ],
+        [
+         "tú comes",
+         "you eat"
+        ],
+        [
+         "nosotros comemos",
+         "we eat"
+        ],
+        [
+         "nosotros vivimos",
+         "we live"
+        ]
+       ]
+      },
+      {
+       "h": "Ser and estar",
+       "b": "Ser states what something is: identity, origin, profession and lasting traits. Estar states how or where something is at the moment: location, health and mood.",
+       "eg": [
+        [
+         "Ella es maestra",
+         "She is a teacher"
+        ],
+        [
+         "Ella está cansada",
+         "She is tired"
+        ],
+        [
+         "El café es bueno",
+         "The coffee is good"
+        ],
+        [
+         "El café está frío",
+         "The coffee is cold"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ser",
+       "e": "to be",
+       "ipa": "ˈseɾ",
+       "pos": "verb",
+       "note": "identity, traits"
+      },
+      {
+       "t": "estar",
+       "e": "to be (state)",
+       "ipa": "es.ˈtaɾ",
+       "pos": "verb",
+       "note": "state, location"
+      },
+      {
+       "t": "tener",
+       "e": "to have",
+       "ipa": "te.ˈneɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "hablar",
+       "e": "to speak",
+       "ipa": "a.ˈβlaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "comer",
+       "e": "to eat",
+       "ipa": "ko.ˈmeɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "beber",
+       "e": "to drink",
+       "ipa": "be.ˈβeɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "vivir",
+       "e": "to live",
+       "ipa": "bi.ˈβiɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "ir",
+       "e": "to go",
+       "ipa": "ˈiɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "ver",
+       "e": "to see",
+       "ipa": "ˈbeɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "hacer",
+       "e": "to do",
+       "ipa": "a.ˈseɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "aprender",
+       "e": "to learn",
+       "ipa": "a.pɾen.ˈdeɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "trabajar",
+       "e": "to work",
+       "ipa": "tɾa.βa.ˈxaɾ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Hablo español todos los días",
+       "e": "I speak Spanish every day",
+       "ipa": "ˈa.βlo es.pa.ˈɲol ˈto.ðos los ˈði.as"
+      },
+      {
+       "t": "Ella trabaja en la ciudad",
+       "e": "She works in the city",
+       "ipa": "ˈe.ʝa tɾa.ˈβa.xa en la sju.ˈðað"
+      },
+      {
+       "t": "Vivimos en una casa grande",
+       "e": "We live in a big house",
+       "ipa": "bi.ˈβi.mos en ˈu.na ˈka.sa ˈɡɾan.de"
+      },
+      {
+       "t": "Aprendo español en casa",
+       "e": "I learn Spanish at home",
+       "ipa": "a.ˈpɾen.do es.pa.ˈɲol eŋ ˈka.sa"
+      }
+     ]
+    },
+    {
+     "name": "Adjectives",
+     "tips": [
+      {
+       "h": "An adjective agrees in gender",
+       "b": "An adjective takes the gender and number of the noun it describes: un libro nuevo, una casa nueva, unos libros nuevos, unas casas nuevas.",
+       "eg": [
+        [
+         "el carro viejo",
+         "the old car"
+        ],
+        [
+         "la casa vieja",
+         "the old house"
+        ],
+        [
+         "los carros viejos",
+         "the old cars"
+        ]
+       ]
+      },
+      {
+       "h": "Bueno and malo shorten",
+       "b": "Bueno and malo drop the final -o before a masculine singular noun. Grande shortens to gran before any singular noun, and in that position it praises the noun instead of measuring it.",
+       "eg": [
+        [
+         "un buen día",
+         "a good day"
+        ],
+        [
+         "un mal año",
+         "a bad year"
+        ],
+        [
+         "una gran mujer",
+         "a great woman"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "grande",
+       "e": "big",
+       "ipa": "ˈɡɾan.de",
+       "pos": "adj"
+      },
+      {
+       "t": "pequeño",
+       "e": "small",
+       "ipa": "pe.ˈke.ɲo",
+       "pos": "adj"
+      },
+      {
+       "t": "bueno",
+       "e": "good",
+       "ipa": "ˈbwe.no",
+       "pos": "adj"
+      },
+      {
+       "t": "malo",
+       "e": "bad",
+       "ipa": "ˈma.lo",
+       "pos": "adj"
+      },
+      {
+       "t": "nuevo",
+       "e": "new",
+       "ipa": "ˈnwe.βo",
+       "pos": "adj"
+      },
+      {
+       "t": "viejo",
+       "e": "old",
+       "ipa": "ˈbje.xo",
+       "pos": "adj"
+      },
+      {
+       "t": "bonito",
+       "e": "pretty",
+       "ipa": "bo.ˈni.to",
+       "pos": "adj"
+      },
+      {
+       "t": "feo",
+       "e": "ugly",
+       "ipa": "ˈfe.o",
+       "pos": "adj"
+      },
+      {
+       "t": "largo",
+       "e": "long",
+       "ipa": "ˈlaɾ.ɣo",
+       "pos": "adj"
+      },
+      {
+       "t": "corto",
+       "e": "short",
+       "ipa": "ˈkoɾ.to",
+       "pos": "adj"
+      },
+      {
+       "t": "fácil",
+       "e": "easy",
+       "ipa": "ˈfa.sil",
+       "pos": "adj"
+      },
+      {
+       "t": "difícil",
+       "e": "hard",
+       "ipa": "di.ˈfi.sil",
+       "pos": "adj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "El libro es muy fácil",
+       "e": "The book is very easy",
+       "ipa": "el ˈli.βɾo es ˈmuj ˈfa.sil"
+      },
+      {
+       "t": "Mi casa es pequeña",
+       "e": "My house is small",
+       "ipa": "mi ˈka.sa es pe.ˈke.ɲa"
+      },
+      {
+       "t": "Las calles son largas",
+       "e": "The streets are long",
+       "ipa": "las ˈka.ʝes son ˈlaɾ.ɣas"
+      },
+      {
+       "t": "Es un día bonito",
+       "e": "It is a pretty day",
+       "ipa": "es un ˈdi.a βo.ˈni.to"
+      }
+     ]
+    },
+    {
+     "name": "Questions",
+     "tips": [
+      {
+       "h": "Question words carry an accent",
+       "b": "Qué, quién, dónde, cuándo, cómo and cuánto take a written accent when they ask. The same words without the accent introduce a statement.",
+       "eg": [
+        [
+         "¿Qué comes?",
+         "What are you eating?"
+        ],
+        [
+         "Sé que comes",
+         "I know that you eat"
+        ],
+        [
+         "¿Dónde vive?",
+         "Where does he live?"
+        ]
+       ]
+      },
+      {
+       "h": "The subject follows the verb",
+       "b": "A question puts the verb before its subject, and no extra word stands in for the English do or does.",
+       "eg": [
+        [
+         "¿Dónde vive Ana?",
+         "Where does Ana live?"
+        ],
+        [
+         "¿Qué quiere el niño?",
+         "What does the boy want?"
+        ]
+       ]
+      },
+      {
+       "h": "Por qué and porque",
+       "b": "Two words with an accent ask the question; one word without an accent gives the reason.",
+       "eg": [
+        [
+         "¿Por qué no comes?",
+         "Why are you not eating?"
+        ],
+        [
+         "Porque no tengo hambre",
+         "Because I am not hungry"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "qué",
+       "e": "what",
+       "ipa": "ˈke",
+       "pos": "pron"
+      },
+      {
+       "t": "quién",
+       "e": "who",
+       "ipa": "ˈkjen",
+       "pos": "pron"
+      },
+      {
+       "t": "cuál",
+       "e": "which",
+       "ipa": "ˈkwal",
+       "pos": "pron"
+      },
+      {
+       "t": "cuánto",
+       "e": "how much",
+       "ipa": "ˈkwan.to",
+       "pos": "pron"
+      },
+      {
+       "t": "dónde",
+       "e": "where",
+       "ipa": "ˈdon.de",
+       "pos": "adv"
+      },
+      {
+       "t": "cuándo",
+       "e": "when",
+       "ipa": "ˈkwan.do",
+       "pos": "adv"
+      },
+      {
+       "t": "cómo",
+       "e": "how",
+       "ipa": "ˈko.mo",
+       "pos": "adv"
+      },
+      {
+       "t": "por qué",
+       "e": "why",
+       "ipa": "poɾ ˈke",
+       "pos": "adv"
+      },
+      {
+       "t": "porque",
+       "e": "because",
+       "ipa": "ˈpoɾ.ke",
+       "pos": "conj"
+      },
+      {
+       "t": "preguntar",
+       "e": "to ask",
+       "ipa": "pɾe.ɣun.ˈtaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "pregunta",
+       "e": "question",
+       "ipa": "pɾe.ˈɣun.ta",
+       "pos": "noun",
+       "note": "la pregunta (f)"
+      },
+      {
+       "t": "respuesta",
+       "e": "answer",
+       "ipa": "res.ˈpwes.ta",
+       "pos": "noun",
+       "note": "la respuesta (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "¿Dónde vive la familia?",
+       "e": "Where does the family live?",
+       "ipa": "ˈdon.de ˈbi.βe la fa.ˈmi.lja"
+      },
+      {
+       "t": "¿Quién es esa mujer?",
+       "e": "Who is that woman?",
+       "ipa": "ˈkjen es ˈe.sa mu.ˈxeɾ"
+      },
+      {
+       "t": "¿Cuánto cuesta el café?",
+       "e": "How much is the coffee?",
+       "ipa": "ˈkwan.to ˈkwes.ta el ka.ˈfe"
+      },
+      {
+       "t": "La respuesta es fácil",
+       "e": "The answer is easy",
+       "ipa": "la res.ˈpwes.ta es ˈfa.sil"
+      }
+     ]
+    },
+    {
+     "name": "Negation",
+     "tips": [
+      {
+       "h": "No goes before the verb",
+       "b": "A sentence is negated by placing no directly in front of the verb. Nothing else changes.",
+       "eg": [
+        [
+         "No hablo inglés",
+         "I do not speak English"
+        ],
+        [
+         "Ella no come carne",
+         "She does not eat meat"
+        ]
+       ]
+      },
+      {
+       "h": "Two negatives are required",
+       "b": "When nada, nadie, nunca or ninguno stand after the verb, no must also stand before it. The double negative is the correct form, not an error.",
+       "eg": [
+        [
+         "No veo nada",
+         "I see nothing"
+        ],
+        [
+         "No viene nadie",
+         "Nobody is coming"
+        ],
+        [
+         "Nunca como carne",
+         "I never eat meat"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "no",
+       "e": "no",
+       "ipa": "ˈno",
+       "pos": "adv",
+       "note": "also negates a verb"
+      },
+      {
+       "t": "nada",
+       "e": "nothing",
+       "ipa": "ˈna.ða",
+       "pos": "pron"
+      },
+      {
+       "t": "algo",
+       "e": "something",
+       "ipa": "ˈal.ɣo",
+       "pos": "pron"
+      },
+      {
+       "t": "nadie",
+       "e": "nobody",
+       "ipa": "ˈna.ðje",
+       "pos": "pron"
+      },
+      {
+       "t": "alguien",
+       "e": "somebody",
+       "ipa": "ˈal.ɣjen",
+       "pos": "pron"
+      },
+      {
+       "t": "ninguno",
+       "e": "none",
+       "ipa": "niŋ.ˈɡu.no",
+       "pos": "pron"
+      },
+      {
+       "t": "todo",
+       "e": "everything",
+       "ipa": "ˈto.ðo",
+       "pos": "pron"
+      },
+      {
+       "t": "nunca",
+       "e": "never",
+       "ipa": "ˈnuŋ.ka",
+       "pos": "adv"
+      },
+      {
+       "t": "siempre",
+       "e": "always",
+       "ipa": "ˈsjem.pɾe",
+       "pos": "adv"
+      },
+      {
+       "t": "tampoco",
+       "e": "neither",
+       "ipa": "tam.ˈpo.ko",
+       "pos": "adv"
+      },
+      {
+       "t": "pero",
+       "e": "but",
+       "ipa": "ˈpe.ɾo",
+       "pos": "conj"
+      },
+      {
+       "t": "negar",
+       "e": "to deny",
+       "ipa": "ne.ˈɣaɾ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "No tengo nada aquí",
+       "e": "I have nothing here",
+       "ipa": "ˈno ˈteŋ.ɡo ˈna.ða a.ˈki",
+       "lit": "not I-have nothing here"
+      },
+      {
+       "t": "Nunca como carne",
+       "e": "I never eat meat",
+       "ipa": "ˈnuŋ.ka ˈko.mo ˈkaɾ.ne"
+      },
+      {
+       "t": "No hay nadie en casa",
+       "e": "There is nobody at home",
+       "ipa": "ˈno ˈai ˈna.ðje eŋ ˈka.sa"
+      },
+      {
+       "t": "Ella no bebe café",
+       "e": "She does not drink coffee",
+       "ipa": "ˈe.ʝa ˈno ˈbe.βe ka.ˈfe"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "AT HOME",
+   "subtitle": "The rooms of a house, what stands in them, clothing, and animals",
+   "skills": [
+    {
+     "name": "House",
+     "tips": [
+      {
+       "h": "Hay states what exists",
+       "b": "Hay is one form for both there is and there are. It never changes for number, and it takes un, una, a number or no article at all, never el or la.",
+       "eg": [
+        [
+         "Hay una puerta",
+         "There is a door"
+        ],
+        [
+         "Hay dos ventanas",
+         "There are two windows"
+        ],
+        [
+         "No hay pan",
+         "There is no bread"
+        ]
+       ]
+      },
+      {
+       "h": "Endings that fix the gender",
+       "b": "Gender is readable beyond -o and -a. Nouns ending in -ción, -sión, -dad and -tad are feminine; nouns ending in -aje, -or and -ma from Greek are masculine.",
+       "eg": [
+        [
+         "la ciudad",
+         "the city"
+        ],
+        [
+         "la estación",
+         "the station"
+        ],
+        [
+         "el color",
+         "the color"
+        ],
+        [
+         "el viaje",
+         "the trip"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "casa",
+       "e": "house",
+       "ipa": "ˈka.sa",
+       "pos": "noun",
+       "note": "la casa (f)"
+      },
+      {
+       "t": "cuarto",
+       "e": "room",
+       "ipa": "ˈkwaɾ.to",
+       "pos": "noun",
+       "note": "el cuarto (m)"
+      },
+      {
+       "t": "cocina",
+       "e": "kitchen",
+       "ipa": "ko.ˈsi.na",
+       "pos": "noun",
+       "note": "la cocina (f)"
+      },
+      {
+       "t": "baño",
+       "e": "bathroom",
+       "ipa": "ˈba.ɲo",
+       "pos": "noun",
+       "note": "el baño (m)"
+      },
+      {
+       "t": "sala",
+       "e": "living room",
+       "ipa": "ˈsa.la",
+       "pos": "noun",
+       "note": "la sala (f)"
+      },
+      {
+       "t": "puerta",
+       "e": "door",
+       "ipa": "ˈpweɾ.ta",
+       "pos": "noun",
+       "note": "la puerta (f)"
+      },
+      {
+       "t": "ventana",
+       "e": "window",
+       "ipa": "ben.ˈta.na",
+       "pos": "noun",
+       "note": "la ventana (f)"
+      },
+      {
+       "t": "piso",
+       "e": "floor",
+       "ipa": "ˈpi.so",
+       "pos": "noun",
+       "note": "el piso (m)"
+      },
+      {
+       "t": "techo",
+       "e": "roof",
+       "ipa": "ˈte.tʃo",
+       "pos": "noun",
+       "note": "el techo (m)"
+      },
+      {
+       "t": "pared",
+       "e": "wall",
+       "ipa": "pa.ˈɾeð",
+       "pos": "noun",
+       "note": "la pared (f)"
+      },
+      {
+       "t": "jardín",
+       "e": "garden",
+       "ipa": "xaɾ.ˈðin",
+       "pos": "noun",
+       "note": "el jardín (m)"
+      },
+      {
+       "t": "llave",
+       "e": "key",
+       "ipa": "ˈʝa.βe",
+       "pos": "noun",
+       "note": "la llave (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La cocina tiene una ventana",
+       "e": "The kitchen has a window",
+       "ipa": "la ko.ˈsi.na ˈtje.ne ˈu.na βen.ˈta.na"
+      },
+      {
+       "t": "Hay dos cuartos aquí",
+       "e": "There are two rooms here",
+       "ipa": "ˈai dos ˈkwaɾ.tos a.ˈki"
+      },
+      {
+       "t": "La llave está en la puerta",
+       "e": "The key is in the door",
+       "ipa": "la ˈʝa.βe es.ˈta en la ˈpweɾ.ta"
+      },
+      {
+       "t": "Mi casa tiene un jardín",
+       "e": "My house has a garden",
+       "ipa": "mi ˈka.sa ˈtje.ne un xaɾ.ˈðin"
+      }
+     ]
+    },
+    {
+     "name": "Objects",
+     "tips": [
+      {
+       "h": "This one and that one",
+       "b": "Este points at what is near the speaker, ese at what is further away. Both agree with the noun: este plato, esta mesa, estos platos, estas mesas.",
+       "eg": [
+        [
+         "este libro",
+         "this book"
+        ],
+        [
+         "esta silla",
+         "this chair"
+        ],
+        [
+         "ese plato",
+         "that plate"
+        ],
+        [
+         "esas camas",
+         "those beds"
+        ]
+       ]
+      },
+      {
+       "h": "De links two nouns",
+       "b": "Possession is built with de, running from the thing owned to the owner. There is no apostrophe form in Spanish, and de plus el contracts to del.",
+       "eg": [
+        [
+         "la puerta de la casa",
+         "the door of the house"
+        ],
+        [
+         "el libro de Ana",
+         "Ana's book"
+        ],
+        [
+         "la llave del cuarto",
+         "the key of the room"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "mesa",
+       "e": "table",
+       "ipa": "ˈme.sa",
+       "pos": "noun",
+       "note": "la mesa (f)"
+      },
+      {
+       "t": "silla",
+       "e": "chair",
+       "ipa": "ˈsi.ʝa",
+       "pos": "noun",
+       "note": "la silla (f)"
+      },
+      {
+       "t": "cama",
+       "e": "bed",
+       "ipa": "ˈka.ma",
+       "pos": "noun",
+       "note": "la cama (f)"
+      },
+      {
+       "t": "libro",
+       "e": "book",
+       "ipa": "ˈli.βɾo",
+       "pos": "noun",
+       "note": "el libro (m)"
+      },
+      {
+       "t": "lámpara",
+       "e": "lamp",
+       "ipa": "ˈlam.pa.ɾa",
+       "pos": "noun",
+       "note": "la lámpara (f)"
+      },
+      {
+       "t": "plato",
+       "e": "plate",
+       "ipa": "ˈpla.to",
+       "pos": "noun",
+       "note": "el plato (m)"
+      },
+      {
+       "t": "cuchillo",
+       "e": "knife",
+       "ipa": "ku.ˈtʃi.ʝo",
+       "pos": "noun",
+       "note": "el cuchillo (m)"
+      },
+      {
+       "t": "tenedor",
+       "e": "fork",
+       "ipa": "te.ne.ˈðoɾ",
+       "pos": "noun",
+       "note": "el tenedor (m)"
+      },
+      {
+       "t": "cuchara",
+       "e": "spoon",
+       "ipa": "ku.ˈtʃa.ɾa",
+       "pos": "noun",
+       "note": "la cuchara (f)"
+      },
+      {
+       "t": "este",
+       "e": "this",
+       "ipa": "ˈes.te",
+       "pos": "det",
+       "note": "esta before f nouns"
+      },
+      {
+       "t": "ese",
+       "e": "that",
+       "ipa": "ˈe.se",
+       "pos": "det",
+       "note": "esa before f nouns"
+      },
+      {
+       "t": "sobre",
+       "e": "on",
+       "ipa": "ˈso.βɾe",
+       "pos": "prep",
+       "note": "on top of"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "El libro está sobre la mesa",
+       "e": "The book is on the table",
+       "ipa": "el ˈli.βɾo es.ˈta ˈso.βɾe la ˈme.sa"
+      },
+      {
+       "t": "Esta silla es nueva",
+       "e": "This chair is new",
+       "ipa": "ˈes.ta ˈsi.ʝa es ˈnwe.βa"
+      },
+      {
+       "t": "Hay dos platos en la cocina",
+       "e": "There are two plates in the kitchen",
+       "ipa": "ˈai dos ˈpla.tos en la ko.ˈsi.na"
+      },
+      {
+       "t": "La lámpara es muy vieja",
+       "e": "The lamp is very old",
+       "ipa": "la ˈlam.pa.ɾa es ˈmuj ˈbje.xa"
+      }
+     ]
+    },
+    {
+     "name": "Clothing",
+     "tips": [
+      {
+       "h": "Llevar covers wearing and carrying",
+       "b": "Llevar names both what a person has on and what a person carries along. Usar also serves for wearing a garment or a size.",
+       "eg": [
+        [
+         "Llevo un abrigo",
+         "I am wearing a coat"
+        ],
+        [
+         "Llevo la maleta",
+         "I am carrying the suitcase"
+        ],
+        [
+         "Uso talla ocho",
+         "I wear size eight"
+        ]
+       ]
+      },
+      {
+       "h": "Garments and their colour",
+       "b": "The colour word stands after the garment and agrees with it in gender and number.",
+       "eg": [
+        [
+         "una camisa blanca",
+         "a white shirt"
+        ],
+        [
+         "unos zapatos negros",
+         "black shoes"
+        ],
+        [
+         "la falda roja",
+         "the red skirt"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ropa",
+       "e": "clothes",
+       "ipa": "ˈro.pa",
+       "pos": "noun",
+       "note": "la ropa (f)"
+      },
+      {
+       "t": "camisa",
+       "e": "shirt",
+       "ipa": "ka.ˈmi.sa",
+       "pos": "noun",
+       "note": "la camisa (f)"
+      },
+      {
+       "t": "pantalón",
+       "e": "pants",
+       "ipa": "pan.ta.ˈlon",
+       "pos": "noun",
+       "note": "el pantalón (m)"
+      },
+      {
+       "t": "falda",
+       "e": "skirt",
+       "ipa": "ˈfal.da",
+       "pos": "noun",
+       "note": "la falda (f)"
+      },
+      {
+       "t": "vestido",
+       "e": "dress",
+       "ipa": "bes.ˈti.ðo",
+       "pos": "noun",
+       "note": "el vestido (m)"
+      },
+      {
+       "t": "zapato",
+       "e": "shoe",
+       "ipa": "sa.ˈpa.to",
+       "pos": "noun",
+       "note": "el zapato (m)"
+      },
+      {
+       "t": "calcetín",
+       "e": "sock",
+       "ipa": "kal.se.ˈtin",
+       "pos": "noun",
+       "note": "el calcetín (m)"
+      },
+      {
+       "t": "sombrero",
+       "e": "hat",
+       "ipa": "som.ˈbɾe.ɾo",
+       "pos": "noun",
+       "note": "el sombrero (m)"
+      },
+      {
+       "t": "abrigo",
+       "e": "coat",
+       "ipa": "a.ˈβɾi.ɣo",
+       "pos": "noun",
+       "note": "el abrigo (m)"
+      },
+      {
+       "t": "chaqueta",
+       "e": "jacket",
+       "ipa": "tʃa.ˈke.ta",
+       "pos": "noun",
+       "note": "la chaqueta (f)"
+      },
+      {
+       "t": "bolsa",
+       "e": "bag",
+       "ipa": "ˈbol.sa",
+       "pos": "noun",
+       "note": "la bolsa (f)"
+      },
+      {
+       "t": "llevar",
+       "e": "to wear",
+       "ipa": "ʝe.ˈβaɾ",
+       "pos": "verb",
+       "note": "also: to carry"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Llevo una camisa blanca",
+       "e": "I am wearing a white shirt",
+       "ipa": "ˈʝe.βo ˈu.na ka.ˈmi.sa ˈblaŋ.ka"
+      },
+      {
+       "t": "Los zapatos son negros",
+       "e": "The shoes are black",
+       "ipa": "los sa.ˈpa.tos son ˈne.ɣɾos"
+      },
+      {
+       "t": "Mi abrigo está en la silla",
+       "e": "My coat is on the chair",
+       "ipa": "mi a.ˈβɾi.ɣo es.ˈta en la ˈsi.ʝa"
+      },
+      {
+       "t": "Ella lleva un vestido rojo",
+       "e": "She is wearing a red dress",
+       "ipa": "ˈe.ʝa ˈʝe.βa um bes.ˈti.ðo ˈro.xo"
+      }
+     ]
+    },
+    {
+     "name": "Animals",
+     "tips": [
+      {
+       "h": "The rolled rr",
+       "b": "A double rr between vowels is trilled, and a single r at the start of a word is trilled as well. A single r elsewhere is one short tap. The difference separates two words.",
+       "eg": [
+        [
+         "perro",
+         "dog"
+        ],
+        [
+         "pero",
+         "but"
+        ],
+        [
+         "ratón",
+         "mouse"
+        ],
+        [
+         "caro",
+         "expensive"
+        ]
+       ]
+      },
+      {
+       "h": "One gender for the animal",
+       "b": "Most animal names carry a fixed gender that says nothing about the animal: la araña and el ratón keep their article for either sex. A few pairs do change, such as el gato and la gata.",
+       "eg": [
+        [
+         "la araña",
+         "the spider"
+        ],
+        [
+         "el pez",
+         "the fish"
+        ],
+        [
+         "la gata",
+         "the female cat"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "perro",
+       "e": "dog",
+       "ipa": "ˈpe.ro",
+       "pos": "noun",
+       "note": "el perro (m)"
+      },
+      {
+       "t": "gato",
+       "e": "cat",
+       "ipa": "ˈɡa.to",
+       "pos": "noun",
+       "note": "el gato (m)"
+      },
+      {
+       "t": "pájaro",
+       "e": "bird",
+       "ipa": "ˈpa.xa.ɾo",
+       "pos": "noun",
+       "note": "el pájaro (m)"
+      },
+      {
+       "t": "caballo",
+       "e": "horse",
+       "ipa": "ka.ˈβa.ʝo",
+       "pos": "noun",
+       "note": "el caballo (m)"
+      },
+      {
+       "t": "vaca",
+       "e": "cow",
+       "ipa": "ˈba.ka",
+       "pos": "noun",
+       "note": "la vaca (f)"
+      },
+      {
+       "t": "cerdo",
+       "e": "pig",
+       "ipa": "ˈseɾ.ðo",
+       "pos": "noun",
+       "note": "el cerdo (m)"
+      },
+      {
+       "t": "oveja",
+       "e": "sheep",
+       "ipa": "o.ˈβe.xa",
+       "pos": "noun",
+       "note": "la oveja (f)"
+      },
+      {
+       "t": "conejo",
+       "e": "rabbit",
+       "ipa": "ko.ˈne.xo",
+       "pos": "noun",
+       "note": "el conejo (m)"
+      },
+      {
+       "t": "ratón",
+       "e": "mouse",
+       "ipa": "ra.ˈton",
+       "pos": "noun",
+       "note": "el ratón (m)"
+      },
+      {
+       "t": "pez",
+       "e": "fish (live)",
+       "ipa": "ˈpes",
+       "pos": "noun",
+       "note": "el pez (m)"
+      },
+      {
+       "t": "araña",
+       "e": "spider",
+       "ipa": "a.ˈɾa.ɲa",
+       "pos": "noun",
+       "note": "la araña (f)"
+      },
+      {
+       "t": "insecto",
+       "e": "insect",
+       "ipa": "in.ˈsek.to",
+       "pos": "noun",
+       "note": "el insecto (m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Tengo un perro pequeño",
+       "e": "I have a small dog",
+       "ipa": "ˈteŋ.ɡo um ˈpe.ro pe.ˈke.ɲo"
+      },
+      {
+       "t": "El gato bebe leche",
+       "e": "The cat drinks milk",
+       "ipa": "el ˈɡa.to ˈbe.βe ˈle.tʃe"
+      },
+      {
+       "t": "Los pájaros están en el árbol",
+       "e": "The birds are in the tree",
+       "ipa": "los ˈpa.xa.ɾos es.ˈtan en el ˈaɾ.βol"
+      },
+      {
+       "t": "El caballo es muy grande",
+       "e": "The horse is very big",
+       "ipa": "el ka.ˈβa.ʝo es ˈmuj ˈɡɾan.de"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "TIME",
+   "subtitle": "The days, the months, the hours of the day, and the weather",
+   "skills": [
+    {
+     "name": "Days",
+     "tips": [
+      {
+       "h": "El lunes means on Monday",
+       "b": "Days of the week are written in lower case and take el for a single day and los for a repeated one. No word for on is used.",
+       "eg": [
+        [
+         "el lunes",
+         "on Monday"
+        ],
+        [
+         "los lunes",
+         "on Mondays"
+        ],
+        [
+         "Hoy es martes",
+         "Today is Tuesday"
+        ]
+       ]
+      },
+      {
+       "h": "Days ending in -s stay the same",
+       "b": "Lunes, martes, miércoles, jueves and viernes have one form for singular and plural; only the article changes. Sábado and domingo add -s.",
+       "eg": [
+        [
+         "el viernes",
+         "Friday"
+        ],
+        [
+         "los viernes",
+         "Fridays"
+        ],
+        [
+         "los sábados",
+         "Saturdays"
+        ]
+       ]
+      },
+      {
+       "h": "Saying what happened yesterday",
+       "b": "The preterite reports a finished action. In the first person singular an -ar verb ends -é and an -er or -ir verb ends -í.",
+       "eg": [
+        [
+         "Ayer hablé con Ana",
+         "Yesterday I spoke with Ana"
+        ],
+        [
+         "Comí en casa",
+         "I ate at home"
+        ],
+        [
+         "Viví en la ciudad",
+         "I lived in the city"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "lunes",
+       "e": "Monday",
+       "ipa": "ˈlu.nes",
+       "pos": "noun",
+       "note": "el lunes (m)"
+      },
+      {
+       "t": "martes",
+       "e": "Tuesday",
+       "ipa": "ˈmaɾ.tes",
+       "pos": "noun",
+       "note": "el martes (m)"
+      },
+      {
+       "t": "miércoles",
+       "e": "Wednesday",
+       "ipa": "ˈmjeɾ.ko.les",
+       "pos": "noun",
+       "note": "el miércoles (m)"
+      },
+      {
+       "t": "jueves",
+       "e": "Thursday",
+       "ipa": "ˈxwe.βes",
+       "pos": "noun",
+       "note": "el jueves (m)"
+      },
+      {
+       "t": "viernes",
+       "e": "Friday",
+       "ipa": "ˈbjeɾ.nes",
+       "pos": "noun",
+       "note": "el viernes (m)"
+      },
+      {
+       "t": "sábado",
+       "e": "Saturday",
+       "ipa": "ˈsa.βa.ðo",
+       "pos": "noun",
+       "note": "el sábado (m)"
+      },
+      {
+       "t": "domingo",
+       "e": "Sunday",
+       "ipa": "do.ˈmiŋ.ɡo",
+       "pos": "noun",
+       "note": "el domingo (m)"
+      },
+      {
+       "t": "día",
+       "e": "day",
+       "ipa": "ˈdi.a",
+       "pos": "noun",
+       "note": "el día (m)"
+      },
+      {
+       "t": "semana",
+       "e": "week",
+       "ipa": "se.ˈma.na",
+       "pos": "noun",
+       "note": "la semana (f)"
+      },
+      {
+       "t": "hoy",
+       "e": "today",
+       "ipa": "ˈoi",
+       "pos": "adv"
+      },
+      {
+       "t": "mañana",
+       "e": "tomorrow",
+       "ipa": "ma.ˈɲa.na",
+       "pos": "adv",
+       "note": "also: morning"
+      },
+      {
+       "t": "ayer",
+       "e": "yesterday",
+       "ipa": "a.ˈʝeɾ",
+       "pos": "adv"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Hoy es lunes",
+       "e": "Today is Monday",
+       "ipa": "ˈoi es ˈlu.nes"
+      },
+      {
+       "t": "El sábado voy al mercado",
+       "e": "On Saturday I go to the market",
+       "ipa": "el ˈsa.βa.ðo ˈβoi al meɾ.ˈka.ðo"
+      },
+      {
+       "t": "La semana tiene siete días",
+       "e": "The week has seven days",
+       "ipa": "la se.ˈma.na ˈtje.ne ˈsje.te ˈði.as"
+      },
+      {
+       "t": "Ayer comí en casa",
+       "e": "Yesterday I ate at home",
+       "ipa": "a.ˈʝeɾ ko.ˈmi eŋ ˈka.sa"
+      }
+     ]
+    },
+    {
+     "name": "Months",
+     "tips": [
+      {
+       "h": "Months are lower case",
+       "b": "Month names are written in lower case and take no article. The preposition en covers in: en enero, en marzo.",
+       "eg": [
+        [
+         "en enero",
+         "in January"
+        ],
+        [
+         "en agosto",
+         "in August"
+        ],
+        [
+         "Es mayo",
+         "It is May"
+        ]
+       ]
+      },
+      {
+       "h": "A date runs day, then month",
+       "b": "A date is built with the number, de and the month: el doce de octubre. The first of the month is primero, and the other days use plain numbers.",
+       "eg": [
+        [
+         "el cinco de mayo",
+         "the fifth of May"
+        ],
+        [
+         "el primero de abril",
+         "the first of April"
+        ],
+        [
+         "el doce de octubre",
+         "the twelfth of October"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "enero",
+       "e": "January",
+       "ipa": "e.ˈne.ɾo",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "febrero",
+       "e": "February",
+       "ipa": "fe.ˈβɾe.ɾo",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "marzo",
+       "e": "March",
+       "ipa": "ˈmaɾ.so",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "abril",
+       "e": "April",
+       "ipa": "a.ˈβɾil",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "mayo",
+       "e": "May",
+       "ipa": "ˈma.ʝo",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "junio",
+       "e": "June",
+       "ipa": "ˈxu.njo",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "julio",
+       "e": "July",
+       "ipa": "ˈxu.ljo",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "agosto",
+       "e": "August",
+       "ipa": "a.ˈɣos.to",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "septiembre",
+       "e": "September",
+       "ipa": "sep.ˈtjem.bɾe",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "octubre",
+       "e": "October",
+       "ipa": "ok.ˈtu.βɾe",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "noviembre",
+       "e": "November",
+       "ipa": "no.ˈβjem.bɾe",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "diciembre",
+       "e": "December",
+       "ipa": "di.ˈsjem.bɾe",
+       "pos": "noun",
+       "note": "masculine, no article"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "En enero hace mucho frío",
+       "e": "In January it is very cold",
+       "ipa": "en e.ˈne.ɾo ˈa.se ˈmu.tʃo ˈfɾi.o",
+       "lit": "in January it-makes much cold"
+      },
+      {
+       "t": "Hay doce meses en el año",
+       "e": "There are twelve months in the year",
+       "ipa": "ˈai ˈdo.se ˈme.ses en el ˈa.ɲo"
+      },
+      {
+       "t": "Vamos a la playa en julio",
+       "e": "We go to the beach in July",
+       "ipa": "ˈba.mos a la ˈpla.ʝa en ˈxu.ljo"
+      },
+      {
+       "t": "Abril tiene treinta días",
+       "e": "April has thirty days",
+       "ipa": "a.ˈβɾil ˈtje.ne ˈtɾein.ta ˈði.as"
+      }
+     ]
+    },
+    {
+     "name": "Time of Day",
+     "tips": [
+      {
+       "h": "Telling the clock",
+       "b": "The hour is given with son las plus the number, except one o'clock, which takes es la. Minutes are added with y, and a half hour is media.",
+       "eg": [
+        [
+         "Son las tres",
+         "It is three o'clock"
+        ],
+        [
+         "Es la una",
+         "It is one o'clock"
+        ],
+        [
+         "Son las dos y media",
+         "It is half past two"
+        ],
+        [
+         "Son las siete y cuarto",
+         "It is a quarter past seven"
+        ]
+       ]
+      },
+      {
+       "h": "Parts of the day",
+       "b": "A named hour takes de la mañana or de la tarde. Without an hour, the general stretch of the day takes por la mañana or por la noche.",
+       "eg": [
+        [
+         "a las ocho de la mañana",
+         "at eight in the morning"
+        ],
+        [
+         "por la tarde",
+         "in the afternoon"
+        ],
+        [
+         "por la noche",
+         "at night"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "mañana",
+       "e": "morning",
+       "ipa": "ma.ˈɲa.na",
+       "pos": "noun",
+       "note": "la mañana (f)"
+      },
+      {
+       "t": "tarde",
+       "e": "afternoon",
+       "ipa": "ˈtaɾ.ðe",
+       "pos": "noun",
+       "note": "la tarde (f)"
+      },
+      {
+       "t": "noche",
+       "e": "night",
+       "ipa": "ˈno.tʃe",
+       "pos": "noun",
+       "note": "la noche (f)"
+      },
+      {
+       "t": "mediodía",
+       "e": "noon",
+       "ipa": "me.ðjo.ˈði.a",
+       "pos": "noun",
+       "note": "el mediodía (m)"
+      },
+      {
+       "t": "medianoche",
+       "e": "midnight",
+       "ipa": "me.ðja.ˈno.tʃe",
+       "pos": "noun",
+       "note": "la medianoche (f)"
+      },
+      {
+       "t": "hora",
+       "e": "hour",
+       "ipa": "ˈo.ɾa",
+       "pos": "noun",
+       "note": "la hora (f)"
+      },
+      {
+       "t": "minuto",
+       "e": "minute",
+       "ipa": "mi.ˈnu.to",
+       "pos": "noun",
+       "note": "el minuto (m)"
+      },
+      {
+       "t": "reloj",
+       "e": "clock",
+       "ipa": "re.ˈlox",
+       "pos": "noun",
+       "note": "el reloj (m)"
+      },
+      {
+       "t": "mes",
+       "e": "month",
+       "ipa": "ˈmes",
+       "pos": "noun",
+       "note": "el mes (m)"
+      },
+      {
+       "t": "año",
+       "e": "year",
+       "ipa": "ˈa.ɲo",
+       "pos": "noun",
+       "note": "el año (m)"
+      },
+      {
+       "t": "ahora",
+       "e": "now",
+       "ipa": "a.ˈo.ɾa",
+       "pos": "adv"
+      },
+      {
+       "t": "cada",
+       "e": "each",
+       "ipa": "ˈka.ða",
+       "pos": "det",
+       "note": "one form only"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Son las tres de la tarde",
+       "e": "It is three in the afternoon",
+       "ipa": "son las ˈtɾes ðe la ˈtaɾ.ðe"
+      },
+      {
+       "t": "Trabajo por la mañana",
+       "e": "I work in the morning",
+       "ipa": "tɾa.ˈβa.xo poɾ la ma.ˈɲa.na"
+      },
+      {
+       "t": "Ahora es mediodía",
+       "e": "It is noon now",
+       "ipa": "a.ˈo.ɾa es me.ðjo.ˈði.a"
+      },
+      {
+       "t": "Estudio una hora cada día",
+       "e": "I study one hour each day",
+       "ipa": "es.ˈtu.ðjo ˈu.na ˈo.ɾa ˈka.ða ˈði.a"
+      }
+     ]
+    },
+    {
+     "name": "Weather",
+     "tips": [
+      {
+       "h": "The weather is made, not been",
+       "b": "Spanish reports most weather with hacer in the third person: hace frío, hace calor, hace sol, hace viento. Está covers cloud and rain in progress.",
+       "eg": [
+        [
+         "Hace frío",
+         "It is cold"
+        ],
+        [
+         "Hace mucho calor",
+         "It is very hot"
+        ],
+        [
+         "Está nublado",
+         "It is cloudy"
+        ]
+       ]
+      },
+      {
+       "h": "Llover and nevar have no subject",
+       "b": "Verbs of weather appear only in the third person singular, with nothing standing in front of them. The stem changes: llueve, nieva.",
+       "eg": [
+        [
+         "Llueve",
+         "It is raining"
+        ],
+        [
+         "Nieva en enero",
+         "It snows in January"
+        ]
+       ]
+      },
+      {
+       "h": "Ir a states what comes next",
+       "b": "A form of ir, then a, then an infinitive announces the near future. It replaces a separate future tense in everyday speech.",
+       "eg": [
+        [
+         "Va a llover",
+         "It is going to rain"
+        ],
+        [
+         "Voy a comer",
+         "I am going to eat"
+        ],
+        [
+         "Vamos a viajar",
+         "We are going to travel"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "tiempo",
+       "e": "weather",
+       "ipa": "ˈtjem.po",
+       "pos": "noun",
+       "note": "el tiempo (m)"
+      },
+      {
+       "t": "sol",
+       "e": "sun",
+       "ipa": "ˈsol",
+       "pos": "noun",
+       "note": "el sol (m)"
+      },
+      {
+       "t": "lluvia",
+       "e": "rain",
+       "ipa": "ˈʝu.βja",
+       "pos": "noun",
+       "note": "la lluvia (f)"
+      },
+      {
+       "t": "nieve",
+       "e": "snow",
+       "ipa": "ˈnje.βe",
+       "pos": "noun",
+       "note": "la nieve (f)"
+      },
+      {
+       "t": "viento",
+       "e": "wind",
+       "ipa": "ˈbjen.to",
+       "pos": "noun",
+       "note": "el viento (m)"
+      },
+      {
+       "t": "nube",
+       "e": "cloud",
+       "ipa": "ˈnu.βe",
+       "pos": "noun",
+       "note": "la nube (f)"
+      },
+      {
+       "t": "calor",
+       "e": "heat",
+       "ipa": "ka.ˈloɾ",
+       "pos": "noun",
+       "note": "el calor (m)"
+      },
+      {
+       "t": "frío",
+       "e": "cold",
+       "ipa": "ˈfɾi.o",
+       "pos": "noun",
+       "note": "el frío (m)"
+      },
+      {
+       "t": "llover",
+       "e": "to rain",
+       "ipa": "ʝo.ˈβeɾ",
+       "pos": "verb",
+       "note": "llueve, third person"
+      },
+      {
+       "t": "nevar",
+       "e": "to snow",
+       "ipa": "ne.ˈβaɾ",
+       "pos": "verb",
+       "note": "nieva, third person"
+      },
+      {
+       "t": "húmedo",
+       "e": "humid",
+       "ipa": "ˈu.me.ðo",
+       "pos": "adj"
+      },
+      {
+       "t": "seco",
+       "e": "dry",
+       "ipa": "ˈse.ko",
+       "pos": "adj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Hoy hace mucho calor",
+       "e": "It is very hot today",
+       "ipa": "ˈoi ˈa.se ˈmu.tʃo ka.ˈloɾ",
+       "lit": "today it-makes much heat"
+      },
+      {
+       "t": "Hace frío en diciembre",
+       "e": "It is cold in December",
+       "ipa": "ˈa.se ˈfɾi.o en di.ˈsjem.bɾe"
+      },
+      {
+       "t": "El cielo tiene muchas nubes",
+       "e": "The sky has many clouds",
+       "ipa": "el ˈsje.lo ˈtje.ne ˈmu.tʃas ˈnu.βes"
+      },
+      {
+       "t": "Mañana va a llover",
+       "e": "It is going to rain tomorrow",
+       "ipa": "ma.ˈɲa.na βa a ʝo.ˈβeɾ"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "GETTING AROUND",
+   "subtitle": "Places in a town, directions, vehicles, and travel",
+   "skills": [
+    {
+     "name": "Places",
+     "tips": [
+      {
+       "h": "A plus el becomes al",
+       "b": "Spanish has two contractions and no others: a and el join as al, de and el join as del. The feminine la never contracts.",
+       "eg": [
+        [
+         "Voy al banco",
+         "I go to the bank"
+        ],
+        [
+         "Vengo del mercado",
+         "I come from the market"
+        ],
+        [
+         "Voy a la tienda",
+         "I go to the store"
+        ]
+       ]
+      },
+      {
+       "h": "Estar for where something is",
+       "b": "Location always takes estar, whatever the building or the country. Ser with a place names an event instead: la fiesta es en el parque.",
+       "eg": [
+        [
+         "La tienda está cerca",
+         "The store is nearby"
+        ],
+        [
+         "¿Dónde está el museo?",
+         "Where is the museum?"
+        ],
+        [
+         "Madrid está en España",
+         "Madrid is in Spain"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "lugar",
+       "e": "place",
+       "ipa": "lu.ˈɣaɾ",
+       "pos": "noun",
+       "note": "el lugar (m)"
+      },
+      {
+       "t": "escuela",
+       "e": "school",
+       "ipa": "es.ˈkwe.la",
+       "pos": "noun",
+       "note": "la escuela (f)"
+      },
+      {
+       "t": "tienda",
+       "e": "store",
+       "ipa": "ˈtjen.da",
+       "pos": "noun",
+       "note": "la tienda (f)"
+      },
+      {
+       "t": "mercado",
+       "e": "market",
+       "ipa": "meɾ.ˈka.ðo",
+       "pos": "noun",
+       "note": "el mercado (m)"
+      },
+      {
+       "t": "banco",
+       "e": "bank",
+       "ipa": "ˈbaŋ.ko",
+       "pos": "noun",
+       "note": "el banco (m)"
+      },
+      {
+       "t": "farmacia",
+       "e": "pharmacy",
+       "ipa": "faɾ.ˈma.sja",
+       "pos": "noun",
+       "note": "la farmacia (f)"
+      },
+      {
+       "t": "iglesia",
+       "e": "church",
+       "ipa": "i.ˈɣle.sja",
+       "pos": "noun",
+       "note": "la iglesia (f)"
+      },
+      {
+       "t": "parque",
+       "e": "park",
+       "ipa": "ˈpaɾ.ke",
+       "pos": "noun",
+       "note": "el parque (m)"
+      },
+      {
+       "t": "museo",
+       "e": "museum",
+       "ipa": "mu.ˈse.o",
+       "pos": "noun",
+       "note": "el museo (m)"
+      },
+      {
+       "t": "biblioteca",
+       "e": "library",
+       "ipa": "bi.βljo.ˈte.ka",
+       "pos": "noun",
+       "note": "la biblioteca (f)"
+      },
+      {
+       "t": "restaurante",
+       "e": "restaurant",
+       "ipa": "res.tau.ˈɾan.te",
+       "pos": "noun",
+       "note": "el restaurante (m)"
+      },
+      {
+       "t": "oficina",
+       "e": "office",
+       "ipa": "o.fi.ˈsi.na",
+       "pos": "noun",
+       "note": "la oficina (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Voy al mercado los sábados",
+       "e": "I go to the market on Saturdays",
+       "ipa": "ˈboi al meɾ.ˈka.ðo los ˈsa.βa.ðos"
+      },
+      {
+       "t": "La biblioteca está cerca",
+       "e": "The library is nearby",
+       "ipa": "la βi.βljo.ˈte.ka es.ˈta ˈseɾ.ka"
+      },
+      {
+       "t": "Trabajo en una oficina grande",
+       "e": "I work in a big office",
+       "ipa": "tɾa.ˈβa.xo en ˈu.na o.fi.ˈsi.na ˈɡɾan.de"
+      },
+      {
+       "t": "¿Dónde está la farmacia?",
+       "e": "Where is the pharmacy?",
+       "ipa": "ˈdon.de es.ˈta la faɾ.ˈma.sja"
+      }
+     ]
+    },
+    {
+     "name": "Directions",
+     "tips": [
+      {
+       "h": "Directions use the usted command",
+       "b": "An instruction to a stranger uses the usted command: an -ar verb ends -e and an -er or -ir verb ends -a. Doblar, seguir and tomar carry most directions.",
+       "eg": [
+        [
+         "Doble a la izquierda",
+         "Turn left"
+        ],
+        [
+         "Siga recto",
+         "Go straight ahead"
+        ],
+        [
+         "Tome la primera calle",
+         "Take the first street"
+        ]
+       ]
+      },
+      {
+       "h": "Left and right keep the article",
+       "b": "Izquierda and derecha are nouns, so they stand with la after a: a la izquierda, a la derecha.",
+       "eg": [
+        [
+         "a la derecha",
+         "on the right"
+        ],
+        [
+         "a la izquierda",
+         "on the left"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "izquierda",
+       "e": "left",
+       "ipa": "is.ˈkjeɾ.ða",
+       "pos": "noun",
+       "note": "la izquierda (f)"
+      },
+      {
+       "t": "derecha",
+       "e": "right",
+       "ipa": "de.ˈɾe.tʃa",
+       "pos": "noun",
+       "note": "la derecha (f)"
+      },
+      {
+       "t": "esquina",
+       "e": "corner",
+       "ipa": "es.ˈki.na",
+       "pos": "noun",
+       "note": "la esquina (f)"
+      },
+      {
+       "t": "recto",
+       "e": "straight",
+       "ipa": "ˈrek.to",
+       "pos": "adj"
+      },
+      {
+       "t": "cerca",
+       "e": "nearby",
+       "ipa": "ˈseɾ.ka",
+       "pos": "adv",
+       "note": "cerca de: near to"
+      },
+      {
+       "t": "lejos",
+       "e": "far",
+       "ipa": "ˈle.xos",
+       "pos": "adv",
+       "note": "lejos de: far from"
+      },
+      {
+       "t": "aquí",
+       "e": "here",
+       "ipa": "a.ˈki",
+       "pos": "adv"
+      },
+      {
+       "t": "allí",
+       "e": "there",
+       "ipa": "a.ˈʝi",
+       "pos": "adv"
+      },
+      {
+       "t": "arriba",
+       "e": "up",
+       "ipa": "a.ˈri.βa",
+       "pos": "adv"
+      },
+      {
+       "t": "abajo",
+       "e": "down",
+       "ipa": "a.ˈβa.xo",
+       "pos": "adv"
+      },
+      {
+       "t": "entre",
+       "e": "between",
+       "ipa": "ˈen.tɾe",
+       "pos": "prep"
+      },
+      {
+       "t": "hasta",
+       "e": "until",
+       "ipa": "ˈas.ta",
+       "pos": "prep",
+       "note": "also: as far as"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La tienda está a la derecha",
+       "e": "The store is on the right",
+       "ipa": "la ˈtjen.da es.ˈta a la ðe.ˈɾe.tʃa"
+      },
+      {
+       "t": "Siga recto hasta la esquina",
+       "e": "Go straight to the corner",
+       "ipa": "ˈsi.ɣa ˈrek.to ˈas.ta la es.ˈki.na"
+      },
+      {
+       "t": "El banco está muy lejos",
+       "e": "The bank is very far",
+       "ipa": "el ˈbaŋ.ko es.ˈta ˈmuj ˈle.xos"
+      },
+      {
+       "t": "Vivo cerca del parque",
+       "e": "I live near the park",
+       "ipa": "ˈbi.βo ˈseɾ.ka ðel ˈpaɾ.ke"
+      }
+     ]
+    },
+    {
+     "name": "Transport",
+     "tips": [
+      {
+       "h": "En for the vehicle",
+       "b": "The means of transport takes en, with no article: en tren, en avión, en bicicleta. Travel on foot is a pie.",
+       "eg": [
+        [
+         "Voy en autobús",
+         "I go by bus"
+        ],
+        [
+         "Viajo en tren",
+         "I travel by train"
+        ],
+        [
+         "Vamos a pie",
+         "We go on foot"
+        ]
+       ]
+      },
+      {
+       "h": "Regional words for a car",
+       "b": "Carro is the usual word across most of Latin America, coche is heard in Mexico and Spain, and auto is common in the southern countries. This course uses carro.",
+       "eg": [
+        [
+         "el carro",
+         "the car"
+        ],
+        [
+         "el autobús",
+         "the bus"
+        ],
+        [
+         "el camión",
+         "the truck"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "carro",
+       "e": "car",
+       "ipa": "ˈka.ro",
+       "pos": "noun",
+       "note": "el carro (m)"
+      },
+      {
+       "t": "autobús",
+       "e": "bus",
+       "ipa": "au.to.ˈβus",
+       "pos": "noun",
+       "note": "el autobús (m)"
+      },
+      {
+       "t": "tren",
+       "e": "train",
+       "ipa": "ˈtɾen",
+       "pos": "noun",
+       "note": "el tren (m)"
+      },
+      {
+       "t": "avión",
+       "e": "airplane",
+       "ipa": "a.ˈβjon",
+       "pos": "noun",
+       "note": "el avión (m)"
+      },
+      {
+       "t": "barco",
+       "e": "boat",
+       "ipa": "ˈbaɾ.ko",
+       "pos": "noun",
+       "note": "el barco (m)"
+      },
+      {
+       "t": "bicicleta",
+       "e": "bicycle",
+       "ipa": "bi.si.ˈkle.ta",
+       "pos": "noun",
+       "note": "la bicicleta (f)"
+      },
+      {
+       "t": "metro",
+       "e": "subway",
+       "ipa": "ˈme.tɾo",
+       "pos": "noun",
+       "note": "el metro (m)"
+      },
+      {
+       "t": "camión",
+       "e": "truck",
+       "ipa": "ka.ˈmjon",
+       "pos": "noun",
+       "note": "el camión (m)"
+      },
+      {
+       "t": "boleto",
+       "e": "ticket",
+       "ipa": "bo.ˈle.to",
+       "pos": "noun",
+       "note": "el boleto (m)"
+      },
+      {
+       "t": "estación",
+       "e": "station",
+       "ipa": "es.ta.ˈsjon",
+       "pos": "noun",
+       "note": "la estación (f)"
+      },
+      {
+       "t": "manejar",
+       "e": "to drive",
+       "ipa": "ma.ne.ˈxaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "caminar",
+       "e": "to walk",
+       "ipa": "ka.mi.ˈnaɾ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Voy en autobús al trabajo",
+       "e": "I go to work by bus",
+       "ipa": "ˈboi en au.to.ˈβus al tɾa.ˈβa.xo"
+      },
+      {
+       "t": "El tren llega a las ocho",
+       "e": "The train arrives at eight",
+       "ipa": "el ˈtɾen ˈʝe.ɣa a las ˈo.tʃo"
+      },
+      {
+       "t": "Compro un boleto de tren",
+       "e": "I buy a train ticket",
+       "ipa": "ˈkom.pɾo um bo.ˈle.to ðe ˈtɾen"
+      },
+      {
+       "t": "Ella maneja un carro rojo",
+       "e": "She drives a red car",
+       "ipa": "ˈe.ʝa ma.ˈne.xa uŋ ˈka.ro ˈro.xo"
+      }
+     ]
+    },
+    {
+     "name": "Travel",
+     "tips": [
+      {
+       "h": "Por and para",
+       "b": "Para points forward: a destination, a purpose, a deadline, a recipient. Por looks at cause, duration, exchange and the route taken through a place.",
+       "eg": [
+        [
+         "Salgo para México",
+         "I leave for Mexico"
+        ],
+        [
+         "Paso por el parque",
+         "I pass through the park"
+        ],
+        [
+         "Es para mi madre",
+         "It is for my mother"
+        ],
+        [
+         "Gracias por todo",
+         "Thanks for everything"
+        ]
+       ]
+      },
+      {
+       "h": "Salir and llegar take a preposition",
+       "b": "Salir de names the place left behind and salir para the place ahead. Llegar a names the place reached.",
+       "eg": [
+        [
+         "Salgo de la casa",
+         "I leave the house"
+        ],
+        [
+         "Llego a la estación",
+         "I arrive at the station"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "viaje",
+       "e": "trip",
+       "ipa": "ˈbja.xe",
+       "pos": "noun",
+       "note": "el viaje (m)"
+      },
+      {
+       "t": "maleta",
+       "e": "suitcase",
+       "ipa": "ma.ˈle.ta",
+       "pos": "noun",
+       "note": "la maleta (f)"
+      },
+      {
+       "t": "pasaporte",
+       "e": "passport",
+       "ipa": "pa.sa.ˈpoɾ.te",
+       "pos": "noun",
+       "note": "el pasaporte (m)"
+      },
+      {
+       "t": "mapa",
+       "e": "map",
+       "ipa": "ˈma.pa",
+       "pos": "noun",
+       "note": "el mapa (m)"
+      },
+      {
+       "t": "camino",
+       "e": "road",
+       "ipa": "ka.ˈmi.no",
+       "pos": "noun",
+       "note": "el camino (m)"
+      },
+      {
+       "t": "playa",
+       "e": "beach",
+       "ipa": "ˈpla.ʝa",
+       "pos": "noun",
+       "note": "la playa (f)"
+      },
+      {
+       "t": "viajar",
+       "e": "to travel",
+       "ipa": "bja.ˈxaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "llegar",
+       "e": "to arrive",
+       "ipa": "ʝe.ˈɣaɾ",
+       "pos": "verb",
+       "note": "llegar a: arrive at"
+      },
+      {
+       "t": "salir",
+       "e": "to leave",
+       "ipa": "sa.ˈliɾ",
+       "pos": "verb",
+       "note": "salir de: leave from"
+      },
+      {
+       "t": "regresar",
+       "e": "to return",
+       "ipa": "re.ɣɾe.ˈsaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "por",
+       "e": "by",
+       "ipa": "poɾ",
+       "pos": "prep",
+       "note": "cause, route, duration"
+      },
+      {
+       "t": "para",
+       "e": "for",
+       "ipa": "ˈpa.ɾa",
+       "pos": "prep",
+       "note": "goal, recipient"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "El avión sale a las nueve",
+       "e": "The plane leaves at nine",
+       "ipa": "el a.ˈβjon ˈsa.le a las ˈnwe.βe"
+      },
+      {
+       "t": "Viajamos a la playa",
+       "e": "We travel to the beach",
+       "ipa": "bja.ˈxa.mos a la ˈpla.ʝa"
+      },
+      {
+       "t": "Mi maleta está en el carro",
+       "e": "My suitcase is in the car",
+       "ipa": "mi ma.ˈle.ta es.ˈta en el ˈka.ro"
+      },
+      {
+       "t": "Regreso el domingo por la tarde",
+       "e": "I return on Sunday afternoon",
+       "ipa": "re.ˈɣɾe.so el do.ˈmiŋ.ɡo poɾ la ˈtaɾ.ðe"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "PEOPLE",
+   "subtitle": "Feelings, the body, health, and how a person looks",
+   "skills": [
+    {
+     "name": "Feelings",
+     "tips": [
+      {
+       "h": "Gustar runs the other way",
+       "b": "Gustar means to please, so the thing liked is the subject and the person is an object pronoun in front. One thing takes gusta, several things take gustan.",
+       "eg": [
+        [
+         "Me gusta el café",
+         "I like coffee"
+        ],
+        [
+         "Me gustan los libros",
+         "I like books"
+        ],
+        [
+         "Le gusta la música",
+         "He likes music"
+        ],
+        [
+         "Nos gusta bailar",
+         "We like dancing"
+        ]
+       ]
+      },
+      {
+       "h": "A feeling takes estar",
+       "b": "Estar carries a mood of the moment and ser carries a lasting trait. Está triste reports a bad day; es triste describes a sad person or thing.",
+       "eg": [
+        [
+         "Está cansado",
+         "He is tired"
+        ],
+        [
+         "Es tranquilo",
+         "He is a calm person"
+        ],
+        [
+         "Estoy contenta",
+         "I am glad"
+        ]
+       ]
+      },
+      {
+       "h": "Tener with a state of the body",
+       "b": "A set of everyday states is had rather than been: tener hambre, tener sed, tener frío, tener miedo, tener sueño, tener años. Mucho, not muy, strengthens them.",
+       "eg": [
+        [
+         "Tengo hambre",
+         "I am hungry"
+        ],
+        [
+         "Tenemos frío",
+         "We are cold"
+        ],
+        [
+         "Tiene mucho miedo",
+         "He is very afraid"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "feliz",
+       "e": "happy",
+       "ipa": "fe.ˈlis",
+       "pos": "adj"
+      },
+      {
+       "t": "triste",
+       "e": "sad",
+       "ipa": "ˈtɾis.te",
+       "pos": "adj"
+      },
+      {
+       "t": "cansado",
+       "e": "tired",
+       "ipa": "kan.ˈsa.ðo",
+       "pos": "adj"
+      },
+      {
+       "t": "enojado",
+       "e": "angry",
+       "ipa": "e.no.ˈxa.ðo",
+       "pos": "adj"
+      },
+      {
+       "t": "contento",
+       "e": "glad",
+       "ipa": "kon.ˈten.to",
+       "pos": "adj"
+      },
+      {
+       "t": "nervioso",
+       "e": "nervous",
+       "ipa": "neɾ.ˈβjo.so",
+       "pos": "adj"
+      },
+      {
+       "t": "tranquilo",
+       "e": "calm",
+       "ipa": "tɾaŋ.ˈki.lo",
+       "pos": "adj"
+      },
+      {
+       "t": "miedo",
+       "e": "fear",
+       "ipa": "ˈmje.ðo",
+       "pos": "noun",
+       "note": "el miedo (m)"
+      },
+      {
+       "t": "amor",
+       "e": "love",
+       "ipa": "a.ˈmoɾ",
+       "pos": "noun",
+       "note": "el amor (m)"
+      },
+      {
+       "t": "gustar",
+       "e": "to please",
+       "ipa": "ɡus.ˈtaɾ",
+       "pos": "verb",
+       "note": "me gusta: I like it"
+      },
+      {
+       "t": "sentir",
+       "e": "to feel",
+       "ipa": "sen.ˈtiɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "llorar",
+       "e": "to cry",
+       "ipa": "ʝo.ˈɾaɾ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Me gusta mucho el café",
+       "e": "I like coffee a lot",
+       "ipa": "me ˈɡus.ta ˈmu.tʃo el ka.ˈfe",
+       "lit": "to-me pleases much the coffee"
+      },
+      {
+       "t": "Estoy muy cansado hoy",
+       "e": "I am very tired today",
+       "ipa": "es.ˈtoi ˈmuj kan.ˈsa.ðo ˈoi"
+      },
+      {
+       "t": "Los niños tienen miedo",
+       "e": "The children are afraid",
+       "ipa": "los ˈni.ɲos ˈtje.nem ˈmje.ðo",
+       "lit": "the children have fear"
+      },
+      {
+       "t": "Ella está contenta ahora",
+       "e": "She is glad now",
+       "ipa": "ˈe.ʝa es.ˈta kon.ˈten.ta a.ˈo.ɾa"
+      }
+     ]
+    },
+    {
+     "name": "Body",
+     "tips": [
+      {
+       "h": "La mano and other exceptions",
+       "b": "Nouns ending in -o are usually masculine, and la mano is the common exception. Nouns ending in -a are usually feminine, against el día, el mapa and el problema.",
+       "eg": [
+        [
+         "la mano",
+         "the hand"
+        ],
+        [
+         "el día",
+         "the day"
+        ],
+        [
+         "el mapa",
+         "the map"
+        ]
+       ]
+      },
+      {
+       "h": "The body takes the article",
+       "b": "With doler and with reflexive verbs the body part carries el or la, not a possessive, because the pronoun already names the owner.",
+       "eg": [
+        [
+         "Me duele la cabeza",
+         "My head hurts"
+        ],
+        [
+         "Se lava las manos",
+         "He washes his hands"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "cabeza",
+       "e": "head",
+       "ipa": "ka.ˈβe.sa",
+       "pos": "noun",
+       "note": "la cabeza (f)"
+      },
+      {
+       "t": "cara",
+       "e": "face",
+       "ipa": "ˈka.ɾa",
+       "pos": "noun",
+       "note": "la cara (f)"
+      },
+      {
+       "t": "ojo",
+       "e": "eye",
+       "ipa": "ˈo.xo",
+       "pos": "noun",
+       "note": "el ojo (m)"
+      },
+      {
+       "t": "boca",
+       "e": "mouth",
+       "ipa": "ˈbo.ka",
+       "pos": "noun",
+       "note": "la boca (f)"
+      },
+      {
+       "t": "nariz",
+       "e": "nose",
+       "ipa": "na.ˈɾis",
+       "pos": "noun",
+       "note": "la nariz (f)"
+      },
+      {
+       "t": "oreja",
+       "e": "ear",
+       "ipa": "o.ˈɾe.xa",
+       "pos": "noun",
+       "note": "la oreja (f)"
+      },
+      {
+       "t": "mano",
+       "e": "hand",
+       "ipa": "ˈma.no",
+       "pos": "noun",
+       "note": "la mano (f)"
+      },
+      {
+       "t": "brazo",
+       "e": "arm",
+       "ipa": "ˈbɾa.so",
+       "pos": "noun",
+       "note": "el brazo (m)"
+      },
+      {
+       "t": "pierna",
+       "e": "leg",
+       "ipa": "ˈpjeɾ.na",
+       "pos": "noun",
+       "note": "la pierna (f)"
+      },
+      {
+       "t": "pie",
+       "e": "foot",
+       "ipa": "ˈpje",
+       "pos": "noun",
+       "note": "el pie (m)"
+      },
+      {
+       "t": "dedo",
+       "e": "finger",
+       "ipa": "ˈde.ðo",
+       "pos": "noun",
+       "note": "el dedo (m)"
+      },
+      {
+       "t": "pelo",
+       "e": "hair",
+       "ipa": "ˈpe.lo",
+       "pos": "noun",
+       "note": "el pelo (m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Me duele la cabeza",
+       "e": "My head hurts",
+       "ipa": "me ˈðwe.le la ka.ˈβe.sa",
+       "lit": "to-me it-hurts the head"
+      },
+      {
+       "t": "Tiene los ojos azules",
+       "e": "He has blue eyes",
+       "ipa": "ˈtje.ne los ˈo.xos a.ˈsu.les"
+      },
+      {
+       "t": "Ella tiene el pelo largo",
+       "e": "She has long hair",
+       "ipa": "ˈe.ʝa ˈtje.ne el ˈpe.lo ˈlaɾ.ɣo"
+      },
+      {
+       "t": "Tengo las manos frías",
+       "e": "My hands are cold",
+       "ipa": "ˈteŋ.ɡo las ˈma.nos ˈfɾi.as",
+       "lit": "I-have the hands cold"
+      }
+     ]
+    },
+    {
+     "name": "Health",
+     "tips": [
+      {
+       "h": "Doler follows gustar",
+       "b": "The part of the body that hurts is the subject of doler, and the person appears as a pronoun in front: me duele el pie, me duelen los pies.",
+       "eg": [
+        [
+         "Me duele el brazo",
+         "My arm hurts"
+        ],
+        [
+         "Le duelen las piernas",
+         "His legs hurt"
+        ]
+       ]
+      },
+      {
+       "h": "Estar enfermo, not ser",
+       "b": "Illness is a passing condition and takes estar. Ser enfermo would describe a permanent identity and is not used for being unwell.",
+       "eg": [
+        [
+         "Estoy enfermo",
+         "I am sick"
+        ],
+        [
+         "El niño está mal",
+         "The boy is unwell"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "salud",
+       "e": "health",
+       "ipa": "sa.ˈluð",
+       "pos": "noun",
+       "note": "la salud (f)"
+      },
+      {
+       "t": "médico",
+       "e": "doctor",
+       "ipa": "ˈme.ði.ko",
+       "pos": "noun",
+       "note": "el médico (m)"
+      },
+      {
+       "t": "enfermera",
+       "e": "nurse",
+       "ipa": "em.feɾ.ˈme.ɾa",
+       "pos": "noun",
+       "note": "la enfermera (f)"
+      },
+      {
+       "t": "dolor",
+       "e": "pain",
+       "ipa": "do.ˈloɾ",
+       "pos": "noun",
+       "note": "el dolor (m)"
+      },
+      {
+       "t": "fiebre",
+       "e": "fever",
+       "ipa": "ˈfje.βɾe",
+       "pos": "noun",
+       "note": "la fiebre (f)"
+      },
+      {
+       "t": "medicina",
+       "e": "medicine",
+       "ipa": "me.ði.ˈsi.na",
+       "pos": "noun",
+       "note": "la medicina (f)"
+      },
+      {
+       "t": "sangre",
+       "e": "blood",
+       "ipa": "ˈsaŋ.ɡɾe",
+       "pos": "noun",
+       "note": "la sangre (f)"
+      },
+      {
+       "t": "cita",
+       "e": "appointment",
+       "ipa": "ˈsi.ta",
+       "pos": "noun",
+       "note": "la cita (f)"
+      },
+      {
+       "t": "enfermo",
+       "e": "sick",
+       "ipa": "em.ˈfeɾ.mo",
+       "pos": "adj"
+      },
+      {
+       "t": "doler",
+       "e": "to hurt",
+       "ipa": "do.ˈleɾ",
+       "pos": "verb",
+       "note": "duele, third person"
+      },
+      {
+       "t": "descansar",
+       "e": "to rest",
+       "ipa": "des.kan.ˈsaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "dormir",
+       "e": "to sleep",
+       "ipa": "doɾ.ˈmiɾ",
+       "pos": "verb",
+       "note": "duermo, stem change"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Tengo fiebre y dolor",
+       "e": "I have a fever and pain",
+       "ipa": "ˈteŋ.ɡo ˈfje.βɾe i ðo.ˈloɾ"
+      },
+      {
+       "t": "El niño está enfermo",
+       "e": "The boy is sick",
+       "ipa": "el ˈni.ɲo es.ˈta em.ˈfeɾ.mo"
+      },
+      {
+       "t": "Duermo ocho horas cada noche",
+       "e": "I sleep eight hours each night",
+       "ipa": "ˈdweɾ.mo ˈo.tʃo ˈo.ɾas ˈka.ða ˈno.tʃe"
+      },
+      {
+       "t": "La medicina está en la cocina",
+       "e": "The medicine is in the kitchen",
+       "ipa": "la me.ði.ˈsi.na es.ˈta en la ko.ˈsi.na"
+      }
+     ]
+    },
+    {
+     "name": "Describing",
+     "tips": [
+      {
+       "h": "Ser for what a person is like",
+       "b": "A lasting quality of a person takes ser: es alta, es amable, es joven. Estar with the same adjective would report a change or a passing impression.",
+       "eg": [
+        [
+         "Es alto",
+         "He is tall"
+        ],
+        [
+         "Es muy amable",
+         "She is very kind"
+        ],
+        [
+         "Está delgado",
+         "He looks thin now"
+        ]
+       ]
+      },
+      {
+       "h": "The ending -ito",
+       "b": "The ending -ito or -ita shrinks a word or softens its tone. It attaches to nouns, adjectives and a few adverbs, and often carries affection rather than size.",
+       "eg": [
+        [
+         "abuelita",
+         "granny"
+        ],
+        [
+         "un poquito",
+         "a little bit"
+        ],
+        [
+         "ahorita",
+         "right now"
+        ],
+        [
+         "perrito",
+         "puppy"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "alto",
+       "e": "tall",
+       "ipa": "ˈal.to",
+       "pos": "adj"
+      },
+      {
+       "t": "bajo",
+       "e": "short (height)",
+       "ipa": "ˈba.xo",
+       "pos": "adj"
+      },
+      {
+       "t": "joven",
+       "e": "young",
+       "ipa": "ˈxo.βen",
+       "pos": "adj"
+      },
+      {
+       "t": "fuerte",
+       "e": "strong",
+       "ipa": "ˈfweɾ.te",
+       "pos": "adj"
+      },
+      {
+       "t": "débil",
+       "e": "weak",
+       "ipa": "ˈde.βil",
+       "pos": "adj"
+      },
+      {
+       "t": "gordo",
+       "e": "fat",
+       "ipa": "ˈɡoɾ.ðo",
+       "pos": "adj"
+      },
+      {
+       "t": "delgado",
+       "e": "thin",
+       "ipa": "del.ˈɡa.ðo",
+       "pos": "adj"
+      },
+      {
+       "t": "rubio",
+       "e": "blond",
+       "ipa": "ˈru.βjo",
+       "pos": "adj"
+      },
+      {
+       "t": "moreno",
+       "e": "dark-haired",
+       "ipa": "mo.ˈɾe.no",
+       "pos": "adj"
+      },
+      {
+       "t": "amable",
+       "e": "kind",
+       "ipa": "a.ˈma.βle",
+       "pos": "adj"
+      },
+      {
+       "t": "otro",
+       "e": "other",
+       "ipa": "ˈo.tɾo",
+       "pos": "det",
+       "note": "never with un"
+      },
+      {
+       "t": "mismo",
+       "e": "same",
+       "ipa": "ˈmis.mo",
+       "pos": "det"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi hermana es muy alta",
+       "e": "My sister is very tall",
+       "ipa": "mi eɾ.ˈma.na es ˈmuj ˈal.ta"
+      },
+      {
+       "t": "Es un hombre muy amable",
+       "e": "He is a very kind man",
+       "ipa": "es un ˈom.bɾe ˈmuj a.ˈma.βle"
+      },
+      {
+       "t": "El niño rubio es mi hijo",
+       "e": "The blond boy is my son",
+       "ipa": "el ˈni.ɲo ˈru.βjo es mi ˈi.xo"
+      },
+      {
+       "t": "Tenemos el mismo abrigo",
+       "e": "We have the same coat",
+       "ipa": "te.ˈne.mos el ˈmis.mo a.ˈβɾi.ɣo"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "WORK AND SCHOOL",
+   "subtitle": "The classroom, jobs, the numbers past twelve, and money",
+   "skills": [
+    {
+     "name": "School",
+     "tips": [
+      {
+       "h": "The personal a",
+       "b": "When the direct object of a verb is a person, the preposition a stands in front of it. The same verb takes no a before a thing.",
+       "eg": [
+        [
+         "Veo a la maestra",
+         "I see the teacher"
+        ],
+        [
+         "Veo el pizarrón",
+         "I see the blackboard"
+        ],
+        [
+         "Enseño a los niños",
+         "I teach the children"
+        ]
+       ]
+      },
+      {
+       "h": "Accents shift in the plural",
+       "b": "The written accent moves or disappears in the plural so that the stressed syllable stays where it was: examen becomes exámenes, lección becomes lecciones. A final z turns into c: lápiz, lápices.",
+       "eg": [
+        [
+         "el examen",
+         "the exam"
+        ],
+        [
+         "los exámenes",
+         "the exams"
+        ],
+        [
+         "el lápiz",
+         "the pencil"
+        ],
+        [
+         "los lápices",
+         "the pencils"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "clase",
+       "e": "class",
+       "ipa": "ˈkla.se",
+       "pos": "noun",
+       "note": "la clase (f)"
+      },
+      {
+       "t": "maestro",
+       "e": "teacher",
+       "ipa": "ma.ˈes.tɾo",
+       "pos": "noun",
+       "note": "el maestro (m)"
+      },
+      {
+       "t": "alumno",
+       "e": "student",
+       "ipa": "a.ˈlum.no",
+       "pos": "noun",
+       "note": "el alumno (m)"
+      },
+      {
+       "t": "tarea",
+       "e": "homework",
+       "ipa": "ta.ˈɾe.a",
+       "pos": "noun",
+       "note": "la tarea (f)"
+      },
+      {
+       "t": "examen",
+       "e": "exam",
+       "ipa": "ek.ˈsa.men",
+       "pos": "noun",
+       "note": "el examen (m)"
+      },
+      {
+       "t": "lápiz",
+       "e": "pencil",
+       "ipa": "ˈla.pis",
+       "pos": "noun",
+       "note": "el lápiz (m)"
+      },
+      {
+       "t": "cuaderno",
+       "e": "notebook",
+       "ipa": "kwa.ˈðeɾ.no",
+       "pos": "noun",
+       "note": "el cuaderno (m)"
+      },
+      {
+       "t": "pizarrón",
+       "e": "blackboard",
+       "ipa": "pi.sa.ˈron",
+       "pos": "noun",
+       "note": "el pizarrón (m)"
+      },
+      {
+       "t": "estudiar",
+       "e": "to study",
+       "ipa": "es.tu.ˈðjaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "leer",
+       "e": "to read",
+       "ipa": "le.ˈeɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "escribir",
+       "e": "to write",
+       "ipa": "es.kɾi.ˈβiɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "enseñar",
+       "e": "to teach",
+       "ipa": "en.se.ˈɲaɾ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Estudio español en la escuela",
+       "e": "I study Spanish at school",
+       "ipa": "es.ˈtu.ðjo es.pa.ˈɲol en la es.ˈkwe.la"
+      },
+      {
+       "t": "La maestra enseña a los niños",
+       "e": "The teacher teaches the children",
+       "ipa": "la ma.ˈes.tɾa en.ˈse.ɲa a los ˈni.ɲos"
+      },
+      {
+       "t": "Escribo la tarea en el cuaderno",
+       "e": "I write the homework in the notebook",
+       "ipa": "es.ˈkɾi.βo la ta.ˈɾe.a en el kwa.ˈðeɾ.no"
+      },
+      {
+       "t": "El examen es muy difícil",
+       "e": "The exam is very hard",
+       "ipa": "el ek.ˈsa.men es ˈmuj di.ˈfi.sil"
+      }
+     ]
+    },
+    {
+     "name": "Work",
+     "tips": [
+      {
+       "h": "A job drops the article",
+       "b": "After ser a profession stands bare: es maestra, es ingeniero. The article returns as soon as an adjective describes the job.",
+       "eg": [
+        [
+         "Soy médico",
+         "I am a doctor"
+        ],
+        [
+         "Es abogada",
+         "She is a lawyer"
+        ],
+        [
+         "Es un abogado bueno",
+         "He is a good lawyer"
+        ]
+       ]
+      },
+      {
+       "h": "Job names for a woman",
+       "b": "A job ending in -o changes to -a, and one ending in -or adds -a. Names ending in -e or -ista keep one form and change only the article.",
+       "eg": [
+        [
+         "el maestro",
+         "the male teacher"
+        ],
+        [
+         "la maestra",
+         "the female teacher"
+        ],
+        [
+         "la trabajadora",
+         "the female worker"
+        ],
+        [
+         "la jefe",
+         "the female boss"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "trabajo",
+       "e": "work",
+       "ipa": "tɾa.ˈβa.xo",
+       "pos": "noun",
+       "note": "el trabajo (m)"
+      },
+      {
+       "t": "jefe",
+       "e": "boss",
+       "ipa": "ˈxe.fe",
+       "pos": "noun",
+       "note": "el jefe (m)"
+      },
+      {
+       "t": "empresa",
+       "e": "company",
+       "ipa": "em.ˈpɾe.sa",
+       "pos": "noun",
+       "note": "la empresa (f)"
+      },
+      {
+       "t": "reunión",
+       "e": "meeting",
+       "ipa": "reu.ˈnjon",
+       "pos": "noun",
+       "note": "la reunión (f)"
+      },
+      {
+       "t": "correo",
+       "e": "mail",
+       "ipa": "ko.ˈre.o",
+       "pos": "noun",
+       "note": "el correo (m)"
+      },
+      {
+       "t": "sueldo",
+       "e": "salary",
+       "ipa": "ˈswel.do",
+       "pos": "noun",
+       "note": "el sueldo (m)"
+      },
+      {
+       "t": "cocinero",
+       "e": "cook",
+       "ipa": "ko.si.ˈne.ɾo",
+       "pos": "noun",
+       "note": "el cocinero (m)"
+      },
+      {
+       "t": "ingeniero",
+       "e": "engineer",
+       "ipa": "iŋ.xe.ˈnje.ɾo",
+       "pos": "noun",
+       "note": "el ingeniero (m)"
+      },
+      {
+       "t": "abogado",
+       "e": "lawyer",
+       "ipa": "a.βo.ˈɣa.ðo",
+       "pos": "noun",
+       "note": "el abogado (m)"
+      },
+      {
+       "t": "agricultor",
+       "e": "farmer",
+       "ipa": "a.ɣɾi.kul.ˈtoɾ",
+       "pos": "noun",
+       "note": "el agricultor (m)"
+      },
+      {
+       "t": "ocupado",
+       "e": "busy",
+       "ipa": "o.ku.ˈpa.ðo",
+       "pos": "adj"
+      },
+      {
+       "t": "ganar",
+       "e": "to earn",
+       "ipa": "ɡa.ˈnaɾ",
+       "pos": "verb",
+       "note": "also: to win"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi padre es ingeniero",
+       "e": "My father is an engineer",
+       "ipa": "mi ˈpa.ðɾe es iŋ.xe.ˈnje.ɾo"
+      },
+      {
+       "t": "El jefe está muy ocupado",
+       "e": "The boss is very busy",
+       "ipa": "el ˈxe.fe es.ˈta ˈmuj o.ku.ˈpa.ðo"
+      },
+      {
+       "t": "Trabajo en una empresa grande",
+       "e": "I work at a big company",
+       "ipa": "tɾa.ˈβa.xo en ˈu.na em.ˈpɾe.sa ˈɡɾan.de"
+      },
+      {
+       "t": "La reunión es el martes",
+       "e": "The meeting is on Tuesday",
+       "ipa": "la reu.ˈnjon es el ˈmaɾ.tes"
+      }
+     ]
+    },
+    {
+     "name": "Big Numbers",
+     "tips": [
+      {
+       "h": "The teens and the twenties",
+       "b": "Eleven to fifteen have their own names. Sixteen to nineteen and twenty-one to twenty-nine are written as one word: dieciséis, diecisiete, veintiuno, veintidós.",
+       "eg": [
+        [
+         "catorce",
+         "fourteen"
+        ],
+        [
+         "dieciséis",
+         "sixteen"
+        ],
+        [
+         "veintiuno",
+         "twenty-one"
+        ]
+       ]
+      },
+      {
+       "h": "From thirty-one upward",
+       "b": "Above thirty the tens and the units are joined by y and written as three words: treinta y uno, cuarenta y cinco, noventa y nueve.",
+       "eg": [
+        [
+         "treinta y uno",
+         "thirty-one"
+        ],
+        [
+         "cuarenta y cinco",
+         "forty-five"
+        ],
+        [
+         "noventa y nueve",
+         "ninety-nine"
+        ]
+       ]
+      },
+      {
+       "h": "Cien and ciento",
+       "b": "Cien counts exactly one hundred and stands before a noun. From 101 to 199 the form is ciento, with no y after it.",
+       "eg": [
+        [
+         "cien pesos",
+         "one hundred pesos"
+        ],
+        [
+         "ciento cinco",
+         "one hundred five"
+        ],
+        [
+         "mil doscientos",
+         "one thousand two hundred"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "trece",
+       "e": "thirteen",
+       "ipa": "ˈtɾe.se",
+       "pos": "num"
+      },
+      {
+       "t": "quince",
+       "e": "fifteen",
+       "ipa": "ˈkin.se",
+       "pos": "num"
+      },
+      {
+       "t": "veinte",
+       "e": "twenty",
+       "ipa": "ˈbein.te",
+       "pos": "num"
+      },
+      {
+       "t": "treinta",
+       "e": "thirty",
+       "ipa": "ˈtɾein.ta",
+       "pos": "num"
+      },
+      {
+       "t": "cuarenta",
+       "e": "forty",
+       "ipa": "kwa.ˈɾen.ta",
+       "pos": "num"
+      },
+      {
+       "t": "cincuenta",
+       "e": "fifty",
+       "ipa": "siŋ.ˈkwen.ta",
+       "pos": "num"
+      },
+      {
+       "t": "sesenta",
+       "e": "sixty",
+       "ipa": "se.ˈsen.ta",
+       "pos": "num"
+      },
+      {
+       "t": "setenta",
+       "e": "seventy",
+       "ipa": "se.ˈten.ta",
+       "pos": "num"
+      },
+      {
+       "t": "ochenta",
+       "e": "eighty",
+       "ipa": "o.ˈtʃen.ta",
+       "pos": "num"
+      },
+      {
+       "t": "noventa",
+       "e": "ninety",
+       "ipa": "no.ˈβen.ta",
+       "pos": "num"
+      },
+      {
+       "t": "cien",
+       "e": "one hundred",
+       "ipa": "ˈsjen",
+       "pos": "num",
+       "note": "ciento in 101-199"
+      },
+      {
+       "t": "mil",
+       "e": "one thousand",
+       "ipa": "ˈmil",
+       "pos": "num",
+       "note": "never un mil"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Hay treinta alumnos en la clase",
+       "e": "There are thirty students in the class",
+       "ipa": "ˈai ˈtɾein.ta a.ˈlum.nos en la ˈkla.se"
+      },
+      {
+       "t": "Mi abuela tiene ochenta años",
+       "e": "My grandmother is eighty",
+       "ipa": "mi a.ˈβwe.la ˈtje.ne o.ˈtʃen.ta ˈa.ɲos"
+      },
+      {
+       "t": "El libro cuesta cien pesos",
+       "e": "The book costs one hundred pesos",
+       "ipa": "el ˈli.βɾo ˈkwes.ta ˈsjem ˈpe.sos"
+      },
+      {
+       "t": "Cuarenta y cinco minutos",
+       "e": "Forty-five minutes",
+       "ipa": "kwa.ˈɾen.ta i ˈsiŋ.ko mi.ˈnu.tos"
+      }
+     ]
+    },
+    {
+     "name": "Money",
+     "tips": [
+      {
+       "h": "Costar follows gustar",
+       "b": "Costar appears in the third person only, and it agrees with the thing bought: cuesta for one, cuestan for several.",
+       "eg": [
+        [
+         "¿Cuánto cuesta?",
+         "How much is it?"
+        ],
+        [
+         "¿Cuánto cuestan?",
+         "How much are they?"
+        ],
+        [
+         "Cuesta mil pesos",
+         "It costs a thousand pesos"
+        ]
+       ]
+      },
+      {
+       "h": "Names of money are lower case",
+       "b": "A currency is an ordinary noun and keeps its article: el peso, el dólar, el euro. The amount comes first and the currency follows.",
+       "eg": [
+        [
+         "cien pesos",
+         "one hundred pesos"
+        ],
+        [
+         "veinte dólares",
+         "twenty dollars"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "dinero",
+       "e": "money",
+       "ipa": "di.ˈne.ɾo",
+       "pos": "noun",
+       "note": "el dinero (m)"
+      },
+      {
+       "t": "moneda",
+       "e": "coin",
+       "ipa": "mo.ˈne.ða",
+       "pos": "noun",
+       "note": "la moneda (f)"
+      },
+      {
+       "t": "billete",
+       "e": "bill",
+       "ipa": "bi.ˈʝe.te",
+       "pos": "noun",
+       "note": "el billete (m)"
+      },
+      {
+       "t": "precio",
+       "e": "price",
+       "ipa": "ˈpɾe.sjo",
+       "pos": "noun",
+       "note": "el precio (m)"
+      },
+      {
+       "t": "tarjeta",
+       "e": "card",
+       "ipa": "taɾ.ˈxe.ta",
+       "pos": "noun",
+       "note": "la tarjeta (f)"
+      },
+      {
+       "t": "caro",
+       "e": "expensive",
+       "ipa": "ˈka.ɾo",
+       "pos": "adj"
+      },
+      {
+       "t": "barato",
+       "e": "cheap",
+       "ipa": "ba.ˈɾa.to",
+       "pos": "adj"
+      },
+      {
+       "t": "rico",
+       "e": "rich",
+       "ipa": "ˈri.ko",
+       "pos": "adj"
+      },
+      {
+       "t": "pobre",
+       "e": "poor",
+       "ipa": "ˈpo.βɾe",
+       "pos": "adj"
+      },
+      {
+       "t": "pagar",
+       "e": "to pay",
+       "ipa": "pa.ˈɣaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "costar",
+       "e": "to cost",
+       "ipa": "kos.ˈtaɾ",
+       "pos": "verb",
+       "note": "cuesta, third person"
+      },
+      {
+       "t": "ahorrar",
+       "e": "to save",
+       "ipa": "a.o.ˈraɾ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Este libro es muy caro",
+       "e": "This book is very expensive",
+       "ipa": "ˈes.te ˈli.βɾo es ˈmuj ˈka.ɾo"
+      },
+      {
+       "t": "Pago con tarjeta",
+       "e": "I pay by card",
+       "ipa": "ˈpa.ɣo kon taɾ.ˈxe.ta"
+      },
+      {
+       "t": "¿Cuánto cuesta esta camisa?",
+       "e": "How much is this shirt?",
+       "ipa": "ˈkwan.to ˈkwes.ta ˈes.ta ka.ˈmi.sa"
+      },
+      {
+       "t": "No tengo dinero ahora",
+       "e": "I have no money now",
+       "ipa": "ˈno ˈteŋ.ɡo ði.ˈne.ɾo a.ˈo.ɾa"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "OUT AND ABOUT",
+   "subtitle": "Ordering a meal, shopping, pastimes, and sport",
+   "skills": [
+    {
+     "name": "Restaurant",
+     "tips": [
+      {
+       "h": "Quisiera is the polite order",
+       "b": "Quiero states a want plainly. Quisiera softens it to would like and is the ordinary form for ordering food from a stranger.",
+       "eg": [
+        [
+         "Quisiera un café",
+         "I would like a coffee"
+        ],
+        [
+         "¿Me trae la cuenta?",
+         "Could I have the check?"
+        ],
+        [
+         "Para mí, la sopa",
+         "The soup for me"
+        ]
+       ]
+      },
+      {
+       "h": "Each meal has its own verb",
+       "b": "The three meals carry matching verbs: desayunar for breakfast, almorzar for lunch, cenar for dinner. The noun and the verb share a stem.",
+       "eg": [
+        [
+         "Desayuno a las siete",
+         "I have breakfast at seven"
+        ],
+        [
+         "Almorzamos en casa",
+         "We have lunch at home"
+        ],
+        [
+         "Ceno con mi familia",
+         "I have dinner with my family"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "mesero",
+       "e": "waiter",
+       "ipa": "me.ˈse.ɾo",
+       "pos": "noun",
+       "note": "el mesero (m)"
+      },
+      {
+       "t": "carta",
+       "e": "menu",
+       "ipa": "ˈkaɾ.ta",
+       "pos": "noun",
+       "note": "la carta (f)"
+      },
+      {
+       "t": "cuenta",
+       "e": "check",
+       "ipa": "ˈkwen.ta",
+       "pos": "noun",
+       "note": "la cuenta (f)"
+      },
+      {
+       "t": "propina",
+       "e": "tip",
+       "ipa": "pɾo.ˈpi.na",
+       "pos": "noun",
+       "note": "la propina (f)"
+      },
+      {
+       "t": "desayuno",
+       "e": "breakfast",
+       "ipa": "de.sa.ˈʝu.no",
+       "pos": "noun",
+       "note": "el desayuno (m)"
+      },
+      {
+       "t": "almuerzo",
+       "e": "lunch",
+       "ipa": "al.ˈmweɾ.so",
+       "pos": "noun",
+       "note": "el almuerzo (m)"
+      },
+      {
+       "t": "cena",
+       "e": "dinner",
+       "ipa": "ˈse.na",
+       "pos": "noun",
+       "note": "la cena (f)"
+      },
+      {
+       "t": "postre",
+       "e": "dessert",
+       "ipa": "ˈpos.tɾe",
+       "pos": "noun",
+       "note": "el postre (m)"
+      },
+      {
+       "t": "sal",
+       "e": "salt",
+       "ipa": "ˈsal",
+       "pos": "noun",
+       "note": "la sal (f)"
+      },
+      {
+       "t": "azúcar",
+       "e": "sugar",
+       "ipa": "a.ˈsu.kaɾ",
+       "pos": "noun",
+       "note": "el azúcar (m)"
+      },
+      {
+       "t": "caliente",
+       "e": "hot",
+       "ipa": "ka.ˈljen.te",
+       "pos": "adj"
+      },
+      {
+       "t": "pedir",
+       "e": "to order",
+       "ipa": "pe.ˈðiɾ",
+       "pos": "verb",
+       "note": "pido, stem change"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La cuenta, por favor",
+       "e": "The check, please",
+       "ipa": "la ˈkwen.ta poɾ fa.ˈβoɾ"
+      },
+      {
+       "t": "Quisiera un café con leche",
+       "e": "I would like a coffee with milk",
+       "ipa": "ki.ˈsje.ɾa uŋ ka.ˈfe koŋ ˈle.tʃe"
+      },
+      {
+       "t": "El almuerzo está caliente",
+       "e": "The lunch is hot",
+       "ipa": "el al.ˈmweɾ.so es.ˈta ka.ˈljen.te"
+      },
+      {
+       "t": "¿Qué hay de postre?",
+       "e": "What is for dessert?",
+       "ipa": "ˈke ˈai ðe ˈpos.tɾe"
+      }
+     ]
+    },
+    {
+     "name": "Shopping",
+     "tips": [
+      {
+       "h": "Buscar carries its own for",
+       "b": "Buscar already means to look for, so no preposition follows it. Esperar, mirar and pedir work the same way.",
+       "eg": [
+        [
+         "Busco un regalo",
+         "I am looking for a gift"
+        ],
+        [
+         "Espero el autobús",
+         "I am waiting for the bus"
+        ],
+        [
+         "Pido la cuenta",
+         "I ask for the check"
+        ]
+       ]
+      },
+      {
+       "h": "Going shopping",
+       "b": "The act of shopping is ir de compras. A single purchase is hacer una compra, and the verb comprar names the buying itself.",
+       "eg": [
+        [
+         "Voy de compras",
+         "I go shopping"
+        ],
+        [
+         "Compro fruta",
+         "I buy fruit"
+        ],
+        [
+         "¿Cuánto es todo?",
+         "How much is everything?"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "cliente",
+       "e": "customer",
+       "ipa": "ˈkljen.te",
+       "pos": "noun",
+       "note": "el cliente (m)"
+      },
+      {
+       "t": "supermercado",
+       "e": "supermarket",
+       "ipa": "su.peɾ.meɾ.ˈka.ðo",
+       "pos": "noun",
+       "note": "el supermercado (m)"
+      },
+      {
+       "t": "caja",
+       "e": "box",
+       "ipa": "ˈka.xa",
+       "pos": "noun",
+       "note": "la caja (f)"
+      },
+      {
+       "t": "lista",
+       "e": "list",
+       "ipa": "ˈlis.ta",
+       "pos": "noun",
+       "note": "la lista (f)"
+      },
+      {
+       "t": "oferta",
+       "e": "sale",
+       "ipa": "o.ˈfeɾ.ta",
+       "pos": "noun",
+       "note": "la oferta (f)"
+      },
+      {
+       "t": "talla",
+       "e": "size",
+       "ipa": "ˈta.ʝa",
+       "pos": "noun",
+       "note": "la talla (f)"
+      },
+      {
+       "t": "regalo",
+       "e": "gift",
+       "ipa": "re.ˈɣa.lo",
+       "pos": "noun",
+       "note": "el regalo (m)"
+      },
+      {
+       "t": "comprar",
+       "e": "to buy",
+       "ipa": "kom.ˈpɾaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "vender",
+       "e": "to sell",
+       "ipa": "ben.ˈdeɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "buscar",
+       "e": "to look for",
+       "ipa": "bus.ˈkaɾ",
+       "pos": "verb",
+       "note": "no preposition"
+      },
+      {
+       "t": "probar",
+       "e": "to try",
+       "ipa": "pɾo.ˈβaɾ",
+       "pos": "verb",
+       "note": "pruebo, stem change"
+      },
+      {
+       "t": "necesitar",
+       "e": "to need",
+       "ipa": "ne.se.si.ˈtaɾ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Busco un regalo para mi madre",
+       "e": "I am looking for a gift for my mother",
+       "ipa": "ˈbus.ko un re.ˈɣa.lo ˈpa.ɾa mi ˈma.ðɾe"
+      },
+      {
+       "t": "Necesito una camisa nueva",
+       "e": "I need a new shirt",
+       "ipa": "ne.se.ˈsi.to ˈu.na ka.ˈmi.sa ˈnwe.βa"
+      },
+      {
+       "t": "Compro fruta en el supermercado",
+       "e": "I buy fruit at the supermarket",
+       "ipa": "ˈkom.pɾo ˈfɾu.ta en el su.peɾ.meɾ.ˈka.ðo"
+      },
+      {
+       "t": "Esta falda está en oferta",
+       "e": "This skirt is on sale",
+       "ipa": "ˈes.ta ˈfal.da es.ˈta en o.ˈfeɾ.ta"
+      }
+     ]
+    },
+    {
+     "name": "Hobbies",
+     "tips": [
+      {
+       "h": "Two verbs for the word play",
+       "b": "Jugar covers games and sport and takes a before the name of the game. Tocar covers playing an instrument or any music.",
+       "eg": [
+        [
+         "Juego al fútbol",
+         "I play soccer"
+        ],
+        [
+         "Toco la guitarra",
+         "I play the guitar"
+        ],
+        [
+         "Los niños juegan",
+         "The children are playing"
+        ]
+       ]
+      },
+      {
+       "h": "Gustar with an infinitive",
+       "b": "When what pleases is an activity, the infinitive follows gusta and the verb stays singular even with two activities listed.",
+       "eg": [
+        [
+         "Me gusta cantar",
+         "I like singing"
+        ],
+        [
+         "Le gusta bailar",
+         "She likes dancing"
+        ],
+        [
+         "Nos gusta leer y pintar",
+         "We like reading and painting"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "música",
+       "e": "music",
+       "ipa": "ˈmu.si.ka",
+       "pos": "noun",
+       "note": "la música (f)"
+      },
+      {
+       "t": "canción",
+       "e": "song",
+       "ipa": "kan.ˈsjon",
+       "pos": "noun",
+       "note": "la canción (f)"
+      },
+      {
+       "t": "película",
+       "e": "movie",
+       "ipa": "pe.ˈli.ku.la",
+       "pos": "noun",
+       "note": "la película (f)"
+      },
+      {
+       "t": "baile",
+       "e": "dance",
+       "ipa": "ˈbai.le",
+       "pos": "noun",
+       "note": "el baile (m)"
+      },
+      {
+       "t": "juego",
+       "e": "game",
+       "ipa": "ˈxwe.ɣo",
+       "pos": "noun",
+       "note": "el juego (m)"
+      },
+      {
+       "t": "fiesta",
+       "e": "party",
+       "ipa": "ˈfjes.ta",
+       "pos": "noun",
+       "note": "la fiesta (f)"
+      },
+      {
+       "t": "cantar",
+       "e": "to sing",
+       "ipa": "kan.ˈtaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "bailar",
+       "e": "to dance",
+       "ipa": "bai.ˈlaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "jugar",
+       "e": "to play",
+       "ipa": "xu.ˈɣaɾ",
+       "pos": "verb",
+       "note": "jugar a: play a game"
+      },
+      {
+       "t": "tocar",
+       "e": "to play music",
+       "ipa": "to.ˈkaɾ",
+       "pos": "verb",
+       "note": "also: to touch"
+      },
+      {
+       "t": "pintar",
+       "e": "to paint",
+       "ipa": "pin.ˈtaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "dibujar",
+       "e": "to draw",
+       "ipa": "di.βu.ˈxaɾ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Me gusta bailar y cantar",
+       "e": "I like dancing and singing",
+       "ipa": "me ˈɡus.ta βai.ˈlaɾ i kan.ˈtaɾ"
+      },
+      {
+       "t": "Vamos a una fiesta",
+       "e": "We are going to a party",
+       "ipa": "ˈba.mos a ˈu.na ˈfjes.ta"
+      },
+      {
+       "t": "Ella toca el piano",
+       "e": "She plays the piano",
+       "ipa": "ˈe.ʝa ˈto.ka el ˈpja.no"
+      },
+      {
+       "t": "Los niños juegan en el parque",
+       "e": "The children play in the park",
+       "ipa": "los ˈni.ɲos ˈxwe.ɣan en el ˈpaɾ.ke"
+      }
+     ]
+    },
+    {
+     "name": "Sports",
+     "tips": [
+      {
+       "h": "Jugar al plus the sport",
+       "b": "The name of a sport follows jugar with a, which contracts with el to al: jugar al fútbol, jugar al tenis.",
+       "eg": [
+        [
+         "Juego al fútbol",
+         "I play soccer"
+        ],
+        [
+         "Juegan al béisbol",
+         "They play baseball"
+        ]
+       ]
+      },
+      {
+       "h": "Winning, losing and earning",
+       "b": "Ganar covers both winning a match and earning money, and perder covers both losing a match and losing an object.",
+       "eg": [
+        [
+         "Ganamos el partido",
+         "We won the match"
+        ],
+        [
+         "Gana mucho dinero",
+         "He earns a lot of money"
+        ],
+        [
+         "Perdí las llaves",
+         "I lost the keys"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "deporte",
+       "e": "sport",
+       "ipa": "de.ˈpoɾ.te",
+       "pos": "noun",
+       "note": "el deporte (m)"
+      },
+      {
+       "t": "fútbol",
+       "e": "soccer",
+       "ipa": "ˈfut.βol",
+       "pos": "noun",
+       "note": "el fútbol (m)"
+      },
+      {
+       "t": "pelota",
+       "e": "ball",
+       "ipa": "pe.ˈlo.ta",
+       "pos": "noun",
+       "note": "la pelota (f)"
+      },
+      {
+       "t": "equipo",
+       "e": "team",
+       "ipa": "e.ˈki.po",
+       "pos": "noun",
+       "note": "el equipo (m)"
+      },
+      {
+       "t": "partido",
+       "e": "match",
+       "ipa": "paɾ.ˈti.ðo",
+       "pos": "noun",
+       "note": "el partido (m)"
+      },
+      {
+       "t": "jugador",
+       "e": "player",
+       "ipa": "xu.ɣa.ˈðoɾ",
+       "pos": "noun",
+       "note": "el jugador (m)"
+      },
+      {
+       "t": "gimnasio",
+       "e": "gym",
+       "ipa": "xim.ˈna.sjo",
+       "pos": "noun",
+       "note": "el gimnasio (m)"
+      },
+      {
+       "t": "correr",
+       "e": "to run",
+       "ipa": "ko.ˈreɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "nadar",
+       "e": "to swim",
+       "ipa": "na.ˈðaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "saltar",
+       "e": "to jump",
+       "ipa": "sal.ˈtaɾ",
+       "pos": "verb"
+      },
+      {
+       "t": "montar",
+       "e": "to ride",
+       "ipa": "mon.ˈtaɾ",
+       "pos": "verb",
+       "note": "montar en bicicleta"
+      },
+      {
+       "t": "perder",
+       "e": "to lose",
+       "ipa": "peɾ.ˈðeɾ",
+       "pos": "verb",
+       "note": "pierdo, stem change"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi equipo juega hoy",
+       "e": "My team plays today",
+       "ipa": "mi e.ˈki.po ˈxwe.ɣa ˈoi"
+      },
+      {
+       "t": "Corro en el parque",
+       "e": "I run in the park",
+       "ipa": "ˈko.ro en el ˈpaɾ.ke"
+      },
+      {
+       "t": "Los jugadores están cansados",
+       "e": "The players are tired",
+       "ipa": "los xu.ɣa.ˈðo.ɾes es.ˈtaŋ kan.ˈsa.ðos"
+      },
+      {
+       "t": "Me gusta nadar en el mar",
+       "e": "I like swimming in the sea",
+       "ipa": "me ˈɡus.ta na.ˈðaɾ en el ˈmaɾ"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "THE WORLD",
+   "subtitle": "Landscape, the city, countries and languages, and more verbs",
+   "skills": [
+    {
+     "name": "Nature",
+     "tips": [
+      {
+       "h": "The letter h is silent",
+       "b": "H is written and never pronounced: hoja sounds like oja, hola like ola. The only place h is heard is in the pair ch.",
+       "eg": [
+        [
+         "hoja",
+         "leaf"
+        ],
+        [
+         "hombre",
+         "man"
+        ],
+        [
+         "hielo",
+         "ice"
+        ],
+        [
+         "noche",
+         "night"
+        ]
+       ]
+      },
+      {
+       "h": "The article in a general statement",
+       "b": "A noun taken in general keeps its article, where English drops it: la nieve es blanca, me gustan las montañas.",
+       "eg": [
+        [
+         "La nieve es blanca",
+         "Snow is white"
+        ],
+        [
+         "Me gustan las flores",
+         "I like flowers"
+        ],
+        [
+         "El agua es fría",
+         "Water is cold"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "árbol",
+       "e": "tree",
+       "ipa": "ˈaɾ.βol",
+       "pos": "noun",
+       "note": "el árbol (m)"
+      },
+      {
+       "t": "flor",
+       "e": "flower",
+       "ipa": "ˈfloɾ",
+       "pos": "noun",
+       "note": "la flor (f)"
+      },
+      {
+       "t": "hoja",
+       "e": "leaf",
+       "ipa": "ˈo.xa",
+       "pos": "noun",
+       "note": "la hoja (f)"
+      },
+      {
+       "t": "río",
+       "e": "river",
+       "ipa": "ˈri.o",
+       "pos": "noun",
+       "note": "el río (m)"
+      },
+      {
+       "t": "montaña",
+       "e": "mountain",
+       "ipa": "mon.ˈta.ɲa",
+       "pos": "noun",
+       "note": "la montaña (f)"
+      },
+      {
+       "t": "bosque",
+       "e": "forest",
+       "ipa": "ˈbos.ke",
+       "pos": "noun",
+       "note": "el bosque (m)"
+      },
+      {
+       "t": "mar",
+       "e": "sea",
+       "ipa": "ˈmaɾ",
+       "pos": "noun",
+       "note": "el mar (m)"
+      },
+      {
+       "t": "cielo",
+       "e": "sky",
+       "ipa": "ˈsje.lo",
+       "pos": "noun",
+       "note": "el cielo (m)"
+      },
+      {
+       "t": "luna",
+       "e": "moon",
+       "ipa": "ˈlu.na",
+       "pos": "noun",
+       "note": "la luna (f)"
+      },
+      {
+       "t": "estrella",
+       "e": "star",
+       "ipa": "es.ˈtɾe.ʝa",
+       "pos": "noun",
+       "note": "la estrella (f)"
+      },
+      {
+       "t": "tierra",
+       "e": "earth",
+       "ipa": "ˈtje.ra",
+       "pos": "noun",
+       "note": "la tierra (f)"
+      },
+      {
+       "t": "piedra",
+       "e": "stone",
+       "ipa": "ˈpje.ðɾa",
+       "pos": "noun",
+       "note": "la piedra (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "El río pasa por el bosque",
+       "e": "The river runs through the forest",
+       "ipa": "el ˈri.o ˈpa.sa poɾ el ˈbos.ke"
+      },
+      {
+       "t": "Las estrellas están en el cielo",
+       "e": "The stars are in the sky",
+       "ipa": "las es.ˈtɾe.ʝas es.ˈtan en el ˈsje.lo"
+      },
+      {
+       "t": "Veo el sol y la luna",
+       "e": "I see the sun and the moon",
+       "ipa": "ˈbe.o el ˈsol i la ˈlu.na"
+      },
+      {
+       "t": "La montaña es muy alta",
+       "e": "The mountain is very tall",
+       "ipa": "la mon.ˈta.ɲa es ˈmuj ˈal.ta"
+      }
+     ]
+    },
+    {
+     "name": "City",
+     "tips": [
+      {
+       "h": "La gente takes a singular verb",
+       "b": "Gente is one collective noun, so the verb after it stays singular: la gente habla, la gente camina. English treats people as plural.",
+       "eg": [
+        [
+         "La gente habla",
+         "The people are talking"
+        ],
+        [
+         "Hay mucha gente",
+         "There are many people"
+        ]
+       ]
+      },
+      {
+       "h": "Por for movement along a place",
+       "b": "Por marks the route: movement along a street, through a park or around a city. A for the same verb would mark the destination instead.",
+       "eg": [
+        [
+         "Camino por la calle",
+         "I walk along the street"
+        ],
+        [
+         "Paso por la plaza",
+         "I go through the square"
+        ],
+        [
+         "Voy a la plaza",
+         "I go to the square"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ciudad",
+       "e": "city",
+       "ipa": "sju.ˈðað",
+       "pos": "noun",
+       "note": "la ciudad (f)"
+      },
+      {
+       "t": "pueblo",
+       "e": "town",
+       "ipa": "ˈpwe.βlo",
+       "pos": "noun",
+       "note": "el pueblo (m)"
+      },
+      {
+       "t": "calle",
+       "e": "street",
+       "ipa": "ˈka.ʝe",
+       "pos": "noun",
+       "note": "la calle (f)"
+      },
+      {
+       "t": "plaza",
+       "e": "square",
+       "ipa": "ˈpla.sa",
+       "pos": "noun",
+       "note": "la plaza (f)"
+      },
+      {
+       "t": "edificio",
+       "e": "building",
+       "ipa": "e.ði.ˈfi.sjo",
+       "pos": "noun",
+       "note": "el edificio (m)"
+      },
+      {
+       "t": "puente",
+       "e": "bridge",
+       "ipa": "ˈpwen.te",
+       "pos": "noun",
+       "note": "el puente (m)"
+      },
+      {
+       "t": "acera",
+       "e": "sidewalk",
+       "ipa": "a.ˈse.ɾa",
+       "pos": "noun",
+       "note": "la acera (f)"
+      },
+      {
+       "t": "semáforo",
+       "e": "traffic light",
+       "ipa": "se.ˈma.fo.ɾo",
+       "pos": "noun",
+       "note": "el semáforo (m)"
+      },
+      {
+       "t": "gente",
+       "e": "people",
+       "ipa": "ˈxen.te",
+       "pos": "noun",
+       "note": "la gente (f), singular"
+      },
+      {
+       "t": "policía",
+       "e": "police",
+       "ipa": "po.li.ˈsi.a",
+       "pos": "noun",
+       "note": "la policía (f)"
+      },
+      {
+       "t": "vecino",
+       "e": "neighbor",
+       "ipa": "be.ˈsi.no",
+       "pos": "noun",
+       "note": "el vecino (m)"
+      },
+      {
+       "t": "ruido",
+       "e": "noise",
+       "ipa": "ˈrwi.ðo",
+       "pos": "noun",
+       "note": "el ruido (m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La gente camina por la calle",
+       "e": "The people walk along the street",
+       "ipa": "la ˈxen.te ka.ˈmi.na poɾ la ˈka.ʝe"
+      },
+      {
+       "t": "Vivo en un pueblo pequeño",
+       "e": "I live in a small town",
+       "ipa": "ˈbi.βo en um ˈpwe.βlo pe.ˈke.ɲo"
+      },
+      {
+       "t": "El edificio está en la plaza",
+       "e": "The building is on the square",
+       "ipa": "el e.ði.ˈfi.sjo es.ˈta en la ˈpla.sa"
+      },
+      {
+       "t": "Hay mucho ruido aquí",
+       "e": "There is a lot of noise here",
+       "ipa": "ˈai ˈmu.tʃo ˈrwi.ðo a.ˈki"
+      }
+     ]
+    },
+    {
+     "name": "Countries",
+     "tips": [
+      {
+       "h": "Languages are lower case",
+       "b": "A country is capitalised, and the language and the nationality drawn from it are not: España, español; Francia, francés.",
+       "eg": [
+        [
+         "Hablo español",
+         "I speak Spanish"
+        ],
+        [
+         "Es mexicana",
+         "She is Mexican"
+        ],
+        [
+         "Vivo en Francia",
+         "I live in France"
+        ]
+       ]
+      },
+      {
+       "h": "Ser de names the origin",
+       "b": "Origin is stated with ser and de, and the question is ¿De dónde es? Countries take no article in this pattern.",
+       "eg": [
+        [
+         "Soy de México",
+         "I am from Mexico"
+        ],
+        [
+         "¿De dónde es usted?",
+         "Where are you from?"
+        ],
+        [
+         "Es de Colombia",
+         "He is from Colombia"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "país",
+       "e": "country",
+       "ipa": "pa.ˈis",
+       "pos": "noun",
+       "note": "el país (m)"
+      },
+      {
+       "t": "mundo",
+       "e": "world",
+       "ipa": "ˈmun.do",
+       "pos": "noun",
+       "note": "el mundo (m)"
+      },
+      {
+       "t": "idioma",
+       "e": "language",
+       "ipa": "i.ˈðjo.ma",
+       "pos": "noun",
+       "note": "el idioma (m)"
+      },
+      {
+       "t": "bandera",
+       "e": "flag",
+       "ipa": "ban.ˈde.ɾa",
+       "pos": "noun",
+       "note": "la bandera (f)"
+      },
+      {
+       "t": "frontera",
+       "e": "border",
+       "ipa": "fɾon.ˈte.ɾa",
+       "pos": "noun",
+       "note": "la frontera (f)"
+      },
+      {
+       "t": "español",
+       "e": "Spanish",
+       "ipa": "es.pa.ˈɲol",
+       "pos": "noun",
+       "note": "el español (m)"
+      },
+      {
+       "t": "inglés",
+       "e": "English",
+       "ipa": "iŋ.ˈɡles",
+       "pos": "noun",
+       "note": "el inglés (m)"
+      },
+      {
+       "t": "francés",
+       "e": "French",
+       "ipa": "fɾan.ˈses",
+       "pos": "noun",
+       "note": "el francés (m)"
+      },
+      {
+       "t": "España",
+       "e": "Spain",
+       "ipa": "es.ˈpa.ɲa",
+       "pos": "noun",
+       "note": "no article"
+      },
+      {
+       "t": "Francia",
+       "e": "France",
+       "ipa": "ˈfɾan.sja",
+       "pos": "noun",
+       "note": "no article"
+      },
+      {
+       "t": "Alemania",
+       "e": "Germany",
+       "ipa": "a.le.ˈma.nja",
+       "pos": "noun",
+       "note": "no article"
+      },
+      {
+       "t": "Japón",
+       "e": "Japan",
+       "ipa": "xa.ˈpon",
+       "pos": "noun",
+       "note": "no article"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ella habla tres idiomas",
+       "e": "She speaks three languages",
+       "ipa": "ˈe.ʝa ˈa.βla ˈtɾes i.ˈðjo.mas"
+      },
+      {
+       "t": "Soy de un país pequeño",
+       "e": "I am from a small country",
+       "ipa": "ˈsoi ðe um pa.ˈis pe.ˈke.ɲo"
+      },
+      {
+       "t": "En Francia hablan francés",
+       "e": "In France they speak French",
+       "ipa": "em ˈfɾan.sja ˈa.βlan fɾan.ˈses"
+      },
+      {
+       "t": "Quiero viajar por el mundo",
+       "e": "I want to travel around the world",
+       "ipa": "ˈkje.ɾo βja.ˈxaɾ poɾ el ˈmun.do"
+      }
+     ]
+    },
+    {
+     "name": "More Verbs",
+     "tips": [
+      {
+       "h": "Verbs that change their stem",
+       "b": "Querer, poder, pedir and their kind change the vowel of the stem in every form except nosotros: quiero, quieres, quiere, queremos, quieren.",
+       "eg": [
+        [
+         "quiero",
+         "I want"
+        ],
+        [
+         "puedes",
+         "you can"
+        ],
+        [
+         "queremos",
+         "we want"
+        ],
+        [
+         "podemos",
+         "we can"
+        ]
+       ]
+      },
+      {
+       "h": "Reflexive verbs",
+       "b": "A verb listed with -se turns its action back on the subject. The pronoun changes with the person and stands before the verb: me llamo, se levanta.",
+       "eg": [
+        [
+         "Me llamo Ana",
+         "My name is Ana"
+        ],
+        [
+         "Se levanta temprano",
+         "He gets up early"
+        ],
+        [
+         "Nos levantamos",
+         "We get up"
+        ]
+       ]
+      },
+      {
+       "h": "Saber and conocer",
+       "b": "Saber holds facts and skills, and takes an infinitive for an ability. Conocer holds acquaintance with a person, a city or a work, and takes the personal a before a person.",
+       "eg": [
+        [
+         "Sé la respuesta",
+         "I know the answer"
+        ],
+        [
+         "Sé nadar",
+         "I know how to swim"
+        ],
+        [
+         "Conozco a Ana",
+         "I know Ana"
+        ],
+        [
+         "Conozco la ciudad",
+         "I know the city"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "querer",
+       "e": "to want",
+       "ipa": "ke.ˈɾeɾ",
+       "pos": "verb",
+       "note": "quiero, stem change"
+      },
+      {
+       "t": "poder",
+       "e": "to be able",
+       "ipa": "po.ˈðeɾ",
+       "pos": "verb",
+       "note": "puedo, stem change"
+      },
+      {
+       "t": "deber",
+       "e": "to have to",
+       "ipa": "de.ˈβeɾ",
+       "pos": "verb",
+       "note": "also: to owe"
+      },
+      {
+       "t": "saber",
+       "e": "to know",
+       "ipa": "sa.ˈβeɾ",
+       "pos": "verb",
+       "note": "facts and skills"
+      },
+      {
+       "t": "conocer",
+       "e": "to know a person",
+       "ipa": "ko.no.ˈseɾ",
+       "pos": "verb",
+       "note": "people and places"
+      },
+      {
+       "t": "decir",
+       "e": "to say",
+       "ipa": "de.ˈsiɾ",
+       "pos": "verb",
+       "note": "digo, stem change"
+      },
+      {
+       "t": "venir",
+       "e": "to come",
+       "ipa": "be.ˈniɾ",
+       "pos": "verb",
+       "note": "vengo, stem change"
+      },
+      {
+       "t": "dar",
+       "e": "to give",
+       "ipa": "ˈdaɾ",
+       "pos": "verb",
+       "note": "doy in the yo form"
+      },
+      {
+       "t": "llamarse",
+       "e": "to be called",
+       "ipa": "ʝa.ˈmaɾ.se",
+       "pos": "verb",
+       "note": "reflexive"
+      },
+      {
+       "t": "levantarse",
+       "e": "to get up",
+       "ipa": "le.βan.ˈtaɾ.se",
+       "pos": "verb",
+       "note": "reflexive"
+      },
+      {
+       "t": "aunque",
+       "e": "although",
+       "ipa": "ˈauŋ.ke",
+       "pos": "conj"
+      },
+      {
+       "t": "mientras",
+       "e": "while",
+       "ipa": "ˈmjen.tɾas",
+       "pos": "conj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Quiero aprender otro idioma",
+       "e": "I want to learn another language",
+       "ipa": "ˈkje.ɾo a.pɾen.ˈdeɾ ˈo.tɾo i.ˈðjo.ma"
+      },
+      {
+       "t": "No puedo ir hoy",
+       "e": "I cannot go today",
+       "ipa": "ˈno ˈpwe.ðo ˈiɾ ˈoi"
+      },
+      {
+       "t": "Me levanto a las seis",
+       "e": "I get up at six",
+       "ipa": "me le.ˈβan.to a las ˈseis"
+      },
+      {
+       "t": "Conozco a su hermana",
+       "e": "I know his sister",
+       "ipa": "ko.ˈnos.ko a su eɾ.ˈma.na"
+      }
+     ]
+    }
+   ]
+  }
+ ]
 }

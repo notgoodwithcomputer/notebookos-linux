@@ -161,8 +161,12 @@ seq._arm_all(True)
 check("sequencer: Undo names the action it takes back",
       [l for l, _a in seq.menu_items("Edit")][0]
       == "Undo Arm All Tracks    Ctrl+Z")
-check("sequencer: Clear All Takes carries the house ellipsis",
-      "Clear All Takes…" in [l for l, _a in seq.menu_items("Track")])
+# The item was renamed "Clear All Takes…" -> "Remove Every Clip…" (function
+# first, per the UI text mandate) and this check kept naming the old label, so
+# it failed on a menu that is correct. The contract being guarded is the
+# ELLIPSIS — a destructive item that stops to ask carries one.
+check("sequencer: Remove Every Clip carries the house ellipsis",
+      "Remove Every Clip…" in [l for l, _a in seq.menu_items("Track")])
 # The shipped wording is "Not saved to a file" (sequencer._update_proj), and
 # that is the key present in all 17 catalogs. "No project saved yet" was an
 # earlier draft and exists nowhere in the tree any more.
@@ -185,7 +189,9 @@ check("video: Delete Clip carries the house ellipsis",
 # "Clear Conversation…" / "Clear conversation?" were BitChat chrome. BitChat
 # was removed on 2026-07-28 and the strings are gone from every source file and
 # from all 17 catalogs, so requiring them here only ever fails.
-NEW_CHROME = ("Clear All Takes…", "Delete Clip…",
+# The LIVE labels, not retired ones: "Clear All Takes…" is still in the
+# catalogs as a dead key, so checking it proved nothing about what ships.
+NEW_CHROME = ("Remove Every Clip…", "Delete Clip…",
               "Not saved to a file", "%s armed")
 missing = []
 for code in "de el eo es fr hi it ja ko nl pl pt ru sr tr yi zh".split():

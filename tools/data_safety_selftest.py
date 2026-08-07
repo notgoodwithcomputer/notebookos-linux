@@ -248,6 +248,10 @@ _ALLOWED = [
     ("settings.py", "/etc/hostname", "system config, not user work"),
     ("finder.py", "origins", "trash put-back sidecar, rebuilt on next trash"),
     ("finder.py", "nbapp.APP_FLAG", "runtime flag in /tmp"),
+    # gbasdk hands off to the emulator the same way the Finder hands off to
+    # an app, and writes the identical runtime flag. Same pattern, same
+    # reason, same allowance.
+    ("gbasdk.py", "nbapp.APP_FLAG", "runtime flag in /tmp"),
     ("finder.py", 'open(d, "wb")', "chunked copy into a NEW destination file"),
     # Cover art pulled out of a music file and cached so playing a track does
     # not decode it again. Temp + os.replace into $NB_HOME/.cache; the source
@@ -272,6 +276,20 @@ _ALLOWED = [
     ("firstrun.py", "HOSTNAME_FILE", "system config, not user work"),
     ("firstrun.py", "USER_NAME_FILE", "the display name, system config"),
     ("firstrun.py", "XKB_CONF", "system config, not user work"),
+    # Writing an image to a USB stick IS this app's function, and the target is
+    # a raw BLOCK DEVICE (/dev/sdX), not a file. The safe pattern this section
+    # enforces -- write a temp file, os.replace it into position -- has no
+    # meaning for a device node: there is nothing to rename onto, and a partial
+    # write cannot be avoided by any file-level trick. Erasing the chosen disk
+    # is the operation the user asked for, not an accident to be guarded
+    # against here; the guarding that DOES apply lives in the app and is real
+    # (_system_disks() excludes anything mounted, in use as swap, or backing a
+    # loop device; _is_usb() checks the sysfs device link rather than the
+    # unreliable `removable` flag; and the disk has to be confirmed BY NAME).
+    # Listed rather than left failing because a data-safety gate that is
+    # permanently red for a legitimate case stops being read at all -- which is
+    # the one outcome that would let a real truncating write through.
+    ("usbwriter.py", 'd["node"], "wb"', "raw block device; writing it is the app"),
 ]
 
 
@@ -403,6 +421,7 @@ def section_write_paths():
 STORES = [
     ("academics", "academics.json", "lecture notes, timetable and homework"),
     ("accounting", "accounting.json", "the ledger"),
+    ("bills", "bills.json",         "every bill and how it gets paid"),
     ("calendar", "calendar.json",   "every appointment"),
     ("contacts", "contacts.json",   "every person they know"),
     ("cookbook", "cookbook.json",   "their recipes"),
@@ -672,6 +691,14 @@ def _rec_calendar(n):
              "cal": "Personal"} for i in range(n)]
 
 
+def _rec_bills(n):
+    return {"bills": [{"id": "b%d" % i, "payee": "Payee %03d" % i,
+                       "account": "44-%03d" % i, "amount": 1000 + i,
+                       "due": "2026-08-11", "every": 1, "method": "mail",
+                       "address": "PO Box %d" % i, "phone": "", "note": "",
+                       "lead": 5, "paid": []} for i in range(n)]}
+
+
 def _rec_workout(n):
     return {"goal": 0, "days": {}, "goals": {},
             "exercises": [{"id": i, "name": "Lift %03d" % i, "sets": 3,
@@ -695,6 +722,8 @@ RECORD_STORES = {
                    lambda w: len(w.people),    lambda d: len(d["people"])),
     "calendar":   ("calendar.json",   _rec_calendar,
                    lambda w: len(w.events),    lambda d: len(d)),
+    "bills":      ("bills.json",      _rec_bills,
+                   lambda w: len(w.bills),     lambda d: len(d["bills"])),
     "workout":    ("workout.json",    _rec_workout,
                    lambda w: len(w.data["exercises"]),
                    lambda d: len(d["exercises"])),

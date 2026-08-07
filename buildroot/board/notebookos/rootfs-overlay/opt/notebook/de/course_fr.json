@@ -1,260 +1,6249 @@
 {
-  "code": "fr",
-  "name": "French",
-  "from": "English",
-  "units": [
+ "code": "fr",
+ "name": "French",
+ "from": "English",
+ "note": "Spelling and sound part ways in French: the Alphabet card lists the pairings",
+ "alphabet": [
+  {
+   "c": "u",
+   "ipa": "y",
+   "e": "lips rounded for oo while the tongue holds ee: tu, rue"
+  },
+  {
+   "c": "ou",
+   "ipa": "u",
+   "e": "oo as in soup: vous, jour"
+  },
+  {
+   "c": "oi",
+   "ipa": "wa",
+   "e": "wa as in watt: trois, noir"
+  },
+  {
+   "c": "eu, œu",
+   "ipa": "ø, œ",
+   "e": "the vowel of her, lips rounded: deux, sœur"
+  },
+  {
+   "c": "ai, ei",
+   "ipa": "ɛ",
+   "e": "e as in bed: lait, neige"
+  },
+  {
+   "c": "au, eau",
+   "ipa": "o",
+   "e": "o as in note: chaud, bateau"
+  },
+  {
+   "c": "on, om",
+   "ipa": "ɔ̃",
+   "e": "nasal o, the n itself is not sounded: bonjour"
+  },
+  {
+   "c": "an, en, am",
+   "ipa": "ɑ̃",
+   "e": "nasal a, the n itself is not sounded: grand"
+  },
+  {
+   "c": "in, ain, ein",
+   "ipa": "ɛ̃",
+   "e": "nasal e, the n itself is not sounded: vin, pain"
+  },
+  {
+   "c": "un",
+   "ipa": "œ̃",
+   "e": "nasal eu, heard in un and lundi"
+  },
+  {
+   "c": "é and è",
+   "ipa": "e, ɛ",
+   "e": "closed e in café, open e in père"
+  },
+  {
+   "c": "ch",
+   "ipa": "ʃ",
+   "e": "sh as in ship: chat, chercher"
+  },
+  {
+   "c": "gn",
+   "ipa": "ɲ",
+   "e": "ny as in canyon: montagne, gagner"
+  },
+  {
+   "c": "j, ge, gi",
+   "ipa": "ʒ",
+   "e": "s as in measure: jour, rouge"
+  },
+  {
+   "c": "ill",
+   "ipa": "j",
+   "e": "y as in yes: fille, travailler"
+  },
+  {
+   "c": "r",
+   "ipa": "ʁ",
+   "e": "scraped at the back of the throat, never rolled: rue"
+  },
+  {
+   "c": "h",
+   "ipa": "∅",
+   "e": "never pronounced: heure, homme, hôpital"
+  },
+  {
+   "c": "final d p s t x z",
+   "ipa": "∅",
+   "e": "silent at the end of a word: petit, vous, nez"
+  }
+ ],
+ "units": [
+  {
+   "title": "BASICS",
+   "subtitle": "Greeting people, naming who is who, and counting to twelve",
+   "skills": [
     {
-      "title": "BASICS",
-      "skills": [
-        {
-          "name": "Greetings",
-          "words": [
-            {"t": "bonjour", "e": "hello", "ipa": "bɔ̃.ʒuʁ"},
-            {"t": "au revoir", "e": "goodbye", "ipa": "o ʁə.vwaʁ"},
-            {"t": "merci", "e": "thank you", "ipa": "mɛʁ.si"},
-            {"t": "s'il vous plaît", "e": "please", "ipa": "sil vu plɛ"},
-            {"t": "oui", "e": "yes", "ipa": "wi"},
-            {"t": "non", "e": "no", "ipa": "nɔ̃"},
-            {"t": "pardon", "e": "sorry", "ipa": "paʁ.dɔ̃"},
-            {"t": "bonne nuit", "e": "good night", "ipa": "bɔn nɥi"}
-          ],
-          "phrases": [
-            {"t": "Comment ça va ?", "e": "How are you?", "ipa": "kɔ.mɑ̃ sa va"},
-            {"t": "Je m'appelle Ana", "e": "My name is Ana", "ipa": "ʒə ma.pɛl a.na"}
-          ]
-        },
-        {
-          "name": "People",
-          "words": [
-            {"t": "je", "e": "I", "ipa": "ʒə"},
-            {"t": "tu", "e": "you", "ipa": "ty"},
-            {"t": "il", "e": "he", "ipa": "il"},
-            {"t": "elle", "e": "she", "ipa": "ɛl"},
-            {"t": "nous", "e": "we", "ipa": "nu"},
-            {"t": "ils", "e": "they", "ipa": "il"},
-            {"t": "homme", "e": "man", "ipa": "ɔm"},
-            {"t": "femme", "e": "woman", "ipa": "fam"},
-            {"t": "garçon", "e": "boy", "ipa": "ɡaʁ.sɔ̃"},
-            {"t": "fille", "e": "girl", "ipa": "fij"}
-          ],
-          "phrases": [
-            {"t": "C'est un homme", "e": "He is a man", "ipa": "sɛ.t‿œ̃.n‿ɔm"}
-          ]
-        },
-        {
-          "name": "Numbers",
-          "words": [
-            {"t": "un", "e": "one", "ipa": "œ̃"},
-            {"t": "deux", "e": "two", "ipa": "dø"},
-            {"t": "trois", "e": "three", "ipa": "tʁwa"},
-            {"t": "quatre", "e": "four", "ipa": "katʁ"},
-            {"t": "cinq", "e": "five", "ipa": "sɛ̃k"},
-            {"t": "six", "e": "six", "ipa": "sis"},
-            {"t": "sept", "e": "seven", "ipa": "sɛt"},
-            {"t": "huit", "e": "eight", "ipa": "ɥit"},
-            {"t": "neuf", "e": "nine", "ipa": "nœf"},
-            {"t": "dix", "e": "ten", "ipa": "dis"}
-          ],
-          "phrases": [
-            {"t": "J'ai deux frères", "e": "I have two brothers", "ipa": "ʒe dø fʁɛʁ"}
-          ]
-        }
-      ]
+     "name": "Greetings",
+     "tips": [
+      {
+       "h": "Bonjour and the time of day",
+       "b": "French greets by the part of the day. Bonjour serves from morning until dusk, bonsoir replaces it after dark, and bonne nuit is said only when parting for the night. Salut works in both directions, arriving and leaving, and only among people on familiar terms.",
+       "eg": [
+        [
+         "Bonjour.",
+         "Hello."
+        ],
+        [
+         "Bonsoir.",
+         "Good evening."
+        ],
+        [
+         "Bonne nuit.",
+         "Good night."
+        ],
+        [
+         "Salut.",
+         "Hi."
+        ]
+       ]
+      },
+      {
+       "h": "Madame and monsieur",
+       "b": "A greeting to a stranger carries a title: bonjour madame, bonjour monsieur. Leaving the title out is short to the point of rudeness in a shop or an office.",
+       "eg": [
+        [
+         "Bonjour, madame.",
+         "Hello, madam."
+        ],
+        [
+         "Au revoir, monsieur.",
+         "Goodbye, sir."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "bonjour",
+       "e": "hello",
+       "ipa": "bɔ̃.ʒuʁ",
+       "pos": "interj"
+      },
+      {
+       "t": "salut",
+       "e": "hi",
+       "ipa": "sa.ly",
+       "pos": "interj",
+       "note": "familiar only"
+      },
+      {
+       "t": "bonsoir",
+       "e": "good evening",
+       "ipa": "bɔ̃.swaʁ",
+       "pos": "interj"
+      },
+      {
+       "t": "bonne nuit",
+       "e": "good night",
+       "ipa": "bɔn nɥi",
+       "pos": "interj"
+      },
+      {
+       "t": "au revoir",
+       "e": "goodbye",
+       "ipa": "o ʁə.vwaʁ",
+       "pos": "interj"
+      },
+      {
+       "t": "merci",
+       "e": "thank you",
+       "ipa": "mɛʁ.si",
+       "pos": "interj"
+      },
+      {
+       "t": "pardon",
+       "e": "sorry",
+       "ipa": "paʁ.dɔ̃",
+       "pos": "interj"
+      },
+      {
+       "t": "bienvenue",
+       "e": "welcome",
+       "ipa": "bjɛ̃v.ny",
+       "pos": "interj"
+      },
+      {
+       "t": "madame",
+       "e": "madam",
+       "ipa": "ma.dam",
+       "pos": "noun",
+       "note": "Madame (f)"
+      },
+      {
+       "t": "monsieur",
+       "e": "sir",
+       "ipa": "mə.sjø",
+       "pos": "noun",
+       "note": "Monsieur (m)"
+      },
+      {
+       "t": "oui",
+       "e": "yes",
+       "ipa": "wi",
+       "pos": "adv"
+      },
+      {
+       "t": "non",
+       "e": "no",
+       "ipa": "nɔ̃",
+       "pos": "adv"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Bonjour, comment ça va ?",
+       "e": "Hello, how are you?",
+       "ipa": "bɔ̃.ʒuʁ kɔ.mɑ̃ sa va",
+       "lit": "hello how it goes"
+      },
+      {
+       "t": "Je m'appelle Marie",
+       "e": "My name is Marie",
+       "ipa": "ʒə ma.pɛl ma.ʁi",
+       "lit": "I call myself Marie"
+      },
+      {
+       "t": "Au revoir et bonne nuit",
+       "e": "Goodbye and good night",
+       "ipa": "o ʁə.vwaʁ e bɔn nɥi"
+      },
+      {
+       "t": "Bonsoir madame, ça va bien",
+       "e": "Good evening madam, all is well",
+       "ipa": "bɔ̃.swaʁ ma.dam sa va bjɛ̃"
+      }
+     ]
     },
     {
-      "title": "PEOPLE",
-      "skills": [
-        {
-          "name": "Family",
-          "words": [
-            {"t": "père", "e": "father", "ipa": "pɛʁ"},
-            {"t": "mère", "e": "mother", "ipa": "mɛʁ"},
-            {"t": "fils", "e": "son", "ipa": "fis"},
-            {"t": "fille", "e": "daughter", "ipa": "fij"},
-            {"t": "frère", "e": "brother", "ipa": "fʁɛʁ"},
-            {"t": "sœur", "e": "sister", "ipa": "sœʁ"},
-            {"t": "famille", "e": "family", "ipa": "fa.mij"},
-            {"t": "ami", "e": "friend", "ipa": "a.mi"}
-          ],
-          "phrases": [
-            {"t": "Elle est mon amie", "e": "She is my friend", "ipa": "ɛl ɛ mɔ̃.n‿a.mi"}
-          ]
-        },
-        {
-          "name": "Colors",
-          "words": [
-            {"t": "rouge", "e": "red", "ipa": "ʁuʒ"},
-            {"t": "bleu", "e": "blue", "ipa": "blø"},
-            {"t": "vert", "e": "green", "ipa": "vɛʁ"},
-            {"t": "jaune", "e": "yellow", "ipa": "ʒon"},
-            {"t": "noir", "e": "black", "ipa": "nwaʁ"},
-            {"t": "blanc", "e": "white", "ipa": "blɑ̃"}
-          ],
-          "phrases": [
-            {"t": "La pomme est rouge", "e": "The apple is red", "ipa": "la pɔm ɛ ʁuʒ"}
-          ]
-        }
-      ]
+     "name": "People",
+     "tips": [
+      {
+       "h": "Tu and vous",
+       "b": "French has two words where English has one you. Tu addresses one friend, one relative or one child. Vous addresses a stranger, an older person, anyone in a position of authority, and any group of two or more. The verb ending changes with the choice.",
+       "eg": [
+        [
+         "Comment vas-tu ?",
+         "How are you? (familiar)"
+        ],
+        [
+         "Comment allez-vous ?",
+         "How are you? (polite)"
+        ],
+        [
+         "Vous êtes trois.",
+         "There are three of you."
+        ]
+       ]
+      },
+      {
+       "h": "Ils, elles and mixed groups",
+       "b": "Ils stands for a group of men and for any mixed group. Elles is used only when every member of the group is female. One man in a group of a hundred women makes the whole group ils.",
+       "eg": [
+        [
+         "ils",
+         "they (men or mixed)"
+        ],
+        [
+         "elles",
+         "they (women only)"
+        ]
+       ]
+      },
+      {
+       "h": "On in place of nous",
+       "b": "Spoken French replaces nous with on for we. On takes the same verb form as il and elle, so the verb looks singular while the meaning is plural.",
+       "eg": [
+        [
+         "On mange.",
+         "We eat."
+        ],
+        [
+         "Nous mangeons.",
+         "We eat."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "je",
+       "e": "I",
+       "ipa": "ʒə",
+       "pos": "pron",
+       "note": "j' before a vowel"
+      },
+      {
+       "t": "tu",
+       "e": "you",
+       "ipa": "ty",
+       "pos": "pron",
+       "note": "informal singular"
+      },
+      {
+       "t": "il",
+       "e": "he",
+       "ipa": "il",
+       "pos": "pron"
+      },
+      {
+       "t": "elle",
+       "e": "she",
+       "ipa": "ɛl",
+       "pos": "pron"
+      },
+      {
+       "t": "on",
+       "e": "we (informal)",
+       "ipa": "ɔ̃",
+       "pos": "pron",
+       "note": "verb takes il form"
+      },
+      {
+       "t": "nous",
+       "e": "we",
+       "ipa": "nu",
+       "pos": "pron"
+      },
+      {
+       "t": "vous",
+       "e": "you (plural)",
+       "ipa": "vu",
+       "pos": "pron",
+       "note": "polite or plural"
+      },
+      {
+       "t": "ils",
+       "e": "they",
+       "ipa": "il",
+       "pos": "pron",
+       "note": "elles if all female"
+      },
+      {
+       "t": "homme",
+       "e": "man",
+       "ipa": "ɔm",
+       "pos": "noun",
+       "note": "l'homme (m)"
+      },
+      {
+       "t": "femme",
+       "e": "woman",
+       "ipa": "fam",
+       "pos": "noun",
+       "note": "la femme (f)"
+      },
+      {
+       "t": "garçon",
+       "e": "boy",
+       "ipa": "ɡaʁ.sɔ̃",
+       "pos": "noun",
+       "note": "le garçon (m)"
+      },
+      {
+       "t": "fille",
+       "e": "girl",
+       "ipa": "fij",
+       "pos": "noun",
+       "note": "la fille (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "C'est un homme",
+       "e": "He is a man",
+       "ipa": "sɛ.t‿œ̃.n‿ɔm",
+       "lit": "it-is a man"
+      },
+      {
+       "t": "Elle est une femme",
+       "e": "She is a woman",
+       "ipa": "ɛ.lɛ.t‿yn fam"
+      },
+      {
+       "t": "Je suis une fille",
+       "e": "I am a girl",
+       "ipa": "ʒə sɥi.z‿yn fij"
+      },
+      {
+       "t": "Tu es un garçon",
+       "e": "You are a boy",
+       "ipa": "ty ɛ.z‿œ̃ ɡaʁ.sɔ̃"
+      }
+     ]
     },
     {
-      "title": "EVERYDAY",
-      "skills": [
-        {
-          "name": "Food",
-          "words": [
-            {"t": "eau", "e": "water", "ipa": "o"},
-            {"t": "pain", "e": "bread", "ipa": "pɛ̃"},
-            {"t": "lait", "e": "milk", "ipa": "lɛ"},
-            {"t": "pomme", "e": "apple", "ipa": "pɔm"},
-            {"t": "viande", "e": "meat", "ipa": "vjɑ̃d"},
-            {"t": "café", "e": "coffee", "ipa": "ka.fe"},
-            {"t": "fromage", "e": "cheese", "ipa": "fʁɔ.maʒ"}
-          ],
-          "phrases": [
-            {"t": "Je mange du pain", "e": "I eat bread", "ipa": "ʒə mɑ̃ʒ dy pɛ̃"},
-            {"t": "Je bois de l'eau", "e": "I drink water", "ipa": "ʒə bwa də lo"}
-          ]
-        },
-        {
-          "name": "Verbs",
-          "words": [
-            {"t": "être", "e": "to be", "ipa": "ɛtʁ"},
-            {"t": "avoir", "e": "to have", "ipa": "a.vwaʁ"},
-            {"t": "aller", "e": "to go", "ipa": "a.le"},
-            {"t": "voir", "e": "to see", "ipa": "vwaʁ"},
-            {"t": "parler", "e": "to speak", "ipa": "paʁ.le"},
-            {"t": "apprendre", "e": "to learn", "ipa": "a.pʁɑ̃dʁ"},
-            {"t": "manger", "e": "to eat", "ipa": "mɑ̃.ʒe"},
-            {"t": "boire", "e": "to drink", "ipa": "bwaʁ"}
-          ],
-          "phrases": [
-            {"t": "J'apprends le français", "e": "I learn French", "ipa": "ʒa.pʁɑ̃ lə fʁɑ̃.sɛ"},
-            {"t": "Parlez-vous français ?", "e": "Do you speak French?", "ipa": "paʁ.le vu fʁɑ̃.sɛ"}
-          ]
-        },
-        {
-          "name": "Describing",
-          "words": [
-            {"t": "grand", "e": "big", "ipa": "ɡʁɑ̃"},
-            {"t": "petit", "e": "small", "ipa": "pə.ti"},
-            {"t": "bon", "e": "good", "ipa": "bɔ̃"},
-            {"t": "beau", "e": "beautiful", "ipa": "bo"},
-            {"t": "nouveau", "e": "new", "ipa": "nu.vo"},
-            {"t": "chaud", "e": "hot", "ipa": "ʃo"},
-            {"t": "froid", "e": "cold", "ipa": "fʁwa"}
-          ],
-          "phrases": [
-            {"t": "Une grande maison", "e": "A big house", "ipa": "yn ɡʁɑ̃d mɛ.zɔ̃"}
-          ]
-        }
-      ]
+     "name": "Phrases",
+     "tips": [
+      {
+       "h": "Please, polite and familiar",
+       "b": "The polite please is s'il vous plaît, built on vous. With someone addressed as tu it becomes s'il te plaît. Both mean if it pleases, with vous or te naming the person addressed.",
+       "eg": [
+        [
+         "s'il vous plaît",
+         "please (polite)"
+        ],
+        [
+         "s'il te plaît",
+         "please (familiar)"
+        ]
+       ]
+      },
+      {
+       "h": "Très and beaucoup",
+       "b": "Très modifies an adjective or an adverb, beaucoup modifies a verb or a quantity. The two are never stacked: très beaucoup does not exist.",
+       "eg": [
+        [
+         "C'est très bien.",
+         "That is very good."
+        ],
+        [
+         "Merci beaucoup.",
+         "Thank you very much."
+        ],
+        [
+         "Il travaille beaucoup.",
+         "He works a lot."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "s'il vous plaît",
+       "e": "please",
+       "ipa": "sil vu plɛ",
+       "pos": "interj",
+       "note": "s'il te plaît with tu"
+      },
+      {
+       "t": "de rien",
+       "e": "you are welcome",
+       "ipa": "də ʁjɛ̃",
+       "pos": "interj"
+      },
+      {
+       "t": "excusez-moi",
+       "e": "excuse me",
+       "ipa": "ɛks.ky.ze mwa",
+       "pos": "interj"
+      },
+      {
+       "t": "d'accord",
+       "e": "all right",
+       "ipa": "da.kɔʁ",
+       "pos": "interj"
+      },
+      {
+       "t": "voilà",
+       "e": "there it is",
+       "ipa": "vwa.la",
+       "pos": "interj"
+      },
+      {
+       "t": "peut-être",
+       "e": "maybe",
+       "ipa": "pø.tɛtʁ",
+       "pos": "adv"
+      },
+      {
+       "t": "beaucoup",
+       "e": "a lot",
+       "ipa": "bo.ku",
+       "pos": "adv"
+      },
+      {
+       "t": "aussi",
+       "e": "also",
+       "ipa": "o.si",
+       "pos": "adv"
+      },
+      {
+       "t": "très",
+       "e": "very",
+       "ipa": "tʁɛ",
+       "pos": "adv"
+      },
+      {
+       "t": "bien",
+       "e": "well",
+       "ipa": "bjɛ̃",
+       "pos": "adv"
+      },
+      {
+       "t": "mais",
+       "e": "but",
+       "ipa": "mɛ",
+       "pos": "conj"
+      },
+      {
+       "t": "et",
+       "e": "and",
+       "ipa": "e",
+       "pos": "conj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Oui, s'il vous plaît",
+       "e": "Yes, please",
+       "ipa": "wi sil vu plɛ"
+      },
+      {
+       "t": "C'est très bien",
+       "e": "That is very good",
+       "ipa": "sɛ tʁɛ bjɛ̃"
+      },
+      {
+       "t": "Merci beaucoup et au revoir",
+       "e": "Thank you very much and goodbye",
+       "ipa": "mɛʁ.si bo.ku e o ʁə.vwaʁ"
+      },
+      {
+       "t": "Excusez-moi monsieur, s'il vous plaît",
+       "e": "Excuse me sir, please",
+       "ipa": "ɛks.ky.ze mwa mə.sjø sil vu plɛ"
+      }
+     ]
     },
     {
-      "title": "GETTING AROUND",
-      "skills": [
-        {
-          "name": "Places",
-          "words": [
-            {"t": "maison", "e": "house", "ipa": "mɛ.zɔ̃"},
-            {"t": "école", "e": "school", "ipa": "e.kɔl"},
-            {"t": "magasin", "e": "store", "ipa": "ma.ɡa.zɛ̃"},
-            {"t": "ville", "e": "city", "ipa": "vil"},
-            {"t": "rue", "e": "street", "ipa": "ʁy"},
-            {"t": "marché", "e": "market", "ipa": "maʁ.ʃe"},
-            {"t": "porte", "e": "door", "ipa": "pɔʁt"}
-          ],
-          "phrases": [
-            {"t": "L'école est grande", "e": "The school is big", "ipa": "le.kɔl ɛ ɡʁɑ̃d"},
-            {"t": "Je vais à l'école", "e": "I go to the school", "ipa": "ʒə vɛ a le.kɔl"}
-          ]
-        },
-        {
-          "name": "Time",
-          "words": [
-            {"t": "aujourd'hui", "e": "today", "ipa": "o.ʒuʁ.dɥi"},
-            {"t": "demain", "e": "tomorrow", "ipa": "də.mɛ̃"},
-            {"t": "maintenant", "e": "now", "ipa": "mɛ̃t.nɑ̃"},
-            {"t": "jour", "e": "day", "ipa": "ʒuʁ"},
-            {"t": "nuit", "e": "night", "ipa": "nɥi"},
-            {"t": "semaine", "e": "week", "ipa": "sə.mɛn"},
-            {"t": "heure", "e": "hour", "ipa": "œʁ"},
-            {"t": "année", "e": "year", "ipa": "a.ne"}
-          ],
-          "phrases": [
-            {"t": "La semaine a sept jours", "e": "The week has seven days", "ipa": "la sə.mɛn a sɛt ʒuʁ"},
-            {"t": "Aujourd'hui je mange du pain", "e": "Today I eat bread", "ipa": "o.ʒuʁ.dɥi ʒə mɑ̃ʒ dy pɛ̃"}
-          ]
-        },
-        {
-          "name": "Travel",
-          "words": [
-            {"t": "voiture", "e": "car", "ipa": "vwa.tyʁ"},
-            {"t": "train", "e": "train", "ipa": "tʁɛ̃"},
-            {"t": "avion", "e": "airplane", "ipa": "a.vjɔ̃"},
-            {"t": "ici", "e": "here", "ipa": "i.si"},
-            {"t": "là", "e": "there", "ipa": "la"},
-            {"t": "loin", "e": "far", "ipa": "lwɛ̃"},
-            {"t": "près", "e": "near", "ipa": "pʁɛ"}
-          ],
-          "phrases": [
-            {"t": "La voiture est nouvelle", "e": "The car is new", "ipa": "la vwa.tyʁ ɛ nu.vɛl"},
-            {"t": "L'avion est grand", "e": "The airplane is big", "ipa": "la.vjɔ̃ ɛ ɡʁɑ̃"}
-          ]
-        }
-      ]
-    },
-    {
-      "title": "THE WORLD",
-      "skills": [
-        {
-          "name": "Animals",
-          "words": [
-            {"t": "chien", "e": "dog", "ipa": "ʃjɛ̃"},
-            {"t": "chat", "e": "cat", "ipa": "ʃa"},
-            {"t": "oiseau", "e": "bird", "ipa": "wa.zo"},
-            {"t": "cheval", "e": "horse", "ipa": "ʃə.val"},
-            {"t": "poisson", "e": "fish", "ipa": "pwa.sɔ̃"},
-            {"t": "vache", "e": "cow", "ipa": "vaʃ"},
-            {"t": "poulet", "e": "chicken", "ipa": "pu.lɛ"}
-          ],
-          "phrases": [
-            {"t": "J'ai un chien", "e": "I have a dog", "ipa": "ʒe œ̃ ʃjɛ̃"},
-            {"t": "Le chat boit du lait", "e": "The cat drinks milk", "ipa": "lə ʃa bwa dy lɛ"}
-          ]
-        },
-        {
-          "name": "Nature",
-          "words": [
-            {"t": "soleil", "e": "sun", "ipa": "sɔ.lɛj"},
-            {"t": "lune", "e": "moon", "ipa": "lyn"},
-            {"t": "arbre", "e": "tree", "ipa": "aʁbʁ"},
-            {"t": "fleur", "e": "flower", "ipa": "flœʁ"},
-            {"t": "pluie", "e": "rain", "ipa": "plɥi"},
-            {"t": "mer", "e": "sea", "ipa": "mɛʁ"},
-            {"t": "ciel", "e": "sky", "ipa": "sjɛl"}
-          ],
-          "phrases": [
-            {"t": "Le ciel est bleu", "e": "The sky is blue", "ipa": "lə sjɛl ɛ blø"},
-            {"t": "Je vois le soleil", "e": "I see the sun", "ipa": "ʒə vwa lə sɔ.lɛj"}
-          ]
-        },
-        {
-          "name": "More Verbs",
-          "words": [
-            {"t": "faire", "e": "to do", "ipa": "fɛʁ"},
-            {"t": "vouloir", "e": "to want", "ipa": "vu.lwaʁ"},
-            {"t": "pouvoir", "e": "to be able", "ipa": "pu.vwaʁ"},
-            {"t": "dire", "e": "to say", "ipa": "diʁ"},
-            {"t": "venir", "e": "to come", "ipa": "və.niʁ"},
-            {"t": "acheter", "e": "to buy", "ipa": "aʃ.te"},
-            {"t": "vivre", "e": "to live", "ipa": "vivʁ"}
-          ],
-          "phrases": [
-            {"t": "Je veux apprendre le français", "e": "I want to learn French", "ipa": "ʒə vø a.pʁɑ̃dʁ lə fʁɑ̃.sɛ"},
-            {"t": "Je veux manger du pain", "e": "I want to eat bread", "ipa": "ʒə vø mɑ̃.ʒe dy pɛ̃"}
-          ]
-        }
-      ]
+     "name": "Numbers",
+     "tips": [
+      {
+       "h": "Final consonants that come back",
+       "b": "Cinq, six, huit and dix sound their final consonant when counting or standing alone. Before a noun beginning with a consonant that ending falls silent, and before a vowel it links across as a z or a t.",
+       "eg": [
+        [
+         "six",
+         "sis, counting"
+        ],
+        [
+         "six livres",
+         "si livʁ"
+        ],
+        [
+         "six ans",
+         "si.z‿ɑ̃"
+        ],
+        [
+         "huit jours",
+         "ɥi ʒuʁ"
+        ]
+       ]
+      },
+      {
+       "h": "Un is also the article",
+       "b": "Un means one and is also the masculine word for a. The feminine pair is une. The sentence, not the word, separates the number from the article.",
+       "eg": [
+        [
+         "un livre",
+         "one book, a book"
+        ],
+        [
+         "une fille",
+         "one girl, a girl"
+        ]
+       ]
+      },
+      {
+       "h": "Age is stated with avoir",
+       "b": "Age uses avoir rather than être: j'ai dix ans. The word ans is part of the expression and is never dropped the way years is in English.",
+       "eg": [
+        [
+         "J'ai dix ans.",
+         "I am ten years old."
+        ],
+        [
+         "Il a onze ans.",
+         "He is eleven years old."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "un",
+       "e": "one",
+       "ipa": "œ̃",
+       "pos": "num",
+       "note": "une in the feminine"
+      },
+      {
+       "t": "deux",
+       "e": "two",
+       "ipa": "dø",
+       "pos": "num"
+      },
+      {
+       "t": "trois",
+       "e": "three",
+       "ipa": "tʁwa",
+       "pos": "num"
+      },
+      {
+       "t": "quatre",
+       "e": "four",
+       "ipa": "katʁ",
+       "pos": "num"
+      },
+      {
+       "t": "cinq",
+       "e": "five",
+       "ipa": "sɛ̃k",
+       "pos": "num"
+      },
+      {
+       "t": "six",
+       "e": "six",
+       "ipa": "sis",
+       "pos": "num"
+      },
+      {
+       "t": "sept",
+       "e": "seven",
+       "ipa": "sɛt",
+       "pos": "num",
+       "note": "the p is silent"
+      },
+      {
+       "t": "huit",
+       "e": "eight",
+       "ipa": "ɥit",
+       "pos": "num"
+      },
+      {
+       "t": "neuf",
+       "e": "nine",
+       "ipa": "nœf",
+       "pos": "num"
+      },
+      {
+       "t": "dix",
+       "e": "ten",
+       "ipa": "dis",
+       "pos": "num"
+      },
+      {
+       "t": "onze",
+       "e": "eleven",
+       "ipa": "ɔ̃z",
+       "pos": "num"
+      },
+      {
+       "t": "douze",
+       "e": "twelve",
+       "ipa": "duz",
+       "pos": "num"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "J'ai deux filles",
+       "e": "I have two daughters",
+       "ipa": "ʒe dø fij"
+      },
+      {
+       "t": "Nous sommes quatre",
+       "e": "There are four of us",
+       "ipa": "nu sɔm katʁ",
+       "lit": "we are four"
+      },
+      {
+       "t": "Le garçon a six ans",
+       "e": "The boy is six years old",
+       "ipa": "lə ɡaʁ.sɔ̃ a si.z‿ɑ̃",
+       "lit": "the boy has six years"
+      },
+      {
+       "t": "Trois et quatre font sept",
+       "e": "Three and four make seven",
+       "ipa": "tʁwa e katʁ fɔ̃ sɛt"
+      }
+     ]
     }
-  ]
+   ]
+  },
+  {
+   "title": "EVERYDAY",
+   "subtitle": "Food, drink, colour and the people of a household",
+   "skills": [
+    {
+     "name": "Food",
+     "tips": [
+      {
+       "h": "Gender comes with the noun",
+       "b": "Every French noun is masculine or feminine, and the article marks which one: le pain, la pomme. The ending is only a weak clue, so the gender is listed beside each noun in this course and is worth learning as part of the word.",
+       "eg": [
+        [
+         "le pain",
+         "the bread"
+        ],
+        [
+         "la pomme",
+         "the apple"
+        ],
+        [
+         "l'œuf",
+         "the egg"
+        ]
+       ]
+      },
+      {
+       "h": "The partitive du, de la, des",
+       "b": "An unmeasured quantity of something takes a partitive article: du before a masculine noun, de la before a feminine one, de l' before a vowel, and des before a plural. English drops the article here; French does not.",
+       "eg": [
+        [
+         "Je mange du pain.",
+         "I eat bread."
+        ],
+        [
+         "Je mange de la viande.",
+         "I eat meat."
+        ],
+        [
+         "Je bois de l'eau.",
+         "I drink water."
+        ],
+        [
+         "Je mange des légumes.",
+         "I eat vegetables."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "pain",
+       "e": "bread",
+       "ipa": "pɛ̃",
+       "pos": "noun",
+       "note": "le pain (m)"
+      },
+      {
+       "t": "fromage",
+       "e": "cheese",
+       "ipa": "fʁɔ.maʒ",
+       "pos": "noun",
+       "note": "le fromage (m)"
+      },
+      {
+       "t": "viande",
+       "e": "meat",
+       "ipa": "vjɑ̃d",
+       "pos": "noun",
+       "note": "la viande (f)"
+      },
+      {
+       "t": "poulet",
+       "e": "chicken",
+       "ipa": "pu.lɛ",
+       "pos": "noun",
+       "note": "le poulet (m)"
+      },
+      {
+       "t": "poisson",
+       "e": "fish",
+       "ipa": "pwa.sɔ̃",
+       "pos": "noun",
+       "note": "le poisson (m)"
+      },
+      {
+       "t": "œuf",
+       "e": "egg",
+       "ipa": "œf",
+       "pos": "noun",
+       "note": "l'œuf (m)"
+      },
+      {
+       "t": "riz",
+       "e": "rice",
+       "ipa": "ʁi",
+       "pos": "noun",
+       "note": "le riz (m)"
+      },
+      {
+       "t": "légume",
+       "e": "vegetable",
+       "ipa": "le.ɡym",
+       "pos": "noun",
+       "note": "le légume (m)"
+      },
+      {
+       "t": "pomme",
+       "e": "apple",
+       "ipa": "pɔm",
+       "pos": "noun",
+       "note": "la pomme (f)"
+      },
+      {
+       "t": "beurre",
+       "e": "butter",
+       "ipa": "bœʁ",
+       "pos": "noun",
+       "note": "le beurre (m)"
+      },
+      {
+       "t": "sel",
+       "e": "salt",
+       "ipa": "sɛl",
+       "pos": "noun",
+       "note": "le sel (m)"
+      },
+      {
+       "t": "gâteau",
+       "e": "cake",
+       "ipa": "ɡɑ.to",
+       "pos": "noun",
+       "note": "le gâteau (m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je mange du pain",
+       "e": "I eat bread",
+       "ipa": "ʒə mɑ̃ʒ dy pɛ̃"
+      },
+      {
+       "t": "Elle mange de la viande",
+       "e": "She eats meat",
+       "ipa": "ɛl mɑ̃ʒ də la vjɑ̃d"
+      },
+      {
+       "t": "Nous mangeons des légumes",
+       "e": "We eat vegetables",
+       "ipa": "nu mɑ̃.ʒɔ̃ de le.ɡym"
+      },
+      {
+       "t": "Le poulet est très bon",
+       "e": "The chicken is very good",
+       "ipa": "lə pu.lɛ ɛ tʁɛ bɔ̃"
+      }
+     ]
+    },
+    {
+     "name": "Drinks",
+     "tips": [
+      {
+       "h": "Avoir faim and avoir soif",
+       "b": "Hunger and thirst are things a person has in French, not things a person is. Avoir faim is to be hungry and avoir soif is to be thirsty, and the noun takes no article.",
+       "eg": [
+        [
+         "J'ai soif.",
+         "I am thirsty."
+        ],
+        [
+         "Il a faim.",
+         "He is hungry."
+        ],
+        [
+         "Nous avons soif.",
+         "We are thirsty."
+        ]
+       ]
+      },
+      {
+       "h": "A glass of wine",
+       "b": "A container and its contents are joined by de with no article between them: un verre de vin, une tasse de café, une bouteille d'eau.",
+       "eg": [
+        [
+         "un verre de vin",
+         "a glass of wine"
+        ],
+        [
+         "une tasse de café",
+         "a cup of coffee"
+        ],
+        [
+         "une bouteille d'eau",
+         "a bottle of water"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "eau",
+       "e": "water",
+       "ipa": "o",
+       "pos": "noun",
+       "note": "l'eau (f)"
+      },
+      {
+       "t": "lait",
+       "e": "milk",
+       "ipa": "lɛ",
+       "pos": "noun",
+       "note": "le lait (m)"
+      },
+      {
+       "t": "café",
+       "e": "coffee",
+       "ipa": "ka.fe",
+       "pos": "noun",
+       "note": "le café (m)"
+      },
+      {
+       "t": "thé",
+       "e": "tea",
+       "ipa": "te",
+       "pos": "noun",
+       "note": "le thé (m)"
+      },
+      {
+       "t": "jus",
+       "e": "juice",
+       "ipa": "ʒy",
+       "pos": "noun",
+       "note": "le jus (m)"
+      },
+      {
+       "t": "vin",
+       "e": "wine",
+       "ipa": "vɛ̃",
+       "pos": "noun",
+       "note": "le vin (m)"
+      },
+      {
+       "t": "bière",
+       "e": "beer",
+       "ipa": "bjɛʁ",
+       "pos": "noun",
+       "note": "la bière (f)"
+      },
+      {
+       "t": "verre",
+       "e": "glass",
+       "ipa": "vɛʁ",
+       "pos": "noun",
+       "note": "le verre (m)"
+      },
+      {
+       "t": "tasse",
+       "e": "cup",
+       "ipa": "tas",
+       "pos": "noun",
+       "note": "la tasse (f)"
+      },
+      {
+       "t": "bouteille",
+       "e": "bottle",
+       "ipa": "bu.tɛj",
+       "pos": "noun",
+       "note": "la bouteille (f)"
+      },
+      {
+       "t": "soif",
+       "e": "thirst",
+       "ipa": "swaf",
+       "pos": "noun",
+       "note": "la soif (f)"
+      },
+      {
+       "t": "boire",
+       "e": "to drink",
+       "ipa": "bwaʁ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je bois du café",
+       "e": "I drink coffee",
+       "ipa": "ʒə bwa dy ka.fe"
+      },
+      {
+       "t": "Elle a soif",
+       "e": "She is thirsty",
+       "ipa": "ɛ.l‿a swaf",
+       "lit": "she has thirst"
+      },
+      {
+       "t": "Nous buvons du thé",
+       "e": "We drink tea",
+       "ipa": "nu by.vɔ̃ dy te"
+      },
+      {
+       "t": "Un verre de vin, s'il vous plaît",
+       "e": "A glass of wine, please",
+       "ipa": "œ̃ vɛʁ də vɛ̃ sil vu plɛ"
+      }
+     ]
+    },
+    {
+     "name": "Colors",
+     "tips": [
+      {
+       "h": "Colours follow the noun",
+       "b": "A colour adjective is placed after the noun it describes: une pomme rouge, un chapeau noir. English puts the colour first; French almost never does.",
+       "eg": [
+        [
+         "une pomme rouge",
+         "a red apple"
+        ],
+        [
+         "le vin blanc",
+         "the white wine"
+        ],
+        [
+         "des yeux bleus",
+         "blue eyes"
+        ]
+       ]
+      },
+      {
+       "h": "Agreement in the feminine",
+       "b": "An adjective takes the gender and the number of its noun. Most add -e for the feminine and -s for the plural: vert, verte, verts, vertes. An adjective already ending in -e, such as rouge or jaune, keeps one form in both genders.",
+       "eg": [
+        [
+         "un pull vert",
+         "a green sweater"
+        ],
+        [
+         "une porte verte",
+         "a green door"
+        ],
+        [
+         "des pulls verts",
+         "green sweaters"
+        ],
+        [
+         "une robe rouge",
+         "a red dress"
+        ]
+       ]
+      },
+      {
+       "h": "Colours that never change",
+       "b": "Marron and orange are nouns pressed into service as adjectives and keep a single form: des chaussures marron, des murs orange.",
+       "eg": [
+        [
+         "des chaussures marron",
+         "brown shoes"
+        ],
+        [
+         "des robes orange",
+         "orange dresses"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "rouge",
+       "e": "red",
+       "ipa": "ʁuʒ",
+       "pos": "adj"
+      },
+      {
+       "t": "bleu",
+       "e": "blue",
+       "ipa": "blø",
+       "pos": "adj",
+       "note": "bleue in the feminine"
+      },
+      {
+       "t": "vert",
+       "e": "green",
+       "ipa": "vɛʁ",
+       "pos": "adj",
+       "note": "verte in the feminine"
+      },
+      {
+       "t": "jaune",
+       "e": "yellow",
+       "ipa": "ʒon",
+       "pos": "adj"
+      },
+      {
+       "t": "noir",
+       "e": "black",
+       "ipa": "nwaʁ",
+       "pos": "adj"
+      },
+      {
+       "t": "blanc",
+       "e": "white",
+       "ipa": "blɑ̃",
+       "pos": "adj",
+       "note": "blanche in the feminine"
+      },
+      {
+       "t": "gris",
+       "e": "grey",
+       "ipa": "ɡʁi",
+       "pos": "adj"
+      },
+      {
+       "t": "marron",
+       "e": "brown",
+       "ipa": "ma.ʁɔ̃",
+       "pos": "adj",
+       "note": "never changes form"
+      },
+      {
+       "t": "violet",
+       "e": "purple",
+       "ipa": "vjɔ.lɛ",
+       "pos": "adj"
+      },
+      {
+       "t": "rose",
+       "e": "pink",
+       "ipa": "ʁoz",
+       "pos": "adj"
+      },
+      {
+       "t": "clair",
+       "e": "pale",
+       "ipa": "klɛʁ",
+       "pos": "adj",
+       "note": "of a colour"
+      },
+      {
+       "t": "couleur",
+       "e": "colour",
+       "ipa": "ku.lœʁ",
+       "pos": "noun",
+       "note": "la couleur (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La pomme est rouge",
+       "e": "The apple is red",
+       "ipa": "la pɔm ɛ ʁuʒ"
+      },
+      {
+       "t": "Le lait est blanc",
+       "e": "The milk is white",
+       "ipa": "lə lɛ ɛ blɑ̃"
+      },
+      {
+       "t": "Le café est noir",
+       "e": "The coffee is black",
+       "ipa": "lə ka.fe ɛ nwaʁ"
+      },
+      {
+       "t": "Les légumes sont verts",
+       "e": "The vegetables are green",
+       "ipa": "le le.ɡym sɔ̃ vɛʁ"
+      }
+     ]
+    },
+    {
+     "name": "Family",
+     "tips": [
+      {
+       "h": "Mon, ma and mes",
+       "b": "A possessive agrees with the thing owned, not with the owner. Mon goes before a masculine noun, ma before a feminine one, mes before any plural. Ton and son, votre and leur follow the same rule, so son père is his father or her father depending on who is speaking.",
+       "eg": [
+        [
+         "mon frère",
+         "my brother"
+        ],
+        [
+         "ma sœur",
+         "my sister"
+        ],
+        [
+         "mes parents",
+         "my parents"
+        ],
+        [
+         "son père",
+         "his father, her father"
+        ]
+       ]
+      },
+      {
+       "h": "Mon before a vowel",
+       "b": "Before a feminine noun beginning with a vowel sound, ma is replaced by mon: mon amie, mon école. The gender of the noun is unchanged, only the sound of the pair.",
+       "eg": [
+        [
+         "mon amie",
+         "my friend (f)"
+        ],
+        [
+         "ma famille",
+         "my family"
+        ]
+       ]
+      },
+      {
+       "h": "De marks belonging",
+       "b": "Possession between two nouns is built with de, and the owned thing comes first: la fille de Marie is Marie's daughter. There is no apostrophe-s in French.",
+       "eg": [
+        [
+         "le fils de Paul",
+         "Paul's son"
+        ],
+        [
+         "la sœur de mon ami",
+         "my friend's sister"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "famille",
+       "e": "family",
+       "ipa": "fa.mij",
+       "pos": "noun",
+       "note": "la famille (f)"
+      },
+      {
+       "t": "père",
+       "e": "father",
+       "ipa": "pɛʁ",
+       "pos": "noun",
+       "note": "le père (m)"
+      },
+      {
+       "t": "mère",
+       "e": "mother",
+       "ipa": "mɛʁ",
+       "pos": "noun",
+       "note": "la mère (f)"
+      },
+      {
+       "t": "fils",
+       "e": "son",
+       "ipa": "fis",
+       "pos": "noun",
+       "note": "le fils (m)"
+      },
+      {
+       "t": "fille",
+       "e": "daughter",
+       "ipa": "fij",
+       "pos": "noun",
+       "note": "la fille (f)"
+      },
+      {
+       "t": "frère",
+       "e": "brother",
+       "ipa": "fʁɛʁ",
+       "pos": "noun",
+       "note": "le frère (m)"
+      },
+      {
+       "t": "sœur",
+       "e": "sister",
+       "ipa": "sœʁ",
+       "pos": "noun",
+       "note": "la sœur (f)"
+      },
+      {
+       "t": "enfant",
+       "e": "child",
+       "ipa": "ɑ̃.fɑ̃",
+       "pos": "noun",
+       "note": "l'enfant (m or f)"
+      },
+      {
+       "t": "oncle",
+       "e": "uncle",
+       "ipa": "ɔ̃kl",
+       "pos": "noun",
+       "note": "l'oncle (m)"
+      },
+      {
+       "t": "grand-mère",
+       "e": "grandmother",
+       "ipa": "ɡʁɑ̃.mɛʁ",
+       "pos": "noun",
+       "note": "la grand-mère (f)"
+      },
+      {
+       "t": "grand-père",
+       "e": "grandfather",
+       "ipa": "ɡʁɑ̃.pɛʁ",
+       "pos": "noun",
+       "note": "le grand-père (m)"
+      },
+      {
+       "t": "ami",
+       "e": "friend",
+       "ipa": "a.mi",
+       "pos": "noun",
+       "note": "l'ami (m), l'amie (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Voici ma famille",
+       "e": "This is my family",
+       "ipa": "vwa.si ma fa.mij"
+      },
+      {
+       "t": "Mon père a deux frères",
+       "e": "My father has two brothers",
+       "ipa": "mɔ̃ pɛʁ a dø fʁɛʁ"
+      },
+      {
+       "t": "C'est la fille de Marie",
+       "e": "She is Marie's daughter",
+       "ipa": "sɛ la fij də ma.ʁi",
+       "lit": "it-is the daughter of Marie"
+      },
+      {
+       "t": "Elle est mon amie",
+       "e": "She is my friend",
+       "ipa": "ɛ.l‿ɛ mɔ̃.n‿a.mi"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "ACTIONS",
+   "subtitle": "The present tense, describing, asking a question and denying",
+   "skills": [
+    {
+     "name": "Verbs",
+     "tips": [
+      {
+       "h": "-er verbs in the present",
+       "b": "Most French verbs end in -er. Removing that ending leaves a stem, and the stem takes -e, -es, -e, -ons, -ez, -ent. Four of the six endings are silent, so je parle, tu parles, il parle and ils parlent all sound alike; only nous and vous stand apart by ear.",
+       "eg": [
+        [
+         "je parle",
+         "I speak"
+        ],
+        [
+         "nous parlons",
+         "we speak"
+        ],
+        [
+         "vous parlez",
+         "you speak"
+        ],
+        [
+         "ils parlent",
+         "they speak"
+        ]
+       ]
+      },
+      {
+       "h": "Être and avoir",
+       "b": "The two most used verbs follow no pattern and are learned as blocks. Être: je suis, tu es, il est, nous sommes, vous êtes, ils sont. Avoir: j'ai, tu as, il a, nous avons, vous avez, ils ont.",
+       "eg": [
+        [
+         "je suis",
+         "I am"
+        ],
+        [
+         "nous sommes",
+         "we are"
+        ],
+        [
+         "j'ai",
+         "I have"
+        ],
+        [
+         "ils ont",
+         "they have"
+        ]
+       ]
+      },
+      {
+       "h": "One present, two in English",
+       "b": "Je parle covers both I speak and I am speaking. French has no separate continuous form, so the context carries that difference.",
+       "eg": [
+        [
+         "Je mange.",
+         "I eat. I am eating."
+        ],
+        [
+         "Il travaille.",
+         "He works. He is working."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "être",
+       "e": "to be",
+       "ipa": "ɛtʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "avoir",
+       "e": "to have",
+       "ipa": "a.vwaʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "aller",
+       "e": "to go",
+       "ipa": "a.le",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "faire",
+       "e": "to do",
+       "ipa": "fɛʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "parler",
+       "e": "to speak",
+       "ipa": "paʁ.le",
+       "pos": "verb"
+      },
+      {
+       "t": "manger",
+       "e": "to eat",
+       "ipa": "mɑ̃.ʒe",
+       "pos": "verb",
+       "note": "nous mangeons"
+      },
+      {
+       "t": "regarder",
+       "e": "to watch",
+       "ipa": "ʁə.ɡaʁ.de",
+       "pos": "verb"
+      },
+      {
+       "t": "écouter",
+       "e": "to listen",
+       "ipa": "e.ku.te",
+       "pos": "verb",
+       "note": "no preposition"
+      },
+      {
+       "t": "aimer",
+       "e": "to like",
+       "ipa": "ɛ.me",
+       "pos": "verb"
+      },
+      {
+       "t": "habiter",
+       "e": "to live",
+       "ipa": "a.bi.te",
+       "pos": "verb",
+       "note": "habiter à + town"
+      },
+      {
+       "t": "travailler",
+       "e": "to work",
+       "ipa": "tʁa.va.je",
+       "pos": "verb"
+      },
+      {
+       "t": "donner",
+       "e": "to give",
+       "ipa": "dɔ.ne",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Nous parlons français",
+       "e": "We speak French",
+       "ipa": "nu paʁ.lɔ̃ fʁɑ̃.sɛ"
+      },
+      {
+       "t": "J'habite à Paris",
+       "e": "I live in Paris",
+       "ipa": "ʒa.bit a pa.ʁi"
+      },
+      {
+       "t": "Il travaille beaucoup",
+       "e": "He works a lot",
+       "ipa": "il tʁa.vaj bo.ku"
+      },
+      {
+       "t": "Elle aime le café",
+       "e": "She likes coffee",
+       "ipa": "ɛ.l‿ɛm lə ka.fe"
+      }
+     ]
+    },
+    {
+     "name": "Adjectives",
+     "tips": [
+      {
+       "h": "Adjectives that go before the noun",
+       "b": "The default position is after the noun, but a short closed set comes before it: beau, bon, grand, gros, jeune, joli, mauvais, nouveau, petit, vieux. Most of these describe size, age, beauty or worth.",
+       "eg": [
+        [
+         "une petite maison",
+         "a small house"
+        ],
+        [
+         "un vieux livre",
+         "an old book"
+        ],
+        [
+         "une voiture chère",
+         "an expensive car"
+        ],
+        [
+         "un homme sérieux",
+         "a serious man"
+        ]
+       ]
+      },
+      {
+       "h": "Beau, nouveau, vieux and a vowel",
+       "b": "Three of those adjectives take a separate masculine form before a vowel sound: bel, nouvel, vieil. Their feminine forms are belle, nouvelle and vieille.",
+       "eg": [
+        [
+         "un bel homme",
+         "a handsome man"
+        ],
+        [
+         "un nouvel ami",
+         "a new friend"
+        ],
+        [
+         "un vieil arbre",
+         "an old tree"
+        ]
+       ]
+      },
+      {
+       "h": "Irregular feminine endings",
+       "b": "An adjective in -eux forms its feminine in -euse, one in -f forms it in -ve, and several double the final consonant before the -e: bon becomes bonne, gros becomes grosse.",
+       "eg": [
+        [
+         "sérieux, sérieuse",
+         "serious"
+        ],
+        [
+         "neuf, neuve",
+         "brand new"
+        ],
+        [
+         "bon, bonne",
+         "good"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "grand",
+       "e": "big",
+       "ipa": "ɡʁɑ̃",
+       "pos": "adj",
+       "note": "before the noun"
+      },
+      {
+       "t": "petit",
+       "e": "small",
+       "ipa": "pə.ti",
+       "pos": "adj",
+       "note": "before the noun"
+      },
+      {
+       "t": "bon",
+       "e": "good",
+       "ipa": "bɔ̃",
+       "pos": "adj",
+       "note": "bonne in the feminine"
+      },
+      {
+       "t": "mauvais",
+       "e": "bad",
+       "ipa": "mo.vɛ",
+       "pos": "adj"
+      },
+      {
+       "t": "beau",
+       "e": "beautiful",
+       "ipa": "bo",
+       "pos": "adj",
+       "note": "bel before a vowel"
+      },
+      {
+       "t": "joli",
+       "e": "pretty",
+       "ipa": "ʒɔ.li",
+       "pos": "adj"
+      },
+      {
+       "t": "nouveau",
+       "e": "new",
+       "ipa": "nu.vo",
+       "pos": "adj",
+       "note": "nouvel before a vowel"
+      },
+      {
+       "t": "vieux",
+       "e": "old",
+       "ipa": "vjø",
+       "pos": "adj",
+       "note": "vieil before a vowel"
+      },
+      {
+       "t": "jeune",
+       "e": "young",
+       "ipa": "ʒœn",
+       "pos": "adj"
+      },
+      {
+       "t": "difficile",
+       "e": "difficult",
+       "ipa": "di.fi.sil",
+       "pos": "adj"
+      },
+      {
+       "t": "cher",
+       "e": "expensive",
+       "ipa": "ʃɛʁ",
+       "pos": "adj",
+       "note": "chère in the feminine"
+      },
+      {
+       "t": "autre",
+       "e": "other",
+       "ipa": "otʁ",
+       "pos": "adj",
+       "note": "before the noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "C'est un bon café",
+       "e": "It is a good coffee",
+       "ipa": "sɛ.t‿œ̃ bɔ̃ ka.fe"
+      },
+      {
+       "t": "Le fromage est mauvais",
+       "e": "The cheese is bad",
+       "ipa": "lə fʁɔ.maʒ ɛ mo.vɛ"
+      },
+      {
+       "t": "Ma sœur est très jeune",
+       "e": "My sister is very young",
+       "ipa": "ma sœʁ ɛ tʁɛ ʒœn"
+      },
+      {
+       "t": "Le vin rouge est cher",
+       "e": "The red wine is expensive",
+       "ipa": "lə vɛ̃ ʁuʒ ɛ ʃɛʁ"
+      }
+     ]
+    },
+    {
+     "name": "Questions",
+     "tips": [
+      {
+       "h": "Three ways to ask",
+       "b": "Rising intonation alone turns a statement into a question in speech: tu parles français. Est-ce que placed in front of an unchanged statement does the same in any register. Inversion of verb and pronoun is the formal and written form: parles-tu français.",
+       "eg": [
+        [
+         "Tu viens ?",
+         "Are you coming?"
+        ],
+        [
+         "Est-ce que tu viens ?",
+         "Are you coming?"
+        ],
+        [
+         "Viens-tu ?",
+         "Are you coming?"
+        ]
+       ]
+      },
+      {
+       "h": "Question words come first",
+       "b": "A question word opens the sentence and is followed either by est-ce que or by an inversion: où est-ce que tu habites, où habites-tu. In casual speech it can also be left at the end: tu habites où.",
+       "eg": [
+        [
+         "Où est-ce que tu habites ?",
+         "Where do you live?"
+        ],
+        [
+         "Quand arrive-t-il ?",
+         "When does he arrive?"
+        ],
+        [
+         "Pourquoi pas ?",
+         "Why not?"
+        ]
+       ]
+      },
+      {
+       "h": "Quel agrees with its noun",
+       "b": "Quel is a determiner rather than a pronoun and takes the gender and number of the noun after it: quel livre, quelle fille, quels livres, quelles filles. All four forms sound the same.",
+       "eg": [
+        [
+         "Quel livre ?",
+         "Which book?"
+        ],
+        [
+         "Quelle heure est-il ?",
+         "What time is it?"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "qui",
+       "e": "who",
+       "ipa": "ki",
+       "pos": "pron"
+      },
+      {
+       "t": "que",
+       "e": "what",
+       "ipa": "kə",
+       "pos": "pron",
+       "note": "qu' before a vowel"
+      },
+      {
+       "t": "où",
+       "e": "where",
+       "ipa": "u",
+       "pos": "adv"
+      },
+      {
+       "t": "quand",
+       "e": "when",
+       "ipa": "kɑ̃",
+       "pos": "adv"
+      },
+      {
+       "t": "comment",
+       "e": "how",
+       "ipa": "kɔ.mɑ̃",
+       "pos": "adv"
+      },
+      {
+       "t": "pourquoi",
+       "e": "why",
+       "ipa": "puʁ.kwa",
+       "pos": "adv"
+      },
+      {
+       "t": "combien",
+       "e": "how much",
+       "ipa": "kɔ̃.bjɛ̃",
+       "pos": "adv",
+       "note": "combien de + noun"
+      },
+      {
+       "t": "est-ce que",
+       "e": "question marker",
+       "ipa": "ɛs.kə",
+       "pos": "adv",
+       "note": "opens a yes-no question"
+      },
+      {
+       "t": "quel",
+       "e": "which",
+       "ipa": "kɛl",
+       "pos": "det",
+       "note": "quelle in the feminine"
+      },
+      {
+       "t": "parce que",
+       "e": "because",
+       "ipa": "paʁs kə",
+       "pos": "conj"
+      },
+      {
+       "t": "demander",
+       "e": "to ask",
+       "ipa": "də.mɑ̃.de",
+       "pos": "verb"
+      },
+      {
+       "t": "répondre",
+       "e": "to answer",
+       "ipa": "ʁe.pɔ̃dʁ",
+       "pos": "verb",
+       "note": "répondre à + person"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Où est-ce que tu habites ?",
+       "e": "Where do you live?",
+       "ipa": "u ɛs.kə ty a.bit"
+      },
+      {
+       "t": "Comment allez-vous ?",
+       "e": "How are you?",
+       "ipa": "kɔ.mɑ̃.t‿a.le vu"
+      },
+      {
+       "t": "Pourquoi est-ce que tu travailles ?",
+       "e": "Why do you work?",
+       "ipa": "puʁ.kwa ɛs.kə ty tʁa.vaj"
+      },
+      {
+       "t": "Combien de frères as-tu ?",
+       "e": "How many brothers do you have?",
+       "ipa": "kɔ̃.bjɛ̃ də fʁɛʁ a ty"
+      }
+     ]
+    },
+    {
+     "name": "Negation",
+     "tips": [
+      {
+       "h": "Negation wraps the verb",
+       "b": "A negative sentence puts ne in front of the verb and pas after it: je ne parle pas. Ne shortens to n' before a vowel sound. In relaxed speech the ne is often dropped and pas alone carries the negation.",
+       "eg": [
+        [
+         "Je ne mange pas.",
+         "I do not eat."
+        ],
+        [
+         "Il n'a pas soif.",
+         "He is not thirsty."
+        ],
+        [
+         "Nous ne sommes pas là.",
+         "We are not there."
+        ]
+       ]
+      },
+      {
+       "h": "Pas is replaced, not doubled",
+       "b": "Jamais, rien, personne and plus take the place of pas instead of joining it. The ne stays: je ne mange rien, il ne vient jamais, elle ne travaille plus.",
+       "eg": [
+        [
+         "Je ne vois rien.",
+         "I see nothing."
+        ],
+        [
+         "Elle ne parle jamais.",
+         "She never speaks."
+        ],
+        [
+         "Il n'y a personne.",
+         "There is nobody."
+        ]
+       ]
+      },
+      {
+       "h": "Pas de after a negative",
+       "b": "The partitive du, de la and des collapse to de after a negation: j'ai du pain becomes je n'ai pas de pain. Un and une do the same: j'ai un frère becomes je n'ai pas de frère.",
+       "eg": [
+        [
+         "J'ai du café.",
+         "I have coffee."
+        ],
+        [
+         "Je n'ai pas de café.",
+         "I have no coffee."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ne",
+       "e": "not (first half)",
+       "ipa": "nə",
+       "pos": "adv",
+       "note": "n' before a vowel"
+      },
+      {
+       "t": "pas",
+       "e": "not",
+       "ipa": "pa",
+       "pos": "adv",
+       "note": "second half of ne...pas"
+      },
+      {
+       "t": "jamais",
+       "e": "never",
+       "ipa": "ʒa.mɛ",
+       "pos": "adv"
+      },
+      {
+       "t": "toujours",
+       "e": "always",
+       "ipa": "tu.ʒuʁ",
+       "pos": "adv"
+      },
+      {
+       "t": "encore",
+       "e": "still",
+       "ipa": "ɑ̃.kɔʁ",
+       "pos": "adv"
+      },
+      {
+       "t": "déjà",
+       "e": "already",
+       "ipa": "de.ʒa",
+       "pos": "adv"
+      },
+      {
+       "t": "plus",
+       "e": "no longer",
+       "ipa": "ply",
+       "pos": "adv",
+       "note": "with ne, s is silent"
+      },
+      {
+       "t": "rien",
+       "e": "nothing",
+       "ipa": "ʁjɛ̃",
+       "pos": "pron"
+      },
+      {
+       "t": "personne",
+       "e": "nobody",
+       "ipa": "pɛʁ.sɔn",
+       "pos": "pron"
+      },
+      {
+       "t": "aucun",
+       "e": "not any",
+       "ipa": "o.kœ̃",
+       "pos": "det",
+       "note": "aucune in the feminine"
+      },
+      {
+       "t": "sans",
+       "e": "without",
+       "ipa": "sɑ̃",
+       "pos": "prep"
+      },
+      {
+       "t": "ni",
+       "e": "nor",
+       "ipa": "ni",
+       "pos": "conj",
+       "note": "ne...ni...ni"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je ne parle pas français",
+       "e": "I do not speak French",
+       "ipa": "ʒə nə paʁl pa fʁɑ̃.sɛ"
+      },
+      {
+       "t": "Elle ne mange jamais de viande",
+       "e": "She never eats meat",
+       "ipa": "ɛl nə mɑ̃ʒ ʒa.mɛ də vjɑ̃d"
+      },
+      {
+       "t": "Nous n'avons pas de lait",
+       "e": "We have no milk",
+       "ipa": "nu na.vɔ̃ pa də lɛ"
+      },
+      {
+       "t": "Il ne travaille plus",
+       "e": "He no longer works",
+       "ipa": "il nə tʁa.vaj ply"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "AT HOME",
+   "subtitle": "The house, the things in it, clothing and animals",
+   "skills": [
+    {
+     "name": "House",
+     "tips": [
+      {
+       "h": "Il y a for there is",
+       "b": "Il y a covers both there is and there are, and the form never changes with number. Its negative is il n'y a pas, and the partitive after it becomes de.",
+       "eg": [
+        [
+         "Il y a une porte.",
+         "There is a door."
+        ],
+        [
+         "Il y a deux fenêtres.",
+         "There are two windows."
+        ],
+        [
+         "Il n'y a pas de jardin.",
+         "There is no garden."
+        ]
+       ]
+      },
+      {
+       "h": "Dans, sur and sous",
+       "b": "Position is stated with a preposition and the ordinary article: dans places a thing inside, sur on top, sous underneath. None of the three contracts with le on its own.",
+       "eg": [
+        [
+         "dans la cuisine",
+         "in the kitchen"
+        ],
+        [
+         "sur la fenêtre",
+         "on the window"
+        ],
+        [
+         "sous le lit",
+         "under the bed"
+        ]
+       ]
+      },
+      {
+       "h": "À la, au and aux",
+       "b": "The preposition à contracts with the definite article: à plus le gives au, à plus les gives aux. À la and à l' stay as two words.",
+       "eg": [
+        [
+         "à la cuisine",
+         "to the kitchen"
+        ],
+        [
+         "au jardin",
+         "to the garden"
+        ],
+        [
+         "à l'escalier",
+         "to the staircase"
+        ],
+        [
+         "aux fenêtres",
+         "to the windows"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "maison",
+       "e": "house",
+       "ipa": "mɛ.zɔ̃",
+       "pos": "noun",
+       "note": "la maison (f)"
+      },
+      {
+       "t": "appartement",
+       "e": "apartment",
+       "ipa": "a.paʁ.tə.mɑ̃",
+       "pos": "noun",
+       "note": "l'appartement (m)"
+      },
+      {
+       "t": "chambre",
+       "e": "bedroom",
+       "ipa": "ʃɑ̃bʁ",
+       "pos": "noun",
+       "note": "la chambre (f)"
+      },
+      {
+       "t": "cuisine",
+       "e": "kitchen",
+       "ipa": "kɥi.zin",
+       "pos": "noun",
+       "note": "la cuisine (f)"
+      },
+      {
+       "t": "salle de bains",
+       "e": "bathroom",
+       "ipa": "sal də bɛ̃",
+       "pos": "noun",
+       "note": "la salle de bains (f)"
+      },
+      {
+       "t": "salon",
+       "e": "living room",
+       "ipa": "sa.lɔ̃",
+       "pos": "noun",
+       "note": "le salon (m)"
+      },
+      {
+       "t": "jardin",
+       "e": "garden",
+       "ipa": "ʒaʁ.dɛ̃",
+       "pos": "noun",
+       "note": "le jardin (m)"
+      },
+      {
+       "t": "porte",
+       "e": "door",
+       "ipa": "pɔʁt",
+       "pos": "noun",
+       "note": "la porte (f)"
+      },
+      {
+       "t": "fenêtre",
+       "e": "window",
+       "ipa": "fə.nɛtʁ",
+       "pos": "noun",
+       "note": "la fenêtre (f)"
+      },
+      {
+       "t": "mur",
+       "e": "wall",
+       "ipa": "myʁ",
+       "pos": "noun",
+       "note": "le mur (m)"
+      },
+      {
+       "t": "toit",
+       "e": "roof",
+       "ipa": "twa",
+       "pos": "noun",
+       "note": "le toit (m)"
+      },
+      {
+       "t": "escalier",
+       "e": "staircase",
+       "ipa": "ɛs.ka.lje",
+       "pos": "noun",
+       "note": "l'escalier (m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Il y a deux chambres",
+       "e": "There are two bedrooms",
+       "ipa": "i.l‿i.a dø ʃɑ̃bʁ"
+      },
+      {
+       "t": "La cuisine est petite",
+       "e": "The kitchen is small",
+       "ipa": "la kɥi.zin ɛ pə.tit"
+      },
+      {
+       "t": "Le chat est dans le jardin",
+       "e": "The cat is in the garden",
+       "ipa": "lə ʃa ɛ dɑ̃ lə ʒaʁ.dɛ̃"
+      },
+      {
+       "t": "J'habite dans un appartement",
+       "e": "I live in an apartment",
+       "ipa": "ʒa.bit dɑ̃.z‿œ̃.n‿a.paʁ.tə.mɑ̃"
+      }
+     ]
+    },
+    {
+     "name": "Objects",
+     "tips": [
+      {
+       "h": "Un, une and des",
+       "b": "The indefinite article is un before a masculine noun, une before a feminine one, and des before any plural. English has no plural article at all, while French requires des.",
+       "eg": [
+        [
+         "un livre",
+         "a book"
+        ],
+        [
+         "une chaise",
+         "a chair"
+        ],
+        [
+         "des livres",
+         "books"
+        ],
+        [
+         "des clés",
+         "keys"
+        ]
+       ]
+      },
+      {
+       "h": "Ce, cet, cette and ces",
+       "b": "This and that are one word in French. Ce stands before a masculine noun, cet before a masculine noun beginning with a vowel sound, cette before a feminine noun, and ces before any plural. Adding -ci or -là after the noun marks near from far.",
+       "eg": [
+        [
+         "ce livre",
+         "this book"
+        ],
+        [
+         "cet homme",
+         "this man"
+        ],
+        [
+         "cette chaise",
+         "this chair"
+        ],
+        [
+         "ces clés-là",
+         "those keys"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "chaise",
+       "e": "chair",
+       "ipa": "ʃɛz",
+       "pos": "noun",
+       "note": "la chaise (f)"
+      },
+      {
+       "t": "lit",
+       "e": "bed",
+       "ipa": "li",
+       "pos": "noun",
+       "note": "le lit (m)"
+      },
+      {
+       "t": "livre",
+       "e": "book",
+       "ipa": "livʁ",
+       "pos": "noun",
+       "note": "le livre (m)"
+      },
+      {
+       "t": "clé",
+       "e": "key",
+       "ipa": "kle",
+       "pos": "noun",
+       "note": "la clé (f)"
+      },
+      {
+       "t": "téléphone",
+       "e": "phone",
+       "ipa": "te.le.fɔn",
+       "pos": "noun",
+       "note": "le téléphone (m)"
+      },
+      {
+       "t": "lampe",
+       "e": "lamp",
+       "ipa": "lɑ̃p",
+       "pos": "noun",
+       "note": "la lampe (f)"
+      },
+      {
+       "t": "couteau",
+       "e": "knife",
+       "ipa": "ku.to",
+       "pos": "noun",
+       "note": "le couteau (m)"
+      },
+      {
+       "t": "fourchette",
+       "e": "fork",
+       "ipa": "fuʁ.ʃɛt",
+       "pos": "noun",
+       "note": "la fourchette (f)"
+      },
+      {
+       "t": "cuillère",
+       "e": "spoon",
+       "ipa": "kɥi.jɛʁ",
+       "pos": "noun",
+       "note": "la cuillère (f)"
+      },
+      {
+       "t": "assiette",
+       "e": "plate",
+       "ipa": "a.sjɛt",
+       "pos": "noun",
+       "note": "l'assiette (f)"
+      },
+      {
+       "t": "stylo",
+       "e": "pen",
+       "ipa": "sti.lo",
+       "pos": "noun",
+       "note": "le stylo (m)"
+      },
+      {
+       "t": "ce",
+       "e": "this",
+       "ipa": "sə",
+       "pos": "det",
+       "note": "cette, ces"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Le livre est sur le lit",
+       "e": "The book is on the bed",
+       "ipa": "lə livʁ ɛ syʁ lə li"
+      },
+      {
+       "t": "Où sont mes clés ?",
+       "e": "Where are my keys?",
+       "ipa": "u sɔ̃ me kle"
+      },
+      {
+       "t": "Cette chaise est nouvelle",
+       "e": "This chair is new",
+       "ipa": "sɛt ʃɛz ɛ nu.vɛl"
+      },
+      {
+       "t": "C'est une belle lampe",
+       "e": "It is a beautiful lamp",
+       "ipa": "sɛ.t‿yn bɛl lɑ̃p"
+      }
+     ]
+    },
+    {
+     "name": "Clothing",
+     "tips": [
+      {
+       "h": "Porter covers wear and carry",
+       "b": "Porter is used both for wearing a garment and for carrying an object, and the context separates them. It is a regular -er verb: je porte, tu portes, nous portons.",
+       "eg": [
+        [
+         "Il porte un manteau.",
+         "He is wearing a coat."
+        ],
+        [
+         "Elle porte une valise.",
+         "She is carrying a suitcase."
+        ]
+       ]
+      },
+      {
+       "h": "Plural in -s and in -x",
+       "b": "Most nouns add a silent -s in the plural. Nouns ending in -eau add -x instead, also silent: un manteau, des manteaux. The article carries the number to the ear.",
+       "eg": [
+        [
+         "une robe, des robes",
+         "a dress, dresses"
+        ],
+        [
+         "un chapeau, des chapeaux",
+         "a hat, hats"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "vêtements",
+       "e": "clothes",
+       "ipa": "vɛt.mɑ̃",
+       "pos": "noun",
+       "note": "les vêtements (m pl)"
+      },
+      {
+       "t": "chemise",
+       "e": "shirt",
+       "ipa": "ʃə.miz",
+       "pos": "noun",
+       "note": "la chemise (f)"
+      },
+      {
+       "t": "pantalon",
+       "e": "trousers",
+       "ipa": "pɑ̃.ta.lɔ̃",
+       "pos": "noun",
+       "note": "le pantalon (m)"
+      },
+      {
+       "t": "robe",
+       "e": "dress",
+       "ipa": "ʁɔb",
+       "pos": "noun",
+       "note": "la robe (f)"
+      },
+      {
+       "t": "jupe",
+       "e": "skirt",
+       "ipa": "ʒyp",
+       "pos": "noun",
+       "note": "la jupe (f)"
+      },
+      {
+       "t": "manteau",
+       "e": "coat",
+       "ipa": "mɑ̃.to",
+       "pos": "noun",
+       "note": "le manteau (m)"
+      },
+      {
+       "t": "veste",
+       "e": "jacket",
+       "ipa": "vɛst",
+       "pos": "noun",
+       "note": "la veste (f)"
+      },
+      {
+       "t": "pull",
+       "e": "sweater",
+       "ipa": "pyl",
+       "pos": "noun",
+       "note": "le pull (m)"
+      },
+      {
+       "t": "chapeau",
+       "e": "hat",
+       "ipa": "ʃa.po",
+       "pos": "noun",
+       "note": "le chapeau (m)"
+      },
+      {
+       "t": "chaussure",
+       "e": "shoe",
+       "ipa": "ʃo.syʁ",
+       "pos": "noun",
+       "note": "la chaussure (f)"
+      },
+      {
+       "t": "chaussette",
+       "e": "sock",
+       "ipa": "ʃo.sɛt",
+       "pos": "noun",
+       "note": "la chaussette (f)"
+      },
+      {
+       "t": "porter",
+       "e": "to wear",
+       "ipa": "pɔʁ.te",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Elle porte une robe rouge",
+       "e": "She is wearing a red dress",
+       "ipa": "ɛl pɔʁt yn ʁɔb ʁuʒ"
+      },
+      {
+       "t": "Mon manteau est très grand",
+       "e": "My coat is very big",
+       "ipa": "mɔ̃ mɑ̃.to ɛ tʁɛ ɡʁɑ̃"
+      },
+      {
+       "t": "J'ai deux chemises blanches",
+       "e": "I have two white shirts",
+       "ipa": "ʒe dø ʃə.miz blɑ̃ʃ"
+      },
+      {
+       "t": "Il ne porte pas de chapeau",
+       "e": "He is not wearing a hat",
+       "ipa": "il nə pɔʁt pa də ʃa.po"
+      }
+     ]
+    },
+    {
+     "name": "Animals",
+     "tips": [
+      {
+       "h": "Plurals in -al become -aux",
+       "b": "A noun ending in -al forms its plural in -aux, and the change is heard as well as written: un cheval, des chevaux; un animal, des animaux.",
+       "eg": [
+        [
+         "un cheval, des chevaux",
+         "a horse, horses"
+        ],
+        [
+         "un animal, des animaux",
+         "an animal, animals"
+        ]
+       ]
+      },
+      {
+       "h": "Animals carry a fixed gender",
+       "b": "The gender of an animal noun belongs to the word, not to the creature: la souris is feminine whatever mouse it names. A few common animals do have a feminine partner: le chien and la chienne, le chat and la chatte.",
+       "eg": [
+        [
+         "la souris",
+         "the mouse"
+        ],
+        [
+         "le chien, la chienne",
+         "the dog, the bitch"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "chien",
+       "e": "dog",
+       "ipa": "ʃjɛ̃",
+       "pos": "noun",
+       "note": "le chien (m)"
+      },
+      {
+       "t": "chat",
+       "e": "cat",
+       "ipa": "ʃa",
+       "pos": "noun",
+       "note": "le chat (m)"
+      },
+      {
+       "t": "oiseau",
+       "e": "bird",
+       "ipa": "wa.zo",
+       "pos": "noun",
+       "note": "l'oiseau (m)"
+      },
+      {
+       "t": "cheval",
+       "e": "horse",
+       "ipa": "ʃə.val",
+       "pos": "noun",
+       "note": "le cheval (m)"
+      },
+      {
+       "t": "vache",
+       "e": "cow",
+       "ipa": "vaʃ",
+       "pos": "noun",
+       "note": "la vache (f)"
+      },
+      {
+       "t": "mouton",
+       "e": "sheep",
+       "ipa": "mu.tɔ̃",
+       "pos": "noun",
+       "note": "le mouton (m)"
+      },
+      {
+       "t": "cochon",
+       "e": "pig",
+       "ipa": "kɔ.ʃɔ̃",
+       "pos": "noun",
+       "note": "le cochon (m)"
+      },
+      {
+       "t": "poule",
+       "e": "hen",
+       "ipa": "pul",
+       "pos": "noun",
+       "note": "la poule (f)"
+      },
+      {
+       "t": "canard",
+       "e": "duck",
+       "ipa": "ka.naʁ",
+       "pos": "noun",
+       "note": "le canard (m)"
+      },
+      {
+       "t": "lapin",
+       "e": "rabbit",
+       "ipa": "la.pɛ̃",
+       "pos": "noun",
+       "note": "le lapin (m)"
+      },
+      {
+       "t": "souris",
+       "e": "mouse",
+       "ipa": "su.ʁi",
+       "pos": "noun",
+       "note": "la souris (f)"
+      },
+      {
+       "t": "ours",
+       "e": "bear",
+       "ipa": "uʁs",
+       "pos": "noun",
+       "note": "l'ours (m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "J'ai un chien noir",
+       "e": "I have a black dog",
+       "ipa": "ʒe œ̃ ʃjɛ̃ nwaʁ"
+      },
+      {
+       "t": "Le chat boit du lait",
+       "e": "The cat drinks milk",
+       "ipa": "lə ʃa bwa dy lɛ"
+      },
+      {
+       "t": "Il y a trois vaches",
+       "e": "There are three cows",
+       "ipa": "i.l‿i.a tʁwa vaʃ"
+      },
+      {
+       "t": "Mon lapin est très petit",
+       "e": "My rabbit is very small",
+       "ipa": "mɔ̃ la.pɛ̃ ɛ tʁɛ pə.ti"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "TIME",
+   "subtitle": "The calendar, the clock and the weather",
+   "skills": [
+    {
+     "name": "Days",
+     "tips": [
+      {
+       "h": "Days are written in lower case",
+       "b": "French writes lundi and mardi without a capital. A day with le in front of it names a habit: le lundi means on Mondays, while lundi on its own means this coming Monday.",
+       "eg": [
+        [
+         "Je travaille lundi.",
+         "I work on Monday."
+        ],
+        [
+         "Je travaille le lundi.",
+         "I work on Mondays."
+        ]
+       ]
+      },
+      {
+       "h": "The week opens on Monday",
+       "b": "A French week runs from lundi to dimanche, so dimanche closes it rather than opening it. Le week-end names samedi and dimanche together.",
+       "eg": [
+        [
+         "en semaine",
+         "on weekdays"
+        ],
+        [
+         "le week-end",
+         "at the weekend"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "lundi",
+       "e": "Monday",
+       "ipa": "lœ̃.di",
+       "pos": "noun",
+       "note": "le lundi (m)"
+      },
+      {
+       "t": "mardi",
+       "e": "Tuesday",
+       "ipa": "maʁ.di",
+       "pos": "noun",
+       "note": "le mardi (m)"
+      },
+      {
+       "t": "mercredi",
+       "e": "Wednesday",
+       "ipa": "mɛʁ.kʁə.di",
+       "pos": "noun",
+       "note": "le mercredi (m)"
+      },
+      {
+       "t": "jeudi",
+       "e": "Thursday",
+       "ipa": "ʒø.di",
+       "pos": "noun",
+       "note": "le jeudi (m)"
+      },
+      {
+       "t": "vendredi",
+       "e": "Friday",
+       "ipa": "vɑ̃.dʁə.di",
+       "pos": "noun",
+       "note": "le vendredi (m)"
+      },
+      {
+       "t": "samedi",
+       "e": "Saturday",
+       "ipa": "sam.di",
+       "pos": "noun",
+       "note": "le samedi (m)"
+      },
+      {
+       "t": "dimanche",
+       "e": "Sunday",
+       "ipa": "di.mɑ̃ʃ",
+       "pos": "noun",
+       "note": "le dimanche (m)"
+      },
+      {
+       "t": "jour",
+       "e": "day",
+       "ipa": "ʒuʁ",
+       "pos": "noun",
+       "note": "le jour (m)"
+      },
+      {
+       "t": "semaine",
+       "e": "week",
+       "ipa": "sə.mɛn",
+       "pos": "noun",
+       "note": "la semaine (f)"
+      },
+      {
+       "t": "aujourd'hui",
+       "e": "today",
+       "ipa": "o.ʒuʁ.dɥi",
+       "pos": "adv"
+      },
+      {
+       "t": "demain",
+       "e": "tomorrow",
+       "ipa": "də.mɛ̃",
+       "pos": "adv"
+      },
+      {
+       "t": "hier",
+       "e": "yesterday",
+       "ipa": "jɛʁ",
+       "pos": "adv"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Aujourd'hui, c'est lundi",
+       "e": "Today is Monday",
+       "ipa": "o.ʒuʁ.dɥi sɛ lœ̃.di"
+      },
+      {
+       "t": "Je travaille le samedi",
+       "e": "I work on Saturdays",
+       "ipa": "ʒə tʁa.vaj lə sam.di"
+      },
+      {
+       "t": "La semaine a sept jours",
+       "e": "The week has seven days",
+       "ipa": "la sə.mɛn a sɛt ʒuʁ"
+      },
+      {
+       "t": "Demain, je vais à Paris",
+       "e": "Tomorrow I am going to Paris",
+       "ipa": "də.mɛ̃ ʒə vɛ a pa.ʁi"
+      }
+     ]
+    },
+    {
+     "name": "Months",
+     "tips": [
+      {
+       "h": "En before a month",
+       "b": "In January is en janvier, with no article between the preposition and the month. Au mois de janvier is the longer form and means the same thing.",
+       "eg": [
+        [
+         "en avril",
+         "in April"
+        ],
+        [
+         "au mois de mai",
+         "in the month of May"
+        ]
+       ]
+      },
+      {
+       "h": "Dates use plain numbers",
+       "b": "A date takes an ordinary number and the definite article, with the day before the month: le deux mars. The one exception is the first of the month, which takes le premier.",
+       "eg": [
+        [
+         "le premier mai",
+         "the first of May"
+        ],
+        [
+         "le deux mai",
+         "the second of May"
+        ],
+        [
+         "le quatorze juillet",
+         "the fourteenth of July"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "janvier",
+       "e": "January",
+       "ipa": "ʒɑ̃.vje",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "février",
+       "e": "February",
+       "ipa": "fe.vʁi.je",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "mars",
+       "e": "March",
+       "ipa": "maʁs",
+       "pos": "noun",
+       "note": "the s is sounded"
+      },
+      {
+       "t": "avril",
+       "e": "April",
+       "ipa": "a.vʁil",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "mai",
+       "e": "May",
+       "ipa": "mɛ",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "juin",
+       "e": "June",
+       "ipa": "ʒɥɛ̃",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "juillet",
+       "e": "July",
+       "ipa": "ʒɥi.jɛ",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "août",
+       "e": "August",
+       "ipa": "ut",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "septembre",
+       "e": "September",
+       "ipa": "sɛp.tɑ̃bʁ",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "octobre",
+       "e": "October",
+       "ipa": "ɔk.tɔbʁ",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "novembre",
+       "e": "November",
+       "ipa": "nɔ.vɑ̃bʁ",
+       "pos": "noun",
+       "note": "masculine, no article"
+      },
+      {
+       "t": "décembre",
+       "e": "December",
+       "ipa": "de.sɑ̃bʁ",
+       "pos": "noun",
+       "note": "masculine, no article"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mon anniversaire est en mai",
+       "e": "My birthday is in May",
+       "ipa": "mɔ̃.n‿a.ni.vɛʁ.sɛʁ ɛ.t‿ɑ̃ mɛ"
+      },
+      {
+       "t": "Il fait chaud en août",
+       "e": "It is hot in August",
+       "ipa": "il fɛ ʃo ɑ̃.n‿ut"
+      },
+      {
+       "t": "Nous sommes en septembre",
+       "e": "It is September",
+       "ipa": "nu sɔm ɑ̃ sɛp.tɑ̃bʁ",
+       "lit": "we are in September"
+      },
+      {
+       "t": "Décembre est un mois froid",
+       "e": "December is a cold month",
+       "ipa": "de.sɑ̃bʁ ɛ.t‿œ̃ mwa fʁwa"
+      }
+     ]
+    },
+    {
+     "name": "Time of Day",
+     "tips": [
+      {
+       "h": "Telling the hour",
+       "b": "The hour is given with il est and the word heure or heures. Minutes past are added straight after, minutes to use moins. Et quart names the quarter hour and et demie the half hour.",
+       "eg": [
+        [
+         "Il est une heure.",
+         "It is one o'clock."
+        ],
+        [
+         "Il est deux heures et quart.",
+         "It is a quarter past two."
+        ],
+        [
+         "Il est six heures et demie.",
+         "It is half past six."
+        ],
+        [
+         "Il est huit heures moins cinq.",
+         "It is five to eight."
+        ]
+       ]
+      },
+      {
+       "h": "Du matin and du soir",
+       "b": "Timetables use the twenty-four hour clock: le train de dix-huit heures. Speech uses the twelve hour clock and adds the part of the day: six heures du soir.",
+       "eg": [
+        [
+         "dix heures du matin",
+         "ten in the morning"
+        ],
+        [
+         "dix heures du soir",
+         "ten at night"
+        ]
+       ]
+      },
+      {
+       "h": "Le matin means every morning",
+       "b": "A part of the day with le in front of it states a habit: le matin je bois du café. Ce matin points at the morning of today.",
+       "eg": [
+        [
+         "le soir",
+         "in the evenings"
+        ],
+        [
+         "ce soir",
+         "this evening"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "matin",
+       "e": "morning",
+       "ipa": "ma.tɛ̃",
+       "pos": "noun",
+       "note": "le matin (m)"
+      },
+      {
+       "t": "midi",
+       "e": "noon",
+       "ipa": "mi.di",
+       "pos": "noun",
+       "note": "midi (m), no article"
+      },
+      {
+       "t": "après-midi",
+       "e": "afternoon",
+       "ipa": "a.pʁɛ.mi.di",
+       "pos": "noun",
+       "note": "l'après-midi (m)"
+      },
+      {
+       "t": "soir",
+       "e": "evening",
+       "ipa": "swaʁ",
+       "pos": "noun",
+       "note": "le soir (m)"
+      },
+      {
+       "t": "nuit",
+       "e": "night",
+       "ipa": "nɥi",
+       "pos": "noun",
+       "note": "la nuit (f)"
+      },
+      {
+       "t": "minuit",
+       "e": "midnight",
+       "ipa": "mi.nɥi",
+       "pos": "noun",
+       "note": "minuit (m), no article"
+      },
+      {
+       "t": "heure",
+       "e": "hour",
+       "ipa": "œʁ",
+       "pos": "noun",
+       "note": "l'heure (f)"
+      },
+      {
+       "t": "temps",
+       "e": "time",
+       "ipa": "tɑ̃",
+       "pos": "noun",
+       "note": "le temps (m)"
+      },
+      {
+       "t": "maintenant",
+       "e": "now",
+       "ipa": "mɛ̃t.nɑ̃",
+       "pos": "adv"
+      },
+      {
+       "t": "tôt",
+       "e": "early",
+       "ipa": "to",
+       "pos": "adv"
+      },
+      {
+       "t": "tard",
+       "e": "late",
+       "ipa": "taʁ",
+       "pos": "adv"
+      },
+      {
+       "t": "chaque",
+       "e": "each",
+       "ipa": "ʃak",
+       "pos": "det",
+       "note": "chaque + singular"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Il est huit heures",
+       "e": "It is eight o'clock",
+       "ipa": "i.l‿ɛ ɥi.t‿œʁ"
+      },
+      {
+       "t": "Je travaille le matin",
+       "e": "I work in the mornings",
+       "ipa": "ʒə tʁa.vaj lə ma.tɛ̃"
+      },
+      {
+       "t": "Il est déjà très tard",
+       "e": "It is already very late",
+       "ipa": "i.l‿ɛ de.ʒa tʁɛ taʁ"
+      },
+      {
+       "t": "Nous mangeons à midi",
+       "e": "We eat at noon",
+       "ipa": "nu mɑ̃.ʒɔ̃ a mi.di"
+      }
+     ]
+    },
+    {
+     "name": "Weather",
+     "tips": [
+      {
+       "h": "Weather runs on il fait",
+       "b": "Most statements about the weather use the impersonal il fait followed by an adjective: il fait chaud, il fait froid, il fait beau. The il stands for nothing at all.",
+       "eg": [
+        [
+         "Il fait beau.",
+         "The weather is fine."
+        ],
+        [
+         "Il fait froid.",
+         "It is cold."
+        ],
+        [
+         "Quel temps fait-il ?",
+         "What is the weather like?"
+        ]
+       ]
+      },
+      {
+       "h": "Verbs for rain and snow",
+       "b": "Rain and snow have impersonal verbs of their own: il pleut, il neige. Wind and sun are stated with il y a and a partitive: il y a du vent, il y a du soleil.",
+       "eg": [
+        [
+         "Il pleut.",
+         "It is raining."
+        ],
+        [
+         "Il neige.",
+         "It is snowing."
+        ],
+        [
+         "Il y a du vent.",
+         "It is windy."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "soleil",
+       "e": "sun",
+       "ipa": "sɔ.lɛj",
+       "pos": "noun",
+       "note": "le soleil (m)"
+      },
+      {
+       "t": "pluie",
+       "e": "rain",
+       "ipa": "plɥi",
+       "pos": "noun",
+       "note": "la pluie (f)"
+      },
+      {
+       "t": "neige",
+       "e": "snow",
+       "ipa": "nɛʒ",
+       "pos": "noun",
+       "note": "la neige (f)"
+      },
+      {
+       "t": "vent",
+       "e": "wind",
+       "ipa": "vɑ̃",
+       "pos": "noun",
+       "note": "le vent (m)"
+      },
+      {
+       "t": "nuage",
+       "e": "cloud",
+       "ipa": "nɥaʒ",
+       "pos": "noun",
+       "note": "le nuage (m)"
+      },
+      {
+       "t": "orage",
+       "e": "storm",
+       "ipa": "ɔ.ʁaʒ",
+       "pos": "noun",
+       "note": "l'orage (m)"
+      },
+      {
+       "t": "météo",
+       "e": "forecast",
+       "ipa": "me.te.o",
+       "pos": "noun",
+       "note": "la météo (f)"
+      },
+      {
+       "t": "saison",
+       "e": "season",
+       "ipa": "sɛ.zɔ̃",
+       "pos": "noun",
+       "note": "la saison (f)"
+      },
+      {
+       "t": "chaud",
+       "e": "hot",
+       "ipa": "ʃo",
+       "pos": "adj"
+      },
+      {
+       "t": "froid",
+       "e": "cold",
+       "ipa": "fʁwa",
+       "pos": "adj"
+      },
+      {
+       "t": "frais",
+       "e": "cool",
+       "ipa": "fʁɛ",
+       "pos": "adj",
+       "note": "fraîche in the feminine"
+      },
+      {
+       "t": "pleuvoir",
+       "e": "to rain",
+       "ipa": "plø.vwaʁ",
+       "pos": "verb",
+       "note": "only il pleut"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Il fait froid en janvier",
+       "e": "It is cold in January",
+       "ipa": "il fɛ fʁwa ɑ̃ ʒɑ̃.vje"
+      },
+      {
+       "t": "Il pleut beaucoup aujourd'hui",
+       "e": "It is raining a lot today",
+       "ipa": "il plø bo.ku o.ʒuʁ.dɥi"
+      },
+      {
+       "t": "Il y a du vent",
+       "e": "It is windy",
+       "ipa": "i.l‿i.a dy vɑ̃",
+       "lit": "there is some wind"
+      },
+      {
+       "t": "Le soleil est très chaud",
+       "e": "The sun is very hot",
+       "ipa": "lə sɔ.lɛj ɛ tʁɛ ʃo"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "GETTING AROUND",
+   "subtitle": "Places in town, directions, transport and travel",
+   "skills": [
+    {
+     "name": "Places",
+     "tips": [
+      {
+       "h": "Au, à la and à l'",
+       "b": "À covers both at and to, so je vais à la gare and je suis à la gare use the same preposition. It contracts with le to make au and with les to make aux, and stays apart before la and before a vowel.",
+       "eg": [
+        [
+         "Je vais au parc.",
+         "I go to the park."
+        ],
+        [
+         "Je suis à la banque.",
+         "I am at the bank."
+        ],
+        [
+         "Il va à l'école.",
+         "He goes to school."
+        ],
+        [
+         "aux magasins",
+         "to the shops"
+        ]
+       ]
+      },
+      {
+       "h": "De for from and of",
+       "b": "De marks origin and belonging, and contracts the same way: de plus le gives du, de plus les gives des. Before a vowel it becomes d'.",
+       "eg": [
+        [
+         "Je viens du marché.",
+         "I come from the market."
+        ],
+        [
+         "la porte de l'église",
+         "the door of the church"
+        ],
+        [
+         "près de la gare",
+         "near the station"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ville",
+       "e": "town",
+       "ipa": "vil",
+       "pos": "noun",
+       "note": "la ville (f)"
+      },
+      {
+       "t": "quartier",
+       "e": "neighbourhood",
+       "ipa": "kaʁ.tje",
+       "pos": "noun",
+       "note": "le quartier (m)"
+      },
+      {
+       "t": "rue",
+       "e": "street",
+       "ipa": "ʁy",
+       "pos": "noun",
+       "note": "la rue (f)"
+      },
+      {
+       "t": "école",
+       "e": "school",
+       "ipa": "e.kɔl",
+       "pos": "noun",
+       "note": "l'école (f)"
+      },
+      {
+       "t": "magasin",
+       "e": "shop",
+       "ipa": "ma.ɡa.zɛ̃",
+       "pos": "noun",
+       "note": "le magasin (m)"
+      },
+      {
+       "t": "marché",
+       "e": "market",
+       "ipa": "maʁ.ʃe",
+       "pos": "noun",
+       "note": "le marché (m)"
+      },
+      {
+       "t": "église",
+       "e": "church",
+       "ipa": "e.ɡliz",
+       "pos": "noun",
+       "note": "l'église (f)"
+      },
+      {
+       "t": "banque",
+       "e": "bank",
+       "ipa": "bɑ̃k",
+       "pos": "noun",
+       "note": "la banque (f)"
+      },
+      {
+       "t": "hôpital",
+       "e": "hospital",
+       "ipa": "ɔ.pi.tal",
+       "pos": "noun",
+       "note": "l'hôpital (m)"
+      },
+      {
+       "t": "gare",
+       "e": "station",
+       "ipa": "ɡaʁ",
+       "pos": "noun",
+       "note": "la gare (f)"
+      },
+      {
+       "t": "parc",
+       "e": "park",
+       "ipa": "paʁk",
+       "pos": "noun",
+       "note": "le parc (m)"
+      },
+      {
+       "t": "bibliothèque",
+       "e": "library",
+       "ipa": "bi.bli.ɔ.tɛk",
+       "pos": "noun",
+       "note": "la bibliothèque (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je vais à la banque",
+       "e": "I am going to the bank",
+       "ipa": "ʒə vɛ a la bɑ̃k"
+      },
+      {
+       "t": "L'école est dans cette rue",
+       "e": "The school is on this street",
+       "ipa": "le.kɔl ɛ dɑ̃ sɛt ʁy"
+      },
+      {
+       "t": "Il travaille à l'hôpital",
+       "e": "He works at the hospital",
+       "ipa": "il tʁa.vaj a lɔ.pi.tal"
+      },
+      {
+       "t": "Le marché est près de l'église",
+       "e": "The market is near the church",
+       "ipa": "lə maʁ.ʃe ɛ pʁɛ də le.ɡliz"
+      }
+     ]
+    },
+    {
+     "name": "Directions",
+     "tips": [
+      {
+       "h": "Asking the way",
+       "b": "A place is asked for with où est or où sont. A direction is given with à gauche, à droite or tout droit, and tout droit means straight ahead rather than to the right.",
+       "eg": [
+        [
+         "Où est la gare ?",
+         "Where is the station?"
+        ],
+        [
+         "Tournez à gauche.",
+         "Turn left."
+        ],
+        [
+         "Continuez tout droit.",
+         "Go straight ahead."
+        ]
+       ]
+      },
+      {
+       "h": "Près de and loin de",
+       "b": "Près and loin take de before the place they measure from: près de la gare, loin de la ville. That de contracts with le and les as usual, giving près du parc and loin des magasins.",
+       "eg": [
+        [
+         "près du parc",
+         "near the park"
+        ],
+        [
+         "loin de la mer",
+         "far from the sea"
+        ],
+        [
+         "à côté de la porte",
+         "next to the door"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "gauche",
+       "e": "left",
+       "ipa": "ɡoʃ",
+       "pos": "noun",
+       "note": "la gauche (f)"
+      },
+      {
+       "t": "droite",
+       "e": "right",
+       "ipa": "dʁwat",
+       "pos": "noun",
+       "note": "la droite (f)"
+      },
+      {
+       "t": "ici",
+       "e": "here",
+       "ipa": "i.si",
+       "pos": "adv"
+      },
+      {
+       "t": "là",
+       "e": "there",
+       "ipa": "la",
+       "pos": "adv"
+      },
+      {
+       "t": "près",
+       "e": "near",
+       "ipa": "pʁɛ",
+       "pos": "adv",
+       "note": "près de + place"
+      },
+      {
+       "t": "loin",
+       "e": "far",
+       "ipa": "lwɛ̃",
+       "pos": "adv",
+       "note": "loin de + place"
+      },
+      {
+       "t": "dans",
+       "e": "in",
+       "ipa": "dɑ̃",
+       "pos": "prep"
+      },
+      {
+       "t": "sur",
+       "e": "on",
+       "ipa": "syʁ",
+       "pos": "prep"
+      },
+      {
+       "t": "sous",
+       "e": "under",
+       "ipa": "su",
+       "pos": "prep"
+      },
+      {
+       "t": "devant",
+       "e": "in front of",
+       "ipa": "də.vɑ̃",
+       "pos": "prep"
+      },
+      {
+       "t": "derrière",
+       "e": "behind",
+       "ipa": "dɛ.ʁjɛʁ",
+       "pos": "prep"
+      },
+      {
+       "t": "entre",
+       "e": "between",
+       "ipa": "ɑ̃tʁ",
+       "pos": "prep"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La banque est à droite",
+       "e": "The bank is on the right",
+       "ipa": "la bɑ̃k ɛ.t‿a dʁwat"
+      },
+      {
+       "t": "Le chat est sous la chaise",
+       "e": "The cat is under the chair",
+       "ipa": "lə ʃa ɛ su la ʃɛz"
+      },
+      {
+       "t": "Ma maison est loin d'ici",
+       "e": "My house is far from here",
+       "ipa": "ma mɛ.zɔ̃ ɛ lwɛ̃ di.si"
+      },
+      {
+       "t": "Le parc est entre deux rues",
+       "e": "The park is between two streets",
+       "ipa": "lə paʁk ɛ.t‿ɑ̃tʁ dø ʁy"
+      }
+     ]
+    },
+    {
+     "name": "Transport",
+     "tips": [
+      {
+       "h": "En voiture and à vélo",
+       "b": "A vehicle one sits inside takes en: en voiture, en train, en avion. A vehicle one sits on takes à, and so does travelling on foot: à vélo, à moto, à pied.",
+       "eg": [
+        [
+         "en train",
+         "by train"
+        ],
+        [
+         "en avion",
+         "by plane"
+        ],
+        [
+         "à vélo",
+         "by bike"
+        ],
+        [
+         "à pied",
+         "on foot"
+        ]
+       ]
+      },
+      {
+       "h": "Prendre for catching a train",
+       "b": "The verb for using a service is prendre: je prends le bus. Its present is irregular: je prends, tu prends, il prend, nous prenons, vous prenez, ils prennent.",
+       "eg": [
+        [
+         "Je prends le métro.",
+         "I take the underground."
+        ],
+        [
+         "Nous prenons l'avion.",
+         "We are flying."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "voiture",
+       "e": "car",
+       "ipa": "vwa.tyʁ",
+       "pos": "noun",
+       "note": "la voiture (f)"
+      },
+      {
+       "t": "train",
+       "e": "train",
+       "ipa": "tʁɛ̃",
+       "pos": "noun",
+       "note": "le train (m)"
+      },
+      {
+       "t": "autobus",
+       "e": "bus",
+       "ipa": "o.to.bys",
+       "pos": "noun",
+       "note": "l'autobus (m)"
+      },
+      {
+       "t": "métro",
+       "e": "underground",
+       "ipa": "me.tʁo",
+       "pos": "noun",
+       "note": "le métro (m)"
+      },
+      {
+       "t": "vélo",
+       "e": "bicycle",
+       "ipa": "ve.lo",
+       "pos": "noun",
+       "note": "le vélo (m)"
+      },
+      {
+       "t": "moto",
+       "e": "motorbike",
+       "ipa": "mɔ.to",
+       "pos": "noun",
+       "note": "la moto (f)"
+      },
+      {
+       "t": "avion",
+       "e": "airplane",
+       "ipa": "a.vjɔ̃",
+       "pos": "noun",
+       "note": "l'avion (m)"
+      },
+      {
+       "t": "bateau",
+       "e": "boat",
+       "ipa": "ba.to",
+       "pos": "noun",
+       "note": "le bateau (m)"
+      },
+      {
+       "t": "camion",
+       "e": "lorry",
+       "ipa": "ka.mjɔ̃",
+       "pos": "noun",
+       "note": "le camion (m)"
+      },
+      {
+       "t": "billet",
+       "e": "ticket",
+       "ipa": "bi.jɛ",
+       "pos": "noun",
+       "note": "le billet (m)"
+      },
+      {
+       "t": "conduire",
+       "e": "to drive",
+       "ipa": "kɔ̃.dɥiʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "prendre",
+       "e": "to take",
+       "ipa": "pʁɑ̃dʁ",
+       "pos": "verb",
+       "note": "irregular"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je prends le train demain",
+       "e": "I am taking the train tomorrow",
+       "ipa": "ʒə pʁɑ̃ lə tʁɛ̃ də.mɛ̃"
+      },
+      {
+       "t": "Nous allons à l'école en autobus",
+       "e": "We go to school by bus",
+       "ipa": "nu.z‿a.lɔ̃ a le.kɔl ɑ̃.n‿o.to.bys"
+      },
+      {
+       "t": "Mon vélo est rouge",
+       "e": "My bicycle is red",
+       "ipa": "mɔ̃ ve.lo ɛ ʁuʒ"
+      },
+      {
+       "t": "L'avion arrive à midi",
+       "e": "The airplane arrives at noon",
+       "ipa": "la.vjɔ̃ a.ʁiv a mi.di"
+      }
+     ]
+    },
+    {
+     "name": "Travel",
+     "tips": [
+      {
+       "h": "Aller in the present",
+       "b": "Aller is irregular and is worth learning whole: je vais, tu vas, il va, nous allons, vous allez, ils vont. On its own it means to go, and with à it names a destination.",
+       "eg": [
+        [
+         "je vais",
+         "I go"
+        ],
+        [
+         "nous allons",
+         "we go"
+        ],
+        [
+         "ils vont",
+         "they go"
+        ]
+       ]
+      },
+      {
+       "h": "The near future with aller",
+       "b": "Aller followed by an infinitive states what is about to happen: je vais partir. Only aller is conjugated; the second verb keeps its dictionary form. This is the ordinary spoken future.",
+       "eg": [
+        [
+         "Je vais partir.",
+         "I am going to leave."
+        ],
+        [
+         "Nous allons visiter Paris.",
+         "We are going to visit Paris."
+        ],
+        [
+         "Il va arriver demain.",
+         "He is going to arrive tomorrow."
+        ]
+       ]
+      },
+      {
+       "h": "En vacances",
+       "b": "Being on holiday is en vacances. Vacances is plural in this sense and has no singular, so the adjective and the article are plural too.",
+       "eg": [
+        [
+         "Je suis en vacances.",
+         "I am on holiday."
+        ],
+        [
+         "les grandes vacances",
+         "the summer holiday"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "voyage",
+       "e": "trip",
+       "ipa": "vwa.jaʒ",
+       "pos": "noun",
+       "note": "le voyage (m)"
+      },
+      {
+       "t": "vacances",
+       "e": "holiday",
+       "ipa": "va.kɑ̃s",
+       "pos": "noun",
+       "note": "les vacances (f pl)"
+      },
+      {
+       "t": "valise",
+       "e": "suitcase",
+       "ipa": "va.liz",
+       "pos": "noun",
+       "note": "la valise (f)"
+      },
+      {
+       "t": "bagage",
+       "e": "luggage",
+       "ipa": "ba.ɡaʒ",
+       "pos": "noun",
+       "note": "le bagage (m)"
+      },
+      {
+       "t": "passeport",
+       "e": "passport",
+       "ipa": "pas.pɔʁ",
+       "pos": "noun",
+       "note": "le passeport (m)"
+      },
+      {
+       "t": "aéroport",
+       "e": "airport",
+       "ipa": "a.e.ʁɔ.pɔʁ",
+       "pos": "noun",
+       "note": "l'aéroport (m)"
+      },
+      {
+       "t": "carte",
+       "e": "map",
+       "ipa": "kaʁt",
+       "pos": "noun",
+       "note": "la carte (f)"
+      },
+      {
+       "t": "retour",
+       "e": "return",
+       "ipa": "ʁə.tuʁ",
+       "pos": "noun",
+       "note": "le retour (m)"
+      },
+      {
+       "t": "partir",
+       "e": "to leave",
+       "ipa": "paʁ.tiʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "arriver",
+       "e": "to arrive",
+       "ipa": "a.ʁi.ve",
+       "pos": "verb"
+      },
+      {
+       "t": "visiter",
+       "e": "to visit",
+       "ipa": "vi.zi.te",
+       "pos": "verb",
+       "note": "of a place"
+      },
+      {
+       "t": "attendre",
+       "e": "to wait",
+       "ipa": "a.tɑ̃dʁ",
+       "pos": "verb",
+       "note": "no preposition"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je vais visiter Paris",
+       "e": "I am going to visit Paris",
+       "ipa": "ʒə vɛ vi.zi.te pa.ʁi"
+      },
+      {
+       "t": "Mon train part à huit heures",
+       "e": "My train leaves at eight",
+       "ipa": "mɔ̃ tʁɛ̃ paʁ a ɥi.t‿œʁ"
+      },
+      {
+       "t": "Nous attendons à l'aéroport",
+       "e": "We are waiting at the airport",
+       "ipa": "nu.z‿a.tɑ̃.dɔ̃ a la.e.ʁɔ.pɔʁ"
+      },
+      {
+       "t": "Où est ma valise ?",
+       "e": "Where is my suitcase?",
+       "ipa": "u ɛ ma va.liz"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "PEOPLE",
+   "subtitle": "Feelings, the body, health and describing a person",
+   "skills": [
+    {
+     "name": "Feelings",
+     "tips": [
+      {
+       "h": "Feelings built with avoir",
+       "b": "Several states are had rather than felt in French: avoir peur, avoir honte, avoir raison. The noun follows avoir with no article, and de introduces whatever caused the feeling.",
+       "eg": [
+        [
+         "J'ai peur.",
+         "I am afraid."
+        ],
+        [
+         "Il a raison.",
+         "He is right."
+        ],
+        [
+         "Elle a peur des chiens.",
+         "She is afraid of dogs."
+        ]
+       ]
+      },
+      {
+       "h": "Reflexive verbs",
+       "b": "A reflexive verb carries a pronoun that matches its subject and stands before the verb: je me sens, tu te sens, il se sent, nous nous sentons, vous vous sentez, ils se sentent. The dictionary form keeps se in front.",
+       "eg": [
+        [
+         "se sentir",
+         "to feel"
+        ],
+        [
+         "Je me sens bien.",
+         "I feel well."
+        ],
+        [
+         "Il se lave.",
+         "He washes."
+        ]
+       ]
+      },
+      {
+       "h": "Adjectives agree with the person",
+       "b": "An adjective describing a person takes that person's gender and number: il est content, elle est contente, ils sont contents, elles sont contentes. Only the written form changes for content; for heureux the sound changes too.",
+       "eg": [
+        [
+         "il est content",
+         "he is pleased"
+        ],
+        [
+         "elle est contente",
+         "she is pleased"
+        ],
+        [
+         "elle est heureuse",
+         "she is happy"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "heureux",
+       "e": "happy",
+       "ipa": "ø.ʁø",
+       "pos": "adj",
+       "note": "heureuse in the fem."
+      },
+      {
+       "t": "content",
+       "e": "pleased",
+       "ipa": "kɔ̃.tɑ̃",
+       "pos": "adj",
+       "note": "contente in the fem."
+      },
+      {
+       "t": "triste",
+       "e": "sad",
+       "ipa": "tʁist",
+       "pos": "adj"
+      },
+      {
+       "t": "fatigué",
+       "e": "tired",
+       "ipa": "fa.ti.ɡe",
+       "pos": "adj"
+      },
+      {
+       "t": "fâché",
+       "e": "angry",
+       "ipa": "fɑ.ʃe",
+       "pos": "adj"
+      },
+      {
+       "t": "inquiet",
+       "e": "worried",
+       "ipa": "ɛ̃.kjɛ",
+       "pos": "adj",
+       "note": "inquiète in the fem."
+      },
+      {
+       "t": "seul",
+       "e": "alone",
+       "ipa": "sœl",
+       "pos": "adj"
+      },
+      {
+       "t": "peur",
+       "e": "fear",
+       "ipa": "pœʁ",
+       "pos": "noun",
+       "note": "la peur (f)"
+      },
+      {
+       "t": "amour",
+       "e": "love",
+       "ipa": "a.muʁ",
+       "pos": "noun",
+       "note": "l'amour (m)"
+      },
+      {
+       "t": "sentir",
+       "e": "to feel",
+       "ipa": "sɑ̃.tiʁ",
+       "pos": "verb",
+       "note": "se sentir bien"
+      },
+      {
+       "t": "pleurer",
+       "e": "to cry",
+       "ipa": "plø.ʁe",
+       "pos": "verb"
+      },
+      {
+       "t": "rire",
+       "e": "to laugh",
+       "ipa": "ʁiʁ",
+       "pos": "verb",
+       "note": "irregular"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je suis très fatigué",
+       "e": "I am very tired",
+       "ipa": "ʒə sɥi tʁɛ fa.ti.ɡe"
+      },
+      {
+       "t": "Elle est heureuse aujourd'hui",
+       "e": "She is happy today",
+       "ipa": "ɛ.lɛ.t‿ø.ʁøz o.ʒuʁ.dɥi"
+      },
+      {
+       "t": "Mon frère a peur des chiens",
+       "e": "My brother is afraid of dogs",
+       "ipa": "mɔ̃ fʁɛʁ a pœʁ de ʃjɛ̃",
+       "lit": "my brother has fear of-the dogs"
+      },
+      {
+       "t": "Il ne pleure jamais",
+       "e": "He never cries",
+       "ipa": "il nə plœʁ ʒa.mɛ"
+      }
+     ]
+    },
+    {
+     "name": "Body",
+     "tips": [
+      {
+       "h": "The body takes le, la and les",
+       "b": "A body part is named with the definite article where English uses a possessive, because the owner is already clear from the verb or the pronoun: il lève la main, elle ferme les yeux, je me lave les mains.",
+       "eg": [
+        [
+         "Je me lave les mains.",
+         "I wash my hands."
+        ],
+        [
+         "Il ferme les yeux.",
+         "He closes his eyes."
+        ]
+       ]
+      },
+      {
+       "h": "Œil and yeux",
+       "b": "Œil has an unrelated plural, yeux. Cheveux names a whole head of hair and is used in the plural; un cheveu is one single strand.",
+       "eg": [
+        [
+         "un œil, deux yeux",
+         "one eye, two eyes"
+        ],
+        [
+         "les cheveux",
+         "the hair"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "tête",
+       "e": "head",
+       "ipa": "tɛt",
+       "pos": "noun",
+       "note": "la tête (f)"
+      },
+      {
+       "t": "cheveux",
+       "e": "hair",
+       "ipa": "ʃə.vø",
+       "pos": "noun",
+       "note": "les cheveux (m pl)"
+      },
+      {
+       "t": "œil",
+       "e": "eye",
+       "ipa": "œj",
+       "pos": "noun",
+       "note": "l'œil (m), pl yeux"
+      },
+      {
+       "t": "oreille",
+       "e": "ear",
+       "ipa": "ɔ.ʁɛj",
+       "pos": "noun",
+       "note": "l'oreille (f)"
+      },
+      {
+       "t": "nez",
+       "e": "nose",
+       "ipa": "ne",
+       "pos": "noun",
+       "note": "le nez (m)"
+      },
+      {
+       "t": "bouche",
+       "e": "mouth",
+       "ipa": "buʃ",
+       "pos": "noun",
+       "note": "la bouche (f)"
+      },
+      {
+       "t": "dent",
+       "e": "tooth",
+       "ipa": "dɑ̃",
+       "pos": "noun",
+       "note": "la dent (f)"
+      },
+      {
+       "t": "main",
+       "e": "hand",
+       "ipa": "mɛ̃",
+       "pos": "noun",
+       "note": "la main (f)"
+      },
+      {
+       "t": "bras",
+       "e": "arm",
+       "ipa": "bʁɑ",
+       "pos": "noun",
+       "note": "le bras (m)"
+      },
+      {
+       "t": "jambe",
+       "e": "leg",
+       "ipa": "ʒɑ̃b",
+       "pos": "noun",
+       "note": "la jambe (f)"
+      },
+      {
+       "t": "pied",
+       "e": "foot",
+       "ipa": "pje",
+       "pos": "noun",
+       "note": "le pied (m)"
+      },
+      {
+       "t": "cœur",
+       "e": "heart",
+       "ipa": "kœʁ",
+       "pos": "noun",
+       "note": "le cœur (m)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "J'ai mal à la tête",
+       "e": "I have a headache",
+       "ipa": "ʒe mal a la tɛt",
+       "lit": "I have pain to the head"
+      },
+      {
+       "t": "Elle a les cheveux noirs",
+       "e": "She has black hair",
+       "ipa": "ɛ.l‿a le ʃə.vø nwaʁ"
+      },
+      {
+       "t": "Mon pied est très froid",
+       "e": "My foot is very cold",
+       "ipa": "mɔ̃ pje ɛ tʁɛ fʁwa"
+      },
+      {
+       "t": "Le chat a deux oreilles",
+       "e": "The cat has two ears",
+       "ipa": "lə ʃa a dø.z‿ɔ.ʁɛj"
+      }
+     ]
+    },
+    {
+     "name": "Health",
+     "tips": [
+      {
+       "h": "Avoir mal à",
+       "b": "A pain is stated with avoir mal à followed by the body part, and that à contracts as usual: avoir mal au dos, avoir mal à la jambe, avoir mal aux dents.",
+       "eg": [
+        [
+         "J'ai mal au dos.",
+         "My back hurts."
+        ],
+        [
+         "Il a mal aux dents.",
+         "He has toothache."
+        ],
+        [
+         "Elle a mal à la main.",
+         "Her hand hurts."
+        ]
+       ]
+      },
+      {
+       "h": "Être malade and aller bien",
+       "b": "Illness is stated with être malade. General wellbeing uses aller: je vais bien, il va mal. The everyday question ça va asks about the same thing.",
+       "eg": [
+        [
+         "Je suis malade.",
+         "I am ill."
+        ],
+        [
+         "Je vais bien.",
+         "I am well."
+        ],
+        [
+         "Ça va mal.",
+         "Things are going badly."
+        ]
+       ]
+      },
+      {
+       "h": "Chez for a person's place",
+       "b": "Chez names a person's home or a professional's premises: chez moi, chez le médecin, chez le boulanger. It is used with a person, never with the name of a town.",
+       "eg": [
+        [
+         "chez moi",
+         "at my place"
+        ],
+        [
+         "chez le médecin",
+         "at the doctor's"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "santé",
+       "e": "health",
+       "ipa": "sɑ̃.te",
+       "pos": "noun",
+       "note": "la santé (f)"
+      },
+      {
+       "t": "médecin",
+       "e": "doctor",
+       "ipa": "med.sɛ̃",
+       "pos": "noun",
+       "note": "le médecin (m)"
+      },
+      {
+       "t": "pharmacie",
+       "e": "chemist",
+       "ipa": "faʁ.ma.si",
+       "pos": "noun",
+       "note": "la pharmacie (f)"
+      },
+      {
+       "t": "médicament",
+       "e": "medicine",
+       "ipa": "me.di.ka.mɑ̃",
+       "pos": "noun",
+       "note": "le médicament (m)"
+      },
+      {
+       "t": "douleur",
+       "e": "pain",
+       "ipa": "du.lœʁ",
+       "pos": "noun",
+       "note": "la douleur (f)"
+      },
+      {
+       "t": "fièvre",
+       "e": "fever",
+       "ipa": "fjɛvʁ",
+       "pos": "noun",
+       "note": "la fièvre (f)"
+      },
+      {
+       "t": "rhume",
+       "e": "a cold",
+       "ipa": "ʁym",
+       "pos": "noun",
+       "note": "le rhume (m)"
+      },
+      {
+       "t": "blessure",
+       "e": "injury",
+       "ipa": "blɛ.syʁ",
+       "pos": "noun",
+       "note": "la blessure (f)"
+      },
+      {
+       "t": "malade",
+       "e": "ill",
+       "ipa": "ma.lad",
+       "pos": "adj",
+       "note": "one form for both"
+      },
+      {
+       "t": "guérir",
+       "e": "to heal",
+       "ipa": "ɡe.ʁiʁ",
+       "pos": "verb"
+      },
+      {
+       "t": "dormir",
+       "e": "to sleep",
+       "ipa": "dɔʁ.miʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "tousser",
+       "e": "to cough",
+       "ipa": "tu.se",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je suis malade aujourd'hui",
+       "e": "I am ill today",
+       "ipa": "ʒə sɥi ma.lad o.ʒuʁ.dɥi"
+      },
+      {
+       "t": "Il va chez le médecin",
+       "e": "He is going to the doctor",
+       "ipa": "il va ʃe lə med.sɛ̃"
+      },
+      {
+       "t": "Elle a de la fièvre",
+       "e": "She has a fever",
+       "ipa": "ɛ.l‿a də la fjɛvʁ"
+      },
+      {
+       "t": "Je dors huit heures",
+       "e": "I sleep eight hours",
+       "ipa": "ʒə dɔʁ ɥi.t‿œʁ"
+      }
+     ]
+    },
+    {
+     "name": "Describing",
+     "tips": [
+      {
+       "h": "Describing with être",
+       "b": "A description of a person is built on être plus an adjective, and the adjective agrees: il est gentil, elle est gentille. Gentil doubles its l in the feminine, and the l is then heard.",
+       "eg": [
+        [
+         "Il est gentil.",
+         "He is kind."
+        ],
+        [
+         "Elle est gentille.",
+         "She is kind."
+        ],
+        [
+         "Ils sont sérieux.",
+         "They are serious."
+        ]
+       ]
+      },
+      {
+       "h": "Comparing with plus and moins",
+       "b": "More is plus, less is moins, and as is aussi, each followed by que before the thing compared. Bon has its own comparative, meilleur, and plus bon is not used.",
+       "eg": [
+        [
+         "plus grand que moi",
+         "taller than me"
+        ],
+        [
+         "moins cher que ça",
+         "cheaper than that"
+        ],
+        [
+         "aussi fort que lui",
+         "as strong as him"
+        ],
+        [
+         "C'est meilleur.",
+         "It is better."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "gentil",
+       "e": "kind",
+       "ipa": "ʒɑ̃.ti",
+       "pos": "adj",
+       "note": "gentille in the fem."
+      },
+      {
+       "t": "méchant",
+       "e": "mean",
+       "ipa": "me.ʃɑ̃",
+       "pos": "adj"
+      },
+      {
+       "t": "fort",
+       "e": "strong",
+       "ipa": "fɔʁ",
+       "pos": "adj"
+      },
+      {
+       "t": "faible",
+       "e": "weak",
+       "ipa": "fɛbl",
+       "pos": "adj"
+      },
+      {
+       "t": "riche",
+       "e": "rich",
+       "ipa": "ʁiʃ",
+       "pos": "adj"
+      },
+      {
+       "t": "pauvre",
+       "e": "poor",
+       "ipa": "povʁ",
+       "pos": "adj"
+      },
+      {
+       "t": "intelligent",
+       "e": "clever",
+       "ipa": "ɛ̃.te.li.ʒɑ̃",
+       "pos": "adj"
+      },
+      {
+       "t": "timide",
+       "e": "shy",
+       "ipa": "ti.mid",
+       "pos": "adj"
+      },
+      {
+       "t": "sérieux",
+       "e": "serious",
+       "ipa": "se.ʁjø",
+       "pos": "adj",
+       "note": "sérieuse in the fem."
+      },
+      {
+       "t": "drôle",
+       "e": "funny",
+       "ipa": "dʁol",
+       "pos": "adj"
+      },
+      {
+       "t": "mince",
+       "e": "thin",
+       "ipa": "mɛ̃s",
+       "pos": "adj"
+      },
+      {
+       "t": "gros",
+       "e": "fat",
+       "ipa": "ɡʁo",
+       "pos": "adj",
+       "note": "grosse in the feminine"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mon ami est très gentil",
+       "e": "My friend is very kind",
+       "ipa": "mɔ̃.n‿a.mi ɛ tʁɛ ʒɑ̃.ti"
+      },
+      {
+       "t": "Elle est plus grande que moi",
+       "e": "She is taller than me",
+       "ipa": "ɛ.lɛ ply ɡʁɑ̃d kə mwa"
+      },
+      {
+       "t": "Ce garçon est intelligent",
+       "e": "This boy is clever",
+       "ipa": "sə ɡaʁ.sɔ̃ ɛ.t‿ɛ̃.te.li.ʒɑ̃"
+      },
+      {
+       "t": "Mon frère est moins timide",
+       "e": "My brother is less shy",
+       "ipa": "mɔ̃ fʁɛʁ ɛ mwɛ̃ ti.mid"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "WORK AND SCHOOL",
+   "subtitle": "School, jobs, numbers past ten and money",
+   "skills": [
+    {
+     "name": "School",
+     "tips": [
+      {
+       "h": "Feminine forms of role names",
+       "b": "Many role nouns build a feminine: un étudiant becomes une étudiante, un boulanger becomes une boulangère. Un élève keeps its spelling and changes only its article, and professeur now has the written feminine professeure.",
+       "eg": [
+        [
+         "un étudiant, une étudiante",
+         "a student"
+        ],
+        [
+         "un élève, une élève",
+         "a pupil"
+        ]
+       ]
+      },
+      {
+       "h": "Apprendre follows prendre",
+       "b": "Apprendre and comprendre are built on prendre and take its endings: j'apprends, tu apprends, il apprend, nous apprenons, vous apprenez, ils apprennent.",
+       "eg": [
+        [
+         "j'apprends",
+         "I learn"
+        ],
+        [
+         "nous apprenons",
+         "we learn"
+        ],
+        [
+         "je comprends",
+         "I understand"
+        ]
+       ]
+      },
+      {
+       "h": "Notre, votre and leur",
+       "b": "The plural possessives are notre, votre and leur for one thing owned, and nos, vos and leurs for several. None of them changes with the gender of the noun.",
+       "eg": [
+        [
+         "notre école",
+         "our school"
+        ],
+        [
+         "vos livres",
+         "your books"
+        ],
+        [
+         "leurs devoirs",
+         "their homework"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "professeur",
+       "e": "teacher",
+       "ipa": "pʁɔ.fɛ.sœʁ",
+       "pos": "noun",
+       "note": "le professeur (m)"
+      },
+      {
+       "t": "élève",
+       "e": "pupil",
+       "ipa": "e.lɛv",
+       "pos": "noun",
+       "note": "l'élève (m or f)"
+      },
+      {
+       "t": "étudiant",
+       "e": "student",
+       "ipa": "e.ty.djɑ̃",
+       "pos": "noun",
+       "note": "l'étudiant (m)"
+      },
+      {
+       "t": "classe",
+       "e": "class",
+       "ipa": "klas",
+       "pos": "noun",
+       "note": "la classe (f)"
+      },
+      {
+       "t": "cours",
+       "e": "lesson",
+       "ipa": "kuʁ",
+       "pos": "noun",
+       "note": "le cours (m)"
+      },
+      {
+       "t": "devoirs",
+       "e": "homework",
+       "ipa": "də.vwaʁ",
+       "pos": "noun",
+       "note": "les devoirs (m pl)"
+      },
+      {
+       "t": "examen",
+       "e": "exam",
+       "ipa": "ɛɡ.za.mɛ̃",
+       "pos": "noun",
+       "note": "l'examen (m)"
+      },
+      {
+       "t": "cahier",
+       "e": "notebook",
+       "ipa": "ka.je",
+       "pos": "noun",
+       "note": "le cahier (m)"
+      },
+      {
+       "t": "crayon",
+       "e": "pencil",
+       "ipa": "kʁɛ.jɔ̃",
+       "pos": "noun",
+       "note": "le crayon (m)"
+      },
+      {
+       "t": "apprendre",
+       "e": "to learn",
+       "ipa": "a.pʁɑ̃dʁ",
+       "pos": "verb",
+       "note": "like prendre"
+      },
+      {
+       "t": "étudier",
+       "e": "to study",
+       "ipa": "e.ty.dje",
+       "pos": "verb"
+      },
+      {
+       "t": "écrire",
+       "e": "to write",
+       "ipa": "e.kʁiʁ",
+       "pos": "verb",
+       "note": "irregular"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "J'apprends le français",
+       "e": "I am learning French",
+       "ipa": "ʒa.pʁɑ̃ lə fʁɑ̃.sɛ"
+      },
+      {
+       "t": "Le professeur écrit au tableau",
+       "e": "The teacher writes on the board",
+       "ipa": "lə pʁɔ.fɛ.sœʁ e.kʁi o ta.blo"
+      },
+      {
+       "t": "Les élèves font leurs devoirs",
+       "e": "The pupils do their homework",
+       "ipa": "le.z‿e.lɛv fɔ̃ lœʁ də.vwaʁ"
+      },
+      {
+       "t": "L'examen est demain matin",
+       "e": "The exam is tomorrow morning",
+       "ipa": "lɛɡ.za.mɛ̃ ɛ də.mɛ̃ ma.tɛ̃"
+      }
+     ]
+    },
+    {
+     "name": "Work",
+     "tips": [
+      {
+       "h": "A job takes no article after être",
+       "b": "After être the name of a job stands bare: il est boulanger, elle est médecin. With c'est an article is required instead: c'est un boulanger.",
+       "eg": [
+        [
+         "Il est professeur.",
+         "He is a teacher."
+        ],
+        [
+         "C'est un professeur.",
+         "He is a teacher."
+        ],
+        [
+         "Elle est infirmière.",
+         "She is a nurse."
+        ]
+       ]
+      },
+      {
+       "h": "Travail and travailler",
+       "b": "Travail is the noun for work and travailler the verb. The plural of travail is travaux, which also names building works.",
+       "eg": [
+        [
+         "le travail",
+         "the work"
+        ],
+        [
+         "les travaux",
+         "the works"
+        ],
+        [
+         "je travaille",
+         "I work"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "travail",
+       "e": "work",
+       "ipa": "tʁa.vaj",
+       "pos": "noun",
+       "note": "le travail (m)"
+      },
+      {
+       "t": "métier",
+       "e": "trade",
+       "ipa": "me.tje",
+       "pos": "noun",
+       "note": "le métier (m)"
+      },
+      {
+       "t": "bureau",
+       "e": "office",
+       "ipa": "by.ʁo",
+       "pos": "noun",
+       "note": "le bureau (m)"
+      },
+      {
+       "t": "usine",
+       "e": "factory",
+       "ipa": "y.zin",
+       "pos": "noun",
+       "note": "l'usine (f)"
+      },
+      {
+       "t": "patron",
+       "e": "boss",
+       "ipa": "pa.tʁɔ̃",
+       "pos": "noun",
+       "note": "le patron (m)"
+      },
+      {
+       "t": "collègue",
+       "e": "colleague",
+       "ipa": "kɔ.lɛɡ",
+       "pos": "noun",
+       "note": "le collègue (m)"
+      },
+      {
+       "t": "réunion",
+       "e": "meeting",
+       "ipa": "ʁe.y.njɔ̃",
+       "pos": "noun",
+       "note": "la réunion (f)"
+      },
+      {
+       "t": "salaire",
+       "e": "wage",
+       "ipa": "sa.lɛʁ",
+       "pos": "noun",
+       "note": "le salaire (m)"
+      },
+      {
+       "t": "boulanger",
+       "e": "baker",
+       "ipa": "bu.lɑ̃.ʒe",
+       "pos": "noun",
+       "note": "le boulanger (m)"
+      },
+      {
+       "t": "infirmier",
+       "e": "nurse",
+       "ipa": "ɛ̃.fiʁ.mje",
+       "pos": "noun",
+       "note": "l'infirmier (m)"
+      },
+      {
+       "t": "agriculteur",
+       "e": "farmer",
+       "ipa": "a.ɡʁi.kyl.tœʁ",
+       "pos": "noun",
+       "note": "l'agriculteur (m)"
+      },
+      {
+       "t": "gagner",
+       "e": "to earn",
+       "ipa": "ɡa.ɲe",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mon père est boulanger",
+       "e": "My father is a baker",
+       "ipa": "mɔ̃ pɛʁ ɛ bu.lɑ̃.ʒe"
+      },
+      {
+       "t": "Elle travaille dans un bureau",
+       "e": "She works in an office",
+       "ipa": "ɛl tʁa.vaj dɑ̃.z‿œ̃ by.ʁo"
+      },
+      {
+       "t": "La réunion est à neuf heures",
+       "e": "The meeting is at nine",
+       "ipa": "la ʁe.y.njɔ̃ ɛ.t‿a nœ.v‿œʁ"
+      },
+      {
+       "t": "Mon collègue gagne beaucoup",
+       "e": "My colleague earns a lot",
+       "ipa": "mɔ̃ kɔ.lɛɡ ɡaɲ bo.ku"
+      }
+     ]
+    },
+    {
+     "name": "Big Numbers",
+     "tips": [
+      {
+       "h": "Seventy, eighty and ninety",
+       "b": "French counts past sixty by addition. Soixante-dix is sixty-ten, quatre-vingts is four-twenties, and quatre-vingt-dix is four-twenties-ten. The pattern runs on: soixante-douze is seventy-two and quatre-vingt-quinze is ninety-five.",
+       "eg": [
+        [
+         "soixante-dix",
+         "70"
+        ],
+        [
+         "soixante-quinze",
+         "75"
+        ],
+        [
+         "quatre-vingts",
+         "80"
+        ],
+        [
+         "quatre-vingt-dix-neuf",
+         "99"
+        ]
+       ]
+      },
+      {
+       "h": "Et un at twenty-one",
+       "b": "Units are joined to tens with a hyphen, except one, which takes et and no hyphen: vingt et un, trente et un, soixante et onze. Quatre-vingt-un breaks the pattern and keeps the hyphen.",
+       "eg": [
+        [
+         "vingt et un",
+         "21"
+        ],
+        [
+         "vingt-deux",
+         "22"
+        ],
+        [
+         "quatre-vingt-un",
+         "81"
+        ]
+       ]
+      },
+      {
+       "h": "Cent and mille",
+       "b": "Cent takes an -s when it is multiplied and nothing follows it: deux cents, but deux cent cinq. Mille never takes an -s at all.",
+       "eg": [
+        [
+         "deux cents",
+         "200"
+        ],
+        [
+         "deux cent cinq",
+         "205"
+        ],
+        [
+         "trois mille",
+         "3000"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "treize",
+       "e": "thirteen",
+       "ipa": "tʁɛz",
+       "pos": "num"
+      },
+      {
+       "t": "quinze",
+       "e": "fifteen",
+       "ipa": "kɛ̃z",
+       "pos": "num"
+      },
+      {
+       "t": "vingt",
+       "e": "twenty",
+       "ipa": "vɛ̃",
+       "pos": "num",
+       "note": "the t is silent"
+      },
+      {
+       "t": "trente",
+       "e": "thirty",
+       "ipa": "tʁɑ̃t",
+       "pos": "num"
+      },
+      {
+       "t": "quarante",
+       "e": "forty",
+       "ipa": "ka.ʁɑ̃t",
+       "pos": "num"
+      },
+      {
+       "t": "cinquante",
+       "e": "fifty",
+       "ipa": "sɛ̃.kɑ̃t",
+       "pos": "num"
+      },
+      {
+       "t": "soixante",
+       "e": "sixty",
+       "ipa": "swa.sɑ̃t",
+       "pos": "num"
+      },
+      {
+       "t": "soixante-dix",
+       "e": "seventy",
+       "ipa": "swa.sɑ̃t.dis",
+       "pos": "num",
+       "note": "sixty-ten"
+      },
+      {
+       "t": "quatre-vingts",
+       "e": "eighty",
+       "ipa": "ka.tʁə.vɛ̃",
+       "pos": "num",
+       "note": "four-twenties"
+      },
+      {
+       "t": "quatre-vingt-dix",
+       "e": "ninety",
+       "ipa": "ka.tʁə.vɛ̃.dis",
+       "pos": "num",
+       "note": "four-twenties-ten"
+      },
+      {
+       "t": "cent",
+       "e": "hundred",
+       "ipa": "sɑ̃",
+       "pos": "num"
+      },
+      {
+       "t": "mille",
+       "e": "thousand",
+       "ipa": "mil",
+       "pos": "num",
+       "note": "never takes an s"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "J'ai trente ans",
+       "e": "I am thirty years old",
+       "ipa": "ʒe tʁɑ̃.t‿ɑ̃",
+       "lit": "I have thirty years"
+      },
+      {
+       "t": "Il y a cent élèves",
+       "e": "There are a hundred pupils",
+       "ipa": "i.l‿i.a sɑ̃.t‿e.lɛv"
+      },
+      {
+       "t": "Ma grand-mère a quatre-vingts ans",
+       "e": "My grandmother is eighty",
+       "ipa": "ma ɡʁɑ̃.mɛʁ a ka.tʁə.vɛ̃.z‿ɑ̃"
+      },
+      {
+       "t": "Le livre coûte quinze euros",
+       "e": "The book costs fifteen euros",
+       "ipa": "lə livʁ kut kɛ̃z ø.ʁo"
+      }
+     ]
+    },
+    {
+     "name": "Money",
+     "tips": [
+      {
+       "h": "Asking the price",
+       "b": "A price is asked for with combien: combien ça coûte, or c'est combien in speech. The answer uses coûter or faire, and faire is the commoner of the two at a till.",
+       "eg": [
+        [
+         "Combien ça coûte ?",
+         "How much does it cost?"
+        ],
+        [
+         "Ça fait dix euros.",
+         "That comes to ten euros."
+        ]
+       ]
+      },
+      {
+       "h": "Argent is money and silver",
+       "b": "Argent names both the metal and money in general, and takes a partitive: j'ai de l'argent. A single coin is une pièce and a banknote is un billet.",
+       "eg": [
+        [
+         "de l'argent",
+         "some money"
+        ],
+        [
+         "une pièce",
+         "a coin"
+        ],
+        [
+         "un billet de dix euros",
+         "a ten euro note"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "argent",
+       "e": "money",
+       "ipa": "aʁ.ʒɑ̃",
+       "pos": "noun",
+       "note": "l'argent (m)"
+      },
+      {
+       "t": "monnaie",
+       "e": "change",
+       "ipa": "mɔ.nɛ",
+       "pos": "noun",
+       "note": "la monnaie (f)"
+      },
+      {
+       "t": "prix",
+       "e": "price",
+       "ipa": "pʁi",
+       "pos": "noun",
+       "note": "le prix (m)"
+      },
+      {
+       "t": "pièce",
+       "e": "coin",
+       "ipa": "pjɛs",
+       "pos": "noun",
+       "note": "la pièce (f)"
+      },
+      {
+       "t": "compte",
+       "e": "account",
+       "ipa": "kɔ̃t",
+       "pos": "noun",
+       "note": "le compte (m)"
+      },
+      {
+       "t": "facture",
+       "e": "invoice",
+       "ipa": "fak.tyʁ",
+       "pos": "noun",
+       "note": "la facture (f)"
+      },
+      {
+       "t": "portefeuille",
+       "e": "wallet",
+       "ipa": "pɔʁ.tə.fœj",
+       "pos": "noun",
+       "note": "le portefeuille (m)"
+      },
+      {
+       "t": "gratuit",
+       "e": "free of charge",
+       "ipa": "ɡʁa.tɥi",
+       "pos": "adj"
+      },
+      {
+       "t": "coûter",
+       "e": "to cost",
+       "ipa": "ku.te",
+       "pos": "verb"
+      },
+      {
+       "t": "payer",
+       "e": "to pay",
+       "ipa": "pe.je",
+       "pos": "verb",
+       "note": "je paie or je paye"
+      },
+      {
+       "t": "dépenser",
+       "e": "to spend",
+       "ipa": "de.pɑ̃.se",
+       "pos": "verb",
+       "note": "of money"
+      },
+      {
+       "t": "économiser",
+       "e": "to save up",
+       "ipa": "e.kɔ.nɔ.mi.ze",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Combien coûte ce livre ?",
+       "e": "How much does this book cost?",
+       "ipa": "kɔ̃.bjɛ̃ kut sə livʁ"
+      },
+      {
+       "t": "Je n'ai pas d'argent",
+       "e": "I have no money",
+       "ipa": "ʒə ne pa daʁ.ʒɑ̃"
+      },
+      {
+       "t": "Elle dépense beaucoup d'argent",
+       "e": "She spends a lot of money",
+       "ipa": "ɛl de.pɑ̃s bo.ku daʁ.ʒɑ̃"
+      },
+      {
+       "t": "Ce magasin est très cher",
+       "e": "This shop is very expensive",
+       "ipa": "sə ma.ɡa.zɛ̃ ɛ tʁɛ ʃɛʁ"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "OUT AND ABOUT",
+   "subtitle": "Ordering, buying and what people do for pleasure",
+   "skills": [
+    {
+     "name": "Restaurant",
+     "tips": [
+      {
+       "h": "Ordering with je voudrais",
+       "b": "An order is placed with je voudrais, a conditional form of vouloir that softens the request. Je veux is blunt to the point of rudeness in a shop or a restaurant.",
+       "eg": [
+        [
+         "Je voudrais un café.",
+         "I would like a coffee."
+        ],
+        [
+         "Nous voudrions la carte.",
+         "We would like the menu."
+        ]
+       ]
+      },
+      {
+       "h": "The three meals",
+       "b": "The meals are le petit-déjeuner, le déjeuner and le dîner. Déjeuner and dîner are verbs as well as nouns, so je déjeune à midi is an ordinary sentence.",
+       "eg": [
+        [
+         "le petit-déjeuner",
+         "breakfast"
+        ],
+        [
+         "Je déjeune à midi.",
+         "I have lunch at noon."
+        ],
+        [
+         "Nous dînons tard.",
+         "We dine late."
+        ]
+       ]
+      },
+      {
+       "h": "L'addition, s'il vous plaît",
+       "b": "The bill in a restaurant is l'addition, while une facture is the written invoice a business sends. Service is included by law, so a pourboire is an extra rather than an expectation.",
+       "eg": [
+        [
+         "L'addition, s'il vous plaît.",
+         "The bill, please."
+        ],
+        [
+         "service compris",
+         "service included"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "serveur",
+       "e": "waiter",
+       "ipa": "sɛʁ.vœʁ",
+       "pos": "noun",
+       "note": "le serveur (m)"
+      },
+      {
+       "t": "addition",
+       "e": "bill",
+       "ipa": "a.di.sjɔ̃",
+       "pos": "noun",
+       "note": "l'addition (f)"
+      },
+      {
+       "t": "repas",
+       "e": "meal",
+       "ipa": "ʁə.pa",
+       "pos": "noun",
+       "note": "le repas (m)"
+      },
+      {
+       "t": "petit-déjeuner",
+       "e": "breakfast",
+       "ipa": "pə.ti.de.ʒø.ne",
+       "pos": "noun",
+       "note": "le petit-déjeuner (m)"
+      },
+      {
+       "t": "déjeuner",
+       "e": "lunch",
+       "ipa": "de.ʒø.ne",
+       "pos": "noun",
+       "note": "le déjeuner (m)"
+      },
+      {
+       "t": "dîner",
+       "e": "dinner",
+       "ipa": "di.ne",
+       "pos": "noun",
+       "note": "le dîner (m)"
+      },
+      {
+       "t": "entrée",
+       "e": "starter",
+       "ipa": "ɑ̃.tʁe",
+       "pos": "noun",
+       "note": "l'entrée (f)"
+      },
+      {
+       "t": "plat",
+       "e": "dish",
+       "ipa": "pla",
+       "pos": "noun",
+       "note": "le plat (m)"
+      },
+      {
+       "t": "sucre",
+       "e": "sugar",
+       "ipa": "sykʁ",
+       "pos": "noun",
+       "note": "le sucre (m)"
+      },
+      {
+       "t": "délicieux",
+       "e": "delicious",
+       "ipa": "de.li.sjø",
+       "pos": "adj",
+       "note": "délicieuse in the fem."
+      },
+      {
+       "t": "commander",
+       "e": "to order",
+       "ipa": "kɔ.mɑ̃.de",
+       "pos": "verb"
+      },
+      {
+       "t": "réserver",
+       "e": "to book",
+       "ipa": "ʁe.zɛʁ.ve",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je voudrais commander un plat",
+       "e": "I would like to order a dish",
+       "ipa": "ʒə vu.dʁɛ kɔ.mɑ̃.de œ̃ pla"
+      },
+      {
+       "t": "L'addition, s'il vous plaît",
+       "e": "The bill, please",
+       "ipa": "la.di.sjɔ̃ sil vu plɛ"
+      },
+      {
+       "t": "Le repas est délicieux",
+       "e": "The meal is delicious",
+       "ipa": "lə ʁə.pa ɛ de.li.sjø"
+      },
+      {
+       "t": "Nous dînons à huit heures",
+       "e": "We have dinner at eight",
+       "ipa": "nu di.nɔ̃ a ɥi.t‿œʁ"
+      }
+     ]
+    },
+    {
+     "name": "Shopping",
+     "tips": [
+      {
+       "h": "-ir verbs like choisir",
+       "b": "A second regular group ends in -ir and inserts -iss- in the plural forms: je choisis, tu choisis, il choisit, nous choisissons, vous choisissez, ils choisissent. Finir and guérir follow the same pattern.",
+       "eg": [
+        [
+         "je choisis",
+         "I choose"
+        ],
+        [
+         "nous choisissons",
+         "we choose"
+        ],
+        [
+         "ils finissent",
+         "they finish"
+        ]
+       ]
+      },
+      {
+       "h": "Shops named after their goods",
+       "b": "A shop is often the product plus -erie: pain gives boulangerie, viande gives boucherie. The person who keeps it takes -er in the masculine and -ère in the feminine.",
+       "eg": [
+        [
+         "la boulangerie",
+         "the bakery"
+        ],
+        [
+         "le boulanger",
+         "the baker"
+        ],
+        [
+         "la boucherie",
+         "the butcher's shop"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "supermarché",
+       "e": "supermarket",
+       "ipa": "sy.pɛʁ.maʁ.ʃe",
+       "pos": "noun",
+       "note": "le supermarché (m)"
+      },
+      {
+       "t": "boulangerie",
+       "e": "bakery",
+       "ipa": "bu.lɑ̃.ʒʁi",
+       "pos": "noun",
+       "note": "la boulangerie (f)"
+      },
+      {
+       "t": "vendeur",
+       "e": "shop assistant",
+       "ipa": "vɑ̃.dœʁ",
+       "pos": "noun",
+       "note": "le vendeur (m)"
+      },
+      {
+       "t": "client",
+       "e": "customer",
+       "ipa": "kli.jɑ̃",
+       "pos": "noun",
+       "note": "le client (m)"
+      },
+      {
+       "t": "sac",
+       "e": "bag",
+       "ipa": "sak",
+       "pos": "noun",
+       "note": "le sac (m)"
+      },
+      {
+       "t": "taille",
+       "e": "size",
+       "ipa": "taj",
+       "pos": "noun",
+       "note": "la taille (f)"
+      },
+      {
+       "t": "liste",
+       "e": "list",
+       "ipa": "list",
+       "pos": "noun",
+       "note": "la liste (f)"
+      },
+      {
+       "t": "soldes",
+       "e": "sale",
+       "ipa": "sɔld",
+       "pos": "noun",
+       "note": "les soldes (m pl)"
+      },
+      {
+       "t": "acheter",
+       "e": "to buy",
+       "ipa": "aʃ.te",
+       "pos": "verb",
+       "note": "j'achète"
+      },
+      {
+       "t": "vendre",
+       "e": "to sell",
+       "ipa": "vɑ̃dʁ",
+       "pos": "verb"
+      },
+      {
+       "t": "choisir",
+       "e": "to choose",
+       "ipa": "ʃwa.ziʁ",
+       "pos": "verb"
+      },
+      {
+       "t": "essayer",
+       "e": "to try",
+       "ipa": "e.sɛ.je",
+       "pos": "verb",
+       "note": "j'essaie"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "J'achète du pain à la boulangerie",
+       "e": "I buy bread at the bakery",
+       "ipa": "ʒa.ʃɛt dy pɛ̃ a la bu.lɑ̃.ʒʁi"
+      },
+      {
+       "t": "Ce sac est très cher",
+       "e": "This bag is very expensive",
+       "ipa": "sə sak ɛ tʁɛ ʃɛʁ"
+      },
+      {
+       "t": "Le vendeur est très gentil",
+       "e": "The shop assistant is very kind",
+       "ipa": "lə vɑ̃.dœʁ ɛ tʁɛ ʒɑ̃.ti"
+      },
+      {
+       "t": "Je choisis une autre taille",
+       "e": "I am choosing another size",
+       "ipa": "ʒə ʃwa.zi y.n‿otʁ taj"
+      }
+     ]
+    },
+    {
+     "name": "Hobbies",
+     "tips": [
+      {
+       "h": "Jouer à and jouer de",
+       "b": "Jouer takes à before a game or a sport and de before a musical instrument, and both prepositions contract with the article as usual: jouer au football, jouer du piano, jouer de la guitare.",
+       "eg": [
+        [
+         "jouer au tennis",
+         "to play tennis"
+        ],
+        [
+         "jouer du piano",
+         "to play the piano"
+        ],
+        [
+         "jouer de la guitare",
+         "to play the guitar"
+        ]
+       ]
+      },
+      {
+       "h": "Aimer plus an infinitive",
+       "b": "Liking an activity is aimer followed straight by the infinitive, with nothing between them: j'aime lire, elle aime danser. Préférer and détester work the same way.",
+       "eg": [
+        [
+         "J'aime lire.",
+         "I like reading."
+        ],
+        [
+         "Elle aime danser.",
+         "She likes dancing."
+        ],
+        [
+         "Je déteste attendre.",
+         "I hate waiting."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "musique",
+       "e": "music",
+       "ipa": "my.zik",
+       "pos": "noun",
+       "note": "la musique (f)"
+      },
+      {
+       "t": "guitare",
+       "e": "guitar",
+       "ipa": "ɡi.taʁ",
+       "pos": "noun",
+       "note": "la guitare (f)"
+      },
+      {
+       "t": "photo",
+       "e": "photograph",
+       "ipa": "fɔ.to",
+       "pos": "noun",
+       "note": "la photo (f)"
+      },
+      {
+       "t": "jeu",
+       "e": "game",
+       "ipa": "ʒø",
+       "pos": "noun",
+       "note": "le jeu (m), pl jeux"
+      },
+      {
+       "t": "loisir",
+       "e": "pastime",
+       "ipa": "lwa.ziʁ",
+       "pos": "noun",
+       "note": "le loisir (m)"
+      },
+      {
+       "t": "lire",
+       "e": "to read",
+       "ipa": "liʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "jouer",
+       "e": "to play",
+       "ipa": "ʒwe",
+       "pos": "verb",
+       "note": "jouer à, jouer de"
+      },
+      {
+       "t": "chanter",
+       "e": "to sing",
+       "ipa": "ʃɑ̃.te",
+       "pos": "verb"
+      },
+      {
+       "t": "danser",
+       "e": "to dance",
+       "ipa": "dɑ̃.se",
+       "pos": "verb"
+      },
+      {
+       "t": "peindre",
+       "e": "to paint",
+       "ipa": "pɛ̃dʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "cuisiner",
+       "e": "to cook",
+       "ipa": "kɥi.zi.ne",
+       "pos": "verb"
+      },
+      {
+       "t": "avec",
+       "e": "with",
+       "ipa": "a.vɛk",
+       "pos": "prep"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "J'aime lire le soir",
+       "e": "I like reading in the evening",
+       "ipa": "ʒɛm liʁ lə swaʁ"
+      },
+      {
+       "t": "Elle joue de la guitare",
+       "e": "She plays the guitar",
+       "ipa": "ɛl ʒu də la ɡi.taʁ"
+      },
+      {
+       "t": "Je danse avec mon amie",
+       "e": "I dance with my friend",
+       "ipa": "ʒə dɑ̃s a.vɛk mɔ̃.n‿a.mi"
+      },
+      {
+       "t": "Mon frère aime la musique",
+       "e": "My brother likes music",
+       "ipa": "mɔ̃ fʁɛʁ ɛm la my.zik"
+      }
+     ]
+    },
+    {
+     "name": "Sports",
+     "tips": [
+      {
+       "h": "Faire du sport",
+       "b": "Taking part in a sport uses faire de plus the partitive: faire du vélo, faire de la natation. A team game played with a ball takes jouer à instead: jouer au football.",
+       "eg": [
+        [
+         "faire du sport",
+         "to do sport"
+        ],
+        [
+         "faire de la natation",
+         "to swim as a sport"
+        ],
+        [
+         "jouer au football",
+         "to play football"
+        ]
+       ]
+      },
+      {
+       "h": "-re verbs like perdre",
+       "b": "A third regular group ends in -re and drops it before the endings: je perds, tu perds, il perd, nous perdons, vous perdez, ils perdent. Attendre, vendre and répondre follow it.",
+       "eg": [
+        [
+         "je perds",
+         "I lose"
+        ],
+        [
+         "nous perdons",
+         "we lose"
+        ],
+        [
+         "ils vendent",
+         "they sell"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ballon",
+       "e": "ball",
+       "ipa": "ba.lɔ̃",
+       "pos": "noun",
+       "note": "le ballon (m)"
+      },
+      {
+       "t": "équipe",
+       "e": "team",
+       "ipa": "e.kip",
+       "pos": "noun",
+       "note": "l'équipe (f)"
+      },
+      {
+       "t": "joueur",
+       "e": "player",
+       "ipa": "ʒwœʁ",
+       "pos": "noun",
+       "note": "le joueur (m)"
+      },
+      {
+       "t": "piscine",
+       "e": "swimming pool",
+       "ipa": "pi.sin",
+       "pos": "noun",
+       "note": "la piscine (f)"
+      },
+      {
+       "t": "stade",
+       "e": "stadium",
+       "ipa": "stad",
+       "pos": "noun",
+       "note": "le stade (m)"
+      },
+      {
+       "t": "entraînement",
+       "e": "training",
+       "ipa": "ɑ̃.tʁɛn.mɑ̃",
+       "pos": "noun",
+       "note": "l'entraînement (m)"
+      },
+      {
+       "t": "victoire",
+       "e": "win",
+       "ipa": "vik.twaʁ",
+       "pos": "noun",
+       "note": "la victoire (f)"
+      },
+      {
+       "t": "règle",
+       "e": "rule",
+       "ipa": "ʁɛɡl",
+       "pos": "noun",
+       "note": "la règle (f)"
+      },
+      {
+       "t": "courir",
+       "e": "to run",
+       "ipa": "ku.ʁiʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "nager",
+       "e": "to swim",
+       "ipa": "na.ʒe",
+       "pos": "verb",
+       "note": "nous nageons"
+      },
+      {
+       "t": "marcher",
+       "e": "to walk",
+       "ipa": "maʁ.ʃe",
+       "pos": "verb"
+      },
+      {
+       "t": "perdre",
+       "e": "to lose",
+       "ipa": "pɛʁdʁ",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je cours le matin",
+       "e": "I run in the mornings",
+       "ipa": "ʒə kuʁ lə ma.tɛ̃"
+      },
+      {
+       "t": "Mon équipe perd toujours",
+       "e": "My team always loses",
+       "ipa": "mɔ̃.n‿e.kip pɛʁ tu.ʒuʁ"
+      },
+      {
+       "t": "Nous nageons à la piscine",
+       "e": "We swim at the pool",
+       "ipa": "nu na.ʒɔ̃ a la pi.sin"
+      },
+      {
+       "t": "Les joueurs sont au stade",
+       "e": "The players are at the stadium",
+       "ipa": "le ʒwœʁ sɔ̃.t‿o stad"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "THE WORLD",
+   "subtitle": "Nature, the city, countries and a wider set of verbs",
+   "skills": [
+    {
+     "name": "Nature",
+     "tips": [
+      {
+       "h": "Endings that hint at gender",
+       "b": "Some endings lean one way: nouns in -age, -eau and -ment are usually masculine, and nouns in -tion, -té and -ette are usually feminine. La plage and l'eau run against the rule, which is why the article is worth learning with the word.",
+       "eg": [
+        [
+         "le nuage",
+         "the cloud"
+        ],
+        [
+         "le bateau",
+         "the boat"
+        ],
+        [
+         "la saison",
+         "the season"
+        ],
+        [
+         "la plage",
+         "the beach"
+        ]
+       ]
+      },
+      {
+       "h": "Le for a whole class of thing",
+       "b": "French uses le, la or les where English uses no article at all for a general statement: j'aime la nature, les arbres sont verts. A bare plural noun is not possible.",
+       "eg": [
+        [
+         "J'aime les fleurs.",
+         "I like flowers."
+        ],
+        [
+         "La mer est froide.",
+         "The sea is cold."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "arbre",
+       "e": "tree",
+       "ipa": "aʁbʁ",
+       "pos": "noun",
+       "note": "l'arbre (m)"
+      },
+      {
+       "t": "fleur",
+       "e": "flower",
+       "ipa": "flœʁ",
+       "pos": "noun",
+       "note": "la fleur (f)"
+      },
+      {
+       "t": "herbe",
+       "e": "grass",
+       "ipa": "ɛʁb",
+       "pos": "noun",
+       "note": "l'herbe (f)"
+      },
+      {
+       "t": "forêt",
+       "e": "forest",
+       "ipa": "fɔ.ʁɛ",
+       "pos": "noun",
+       "note": "la forêt (f)"
+      },
+      {
+       "t": "montagne",
+       "e": "mountain",
+       "ipa": "mɔ̃.taɲ",
+       "pos": "noun",
+       "note": "la montagne (f)"
+      },
+      {
+       "t": "rivière",
+       "e": "river",
+       "ipa": "ʁi.vjɛʁ",
+       "pos": "noun",
+       "note": "la rivière (f)"
+      },
+      {
+       "t": "lac",
+       "e": "lake",
+       "ipa": "lak",
+       "pos": "noun",
+       "note": "le lac (m)"
+      },
+      {
+       "t": "mer",
+       "e": "sea",
+       "ipa": "mɛʁ",
+       "pos": "noun",
+       "note": "la mer (f)"
+      },
+      {
+       "t": "plage",
+       "e": "beach",
+       "ipa": "plaʒ",
+       "pos": "noun",
+       "note": "la plage (f)"
+      },
+      {
+       "t": "ciel",
+       "e": "sky",
+       "ipa": "sjɛl",
+       "pos": "noun",
+       "note": "le ciel (m)"
+      },
+      {
+       "t": "lune",
+       "e": "moon",
+       "ipa": "lyn",
+       "pos": "noun",
+       "note": "la lune (f)"
+      },
+      {
+       "t": "étoile",
+       "e": "star",
+       "ipa": "e.twal",
+       "pos": "noun",
+       "note": "l'étoile (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Le ciel est bleu",
+       "e": "The sky is blue",
+       "ipa": "lə sjɛl ɛ blø"
+      },
+      {
+       "t": "Il y a des fleurs ici",
+       "e": "There are flowers here",
+       "ipa": "i.l‿i.a de flœʁ i.si"
+      },
+      {
+       "t": "La montagne est très haute",
+       "e": "The mountain is very high",
+       "ipa": "la mɔ̃.taɲ ɛ tʁɛ ot"
+      },
+      {
+       "t": "Nous marchons dans la forêt",
+       "e": "We walk in the forest",
+       "ipa": "nu maʁ.ʃɔ̃ dɑ̃ la fɔ.ʁɛ"
+      }
+     ]
+    },
+    {
+     "name": "City",
+     "tips": [
+      {
+       "h": "Le and la change the meaning",
+       "b": "A few nouns carry two genders and two meanings. Le tour is a turn or a circuit while la tour is a tower; le poste is a job or a set while la poste is the post office.",
+       "eg": [
+        [
+         "le tour",
+         "the turn"
+        ],
+        [
+         "la tour",
+         "the tower"
+        ],
+        [
+         "la poste",
+         "the post office"
+        ]
+       ]
+      },
+      {
+       "h": "Y stands in for a place",
+       "b": "Y replaces a place already named and stands in front of the verb: je vais à Paris becomes j'y vais. It is the same y that sits inside il y a.",
+       "eg": [
+        [
+         "J'y vais.",
+         "I am going there."
+        ],
+        [
+         "Il y est.",
+         "He is there."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "centre",
+       "e": "town centre",
+       "ipa": "sɑ̃tʁ",
+       "pos": "noun",
+       "note": "le centre (m)"
+      },
+      {
+       "t": "place",
+       "e": "square",
+       "ipa": "plas",
+       "pos": "noun",
+       "note": "la place (f)"
+      },
+      {
+       "t": "pont",
+       "e": "bridge",
+       "ipa": "pɔ̃",
+       "pos": "noun",
+       "note": "le pont (m)"
+      },
+      {
+       "t": "musée",
+       "e": "museum",
+       "ipa": "my.ze",
+       "pos": "noun",
+       "note": "le musée (m)"
+      },
+      {
+       "t": "mairie",
+       "e": "town hall",
+       "ipa": "mɛ.ʁi",
+       "pos": "noun",
+       "note": "la mairie (f)"
+      },
+      {
+       "t": "poste",
+       "e": "post office",
+       "ipa": "pɔst",
+       "pos": "noun",
+       "note": "la poste (f)"
+      },
+      {
+       "t": "immeuble",
+       "e": "block of flats",
+       "ipa": "i.mœbl",
+       "pos": "noun",
+       "note": "l'immeuble (m)"
+      },
+      {
+       "t": "trottoir",
+       "e": "pavement",
+       "ipa": "tʁɔ.twaʁ",
+       "pos": "noun",
+       "note": "le trottoir (m)"
+      },
+      {
+       "t": "feu",
+       "e": "traffic light",
+       "ipa": "fø",
+       "pos": "noun",
+       "note": "le feu (m), pl feux"
+      },
+      {
+       "t": "bruit",
+       "e": "noise",
+       "ipa": "bʁɥi",
+       "pos": "noun",
+       "note": "le bruit (m)"
+      },
+      {
+       "t": "foule",
+       "e": "crowd",
+       "ipa": "ful",
+       "pos": "noun",
+       "note": "la foule (f)"
+      },
+      {
+       "t": "tour",
+       "e": "tower",
+       "ipa": "tuʁ",
+       "pos": "noun",
+       "note": "la tour (f)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Le musée est près du pont",
+       "e": "The museum is near the bridge",
+       "ipa": "lə my.ze ɛ pʁɛ dy pɔ̃"
+      },
+      {
+       "t": "Il y a beaucoup de bruit",
+       "e": "There is a lot of noise",
+       "ipa": "i.l‿i.a bo.ku də bʁɥi"
+      },
+      {
+       "t": "La place est très grande",
+       "e": "The square is very big",
+       "ipa": "la plas ɛ tʁɛ ɡʁɑ̃d"
+      },
+      {
+       "t": "Nous allons à la poste",
+       "e": "We are going to the post office",
+       "ipa": "nu.z‿a.lɔ̃ a la pɔst"
+      }
+     ]
+    },
+    {
+     "name": "Countries",
+     "tips": [
+      {
+       "h": "En, au and aux with countries",
+       "b": "A feminine country takes en, a masculine one au, and a plural one aux: en Espagne, au Japon, aux États-Unis. A country whose name ends in -e is feminine, with le Mexique and le Cambodge as the main exceptions.",
+       "eg": [
+        [
+         "en Italie",
+         "in Italy"
+        ],
+        [
+         "au Maroc",
+         "in Morocco"
+        ],
+        [
+         "aux États-Unis",
+         "in the United States"
+        ]
+       ]
+      },
+      {
+       "h": "Nationalities in lower case",
+       "b": "A nationality used as an adjective and the name of a language are written in lower case: il est français, je parle espagnol. Naming a person of that nationality takes a capital: un Français.",
+       "eg": [
+        [
+         "Il est français.",
+         "He is French."
+        ],
+        [
+         "un Français",
+         "a Frenchman"
+        ],
+        [
+         "Je parle chinois.",
+         "I speak Chinese."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "pays",
+       "e": "country",
+       "ipa": "pe.i",
+       "pos": "noun",
+       "note": "le pays (m)"
+      },
+      {
+       "t": "monde",
+       "e": "world",
+       "ipa": "mɔ̃d",
+       "pos": "noun",
+       "note": "le monde (m)"
+      },
+      {
+       "t": "langue",
+       "e": "language",
+       "ipa": "lɑ̃ɡ",
+       "pos": "noun",
+       "note": "la langue (f)"
+      },
+      {
+       "t": "Allemagne",
+       "e": "Germany",
+       "ipa": "al.maɲ",
+       "pos": "noun",
+       "note": "l'Allemagne (f)"
+      },
+      {
+       "t": "Angleterre",
+       "e": "England",
+       "ipa": "ɑ̃.ɡlə.tɛʁ",
+       "pos": "noun",
+       "note": "l'Angleterre (f)"
+      },
+      {
+       "t": "Espagne",
+       "e": "Spain",
+       "ipa": "ɛs.paɲ",
+       "pos": "noun",
+       "note": "l'Espagne (f)"
+      },
+      {
+       "t": "Italie",
+       "e": "Italy",
+       "ipa": "i.ta.li",
+       "pos": "noun",
+       "note": "l'Italie (f)"
+      },
+      {
+       "t": "Suisse",
+       "e": "Switzerland",
+       "ipa": "sɥis",
+       "pos": "noun",
+       "note": "la Suisse (f)"
+      },
+      {
+       "t": "Chine",
+       "e": "China",
+       "ipa": "ʃin",
+       "pos": "noun",
+       "note": "la Chine (f)"
+      },
+      {
+       "t": "Japon",
+       "e": "Japan",
+       "ipa": "ʒa.pɔ̃",
+       "pos": "noun",
+       "note": "le Japon (m)"
+      },
+      {
+       "t": "Maroc",
+       "e": "Morocco",
+       "ipa": "ma.ʁɔk",
+       "pos": "noun",
+       "note": "le Maroc (m)"
+      },
+      {
+       "t": "États-Unis",
+       "e": "United States",
+       "ipa": "e.ta.zy.ni",
+       "pos": "noun",
+       "note": "les États-Unis (m pl)"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "J'habite en Suisse",
+       "e": "I live in Switzerland",
+       "ipa": "ʒa.bit ɑ̃ sɥis"
+      },
+      {
+       "t": "Elle va au Japon demain",
+       "e": "She is going to Japan tomorrow",
+       "ipa": "ɛl va o ʒa.pɔ̃ də.mɛ̃"
+      },
+      {
+       "t": "Ce pays a deux langues",
+       "e": "This country has two languages",
+       "ipa": "sə pe.i a dø lɑ̃ɡ"
+      },
+      {
+       "t": "Mes amis sont en Italie",
+       "e": "My friends are in Italy",
+       "ipa": "me.z‿a.mi sɔ̃.t‿ɑ̃.n‿i.ta.li"
+      }
+     ]
+    },
+    {
+     "name": "More Verbs",
+     "tips": [
+      {
+       "h": "Vouloir, pouvoir and devoir",
+       "b": "These three are followed directly by an infinitive with no preposition between them: je veux partir, je peux venir, je dois travailler. All three are irregular: je veux, je peux, je dois.",
+       "eg": [
+        [
+         "Je veux partir.",
+         "I want to leave."
+        ],
+        [
+         "Je peux venir.",
+         "I can come."
+        ],
+        [
+         "Je dois travailler.",
+         "I have to work."
+        ]
+       ]
+      },
+      {
+       "h": "Savoir and connaître",
+       "b": "Savoir covers a fact or a learned skill: je sais nager, je sais où il habite. Connaître covers acquaintance with a person or a place and is never followed by a clause: je connais Paris.",
+       "eg": [
+        [
+         "Je sais nager.",
+         "I can swim."
+        ],
+        [
+         "Je connais son frère.",
+         "I know his brother."
+        ]
+       ]
+      },
+      {
+       "h": "Venir de for the recent past",
+       "b": "Venir de followed by an infinitive states what happened a moment ago: je viens de manger. The tense stays present while the meaning is past.",
+       "eg": [
+        [
+         "Il vient de partir.",
+         "He left a moment ago."
+        ],
+        [
+         "Nous venons d'arriver.",
+         "We have this minute arrived."
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "vouloir",
+       "e": "to want",
+       "ipa": "vu.lwaʁ",
+       "pos": "verb",
+       "note": "je veux"
+      },
+      {
+       "t": "pouvoir",
+       "e": "to be able",
+       "ipa": "pu.vwaʁ",
+       "pos": "verb",
+       "note": "je peux"
+      },
+      {
+       "t": "devoir",
+       "e": "to have to",
+       "ipa": "də.vwaʁ",
+       "pos": "verb",
+       "note": "je dois"
+      },
+      {
+       "t": "savoir",
+       "e": "to know",
+       "ipa": "sa.vwaʁ",
+       "pos": "verb",
+       "note": "of a fact"
+      },
+      {
+       "t": "connaître",
+       "e": "to know a person",
+       "ipa": "kɔ.nɛtʁ",
+       "pos": "verb",
+       "note": "of a person or place"
+      },
+      {
+       "t": "dire",
+       "e": "to say",
+       "ipa": "diʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "venir",
+       "e": "to come",
+       "ipa": "və.niʁ",
+       "pos": "verb",
+       "note": "je viens"
+      },
+      {
+       "t": "sortir",
+       "e": "to go out",
+       "ipa": "sɔʁ.tiʁ",
+       "pos": "verb",
+       "note": "irregular"
+      },
+      {
+       "t": "ouvrir",
+       "e": "to open",
+       "ipa": "u.vʁiʁ",
+       "pos": "verb",
+       "note": "j'ouvre"
+      },
+      {
+       "t": "fermer",
+       "e": "to close",
+       "ipa": "fɛʁ.me",
+       "pos": "verb"
+      },
+      {
+       "t": "chercher",
+       "e": "to look for",
+       "ipa": "ʃɛʁ.ʃe",
+       "pos": "verb",
+       "note": "no preposition"
+      },
+      {
+       "t": "trouver",
+       "e": "to find",
+       "ipa": "tʁu.ve",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Je veux apprendre le français",
+       "e": "I want to learn French",
+       "ipa": "ʒə vø a.pʁɑ̃dʁ lə fʁɑ̃.sɛ"
+      },
+      {
+       "t": "Nous pouvons venir demain",
+       "e": "We can come tomorrow",
+       "ipa": "nu pu.vɔ̃ və.niʁ də.mɛ̃"
+      },
+      {
+       "t": "Il ne sait pas nager",
+       "e": "He cannot swim",
+       "ipa": "il nə sɛ pa na.ʒe"
+      },
+      {
+       "t": "Tu dois fermer la porte",
+       "e": "You have to close the door",
+       "ipa": "ty dwa fɛʁ.me la pɔʁt"
+      }
+     ]
+    }
+   ]
+  }
+ ]
 }

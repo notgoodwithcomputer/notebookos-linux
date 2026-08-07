@@ -73,6 +73,9 @@ PROJ_COLOR = {}
 # No names are reserved as built-in, so every list persists.
 DEFAULT_PROJECT_NAMES = set()
 # Colour palette offered in the New List editor (avoids the reserved signal red).
+# Deliberately off the papertone tokens: these are IDENTITY tints a person picks
+# to tell one list from another at a glance, and the neutrals cannot supply six
+# values that stay distinguishable at dot size.
 LIST_COLORS = ["#4A5E73", "#6E7B57", "#9A7B4F", "#8A857A", "#7A5C8A", "#3F6B6B"]
 
 DUE_ORDER = ["overdue", "today", "anytime", "tomorrow", "week", "later", "inbox"]
@@ -155,6 +158,13 @@ class Tasks(nbapp.AppWindow):
     def __init__(self):
         super().__init__()
         self._install_css()
+
+        # Lifecycle flag, set the moment the window starts tearing down. Every
+        # timer this app owns checks it before touching a widget, so nothing
+        # runs against a destroyed window (see _on_destroy).
+        self._closed = False
+        self._day_rollover_id = 0
+
         self.view = "view:today"
         self._doc_path = None    # current File-menu document (None until saved)
         self._side_rows = {}     # id -> (row widget, count label)
@@ -214,9 +224,31 @@ class Tasks(nbapp.AppWindow):
                     PROJECTS.append((name, color))
                     PROJ_COLOR[name] = color
         self.tasks = self._load_tasks(meta)
+        self._adopt_orphan_lists()
         # Events are NOT part of this app's sidecar any more — they live in the
         # Calendar app's shared store so the two stay in sync (see _load_events).
         self.events = self._load_events()
+
+    def _adopt_orphan_lists(self):
+        """Re-create any list a loaded TASK still names but the list store no
+        longer holds, so the two halves of the same fact can never disagree.
+
+        The task's list assignment and the list definitions are persisted
+        separately (a task carries "project": "Home"; the "Home" list itself
+        lives under "projects"), so the definitions can be lost on their own —
+        a sidecar that lost its wrapper is read as a bare task list with no
+        "projects" key at all (see _read_meta), and a document written before
+        lists existed has tasks but no "lists". The tasks then kept a list that
+        was in NO sidebar row, in no Lists menu and in no view — and because
+        __init__ saves immediately, the next write persisted "projects": [],
+        turning a recoverable mismatch into a permanent one with the list name
+        still sitting on every one of its tasks."""
+        for t in self.tasks:
+            name = t.get("project")
+            if name and name not in PROJ_COLOR:
+                color = LIST_COLORS[len(PROJECTS) % len(LIST_COLORS)]
+                PROJECTS.append((name, color))
+                PROJ_COLOR[name] = color
 
     def _read_meta(self):
         """This app's private sidecar ({tasks, events, projects}) or None.
@@ -260,6 +292,12 @@ class Tasks(nbapp.AppWindow):
            compatible, no loss);
         3. nothing on disk — ship empty."""
         flat = self._read_flat()
+        # Baseline for the three-way merge in _save_tasks.  The desktop Tasks
+        # card writes this same file while this window is open; remembering
+        # what we originally saw lets us distinguish its newer tick from a
+        # completion change made here.
+        self._flat_base = [dict(t) for t in flat] \
+            if isinstance(flat, list) else []
         rich = meta.get("tasks") if isinstance(meta, dict) else None
         # Tasks stored as an object keyed by id: the values are still the rich
         # tasks, and falling through to the flat file instead would silently
@@ -502,6 +540,57 @@ class Tasks(nbapp.AppWindow):
             return "%dh" % h
         return "%dm" % m
 
+    @staticmethod
+    def _done_by_occurrence(rows):
+        """Map (title, occurrence) to done for a flat task snapshot.
+
+        The shared format predates stable IDs and permits duplicate titles, so
+        title alone is not an identity.  Numbering equal titles in their stored
+        order preserves independent duplicate rows without changing the file
+        format understood by the desktop widget.
+        """
+        seen = {}
+        out = {}
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            text = str(row.get("text", ""))
+            n = seen.get(text, 0)
+            seen[text] = n + 1
+            out[(text, n)] = bool(row.get("done"))
+        return out
+
+    def _merge_external_ticks(self, outgoing):
+        """Fold widget-only completion changes into this pending save.
+
+        This is a three-way merge: the flat list loaded with this window is the
+        baseline, tasks.json now is the other writer, and ``outgoing`` is this
+        app.  Disk wins only when disk changed and this app did not; an edit in
+        Tasks wins a same-record conflict.  Additions and deletions remain
+        authoritative here because the widget can only tick rows, never create
+        or remove them.
+        """
+        disk = self._read_flat()
+        if not isinstance(disk, list):
+            return
+        base = self._done_by_occurrence(getattr(self, "_flat_base", []))
+        current = self._done_by_occurrence(disk)
+        seen = {}
+        for i, row in enumerate(outgoing):
+            text = str(row.get("text", ""))
+            n = seen.get(text, 0)
+            seen[text] = n + 1
+            key = (text, n)
+            if key not in base or key not in current:
+                continue
+            mine = bool(row.get("done"))
+            if current[key] != base[key] and mine == base[key]:
+                row["done"] = current[key]
+                # Keep the in-memory model and the file in agreement so a
+                # second autosave cannot undo the merge it just performed.
+                if i < len(self.tasks):
+                    self.tasks[i]["done"] = current[key]
+
     def _save_tasks(self):
         """Persist the TASKS. The shared flat file keeps the widget's
         {"text","done"} shape (so the desktop card stays in sync and can never
@@ -511,7 +600,9 @@ class Tasks(nbapp.AppWindow):
         try:
             flat = [{"text": t.get("title", ""), "done": bool(t.get("done"))}
                     for t in self.tasks]
+            self._merge_external_ticks(flat)
             nbapp.atomic_write_json(TASKS_FILE, flat)
+            self._flat_base = [dict(t) for t in flat]
         except Exception:
             pass
         try:
@@ -533,6 +624,21 @@ class Tasks(nbapp.AppWindow):
                     pass
 
     def _on_destroy(self, *_):
+        # Idempotent: GTK can emit "destroy" more than once through nested
+        # teardown paths, and a second pass must not remove a source id that has
+        # since been reused by another timer, nor write the store twice.
+        if getattr(self, "_closed", False):
+            return False
+        # Marked BEFORE anything else, so a rollover poll that fires during the
+        # save below sees a closing window and stays away from the widgets.
+        self._closed = True
+        rid = getattr(self, "_day_rollover_id", 0)
+        self._day_rollover_id = 0
+        if rid:
+            try:
+                GLib.source_remove(rid)
+            except Exception:
+                pass
         self._save_tasks()
         return False
 
@@ -612,6 +718,10 @@ class Tasks(nbapp.AppWindow):
                 PROJECTS.append((lname, lcolor))
                 PROJ_COLOR[lname] = lcolor
         self.tasks = tasks
+        # A document may name lists on its tasks without defining them above
+        # (one written before "lists" was stored, or hand-made); re-create them
+        # rather than leaving those tasks on a list the app cannot show.
+        self._adopt_orphan_lists()
         self._doc_path = path
         if self.view.startswith("proj:") and self.view[5:] not in PROJ_COLOR:
             self.view = "view:today"
@@ -794,7 +904,7 @@ class Tasks(nbapp.AppWindow):
         foot = Gtk.Button(); foot.set_relief(Gtk.ReliefStyle.NONE)
         foot.get_style_context().add_class("newlist")
         frow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        fico = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 15, MUTED))
+        fico = nbicons.image("plus", 15, MUTED)
         frow.pack_start(fico, False, False, 0)
         flab = Gtk.Label(label=_t("New List"), xalign=0)
         flab.get_style_context().add_class("newlistlabel")
@@ -1009,14 +1119,15 @@ class Tasks(nbapp.AppWindow):
         self._save_tasks()
 
     def _swatch(self, color, idx):
-        eb = Gtk.EventBox(); eb.set_visible_window(False)
-        eb.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        button = Gtk.Button(); button.set_relief(Gtk.ReliefStyle.NONE)
+        button.get_style_context().add_class("nlswatch")
+        button.set_tooltip_text(_t("Choose colour %d") % (idx + 1))
         da = Gtk.DrawingArea(); da.set_size_request(28, 28)
         da.connect("draw", self._draw_swatch, (color, idx))
-        eb.add(da)
-        eb.connect("button-press-event", self._on_pick_color, idx)
+        button.add(da)
+        button.connect("clicked", self._on_pick_color, idx)
         self._nl_swatches.append(da)
-        return eb
+        return button
 
     def _draw_swatch(self, area, ctx, data):
         color, idx = data
@@ -1034,11 +1145,12 @@ class Tasks(nbapp.AppWindow):
             pass
         return False
 
-    def _on_pick_color(self, _w, _e, idx):
+    def _on_pick_color(self, _btn, idx):
+        # `clicked` handler, so no event argument and no return value to stop
+        # propagation with -- the old `button-press-event` signature had both.
         self._nl_color_idx = idx
         for da in getattr(self, "_nl_swatches", []):
             da.queue_draw()
-        return True
 
     def _nl_create(self, *_):
         try:
@@ -1079,7 +1191,7 @@ class Tasks(nbapp.AppWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
 
         if glyph:
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(glyph, 18, "#3A362E"))
+            img = nbicons.image(glyph, 18, "#3A362E")
             row.pack_start(img, False, False, 0)
         else:
             dot = Gtk.DrawingArea(); dot.set_size_request(11, 11)
@@ -1169,7 +1281,7 @@ class Tasks(nbapp.AppWindow):
         add.get_style_context().add_class("quickadd")
         add.set_margin_start(48); add.set_margin_end(48)
         add.set_margin_bottom(8)
-        plus = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 18, MUTED))
+        plus = nbicons.image("plus", 18, MUTED)
         plus.set_margin_start(16)
         add.pack_start(plus, False, False, 0)
         self.draft = Gtk.Entry()
@@ -1735,7 +1847,23 @@ class Tasks(nbapp.AppWindow):
         self._cal_widget = self._mini_calendar()
         self._cal_day = time.localtime()[:3]
         rail.pack_start(self._cal_widget, False, False, 0)
-        GLib.timeout_add_seconds(60, self._check_day_rollover)
+        # Poll the local date each minute and re-render only on an actual date
+        # change, so it stays cheap. The source id is kept so close can remove
+        # it: an anonymous timeout holds a reference to this window forever, so
+        # every Tasks the user ever closed would keep waking each minute and,
+        # on the next date change, rebuild a mini-calendar, event list and main
+        # view whose widgets are already destroyed. The rail is built exactly
+        # once (from __init__), but drop any recorded source first so a future
+        # rebuild can never leak the previous minute timer.
+        prior = getattr(self, "_day_rollover_id", 0)
+        self._day_rollover_id = 0
+        if prior:
+            try:
+                GLib.source_remove(prior)
+            except Exception:
+                pass
+        self._day_rollover_id = GLib.timeout_add_seconds(
+            60, self._check_day_rollover)
         return rail
 
     def _populate_events(self):
@@ -1784,7 +1912,7 @@ class Tasks(nbapp.AppWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         row.get_style_context().add_class("eventadd")
         try:
-            ico = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 14, MUTED))
+            ico = nbicons.image("plus", 14, MUTED)
             row.pack_start(ico, False, False, 0)
         except Exception:
             pass
@@ -1884,6 +2012,10 @@ class Tasks(nbapp.AppWindow):
     def _check_day_rollover(self):
         # Rebuild the mini month calendar when the local date changes so the red
         # "today" pill tracks the real day instead of the boot day.
+        # A closed window drops the poll entirely (return False): _cal_day is
+        # not updated and nothing is re-rendered, because its widgets are gone.
+        if getattr(self, "_closed", False):
+            return False
         try:
             d = time.localtime()[:3]
             if d != getattr(self, "_cal_day", d):
@@ -1970,7 +2102,7 @@ class Tasks(nbapp.AppWindow):
             w = area.get_allocated_width(); h = area.get_allocated_height()
             cx = w / 2.0
             cy, rad = 9.0, 4.5
-            ctx.set_source_rgb(*nbicons._hex("#E6E1D4"))
+            ctx.set_source_rgb(*nbicons._hex("#D7D2C5"))
             ctx.set_line_width(1)
             ctx.move_to(cx, cy + rad + 1)
             ctx.line_to(cx, h)
@@ -2237,7 +2369,7 @@ class Tasks(nbapp.AppWindow):
 
         meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         meta.set_margin_top(5)
-        color = PROJ_COLOR.get(t["project"], "#C4BFB1")
+        color = PROJ_COLOR.get(t["project"], "#C9C4B6")
         pdot = Gtk.DrawingArea(); pdot.set_size_request(9, 9)
         pdot.set_valign(Gtk.Align.CENTER)
         pdot.connect("draw", self._draw_dot, color)
@@ -2309,7 +2441,7 @@ class Tasks(nbapp.AppWindow):
                 ctx.line_to(w * 0.74, h * 0.32)
                 ctx.stroke()
             else:
-                ctx.set_source_rgb(*nbicons._hex("#B5B0A3"))
+                ctx.set_source_rgb(*nbicons._hex("#B3AD9E"))
                 self._round_rect(ctx, 1, 1, w - 2, h - 2, radius)
                 ctx.stroke()
         except Exception:
@@ -2336,9 +2468,9 @@ class Tasks(nbapp.AppWindow):
         .sidebar scrolledwindow, .sidebar viewport { background: #F1EEE6; }
         .sectionhead { font-size: 11px; letter-spacing: 0.13em; color: #8A857A;
                        font-weight: 700; }
-        .siderow { padding: 9px 12px; border-radius: 2px; background: transparent;
+        .siderow { padding: 9px 12px; border-radius: 6px; background: transparent;
                    border: none; box-shadow: none; margin-bottom: 2px; }
-        .siderow:hover { background: #E6DFCE; }
+        .siderow:hover { background: #F0EADC; }
         .siderow.selected { background: #EAE3D2;
                             box-shadow: inset 3px 0 0 #C8341E; }
         .siderowlabel { font-size: 15px; color: #1A1916; font-weight: 500; }
@@ -2346,16 +2478,16 @@ class Tasks(nbapp.AppWindow):
         .newlist { padding: 15px 26px; background: #F1EEE6; border: none;
                    box-shadow: none; border-top: 1px solid #D7D2C5;
                    border-radius: 0; }
-        .newlist:hover { background: #E6DFCE; }
+        .newlist:hover { background: #EAE3D2; }
         .newlistlabel { font-size: 14px; color: #6E695E; font-weight: 500; }
 
-        .centercol { background: #FCFBF8; border-right: 1px solid #E6E1D4; }
+        .centercol { background: #FCFBF8; border-right: 1px solid #D7D2C5; }
         .eyebrow { font-size: 12px; letter-spacing: 0.16em; color: #8A857A;
                    font-weight: 700; }
         .viewtitle { font-size: 34px; font-weight: 700; color: #1A1916; }
         .remaining { font-size: 14px; color: #8A857A; }
-        .quickadd { min-height: 48px; border: 1px dashed #CFC9BA;
-                    border-radius: 2px; }
+        .quickadd { min-height: 48px; border: 1px dashed #C9C4B6;
+                    border-radius: 8px; }
         .draftentry { background: transparent; border: none; box-shadow: none;
                       font-size: 15px; color: #1A1916; }
         .draftentry:focus { border: none; box-shadow: none; }
@@ -2365,44 +2497,44 @@ class Tasks(nbapp.AppWindow):
            column of boxes instead of hairline-separated rows. Clear all four
            sides first, then put the hairline back on the bottom only. */
         .taskrow { padding: 13px 6px; border-radius: 0; border: none;
-                   border-bottom: 1px solid #F0ECE0; background: transparent;
+                   border-bottom: 1px solid #D7D2C5; background: transparent;
                    box-shadow: none; }
-        .taskrow:hover { background: #FAF8F2; }
+        .taskrow:hover { background: #F8F7F2; }
         .tasktitle { font-size: 16px; color: #1A1916; }
-        .taskdone { font-size: 16px; color: #A8A296;
+        .taskdone { font-size: 16px; color: #B3AD9E;
                     text-decoration-line: line-through; }
         .taskproj { font-size: 12px; color: #6E695E; }
-        .taskdot { font-size: 12px; color: #C4BFB1; }
+        .taskdot { font-size: 12px; color: #C9C4B6; }
         .tasknote { font-size: 12px; color: #8A857A; }
         .tasknoteover { font-size: 12px; color: #C8341E; font-weight: 600; }
         .grouphead { font-size: 12px; letter-spacing: 0.1em; font-weight: 700;
                      color: #6E695E; }
         .groupover { font-size: 12px; letter-spacing: 0.1em; font-weight: 700;
                      color: #C8341E; }
-        .groupline { background: #ECE7DA; min-height: 1px; }
+        .groupline { background: #D7D2C5; min-height: 1px; }
         .groupcount { font-size: 12px; color: #8A857A; }
 
         .rail { background: #FCFBF8; }
-        .railhead { border-bottom: 1px solid #E6E1D4; }
-        .railtitle { font-size: 22px; font-weight: 700; color: #1A1916; }
+        .railhead { border-bottom: 1px solid #D7D2C5; }
+        .railtitle { font-size: 20px; font-weight: 700; color: #1A1916; }
         .emptytext { font-size: 14px; color: #8A857A; }
-        .emptyhint { font-size: 12px; color: #A39D8F; }
+        .emptyhint { font-size: 12px; color: #9A9484; }
         .emptysub { font-size: 13px; color: #8A857A; }
         .eventtime { font-size: 13px; color: #1A1916; font-weight: 600; }
         .eventdur { font-size: 11px; color: #8A857A; }
-        .eventcard { background: #FCFBF8; border: 1px solid #E6E1D4;
-                     border-radius: 2px; }
+        .eventcard { background: #FCFBF8; border: 1px solid #D7D2C5;
+                     border-radius: 12px; }
         .eventtitle { font-size: 15px; color: #1A1916; font-weight: 600; }
         .eventsub { font-size: 12px; color: #8A857A; }
-        .minical { border-top: 1px solid #E6E1D4; }
+        .minical { border-top: 1px solid #D7D2C5; }
         .minititle { font-size: 14px; font-weight: 700; color: #1A1916; }
-        .caldow { font-size: 10px; color: #B0AB9D; font-weight: 700; }
+        .caldow { font-size: 10px; color: #B3AD9E; font-weight: 700; }
         .calday { font-size: 12px; color: #6E695E; }
         .calmarked { font-size: 12px; color: #1A1916; font-weight: 700; }
-        .caltoday { font-size: 12px; color: #FFFFFF; font-weight: 700;
+        .caltoday { font-size: 12px; color: #FCFBF8; font-weight: 700;
                     background: #C8341E; border-radius: 50%;
                     min-width: 26px; min-height: 26px; padding: 0; }
-        .eventadd { border-top: 1px solid #EEEADF; padding-top: 8px;
+        .eventadd { border-top: 1px solid #D7D2C5; padding-top: 8px;
                     margin-top: 6px; }
         .eventaddentry { background: transparent; border: none; box-shadow: none;
                          font-size: 13px; color: #6E695E; }
@@ -2418,14 +2550,23 @@ class Tasks(nbapp.AppWindow):
         .nlbody { font-size: 14px; color: #4A473F; }
         .nlhint { font-size: 11px; letter-spacing: 0.13em; color: #8A857A;
                   font-weight: 700; }
-        .nlentry { background: #FCFBF8; border: 1px solid #CFC9BA;
-                   border-radius: 2px; padding: 8px 10px; font-size: 15px;
+        /* The colour picker: a real button, so the keyboard can reach it, but
+           wearing none of the button chrome -- the DrawingArea inside IS the
+           control's appearance. min-width/min-height are pinned to 0 so the
+           theme's shared 20px button minimum can never grow past the 28px
+           artwork and shift the row. No `outline: none`: the global focus ring
+           is the only thing telling a keyboard user where they are. */
+        .nlswatch { padding: 0; border: none; background: transparent;
+                    background-image: none; box-shadow: none;
+                    min-width: 0; min-height: 0; }
+        .nlentry { background: #FCFBF8; border: 1px solid #C9C4B6;
+                   border-radius: 8px; padding: 8px 10px; font-size: 15px;
                    color: #1A1916; }
-        .nlentry:focus { border: 1px solid #B5B0A3; box-shadow: none; }
-        .nlbtn { padding: 8px 18px; border-radius: 2px; border: 1px solid #CFC9BA;
+        .nlentry:focus { border: 1px solid #B3AD9E; box-shadow: none; }
+        .nlbtn { padding: 8px 18px; border-radius: 8px; border: 1px solid #C9C4B6;
                  background: #F1EEE6; color: #1A1916; font-size: 14px;
                  box-shadow: none; }
-        .nlbtn:hover { background: #E6DFCE; }
+        .nlbtn:hover { background: #EAE3D2; }
         /* A colour set on the BUTTON node never reaches the label inside it:
            the theme's `* { color: ink }` matches that label node directly and
            beats the inherited value. Without the `label` selectors below, the
@@ -2434,10 +2575,10 @@ class Tasks(nbapp.AppWindow):
            menu item further down. */
         .nlcreate { background: #1A1916; border: 1px solid #1A1916; }
         .nlcreate, .nlcreate label { color: #FCFBF8; }
-        .nlcreate:hover { background: #2A2823; }
+        .nlcreate:hover { background: #2A2620; }
         .nlremove { background: #C8341E; border: 1px solid #C8341E; }
         .nlremove, .nlremove label { color: #FCFBF8; }
-        .nlremove:hover { background: #A62A17; }
+        .nlremove:hover { background: #B12D19; }
 
         /* Destructive item in the task right-click menu: red is the reserved
            alert use, kept red on hover too. */

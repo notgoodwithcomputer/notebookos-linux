@@ -888,7 +888,12 @@ class Screenplay(nbapp.AppWindow):
         overwritten), or a file-bound script with edits since its last Save."""
         if self._path is None:
             return not self._is_empty()
-        return self._file_dirty
+        # _file_dirty only ever says "something happened since the last save".
+        # Undo the something and the script matches its file again, so ask the
+        # history as well: every content change goes through _touch, which
+        # calls undo.touch(), and the history errs towards dirty, so this can
+        # only drop the confirm when the page really is what the file holds.
+        return self._file_dirty and self.undo.is_dirty()
 
     def _confirm_replace(self, title):
         """Ask before replacing the script if that would lose unsaved work.
@@ -1007,6 +1012,9 @@ class Screenplay(nbapp.AppWindow):
         self.undo.checkpoint("Open Script")
         self._set_document(title, body, tags, path, subtitle)
         self.undo.commit()
+        # What is on screen is exactly what is in the file just opened, so this
+        # is the point undo/redo can return to without anything being at risk.
+        self.undo.mark_saved()
         return True
 
     # Screenplay text conventions used to recognise elements in a plain script.
@@ -1088,6 +1096,7 @@ class Screenplay(nbapp.AppWindow):
             return self._file_save_as()
         if self._write_file(self._path):
             self._file_dirty = False        # in sync with the file on disk now
+            self.undo.mark_saved()          # undoing back to here is not "dirty"
             self._save_doc()
             self._update_status()
             self._set_saved()
@@ -1106,9 +1115,41 @@ class Screenplay(nbapp.AppWindow):
             return
         if not os.path.splitext(path)[1]:
             path += ".json"             # default extension preserves formatting
+        # Adopt the new file ONLY once its bytes have landed. Taking the path
+        # and the title first meant a Save As that could not finish (a full
+        # disk, a read-only stick, a folder removed under it) still renamed the
+        # script on screen and re-pointed it at a file that does not exist,
+        # while the file it was actually bound to was quietly abandoned: the
+        # next Ctrl+S then went to the wrong place and "Save failed" was the
+        # only sign. The old path and title are put back on failure, so the
+        # previous file, the document's identity and its saved point all
+        # survive a refused write untouched.
+        prev_path = self._path
+        prev_title = self.scripttitle.get_text()
+        prev_dirty = self._file_dirty
+        self._set_identity(path, self._title_from_path(path))
+        if not self._write_file(path):
+            self._set_identity(prev_path, prev_title)
+            self._file_dirty = prev_dirty
+            self._update_status()
+            self._flash("Save failed")
+            return
+        self._file_dirty = False        # in sync with the file on disk now
+        self.undo.mark_saved()
+        self._save_doc()
+        self._update_status()
+        self._set_saved()
+
+    def _set_identity(self, path, title):
+        """Point the script at `path` and show `title`, without the title change
+        counting as an edit — this is bookkeeping, not something the user
+        typed."""
         self._path = path
-        self.scripttitle.set_text(self._title_from_path(path))
-        self._file_save()
+        was, self._loading = self._loading, True
+        try:
+            self.scripttitle.set_text(title or "")
+        finally:
+            self._loading = was
 
     def _file_open(self):
         path = self._choose_file(save=False)
@@ -1228,6 +1269,12 @@ class Screenplay(nbapp.AppWindow):
         the script flows from page 2. draw_page(cr, page_no, w, h) fills an opaque
         page and lays the monospace script out at half-letter scale."""
         title = (self.scripttitle.get_text() or DEFAULT_TITLE).upper()
+        # The byline. It is captured, persisted and restored by undo, and until
+        # now it was the one thing on the title page that never reached the
+        # page: a writer typed "written by Alexander Hamilton", saw it on
+        # screen, and printed a script with no name on it. NOT uppercased — the
+        # title is shouted by convention, a byline is not.
+        byline = self.scriptsubtitle.get_text().strip()
         rows = self._pdf_lines()
         usable = nbprint.HALF_H_PT - PDF_MT - PDF_MB
         lpp = max(1, int(usable // PDF_LEAD))
@@ -1242,6 +1289,13 @@ class Screenplay(nbapp.AppWindow):
             if page_no <= 1:
                 _pdf_show(cr, (w - _pdf_w(cr, title, 13.0)) / 2.0,
                           h * 0.44, title, 13.0)
+                if byline:
+                    # 11pt to the title's 13 keeps the printed hierarchy the
+                    # same as the on-screen one (15px to 17px). Full ink, not
+                    # the muted grey the entry shows: a title page is printed,
+                    # and a grey byline reads as a photocopy artefact.
+                    _pdf_show(cr, (w - _pdf_w(cr, byline, 11.0)) / 2.0,
+                              h * 0.44 + 3 * PDF_LEAD, byline, 11.0)
                 return
             cw = _pdf_w(cr, "M", PDF_FS) or (PDF_FS * 0.6)
             # body page number, top-right (first body page reads as "1.")
@@ -1477,39 +1531,40 @@ class Screenplay(nbapp.AppWindow):
                         font-weight: 700; }
         .elbtn { min-height: 30px; padding: 0 13px; font-size: 13px;
                  font-weight: 500; color: #1A1916; background: #FCFBF8;
-                 border: 1px solid #D7D2C5; border-radius: 2px;
+                 border: 1px solid #D7D2C5; border-radius: 8px;
                  box-shadow: none; }
         .elbtn:hover { background: #F1EEE6; }
-        .elbtn.active { color: #C8341E; background: #EAE3D2;
-                        border: 1px solid #C9C4B6; font-weight: 700; }
+        .elbtn.active { color: #1A1916; background: #EAE3D2;
+                        border: 1px solid #C9C4B6; font-weight: 700;
+                        box-shadow: inset 0 -3px 0 #C8341E; }
         /* The button's own label node needs the accent too: the theme's
            `* { color: ink }` matches it directly and so beats the colour it
            would otherwise inherit from the button, which silently dropped the
            red from the selected element chip. */
-        .elbtn.active label { color: #C8341E; }
+        .elbtn.active label { color: #1A1916; }
         .elbtn.active:hover { background: #EAE3D2; }
         .meta, .savestate { font-size: 13px; color: #6E695E; }
         .msep { color: #D7D2C5; min-width: 1px; margin: 15px 0; }
         .findbar { background: #EFEBE0; border-bottom: 1px solid #D7D2C5;
                    padding: 8px 36px; }
         .findbar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .findinput { background: #FCFBF8; border: 1px solid #C4BFB1;
-                     border-radius: 2px; box-shadow: none; color: #1A1916;
+        .findinput { background: #FCFBF8; border: 1px solid #C9C4B6;
+                     border-radius: 8px; box-shadow: none; color: #1A1916;
                      font-size: 13px; min-height: 30px; }
         .findinput:focus { border: 1px solid #8A857A; }
         .findbtn { min-height: 30px; padding: 0 12px; font-size: 13px;
                    color: #2A2620; background: #FCFBF8;
-                   border: 1px solid #D7D2C5; border-radius: 2px;
+                   border: 1px solid #D7D2C5; border-radius: 8px;
                    box-shadow: none; }
-        .findbtn:hover { background: #ECE8DD; }
+        .findbtn:hover { background: #EFEBE0; }
         .findcount { font-size: 13px; color: #6E695E; }
-        .desk { background: #E4DFD2; }
-        .desk viewport { background: #E4DFD2; }
+        .desk { background: #DED4C2; }
+        .desk viewport { background: #DED4C2; }
         .page { background: #FCFBF8; border: 1px solid #D7D2C5;
                 box-shadow: 2px 3px 0 rgba(26,25,22,0.10); }
         .pageno { font-family: "Courier New","Liberation Mono",monospace; font-size: 15px;
                   color: #9A9484; }
-        .scripttitle { font-family: "Courier New","Liberation Mono",monospace; font-size: 18px;
+        .scripttitle { font-family: "Courier New","Liberation Mono",monospace; font-size: 17px;
                        font-weight: 700; letter-spacing: 0.04em; color: #1A1916; }
         .scripttitle { background: transparent; border: none; box-shadow: none;
                        padding: 0; caret-color: #C8341E; }
@@ -1522,23 +1577,23 @@ class Screenplay(nbapp.AppWindow):
         .scriptbody { font-family: "Courier New","Liberation Mono",monospace; font-size: 16px;
                       color: #1A1916; background: #FCFBF8; caret-color: #C8341E; }
         .scriptbody text { background: #FCFBF8; }
-        .scriptbody text selection { background-color: #F1D9D2; color: #1A1916; }
+        .scriptbody text selection { background-color: #EAE3D2; color: #1A1916; }
         /* discard confirmation: a papertone card, matching the OS pattern */
-        .spdlg { background: #FCFBF8; border: 1px solid #C4BFB1; }
+        .spdlg { background: #FCFBF8; border: 1px solid #C9C4B6; }
         .spdlgbox { padding: 24px 28px 20px; }
         .spdlgbox * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .spdlgtitle { font-family: "Newsreader","Liberation Serif",serif;
-                      font-size: 19px; font-weight: 600; color: #1A1916; }
-        .spdlgmsg { font-size: 13px; color: #57534B; }
+                      font-size: 20px; font-weight: 600; color: #1A1916; }
+        .spdlgmsg { font-size: 13px; color: #6E695E; }
         .spdlgcancel { font-size: 13px; color: #2A2620; padding: 6px 16px;
                        background: #FCFBF8; border: 1px solid #C9C4B6;
-                       border-radius: 2px; box-shadow: none; }
-        .spdlgcancel:hover { background: #ECE8DD; }
+                       border-radius: 8px; box-shadow: none; }
+        .spdlgcancel:hover { background: #EFEBE0; }
         .spdlgok { font-size: 13px; padding: 6px 16px; background: #C8341E;
                    color: #FCFBF8; border: 1px solid #C8341E;
-                   border-radius: 2px; box-shadow: none; font-weight: 600; }
+                   border-radius: 8px; box-shadow: none; font-weight: 600; }
         .spdlgok label { color: #FCFBF8; }
-        .spdlgok:hover { background: #A82A18; border-color: #A82A18; }
+        .spdlgok:hover { background: #B12D19; border-color: #B12D19; }
         """
         # A CSS parse failure must never abort window construction — degrade to
         # the app's default (nbapp) styling instead of crashing on launch.

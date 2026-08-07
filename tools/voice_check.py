@@ -20,6 +20,21 @@ sentence that happens to wrap.
   python3 tools/voice_check.py [--file X.py ...] [--fail] [-v]
 
 Exit 0 always unless --fail (then non-zero when anything is flagged).
+
+ENGLISH SOURCE ONLY. Do not point this, or the mandate it enforces, at the
+translation catalogs. Measured 2026-08-04: 110 Japanese strings end in
+`ください`, 80 Chinese ones contain `请`, 25 Korean ones `주세요` — all
+"please", none of which appears in the English. That is not the assistant's
+voice creeping in; it is the required register for a consumer interface in
+those languages, and an English rule against politeness markers would make
+every one of them read curtly wrong. The mandate is about not editorialising,
+and what counts as plain description is a fact about each language.
+
+What IS worth flagging in a catalog is a translation that addresses the reader
+where the English does not — Japanese `ましょう` ("let's") against a plain
+instruction, or "Ya puedes retirar la unidad" for "Safe to remove the drive".
+Six such strings were found and fixed by hand; there is no automatic check for
+it, because telling those apart from required politeness needs the language.
 """
 import argparse
 import ast

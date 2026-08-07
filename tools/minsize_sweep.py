@@ -52,10 +52,38 @@ sys.path.insert(0, DE)
 # aims to keep ~20px of width in hand; 40 gives a little warning before that.
 TIGHT_PX = 40
 
+# THE SWEEP USED TO MEASURE ONE LANGUAGE — the developer's. That is the wrong
+# one: this file exists to catch content that does not fit a 1024px panel, its
+# own TIGHT note says the risk is "one longer translation", and the OS ships
+# seventeen. English is close to the SHORTEST of them. Measured on academics,
+# whose sidebar width is set by its three segmented-control labels:
+#
+#     en/de/es/fr/it/nl/tr/eo/hi/ja/ko/yi/zh  1008     ru  1024
+#     pt 1011   sr 1016   el 1017   pl 1021          <- the budget IS 1024
+#
+# So the app a plain run called "16px to spare" has ZERO to spare in Russian,
+# and the gate said ALL FIT. Re-measuring every app in every language costs
+# 17x, so only the apps that come out near the budget are re-measured, and only
+# in the languages measured to be width-heavy. An app with 300px of slack in
+# English is not one translation from overflowing; an app with 16px is.
+RISK_LANGS = ("ru", "pl", "el", "sr", "pt", "de")
+RETEST_PX = 120
+
 
 def measure_one(name, W, H):
     """Measure one app in THIS process. Only ever called in a --one child, so
-    the CSS it leaves on the screen dies with the process."""
+    the CSS it leaves on the screen dies with the process.
+
+    THERE IS NO `view` ARGUMENT, and one was written and removed on 2026-08-06
+    rather than shipped: a Gtk.Stack is hhomogeneous by DEFAULT, so it reports
+    the MAXIMUM width over all of its pages whatever page happens to be visible.
+    Measured on academics — pages notes/schedule/homework want 788/271/564 and
+    the stack answers 788 for every one of them. Switching pages before
+    measuring therefore cannot change a single number here, and a parameter that
+    looks like it broadens coverage while doing nothing is worse than no
+    parameter. Width is already covered for every tab. (The same is NOT true of
+    ellipsis_sweep, which inspects MAPPED labels — only the visible page's
+    labels are mapped, so that tool really does see one page.)"""
     import gi
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk
@@ -96,9 +124,42 @@ def measure_one(name, W, H):
     return out
 
 
+def measure(name, W, H, lang=None):
+    """Run one app in its own process. Returns (w, h) or (None, reason)."""
+    env = dict(os.environ)
+    if lang:
+        env["NB_LANG"] = lang
+        # Its own home per language: nbi18n persists the active language, and a
+        # measurement must not inherit the one before it.
+        env["NB_HOME"] = "/tmp/nbhome-minsize-%s" % lang
+    try:
+        r = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--one",
+             name, str(W), str(H)],
+            capture_output=True, text=True, timeout=180, env=env)
+    except subprocess.TimeoutExpired:
+        return None, "TIMED OUT"
+    data = None
+    for ln in reversed((r.stdout or "").strip().splitlines()):
+        if ln.startswith("{"):
+            try:
+                data = json.loads(ln)
+            except ValueError:
+                data = None
+            break
+    if data is None or "error" in (data or {}):
+        detail = (data or {}).get("error") if data else \
+            ((r.stderr or "").strip().splitlines() or ["no output"])[-1]
+        return None, str(detail)[:70]
+    return (data["w"], data["h"]), None
+
+
 def main():
+    # 722 = 768 − the 46px panel shell.py strut-reserves. The budget said 740
+    # for weeks because nbapp's note claimed a 28px panel; Video shipped at 725
+    # believing it. docs/PAPER-PHYSICS.md §E3.6 is the corrected derivation.
     sizes = [tuple(int(v) for v in s.split("x")) for s in sys.argv[1:]] or \
-        [(1024, 740), (1366, 740)]
+        [(1024, 722), (1366, 722)]
 
     import finder as _finder
     apps = sorted(set(_finder.APP_MODULES.values()) | {"finder"})
@@ -107,47 +168,49 @@ def main():
     for (W, H) in sizes:
         print("\n=== %dx%d ===" % (W, H))
         for name in apps:
-            try:
-                r = subprocess.run(
-                    [sys.executable, os.path.abspath(__file__), "--one",
-                     name, str(W), str(H)],
-                    capture_output=True, text=True, timeout=180,
-                    env=dict(os.environ))
-            except subprocess.TimeoutExpired:
-                print("  %-12s TIMED OUT" % name)
+            got, err = measure(name, W, H)
+            if got is None:
+                print("  %-12s ERROR %s" % (name, err))
                 continue
-            line = (r.stdout or "").strip().splitlines()
-            data = None
-            for ln in reversed(line):
-                if ln.startswith("{"):
-                    try:
-                        data = json.loads(ln)
-                    except ValueError:
-                        data = None
-                    break
-            if data is None or "error" in (data or {}):
-                detail = (data or {}).get("error") if data else \
-                    ((r.stderr or "").strip().splitlines() or ["no output"])[-1]
-                print("  %-12s ERROR %s" % (name, str(detail)[:70]))
-                continue
-            mw, mh = data["w"], data["h"]
+            mw, mh = got
+            # Anything close to the budget in the shipped language is re-measured
+            # in the width-heavy ones, and the WORST result is what counts —
+            # the machine has to hold the app in whichever language it is set to.
+            worst_lang = None
+            if W - mw <= RETEST_PX or H - mh <= RETEST_PX:
+                for lang in RISK_LANGS:
+                    alt, _e = measure(name, W, H, lang)
+                    if alt is None:
+                        continue
+                    if alt[0] > mw or alt[1] > mh:
+                        if alt[0] > mw:
+                            worst_lang = lang
+                        mw, mh = max(mw, alt[0]), max(mh, alt[1])
+            if worst_lang:
+                name_shown = "%s[%s]" % (name, worst_lang)
+            else:
+                name_shown = name
             over = mw > W or mh > H
             near = (not over) and (W - mw <= TIGHT_PX or H - mh <= TIGHT_PX)
             if over:
-                failures.append((W, H, name, mw, mh))
+                failures.append((W, H, name_shown, mw, mh))
             elif near:
-                tight.append((W, H, name, W - mw, H - mh))
+                tight.append((W, H, name_shown, W - mw, H - mh))
             note = ("   <<< OVERFLOWS" if over else
                     ("   <-- tight: %dpx wide, %dpx tall to spare"
                      % (W - mw, H - mh) if near else ""))
-            print("  %-12s needs at least %4d x %-4d%s" % (name, mw, mh, note))
+            print("  %-16s needs at least %4d x %-4d%s"
+                  % (name_shown, mw, mh, note))
 
     if tight:
         print("\nTIGHT (fits, but with less than %dpx to spare — one longer "
               "translation from overflowing):" % TIGHT_PX)
         for W, H, name, dw, dh in tight:
-            print("  %-12s %dx%d  %dpx wide / %dpx tall left"
+            print("  %-16s %dx%d  %dpx wide / %dpx tall left"
                   % (name, W, H, dw, dh))
+        print("  (a [xx] tag names the language that was widest — the plain "
+              "run measures only the shipped default, which is near the "
+              "shortest of the seventeen)")
 
     print("\nRESULT: " + ("ALL FIT" if not failures else
                           "OVERFLOWS: %s" % (failures,)))

@@ -1,0 +1,50 @@
+From: Notebook OS <notebookos@localhost>
+Subject: [PATCH] ppd-cache: strip only TRAILING spaces from printer-make-and-model
+
+_ppdCreateFromIPP2() sanitises printer-make-and-model before splitting it into
+a make and a model. The comment says "Strip trailing whitespace", but the loop
+that does it walks backwards over the whole string and has no exit condition,
+so it replaces EVERY space with a NUL, not just the ones at the end:
+
+    while (mptr > make)
+    {
+      mptr --;
+      if (*mptr == ' ')
+        *mptr = '\0';
+    }
+
+"Brother MFC-J1355DW" therefore becomes "Brother". The code immediately below
+splits make and model on the first space, finds none left, and falls through to
+its no-model-name case:
+
+    else
+      model = "Printer";
+
+So every PPD generated from a printer's own IPP attributes — which is every
+driverless queue, on any printer whose make and model contains a space, i.e.
+all of them — comes out as:
+
+    *Manufacturer: "Brother"
+    *ModelName: "Printer"
+    *NickName: "Printer - IPP Everywhere"
+
+Stop at the first non-space, which is what "strip trailing whitespace" means
+and what the surrounding code expects.
+
+Signed-off-by: Notebook OS <notebookos@localhost>
+---
+ cups/ppd-cache.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/cups/ppd-cache.c b/cups/ppd-cache.c
+--- a/cups/ppd-cache.c
++++ b/cups/ppd-cache.c
+@@ -3293,6 +3293,8 @@
+       mptr --;
+       if (*mptr == ' ')
+ 	*mptr = '\0';
++      else
++        break;
+     }
+ 
+     if (!make[0])

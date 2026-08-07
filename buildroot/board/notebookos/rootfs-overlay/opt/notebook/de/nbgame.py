@@ -597,14 +597,14 @@ def _install_css():
     if _CSS_DONE:
         return
     css = b"""
-    .gamestage { background: #0B0B0C; }
+    .gamestage { background: #1A1916; }
     .gamestage .gamebar { background: #1A1916; padding: 0 8px 0 18px; }
     .gamestage .gamehint { color: #F1EEE6;
         font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 15px;
         letter-spacing: 0.04em; }
     .gamestage .gamehint.dim { color: #6E695E; }
     .gamestage .gameexit { color: #F1EEE6; background: transparent;
-        border: 1px solid #4A463E; border-radius: 2px; box-shadow: none;
+        border: 1px solid #3A362E; border-radius: 8px; box-shadow: none;
         font-family: "Nimbus Sans","Helvetica",sans-serif; font-size: 13px;
         padding: 5px 14px; margin: 6px 0; }
     .gamestage .gameexit:hover { background: #C8341E; border-color: #C8341E;

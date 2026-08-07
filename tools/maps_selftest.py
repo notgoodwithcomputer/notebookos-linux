@@ -161,6 +161,67 @@ hits = [i + 1 for i, ln in enumerate(src)
         if TOY.search(ln.split("#", 1)[0])]
 check("maps.py calls no cairo toy text function", not hits, hits)
 
+print("--- 5. the map you were looking at is the map you come back to --")
+# THE BUG: _save_cfg records which pack is open, but startup opened maps[0]
+# and only THEN asked whether the config named that same file. Pick a region
+# from the toolbar, find your street, close the window — and Maps reopened
+# somewhere else entirely, then wrote that view over the position you left.
+# Display-free: _startup_pack is the whole decision, and it is pure.
+PACKS = [("britain", "/opt/notebook/maps/britain.nbm2"),
+         ("france", "/home/user/maps/france.nbm2"),
+         ("iberia", "/data/maps/iberia.nbm2")]
+
+
+def _startup_pack(packs, cfg):
+    """maps._startup_pack, or a stand-in that reports the old behaviour as the
+    failure it is — the function did not exist, and a bare AttributeError
+    traceback here would skip every check below it."""
+    fn = getattr(maps, "_startup_pack", None)
+    if fn is None:
+        return "<maps._startup_pack is missing: startup ignores the config>"
+    return fn(packs, cfg)
+
+
+check("with no config at all, the first pack opens",
+      _startup_pack(PACKS, {}) == PACKS[0][1],
+      _startup_pack(PACKS, {}))
+
+# The regression itself: the remembered pack is NOT the first one.
+for want in (PACKS[1], PACKS[2]):
+    got = _startup_pack(PACKS, {"pack": want[1], "cx": 1.0, "cy": 2.0,
+                                "scale": 9000.0})
+    check("the remembered pack reopens: %s" % want[0], got == want[1], got)
+
+# A pack that is no longer installed (deleted, or its stick unplugged) must
+# fall back rather than hand _open_map a path that cannot be read.
+check("an uninstalled remembered pack falls back to the first",
+      _startup_pack(PACKS, {"pack": "/data/maps/gone.nbm2"}) == PACKS[0][1],
+      _startup_pack(PACKS, {"pack": "/data/maps/gone.nbm2"}))
+
+# Whatever a hand-edited or half-written config holds, this returns an
+# installed path or None — never a number, a list or a missing file.
+for junk in ({"pack": 17}, {"pack": None}, {"pack": ["a"]}, {"pack": {}},
+             {}, [], None, "britain", {"cx": 3.0}):
+    try:
+        got = _startup_pack(PACKS, junk)
+        ok = got == PACKS[0][1]
+    except Exception as exc:                      # noqa: BLE001 — that IS the check
+        ok, got = False, "raised %r" % (exc,)
+    check("a malformed config still opens the first pack: %r" % (junk,),
+          ok, got)
+
+check("no packs installed is not an index error",
+      _startup_pack([], {"pack": PACKS[0][1]}) is None,
+      _startup_pack([], {"pack": PACKS[0][1]}))
+
+# The pure function is only a fix if __init__ actually asks it. Static, so it
+# needs no display and no pack on disk.
+init = "\n".join(src)
+check("__init__ opens the pack _startup_pack chose, not maps[0]",
+      "_startup_pack(self.maps, self._load_cfg())" in init
+      and "_open_map(self.maps[0][1])" not in init,
+      "startup still hard-codes maps[0]")
+
 print("")
 print("%d checks, %d passed, %d FAILED"
       % (CHECKS[0], CHECKS[0] - len(FAILS), len(FAILS)))

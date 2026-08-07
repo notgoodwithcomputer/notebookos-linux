@@ -269,6 +269,33 @@ class NBM2:
         return out
 
 
+def _startup_pack(maps, cfg):
+    """The pack to open on launch: the one the config remembers, when it is
+    still installed, else the first one found.
+
+    THE REMEMBERED PACK WAS ONLY EVER HONOURED BY ACCIDENT. Maps opened
+    maps[0] and only THEN asked whether the config named that same file, so
+    the pack recorded on every pan, zoom and search was obeyed only when it
+    happened to sort first. Someone who picked their region from the toolbar,
+    found their street and closed the window came back to a different part of
+    the world — and the first pan there wrote that view over the position they
+    had left, so the place they had found was gone for good.
+
+    A remembered name that is no longer installed (a pack deleted, or the
+    stick it lives on unplugged) falls back to the first, and anything in the
+    config that is not a string is simply not a remembered pack.
+    """
+    if not maps:
+        return None
+    if isinstance(cfg, dict):
+        want = cfg.get("pack")
+        if isinstance(want, str):
+            for _label, path in maps:
+                if path == want:
+                    return path
+    return maps[0][1]
+
+
 class Maps(nbapp.AppWindow):
     app_name = "Maps"
     menus = ("File", "View")
@@ -287,6 +314,10 @@ class Maps(nbapp.AppWindow):
         self._surface = None
         self._surf_size = None
         self._surf_scale = None
+        # Device scale the cached surface was rendered at. Part of the cache key
+        # so moving the window to a monitor with a different scale re-renders
+        # rather than blitting a surface built for the other screen.
+        self._surf_dev = None
         self._surf_cx = 0.0
         self._surf_cy = 0.0
 
@@ -309,9 +340,13 @@ class Maps(nbapp.AppWindow):
         self.content.pack_start(self._status, False, False, 0)
 
         if self.maps:
-            self._open_map(self.maps[0][1])
+            self._open_map(_startup_pack(self.maps, self._load_cfg()))
         else:
-            GLib.idle_add(self._show_empty)
+            # Straight through, not deferred: the canvas and every field
+            # _show_empty touches already exist here, so an idle source only
+            # bought a first frame with no notice on it — and one that could
+            # still fire against a canvas the user had already closed.
+            self._show_empty()
 
     # ================= config / packs =================
     def _cfg_path(self):
@@ -523,11 +558,17 @@ class Maps(nbapp.AppWindow):
     def _draw(self, w, cr):
         aw = w.get_allocated_width()
         ah = w.get_allocated_height()
+        # The DEVICE scale of the screen this widget is on (1, or 2 on a HiDPI
+        # panel). Asked of the widget rather than read from a global, because
+        # the widget is realised by the time it draws and this is the only
+        # answer that is right for the monitor it actually ended up on.
+        sf = max(1, int(w.get_scale_factor() or 1))
         need = (self._surface is None
                 or self._surf_size != (aw, ah)
-                or self._surf_scale != self.scale)
+                or self._surf_scale != self.scale
+                or self._surf_dev != sf)
         if need:
-            self._render_surface(aw, ah)
+            self._render_surface(aw, ah, sf)
         cr.set_source_rgb(*LAND)
         cr.paint()
         if self._surface is not None:
@@ -609,12 +650,30 @@ class Maps(nbapp.AppWindow):
         cx1 = int(math.floor(lon1 / cd)) + m
         return cy0, cy1, cx0, cx1, (min(latb, latt), lon0, max(latb, latt), lon1)
 
-    def _render_surface(self, aw, ah):
+    def _render_surface(self, aw, ah, sf=1):
         import cairo
         if aw < 1 or ah < 1 or not self.pack:
             self._surface = None
             return
-        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, aw, ah)
+        # RENDERED AT DEVICE RESOLUTION, DRAWN IN LOGICAL UNITS.
+        #
+        # The map is a vector renderer, so it has every bit of information
+        # needed to draw at the panel's real resolution. This surface used to be
+        # allocated at the widget's LOGICAL size and then blitted into a context
+        # that GTK had already scaled by 2 on a HiDPI screen -- so the entire
+        # map, every road, coastline and label, was upscaled by the compositor.
+        # A full-screen vector view was the single largest soft area in the OS,
+        # in the one place where sharpness is the whole product.
+        #
+        # set_device_scale is what makes this a two-line change instead of a
+        # rewrite: the surface is allocated with sf times the pixels, but cairo
+        # then interprets every coordinate, line width and font size below in
+        # LOGICAL units and multiplies internally. So none of the drawing code,
+        # the projection maths or the label placement changes at all -- it just
+        # lands on a finer grid. The blit in _draw() is unchanged too, because a
+        # source surface carrying a device scale is placed at its logical size.
+        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, aw * sf, ah * sf)
+        surf.set_device_scale(sf, sf)
         cr = cairo.Context(surf)
         cr.set_source_rgb(*LAND)
         cr.paint()
@@ -704,6 +763,7 @@ class Maps(nbapp.AppWindow):
         self._surface = surf
         self._surf_size = (aw, ah)
         self._surf_scale = self.scale
+        self._surf_dev = sf
         self._surf_cx = self.cx
         self._surf_cy = self.cy
 
@@ -865,13 +925,13 @@ class Maps(nbapp.AppWindow):
         css = b"""
         .mapbar { background: #F1EEE6; border-bottom: 1px solid #C9C4B6;
                   padding: 8px 12px; }
-        .mapsearch { border: 1px solid #CFC9BA; border-radius: 4px;
+        .mapsearch { border: 1px solid #C9C4B6; border-radius: 4px;
                      padding: 5px 9px; background: #FCFBF8; }
         .mapbtn { border: 1px solid #C9C4B6; background: #FCFBF8; color: #1A1916;
-                  border-radius: 3px; padding: 5px 12px; box-shadow: none; }
+                  border-radius: 8px; padding: 5px 12px; box-shadow: none; }
         .mapbtn:hover { background: #F4F2EC; }
         .mapzoom { border: 1px solid #C9C4B6; background: #FCFBF8; color: #1A1916;
-                   border-radius: 3px; min-width: 34px; font-size: 18px;
+                   border-radius: 8px; min-width: 34px; font-size: 17px;
                    box-shadow: none; padding: 0 4px; }
         .mapzoom:hover { background: #F4F2EC; }
         .mapstatus { background: #F1EEE6; border-top: 1px solid #C9C4B6;

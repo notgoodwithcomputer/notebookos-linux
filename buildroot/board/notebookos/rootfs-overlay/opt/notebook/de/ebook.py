@@ -26,7 +26,14 @@ this way).
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
+try:
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf                        # noqa: E402
+    PIXBUF_OK = True
+except Exception:                                              # noqa: BLE001
+    GdkPixbuf = None
+    PIXBUF_OK = False
 
 # Poppler (PDF) is only guaranteed on the built guest, not on the host running
 # construct_all.py / the selftests. Guard the require_version + import so the
@@ -54,6 +61,7 @@ except Exception:
     _CAIRO_OK = False
 
 import os
+import re
 import sys
 import json
 import math
@@ -70,6 +78,7 @@ from html.parser import HTMLParser
 from urllib.parse import unquote
 
 import nbapp
+import nbstate
 import nbpicker
 import nbicons
 from nbi18n import _t  # noqa: E402
@@ -129,16 +138,59 @@ def _epub_localname(tag):
     return (tag or "").lower()
 
 
+_MARKUP_TEXT_RE = re.compile(r"</?[ib]>")
+
+
+def escape_markup(s):
+    """The five characters Pango markup reserves. GLib.markup_escape_text does
+    this too, but only for str — book text arrives from a decode that can yield
+    surrogates, and a raised exception there would lose the paragraph."""
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&apos;"))
+
+
+def set_reading_text(label, markup):
+    """Put a reading block on a label as markup, falling back to plain text.
+
+    A book is a file from outside the system and its markup is assembled from
+    whatever tag soup the publisher shipped. If a paragraph will not parse, the
+    reader must still SEE the paragraph — losing the italics is a blemish,
+    losing the sentence is a bug — so the tags are stripped and the text set
+    directly rather than allowed to raise."""
+    try:
+        Pango.parse_markup(markup, -1, "\0")
+        label.set_markup(markup)
+    except Exception:
+        label.set_text(_MARKUP_TEXT_RE.sub("", markup)
+                       .replace("&amp;", "&").replace("&lt;", "<")
+                       .replace("&gt;", ">").replace("&quot;", '"')
+                       .replace("&apos;", "'"))
+
+
 class _EpubBlocks(HTMLParser):
-    """Strip an XHTML document to a list of (kind, text) reading blocks: 'h' for
-    a heading (h1–h6), 'p' otherwise. Block-level tags separate paragraphs and
-    inline runs of whitespace are collapsed; script/style/head are dropped."""
+    """Strip an XHTML document to a list of (kind, markup) reading blocks: 'h'
+    for a heading (h1–h6), 'p' otherwise. Block-level tags separate paragraphs
+    and inline runs of whitespace are collapsed; script/style/head are dropped.
+
+    The text is PANGO MARKUP, not plain text, so italic and bold survive the
+    trip to the page. They used to be discarded with every other tag, which in
+    a novel is not a detail: emphasis, book titles, foreign words and a
+    character's inner voice are all italics, and a reader was given none of
+    them (ROADMAP #34). Only <em>/<i> and <strong>/<b> are carried — the two
+    that change what a sentence MEANS. Everything else an EPUB can carry is
+    still dropped.
+
+    Data is escaped as it arrives, because the emitted string now has to parse
+    as markup: `convert_charrefs` has already turned `&amp;` back into `&`, and
+    an unescaped one would make the whole paragraph unrenderable."""
 
     SKIP = {"script", "style", "head", "title"}
     HEAD = {"h1", "h2", "h3", "h4", "h5", "h6"}
     BLOCK = {"p", "div", "br", "li", "blockquote", "section", "article",
              "header", "footer", "figcaption", "pre", "tr", "td", "th",
              "h1", "h2", "h3", "h4", "h5", "h6"}
+    # html inline tag -> pango tag
+    INLINE = {"em": "i", "i": "i", "cite": "i", "strong": "b", "b": "b"}
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -146,6 +198,7 @@ class _EpubBlocks(HTMLParser):
         self._buf = []
         self._skip = 0
         self._kind = "p"
+        self._open = []          # pango tags currently open, outermost first
 
     def handle_starttag(self, tag, attrs):
         t = tag.lower()
@@ -158,10 +211,41 @@ class _EpubBlocks(HTMLParser):
         if t in self.BLOCK:
             self._flush()
             self._kind = "h" if t in self.HEAD else "p"
+            return
+        if t in ("img", "image"):
+            # <img src=...> without the closing slash never reaches
+            # handle_startendtag, and most EPUBs in the wild are written that
+            # way even though the spec calls for XHTML.
+            self._image(attrs)
+            return
+        if not self._skip and t in self.INLINE:
+            pt = self.INLINE[t]
+            self._open.append(pt)
+            self._buf.append("<%s>" % pt)
 
     def handle_startendtag(self, tag, attrs):
-        if tag.lower() == "br":
+        t = tag.lower()
+        if t == "br":
             self._flush()
+        elif t in ("img", "image"):
+            self._image(attrs)
+
+    def _image(self, attrs):
+        """Record a picture as its own block, between paragraphs.
+
+        Only the href is kept. Reading the bytes here would mean holding every
+        plate of a picture book in memory from the moment it is opened; the
+        renderer pulls each one out of the zip when its page is built."""
+        if self._skip:
+            return
+        src = ""
+        for k, v in attrs or ():
+            if k and k.lower() in ("src", "href", "xlink:href") and v:
+                src = v
+                break
+        if src:
+            self._flush()
+            self.blocks.append(("img", src))
 
     def handle_endtag(self, tag):
         t = tag.lower()
@@ -171,18 +255,36 @@ class _EpubBlocks(HTMLParser):
             return
         if t in self.BLOCK:
             self._flush()
+            return
+        if not self._skip and t in self.INLINE:
+            pt = self.INLINE[t]
+            # Close only if it is actually open. A stray </em> is common in
+            # hand-made EPUBs and must not emit an unbalanced tag, which would
+            # make the paragraph fail to parse and lose the text entirely.
+            if pt in self._open:
+                while self._open:
+                    top = self._open.pop()
+                    self._buf.append("</%s>" % top)
+                    if top == pt:
+                        break
 
     def handle_data(self, data):
         if self._skip:
             return
-        self._buf.append(data)
+        self._buf.append(escape_markup(data))
 
     def _flush(self):
-        text = " ".join("".join(self._buf).split())
-        self._buf = []
+        # Close what is open so this block stands alone as valid markup, then
+        # reopen it in the next: emphasis that runs across a paragraph break is
+        # legal HTML and should keep going rather than end at the boundary.
+        carry = list(self._open)
+        closing = "".join("</%s>" % t for t in reversed(self._open))
+        text = " ".join("".join(self._buf + [closing]).split())
+        self._buf = ["<%s>" % t for t in carry]
         kind = self._kind
         self._kind = "p"
-        if text:
+        # A block of tags and nothing else is not a block.
+        if text and _MARKUP_TEXT_RE.sub("", text).strip():
             self.blocks.append((kind, text))
 
     def close(self):
@@ -286,6 +388,24 @@ def _epub_load(path):
             if data is None:
                 continue
             blocks = _epub_extract(data)
+            # An <img src> is relative to the DOCUMENT it appears in, not to the
+            # .opf, so it is resolved against this chapter's own directory and
+            # then checked against the archive. An href that resolves to nothing
+            # (a broken book, or a picture stored outside the zip) is dropped
+            # here rather than becoming a blank gap on the page.
+            here = posixpath.dirname(full)
+            fixed = []
+            for kind, payload in blocks:
+                if kind != "img":
+                    fixed.append((kind, payload))
+                    continue
+                ref = posixpath.normpath(
+                    posixpath.join(here, payload.split("#", 1)[0]))
+                for cand in (ref, unquote(ref)):
+                    if cand in names:
+                        fixed.append(("img", cand))
+                        break
+            blocks = fixed
             if blocks:  # skip empty front-matter / navigation documents
                 chapters.append(blocks)
     finally:
@@ -406,6 +526,12 @@ class EbookReader(nbapp.AppWindow):
         self._mode = "message"
         self._page = 0
         self._page_total = 0
+        # Bumped every time the reading surface is swapped (_set_reader_widget)
+        # AND on every page turn (_show_page). The deferred scroll restores
+        # carry the value they were queued under, so a restore for the volume —
+        # or the page — just left cannot land on the next one, and closing the
+        # window invalidates whatever is still queued (see _on_destroy).
+        self._nav = nbstate.Generation("reader")
         self._epub_chapters = []
         # (chapter index, first block, last block + 1) for each reading page
         self._epub_pages = []
@@ -458,7 +584,7 @@ class EbookReader(nbapp.AppWindow):
         # Closing the reader must keep the place in the book, not just the
         # page: everything else here writes on a page turn, and the last thing
         # a reader does is stop mid-page and leave.
-        self.connect("destroy", lambda *_: self._remember_pos(force=True))
+        self.connect("destroy", self._on_destroy)
 
         opened = False
         if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
@@ -553,6 +679,21 @@ class EbookReader(nbapp.AppWindow):
         # the way past instead, the way cookbook.py and language.py do.
         if not self._books and _holds_books(data):
             self._quarantine_pending = True
+
+    # The reading generation is `self._nav`; `_doc_gen` stays as its documented
+    # name (Article III §3) so a reader of the constitution — and the
+    # lifecycle fixture — still find the counter where they expect it.
+    @property
+    def _doc_gen(self):
+        return self._nav.token()
+
+    @_doc_gen.setter
+    def _doc_gen(self, value):
+        # Keep the documented/test-stub compatibility field usable on an
+        # object created with __new__ (before __init__ has installed _nav).
+        if not hasattr(self, "_nav"):
+            self._nav = nbstate.Generation("reader")
+        self._nav.reset(value)
 
     def _save_state(self):
         """Persist the shelf and open book under $NB_HOME (best effort)."""
@@ -656,7 +797,7 @@ class EbookReader(nbapp.AppWindow):
         b.get_style_context().add_class("toolbtn")
         b.set_tooltip_text(tip)
         try:
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(name, 19, color))
+            img = nbicons.image(name, 19, color)
         except Exception:
             # icon renderer unavailable (e.g. no PNG pixbuf loader on a
             # stripped build) — keep the button, just without a glyph.
@@ -754,7 +895,12 @@ class EbookReader(nbapp.AppWindow):
         return scroll
 
     def _set_reader_widget(self, widget):
-        """Show `widget` as the sole child of the reader slot."""
+        """Show `widget` as the sole child of the reader slot.
+
+        This is the one point every document swap goes through (both readers and
+        the message card), so it is where the document generation moves on and
+        anything still queued against the old surface goes stale."""
+        self._nav.bump()
         for child in self._reader_slot.get_children():
             self._reader_slot.remove(child)
         self._reader_slot.pack_start(widget, True, True, 0)
@@ -815,7 +961,13 @@ class EbookReader(nbapp.AppWindow):
         self._update_nav()
 
     def _show_page(self):
-        """Render the current page/chapter for the active document mode."""
+        """Render the current page/chapter for the active document mode.
+
+        A page turn is a new reading state, so the generation moves on here as
+        well as on a document swap: a resume-scroll queued for page 6 must not
+        drop someone three quarters of the way down page 7 because they turned
+        the page while the restore was still waiting on an idle tick."""
+        self._nav.bump()
         if self._mode == "epub":
             self._epub_show_chapter()
         elif self._mode == "pdf":
@@ -855,6 +1007,15 @@ class EbookReader(nbapp.AppWindow):
         book["total"] = self._page_total
         self._save_state()
 
+    def _on_destroy(self, *_):
+        """Bank the place in the book, then retire the reading generation.
+
+        Closing it invalidates every scroll restore still sitting on the main
+        loop: those sources are dispatched even after the window is gone, and
+        each of them would otherwise reach into a torn-down reading view."""
+        self._remember_pos(force=True)
+        self._nav.close()
+
     def _current_scroll(self):
         """The scroller of whichever reading view is showing, or None."""
         return self._epub_scroll if self._mode == "epub" else self._pdf_scroll
@@ -870,10 +1031,20 @@ class EbookReader(nbapp.AppWindow):
         except Exception:
             return 0.0
 
-    def _scroll_to_fraction(self, frac):
+    def _scroll_to_fraction(self, frac, token=None):
         """Put the reader back where they stopped reading on this page. Runs on
         an idle tick because the labels have not been laid out (and the
-        adjustment still reads zero) until after the first allocation."""
+        adjustment still reads zero) until after the first allocation.
+
+        `token` is the document generation this restore was queued for. Because
+        it runs two idle ticks later, the reader may already have opened another
+        volume (or removed/closed this one) in between, and _current_scroll()
+        would then hand back the NEW document's scroller: the restore would drop
+        someone three quarters of the way into a book they just opened at page
+        one. A stale token means the restore has missed its document, so it is
+        dropped rather than applied to whatever is showing now."""
+        if not self._nav.valid(token):
+            return False
         try:
             adj = self._current_scroll().get_vadjustment()
             span = adj.get_upper() - adj.get_page_size() - adj.get_lower()
@@ -924,8 +1095,13 @@ class EbookReader(nbapp.AppWindow):
             return
         if frac <= 0.0:
             return
-        GLib.idle_add(lambda: GLib.idle_add(self._scroll_to_fraction, frac)
-                      and False)
+        # Stamp the restore with the document showing NOW; _scroll_to_fraction
+        # drops it if the surface has been swapped by the time it runs.
+        token = self._nav.token()
+        post = self._nav.guard(
+            lambda: GLib.idle_add(self._scroll_to_fraction, frac, token) and False,
+            token)
+        GLib.idle_add(post)
 
     def _scroll_top(self, scroll):
         """Return a paged view to the top after a page/chapter change."""
@@ -1024,7 +1200,8 @@ class EbookReader(nbapp.AppWindow):
         eye.set_halign(Gtk.Align.CENTER)
         box.pack_start(eye, False, False, 0)
         if title:
-            ttl = Gtk.Label(label=title)
+            ttl = Gtk.Label()
+            set_reading_text(ttl, title)
             ttl.get_style_context().add_class("readh1")
             ttl.set_halign(Gtk.Align.CENTER)
             ttl.set_justify(Gtk.Justification.CENTER)
@@ -1033,6 +1210,51 @@ class EbookReader(nbapp.AppWindow):
             ttl.set_margin_top(12)
             box.pack_start(ttl, False, False, 0)
         return box, body
+
+    def _epub_image(self, entry, cap):
+        """One plate from the open EPUB, scaled to the reading measure.
+
+        Read on demand, from the zip, when the page is built — a picture book
+        held open in memory would cost far more than the text it illustrates.
+        Returns None for anything that will not decode, which is the honest
+        outcome: a book may carry an SVG or a format GdkPixbuf was not built
+        with, and a missing picture is better than a broken one or a crash.
+        """
+        if not PIXBUF_OK:
+            return None
+        path = self._open_path
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            with zipfile.ZipFile(path) as zf:
+                data = zf.read(entry)
+        except Exception:                                      # noqa: BLE001
+            return None
+        try:
+            ldr = GdkPixbuf.PixbufLoader()
+            ldr.write(data)
+            ldr.close()
+            pb = ldr.get_pixbuf()
+        except Exception:                                      # noqa: BLE001
+            return None
+        if pb is None:
+            return None
+        # The measure is the column's, in characters; a plate wider than the
+        # text block would push the page sideways and force a horizontal
+        # scrollbar over the prose. Never enlarged — a 200px thumbnail blown up
+        # to the column width looks worse than a 200px thumbnail.
+        want = max(160, min(560, cap * 9))
+        if pb.get_width() > want:
+            h = max(1, int(pb.get_height() * (want / float(pb.get_width()))))
+            try:
+                pb = pb.scale_simple(want, h, GdkPixbuf.InterpType.BILINEAR)
+            except Exception:                                  # noqa: BLE001
+                pass
+        img = Gtk.Image.new_from_pixbuf(pb)
+        img.set_halign(Gtk.Align.CENTER)
+        img.set_margin_top(10)
+        img.set_margin_bottom(14)
+        return img
 
     def _epub_show_chapter(self, to_top=True):
         col = self._epub_col
@@ -1054,7 +1276,16 @@ class EbookReader(nbapp.AppWindow):
         # page instead of reflowing the text into it.
         cap = max(24, int(64 * self.READ_PT_DEFAULT / float(self._read_pt)))
         for kind, text in blocks:
-            lbl = Gtk.Label(label=text, xalign=0)
+            if kind == "img":
+                img = self._epub_image(text, cap)
+                if img is not None:
+                    col.pack_start(img, False, False, 0)
+                continue
+            # `text` is Pango markup now (italic/bold survive the
+            # EPUB), so it must not go through label=, which would
+            # show the tags.
+            lbl = Gtk.Label(xalign=0)
+            set_reading_text(lbl, text)
             lbl.set_line_wrap(True)
             lbl.set_justify(Gtk.Justification.FILL)
             lbl.set_max_width_chars(cap)
@@ -1073,7 +1304,7 @@ class EbookReader(nbapp.AppWindow):
         # A page/chapter turn starts at the top; a re-flow after a reading-size
         # change must NOT throw the reader back to the top of the chapter.
         if to_top:
-            GLib.idle_add(self._scroll_top, self._epub_scroll)
+            GLib.idle_add(self._nav.guard(self._scroll_top), self._epub_scroll)
 
     # --------------------------------------------------- PDF rendering
     def _open_pdf(self, book):
@@ -1147,7 +1378,7 @@ class EbookReader(nbapp.AppWindow):
             self._pdf_page_obj = None
         self._pdf_relayout()
         # a fresh page returns the reader to the top of the viewport
-        GLib.idle_add(self._scroll_top, self._pdf_scroll)
+        GLib.idle_add(self._nav.guard(self._scroll_top), self._pdf_scroll)
 
     def _pdf_relayout(self):
         """Size the drawing area for the current page at the current zoom. The
@@ -1189,7 +1420,11 @@ class EbookReader(nbapp.AppWindow):
             self._pdf_cache_surface = None
             self._pdf_cache_key = None
             return
-        key = (self._page, round(self._pdf_scale, 4))
+        # The device scale is part of the KEY as well as the size: a page
+        # rasterized for a 1x screen must not be reused after the window moves
+        # to a 2x one, or the reader would keep showing the soft copy.
+        sf = max(1, int(self.get_scale_factor() or 1))
+        key = (self._page, round(self._pdf_scale, 4), sf)
         if key == self._pdf_cache_key and self._pdf_cache_surface is not None:
             return  # same page at the same zoom — reuse the existing raster
         try:
@@ -1201,7 +1436,17 @@ class EbookReader(nbapp.AppWindow):
         w = max(1, int(math.ceil(pw * self._pdf_scale)))
         h = max(1, int(math.ceil(ph * self._pdf_scale)))
         try:
-            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+            # RASTERIZED AT DEVICE RESOLUTION. A PDF is vector, so on a HiDPI
+            # panel the page can be rendered at the screen's real pixel density
+            # instead of being rasterized at logical size and then stretched by
+            # the compositor -- which is what a page of body text can least
+            # afford, since every stem in every letter goes through the
+            # interpolator. The surface carries the scale, so the ctx.scale()
+            # and page.render() below still work in logical units and the blit
+            # in _pdf_draw still places the page at its logical size; only the
+            # grid underneath gets finer.
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w * sf, h * sf)
+            surface.set_device_scale(sf, sf)
             ctx = cairo.Context(surface)
             # White ground: Poppler leaves un-inked regions transparent, so the
             # white sheet is what makes the page read as paper.
@@ -1466,12 +1711,12 @@ class EbookReader(nbapp.AppWindow):
         sub.set_max_width_chars(46)
         entry.pack_start(sub, False, False, 0)
 
-        # An input-only wrapper: it catches the open click but lets the row's
-        # background paint through and sits beside (not over) the Remove button.
-        open_area = Gtk.EventBox()
-        open_area.set_visible_window(False)
-        open_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        open_area.connect("button-press-event", self._on_book_open, book["path"])
+        # A native button makes the primary row action keyboard reachable while
+        # remaining a separate sibling of Remove.
+        open_area = Gtk.Button()
+        open_area.set_relief(Gtk.ReliefStyle.NONE)
+        open_area.get_style_context().add_class("bookopen")
+        open_area.connect("clicked", self._on_book_open, book["path"])
         open_area.set_tooltip_text(_t("Open %s") % book["title"])
         open_area.add(entry)
 
@@ -1525,7 +1770,7 @@ class EbookReader(nbapp.AppWindow):
         self._close_library()
         self._file_open()
 
-    def _on_book_open(self, _row=None, _ev=None, path=None):
+    def _on_book_open(self, _row, path):
         """Open the tapped library volume, then dismiss the sheet."""
         if path:
             self._open_book(path)
@@ -1711,8 +1956,8 @@ class EbookReader(nbapp.AppWindow):
         .readbar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .toolbtn { min-width: 32px; min-height: 32px; padding: 0; margin: 0;
                    background: transparent; border: none; box-shadow: none;
-                   border-radius: 2px; color: #1A1916; }
-        .toolbtn:hover { background: #E6DFCE; }
+                   border-radius: 8px; color: #1A1916; }
+        .toolbtn:hover { background: #F1EEE6; }
         .toolbtn:disabled { background: transparent; }
         .sizebtn { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                    font-weight: 600; color: #1A1916; padding: 0 8px;
@@ -1739,26 +1984,26 @@ class EbookReader(nbapp.AppWindow):
         /* the empty state's one action (dark ink: signage red is for alerts) */
         .readaction { font-family: "Nimbus Sans","Helvetica",sans-serif;
                       min-width: 150px; min-height: 40px; background: #1A1916;
-                      border: 1px solid #1A1916; border-radius: 2px;
+                      border: 1px solid #1A1916; border-radius: 8px;
                       box-shadow: none; font-size: 14px; font-weight: 600; }
         .readaction label { color: #FCFBF8; }
-        .readaction:hover { background: #33302A; border-color: #33302A; }
+        .readaction:hover { background: #3A362E; border-color: #3A362E; }
         /* EPUB reading paragraphs + chapter headings (serif reading face). The
            font SIZE of .readpara comes from the live .readbody rule so the
            A-/A+ steppers scale the body text; headings keep a stable size. */
         .readpara { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                     color: #1A1916; }
         .readchhead { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                      font-size: 23px; font-weight: 600; color: #1A1916; }
+                      font-size: 24px; font-weight: 600; color: #1A1916; }
         /* PDF page sheet: a white leaf on the papertone mat. */
-        .pdfpaper { background: #FFFFFF; border: 1px solid #D7D2C5;
+        .pdfpaper { background: #FCFBF8; border: 1px solid #D7D2C5;
                     box-shadow: 2px 3px 0 rgba(26,25,22,0.10); }
 
         .scrim { background: rgba(26,25,22,0.18); }
         .sheet { background: #FCFBF8; border: 1px solid #C9C4B6;
                  box-shadow: 4px 4px 0 rgba(26,25,22,0.15); }
         .sheet * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .sheetttl { font-size: 18px; font-weight: 700; color: #1A1916; }
+        .sheetttl { font-size: 17px; font-weight: 700; color: #1A1916; }
         .sheetsub { font-size: 13px; color: #9A9484; }
         .sheetscroll, .sheetscroll viewport { background: #FCFBF8; }
         .sheetshelf { border-top: 1px solid #D7D2C5; }
@@ -1768,26 +2013,28 @@ class EbookReader(nbapp.AppWindow):
         .sheetbookttl { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                         font-size: 17px; color: #1A1916; }
         .sheetbooksub { font-size: 12px; color: #9A9484; }
+        .bookopen { padding: 0; border: none; background: transparent;
+                    background-image: none; box-shadow: none; }
         /* The label node needs the colour too: the Papertone theme sets
            `* { color: ink }`, and a rule that matches a node directly always
            beats a colour inherited from its parent, so colouring only the
            button left "Done" as ink-on-ink: an unreadable black slab. */
         .sheetbtn { min-width: 96px; min-height: 38px; background: #1A1916;
-                    color: #FCFBF8; border: none; border-radius: 2px;
+                    color: #FCFBF8; border: none; border-radius: 8px;
                     box-shadow: none; font-size: 14px; font-weight: 600; }
         .sheetbtn label { color: #FCFBF8; }
-        .sheetbtn:hover { background: #33302A; }
+        .sheetbtn:hover { background: #3A362E; }
         /* secondary sheet action (Open Book): a bordered paper button */
         .sheetbtn2 { min-width: 96px; min-height: 38px; background: #FCFBF8;
                      color: #1A1916; border: 1px solid #C9C4B6;
-                     border-radius: 2px; box-shadow: none; font-size: 14px;
+                     border-radius: 8px; box-shadow: none; font-size: 14px;
                      font-weight: 600; }
         .sheetbtn2:hover { background: #EFEBE0; }
         /* per-row Remove control: muted ink, warm alert tint on hover */
         .rmbook { min-width: 30px; min-height: 30px; padding: 0;
                   background: transparent; border: none; box-shadow: none;
-                  border-radius: 2px; }
-        .rmbook:hover { background: #F1DAD4; }
+                  border-radius: 8px; }
+        .rmbook:hover { background: #EAE3D2; }
         /* remove-from-library confirmation card */
         .confirm { background: #FCFBF8; border: 1px solid #C9C4B6;
                    box-shadow: 4px 4px 0 rgba(26,25,22,0.15);
@@ -1797,7 +2044,7 @@ class EbookReader(nbapp.AppWindow):
         .confirmbody { font-size: 13px; color: #6E695E; }
         .confirmbtn { min-width: 88px; min-height: 36px; background: #FCFBF8;
                       color: #1A1916; border: 1px solid #C9C4B6;
-                      border-radius: 2px; box-shadow: none; font-size: 14px; }
+                      border-radius: 8px; box-shadow: none; font-size: 14px; }
         .confirmbtn:hover { background: #EFEBE0; }
         .confirmremove { background: #C8341E; color: #FCFBF8;
                          border: 1px solid #C8341E; font-weight: 600; }

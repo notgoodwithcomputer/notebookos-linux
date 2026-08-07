@@ -14,6 +14,12 @@ int, and every identifier is sanitised to a C token, so a project can never
 inject arbitrary C.
 """
 import os
+
+try:                                    # the build messages are what an author
+    from nbi18n import _t               # reads when their game does not work,
+except Exception:                       # so they are translated like any other
+    def _t(s):                          # UI text. Falls back to English if the
+        return s                        # catalogs are not importable.
 import re
 import json
 import shutil
@@ -33,6 +39,26 @@ KEY_MACRO = {
 }
 CMP_OP = {"==": "==", "!=": "!=", "<": "<", ">": ">", "<=": "<=", ">=": ">=",
           "=": "=="}
+# The twelve effects the runtime carries with no data at all. Play Sound only
+# ever offered the project's OWN sounds, so a new project -- which has none --
+# could not make a noise until someone had written a tune, which is a long way
+# from a first jump.
+BUILTIN_SFX = (
+    ("sfx:blip", "Blip", "NB_SFX_BLIP"),
+    ("sfx:jump", "Jump", "NB_SFX_JUMP"),
+    ("sfx:coin", "Coin", "NB_SFX_COIN"),
+    ("sfx:shoot", "Shoot", "NB_SFX_SHOOT"),
+    ("sfx:hurt", "Hurt", "NB_SFX_HURT"),
+    ("sfx:explode", "Explode", "NB_SFX_EXPLODE"),
+    ("sfx:powerup", "Power-up", "NB_SFX_POWERUP"),
+    ("sfx:land", "Land", "NB_SFX_LAND"),
+    ("sfx:select", "Select", "NB_SFX_SELECT"),
+    ("sfx:error", "Error", "NB_SFX_ERROR"),
+    ("sfx:warp", "Warp", "NB_SFX_WARP"),
+    ("sfx:step", "Step", "NB_SFX_STEP"),
+)
+SFX_MACRO = {k: m for k, _lbl, m in BUILTIN_SFX}
+
 DIR_SPEED = {   # direction -> (hx, vy) multipliers
     "left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1),
     "upleft": (-1, -1), "upright": (1, -1), "downleft": (-1, 1),
@@ -49,15 +75,26 @@ def _cid(s, prefix="id"):
     return s
 
 
+#: The widest integer the target can hold. Every number this generator emits
+#: ends up in an s32 on an ARM7TDMI, so a value outside this range is not a
+#: number the hardware has — it wraps, silently, with no warning from the
+#: compiler and nothing in the build report. Text that is not a number at all
+#: already becomes the default; a number too large should not be treated more
+#: leniently than a typo.
+S32_MIN, S32_MAX = -(1 << 31), (1 << 31) - 1
+
+
 def _int(v, default=0):
     try:
         if isinstance(v, bool):
-            return int(v)
-        if isinstance(v, (int, float)):
-            return int(v)
-        return int(str(v).strip())
+            n = int(v)
+        elif isinstance(v, (int, float)):
+            n = int(v)
+        else:
+            n = int(str(v).strip())
     except (ValueError, TypeError):
         return default
+    return max(S32_MIN, min(S32_MAX, n))
 
 
 def _rgb15(color, default=0):
@@ -89,7 +126,14 @@ def _cstr(s):
         elif 32 <= ord(ch) < 127:
             out.append(ch)
         else:
-            out.append("\\x%02x" % (ord(ch) & 0xFF))
+            # OCTAL, not \xNN. A C hex escape consumes every hex digit that
+            # follows it, so "caf\xe9" + "2" is read as one escape \xe92 --
+            # "hex escape sequence out of range", and the text silently loses
+            # a character. An octal escape stops after three digits, so
+            # "caf\3512" is \351 followed by "2". Author dialogue with an
+            # accent in it is not an edge case in a tool meant for writing
+            # games in any language.
+            out.append("\\%03o" % (ord(ch) & 0xFF))
     out.append('"')
     return "".join(out)
 
@@ -99,7 +143,7 @@ class BuildError(Exception):
 
 
 class GmlError(Exception):
-    """A mistake in a user's GML. `line` is the 1-based line it was found on
+    """A mistake in a user's script. `line` is the 1-based line it was found on
     (0 when the position is unknown) so the IDE can point at it."""
 
     def __init__(self, message, line=0):
@@ -107,20 +151,45 @@ class GmlError(Exception):
         self.line = line
 
 
-# ---------------------------------------------------------------- GML compiler
-GML_BUILTIN_VARS = {"x", "y", "hspeed", "vspeed", "image_index", "image_speed",
+# ------------------------------------------------------------ script compiler
+# The scripting language is a curated SUBSET OF C, not a separate language —
+# see Part 0 of docs/GBA-SDK-SPEC.md. Levels 2 and 3 are therefore one
+# language: dropping from script into hand-written C is adding, not switching,
+# and the Help's "C for GBA" chapter is also the scripting manual.
+# Renamed from a GML_ prefix when the language became a C subset.
+#: Alarms per instance. Mirrors NB_MAX_ALARMS in the runtime header, which is
+#: the authority; tools/gbaruntime_selftest.py fails if the two drift apart.
+MAX_ALARMS = 4
+
+SCRIPT_BUILTIN_VARS = {"x", "y", "hspeed", "vspeed", "image_index", "image_speed",
                     "grav"}
-GML_GLOBALS = {"score": "nb_score", "lives": "nb_lives", "health": "nb_health"}
-GML_KEYS = {"vk_left": "KEY_LEFT", "vk_right": "KEY_RIGHT", "vk_up": "KEY_UP",
+SCRIPT_GLOBALS = {"score": "nb_score", "lives": "nb_lives", "health": "nb_health"}
+SCRIPT_KEYS = {"vk_left": "KEY_LEFT", "vk_right": "KEY_RIGHT", "vk_up": "KEY_UP",
             "vk_down": "KEY_DOWN", "vk_a": "KEY_A", "vk_b": "KEY_B",
             "vk_start": "KEY_START", "vk_select": "KEY_SELECT", "vk_l": "KEY_L",
             "vk_r": "KEY_R"}
-GML_KEYWORDS = {"if", "else", "while", "repeat", "exit", "var", "true", "false",
+#: Words this language does not have, and what to write instead. Each one is
+#: something a C, JavaScript or Python habit reaches for first.
+SCRIPT_NOT_HERE = {
+    "for": "this language counts with repeat (3) { } or loops with "
+           "while (x < 3) { }",
+    "do": "this language loops with while (x < 3) { } or repeat (3) { }",
+    "switch": "use if and else",
+    "case": "use if and else",
+    "break": "a while loop ends when its test is false; exit leaves the event",
+    "continue": "use if to skip the part that should not run",
+    "function": "a Script resource holds a function; write it there",
+    "def": "a Script resource holds a function; write it there",
+    "elif": "write else if",
+    "print": "there is no console on a Game Boy Advance; use Say to show text",
+}
+
+SCRIPT_KEYWORDS = {"if", "else", "while", "repeat", "exit", "var", "true", "false",
                 "return", "then", "begin", "end"}
 
 
 class _Gml:
-    """A small recursive-descent compiler for a useful GML subset -> C against
+    """A small recursive-descent compiler for the script language -> C against
     the runtime. Statements: assignment (= += -= *= /= %=), if/else, while,
     repeat, exit, blocks, function-call statements, `var` decls. Expressions:
     ints, vars, alarm[i], the usual operators, calls. Identifiers resolve to a
@@ -207,7 +276,7 @@ class _Gml:
                 toks.append(("op", s[i:i + 2], ln)); i += 2; continue
             if c in singles:
                 toks.append(("op", c, ln)); i += 1; continue
-            raise GmlError("there is a %r here, which means nothing in code" % c,
+            raise GmlError(_t("there is a %r here, which means nothing in code") % c,
                            ln)
         return toks
 
@@ -227,14 +296,14 @@ class _Gml:
         # after it), so report it as one instead of raising IndexError out of
         # the compiler.
         if self.pos >= len(self.toks):
-            raise GmlError("the code stops in the middle of something",
+            raise GmlError(_t("the code stops in the middle of something"),
                            self._line())
         t = self.toks[self.pos]; self.pos += 1; return t
 
     def _eat(self, val):
         t = self._peek()
         if not t or t[1] != val:
-            raise GmlError("expected %s here, found %s"
+            raise GmlError(_t("expected %s here, found %s")
                            % (val, t[1] if t else "the end of the code"),
                            self._line())
         self.pos += 1
@@ -271,6 +340,14 @@ class _Gml:
                 out += self._stmt(ind)
             self._eat(close)
             return out
+        # Constructs a C or JavaScript habit reaches for that this language
+        # does not have. Without this, `for (i = 0; i < 3; i = i + 1)` was
+        # parsed as a call to a function named `for` and reported as "expected
+        # ) here, found =" — a complaint about a bracket, when the answer the
+        # author needs is which loop to write instead.
+        if t[0] == "id" and t[1] in SCRIPT_NOT_HERE:
+            raise GmlError(_t("%s: %s") % (t[1], SCRIPT_NOT_HERE[t[1]]),
+                           self._line())
         if t[0] == "id" and t[1] == "if":
             self._next(); self._eat("("); cond = self._expr(); self._eat(")")
             if self._is("then"):
@@ -320,26 +397,70 @@ class _Gml:
             if self._peek() and self._peek()[1] in ("=", "+=", "-=", "*=",
                                                     "/=", "%="):
                 op = self._next()[1]
+                # Once the `=` is consumed this IS an assignment, so an error
+                # in the right-hand side is the real one and must not be
+                # swallowed. It used to be: the parser backtracked and
+                # re-read the line as a bare expression, and
+                # `hspeed = abs(1, 2)` — a plain wrong-argument-count — was
+                # reported as "= does not belong here", a complaint about the
+                # one part of the line that was correct.
                 rhs = self._expr()
                 if self._is(";"):
                     self._next()
                 return ["%s%s %s %s;" % (pad, target, op, rhs)]
         except GmlError:
-            pass
+            # NOT `self.pos > save and ...`: _lvalue can fail without consuming
+            # anything (`1 = 2`), and that short-circuit is what kept its two
+            # messages unreachable. _committed decides on its own.
+            if self._committed(save):
+                raise
         self.pos = save
         expr = self._expr()
         if self._is(";"):
             self._next()
         return ["%s%s;" % (pad, expr)]
 
+    ASSIGN_OPS = ("=", "+=", "-=", "*=", "/=", "%=")
+
+    def _committed(self, save):
+        """Is this line an assignment, whatever went wrong in it?
+
+        Two ways to be sure. Past the `=`, the failure is the right-hand
+        side's. Before it, look AHEAD: a top-level assignment operator before
+        the statement ends means an assignment was intended even though the
+        left-hand side never parsed — which is the `1 = 2` and `abs(1) = 2`
+        case. Without the look-ahead those two both backtracked and reported
+        "= does not belong here", so `this is not something you can assign to`
+        and `you cannot assign to the result of f()` could not be reached at
+        all.
+
+        Bare calls must still backtrack: `instance_destroy()` is a statement,
+        and there is no assignment operator anywhere in it."""
+        for k in range(save, min(self.pos, len(self.toks))):
+            if self.toks[k][1] in self.ASSIGN_OPS:
+                return True
+        depth = 0
+        for k in range(save, len(self.toks)):
+            tok = self.toks[k][1]
+            if tok in ("(", "["):
+                depth += 1
+            elif tok in (")", "]"):
+                depth -= 1
+            elif depth <= 0:
+                if tok in (";", "{", "}"):
+                    break
+                if tok in self.ASSIGN_OPS:
+                    return True
+        return False
+
     def _lvalue(self):
         t = self._peek()
-        if not t or t[0] != "id" or t[1] in GML_KEYWORDS:
-            raise GmlError("this is not something you can assign to",
+        if not t or t[0] != "id" or t[1] in SCRIPT_KEYWORDS:
+            raise GmlError(_t("this is not something you can assign to"),
                            self._line())
         nxt = self._peek(1)
         if nxt and nxt[1] == "(":
-            raise GmlError("you cannot assign to the result of %s()" % t[1],
+            raise GmlError(_t("you cannot assign to the result of %s()") % t[1],
                            self._line())
         name = self._next()[1]
         if self._is("["):
@@ -374,7 +495,7 @@ class _Gml:
     def _primary(self):
         t = self._next()
         if t is None:
-            raise GmlError("the code stops in the middle of something",
+            raise GmlError(_t("the code stops in the middle of something"),
                            self._line())
         if t[0] == "num":
             return str(t[1])
@@ -391,7 +512,7 @@ class _Gml:
                 self._next(); idx = self._expr(); self._eat("]")
                 return self._arr_ref(name, idx)
             return self._var_ref(name)
-        raise GmlError("%s does not belong here" % (t[1],), t[2])
+        raise GmlError(_t("%s does not belong here") % (t[1],), t[2])
 
     def _call(self, name):
         line = self._line()          # the open bracket, i.e. where the call is
@@ -404,12 +525,34 @@ class _Gml:
         self._eat(")")
         spec = self.FUNCS.get(name)
         if spec is None:
-            raise GmlError("there is no function called %s" % name, line)
+            # A function this project's scripts define. Checked after the
+            # built-ins so a script cannot shadow one and change what an
+            # existing action means.
+            argc = getattr(self.g, "script_funcs", {}).get(name)
+            if argc is not None:
+                if len(args) != argc:
+                    # Two whole sentences rather than a "%s" plural slot:
+                    # nbi18n hands back the English whenever a translation's
+                    # placeholders differ from the source's, and most languages
+                    # do not form a plural by adding -s.
+                    raise GmlError(
+                        (_t("%s takes one value, not %d") % (name, len(args)))
+                        if argc == 1 else
+                        (_t("%s takes %d values, not %d")
+                         % (name, argc, len(args))), line)
+                return "%s(%s)" % (name, ", ".join(args))
+            raise GmlError(_t("there is no function called %s") % name, line)
         argc, tmpl = spec
         if len(args) != argc:
-            raise GmlError("%s needs %d value%s inside its brackets, not %d"
-                           % (name, argc, "" if argc == 1 else "s", len(args)),
-                           line)
+            if argc == 0:
+                msg = _t("%s takes nothing inside its brackets") % name
+            elif argc == 1:
+                msg = (_t("%s needs one value inside its brackets, not %d")
+                       % (name, len(args)))
+            else:
+                msg = (_t("%s needs %d values inside its brackets, not %d")
+                       % (name, argc, len(args)))
+            raise GmlError(msg, line)
         # templates repeat some args (min/max/abs/sign); expand by placeholder count
         need = tmpl.count("%s")
         fill = args if need == argc else [args[0]] * need if argc == 1 else (
@@ -422,13 +565,13 @@ class _Gml:
             self._next()
             field = self._peek()
             if not field or field[0] != "id":
-                raise GmlError("global. must be followed by a name",
+                raise GmlError(_t("global. must be followed by a name"),
                                self._line())
             self._next()
             slot = self.globals.get(field[1])
             if slot is None:
-                raise GmlError("global.%s is never set anywhere; set it once "
-                               "before you read it" % field[1], self._line())
+                raise GmlError(_t("global.%s is never set anywhere; set it once "
+                               "before you read it") % field[1], self._line())
             return "nb_global[%d]" % slot
         if name in ("true", "false"):
             return "1" if name == "true" else "0"
@@ -440,24 +583,75 @@ class _Gml:
             return str(self.g.room_ix[name])
         if name in self.g.snd_ix:
             return str(self.g.snd_ix[name])
-        if name in GML_KEYS:
-            return GML_KEYS[name]
-        if name in GML_BUILTIN_VARS:
+        if name in SCRIPT_KEYS:
+            return SCRIPT_KEYS[name]
+        if name in SCRIPT_BUILTIN_VARS:
             return "self->%s" % name
-        if name in GML_GLOBALS:
-            return GML_GLOBALS[name]
+        if name in SCRIPT_GLOBALS:
+            return SCRIPT_GLOBALS[name]
         if name in self.vars:
             return "self->var[%d]" % self.vars[name]
-        raise GmlError("%s is not a word this code knows; check the spelling"
+        raise GmlError(_t("%s is not a word this code knows; check the spelling")
                        % name, self._line())
 
     def _arr_ref(self, name, idx):
         if name == "alarm":
+            # An instance has MAX_ALARMS of them. `alarm[9] = 30` — written by
+            # anyone who assumes there are ten — emitted a write past the end
+            # of the array, into the variable slots that follow it in the
+            # struct. gcc says "array subscript 9 is above array bounds of
+            # 's32[4]'", which names a C type the author has never seen; say
+            # it in the language they wrote it in. Only a literal index can be
+            # checked: `alarm[i]` is not knowable here.
+            # A bare literal arrives as "3"; anything else is parenthesised,
+            # so "-1" reaches here as "(-1)". Peel those off before deciding
+            # whether this is a number at all — an expression like (1 + 2)
+            # cannot be judged here and is left to the compiler.
+            lit = str(idx).strip()
+            while len(lit) > 1 and lit[0] == "(" and lit[-1] == ")":
+                lit = lit[1:-1].strip()
+            if re.fullmatch(r"-?\d+", lit) and not (0 <= int(lit) < MAX_ALARMS):
+                raise GmlError(
+                    _t("there is no alarm %s; an object has %d, numbered 0 to %d")
+                    % (lit, MAX_ALARMS, MAX_ALARMS - 1), self._line())
             return "self->alarm[%s]" % idx
-        raise GmlError("unknown array %s" % name)
+        raise GmlError(_t("unknown array %s") % name)
 
 
 # ---------------------------------------------------------------- codegen
+# Words C will not accept as a name. A table column called "char" — which is
+# what a character table's first column gets called — emitted `char char;` and
+# the build died with "two or more data types in declaration", naming a line of
+# generated code the author has never seen. Trailing underscore instead.
+C_KEYWORDS = frozenset("""
+auto break case char const continue default do double else enum extern float
+for goto if inline int long register restrict return short signed sizeof static
+struct switch typedef union unsigned void volatile while
+_Bool _Complex _Imaginary _Alignas _Alignof _Atomic _Generic _Noreturn
+_Static_assert _Thread_local
+""".split())
+
+
+# Every nb_* identifier the runtime already owns. A table's C name is minted
+# from what the author typed, prefixed nb_ — so a table called "score" emitted
+# `nb_score`, which runtime.h declares as `extern s32`, and the build died with
+# "conflicting types for 'nb_score'" pointing into a header the author has
+# never opened. "Score", "Rooms", "Objects" and "Health" are exactly the names
+# a first game's tables get.
+#
+# Over-approximating is deliberate and free: reserving a name the runtime only
+# mentions costs one underscore on a generated identifier. The list is checked
+# against the runtime by tools/gbaruntime_selftest.py, so it cannot drift.
+RESERVED_C = frozenset("""
+nb_DateTime nb_Fx nb_InstanceDef nb_Object nb_Room nb_Sound nb_Sprite nb_Warp
+nb_atan_q nb_bg_palette nb_bg_tile_count nb_bg_tiles nb_event_fn nb_font
+nb_font_w nb_fx nb_fx_prio nb_global nb_health nb_lives nb_note_freq
+nb_obj_palette nb_obj_tile_count nb_obj_tiles nb_object_count nb_objects
+nb_room_count nb_rooms nb_score nb_sin_q nb_sound_count nb_sounds
+nb_sprite_count nb_sprites nb_sram_sig nb_start_room nb_text_bank
+""".split())
+
+
 class _Gen:
     def __init__(self, model):
         self.m = model if isinstance(model, dict) else {}
@@ -473,7 +667,7 @@ class _Gen:
         self.snd_ix = {s.get("id"): i for i, s in enumerate(self.sounds)}
         self.out = []
         self._loopn = 0     # unique counter for generated repeat-loop variables
-        # Mistakes found in the model while generating. A bad line of GML used
+        # Mistakes found in the model while generating. A bad line of script used
         # to become a silent C comment: the ROM built, the code did nothing, and
         # the author was never told. Collect them here so the IDE can show them.
         self.problems = []
@@ -481,6 +675,36 @@ class _Gen:
         self._obj_id = ""
         self._fns = {}      # id(object dict) -> (cid, has_create, has_step, has_destroy)
         self.global_ix = self._collect_globals()   # global.* name -> slot
+        # Functions the project's own scripts define, callable from any action.
+        self.script_funcs = self._collect_script_funcs()
+        self.menus = []          # (array name, lines) for Show Menu actions
+        self._menu_n = 0
+        # Seeded with the runtime's own globals, not empty: the generator
+        # must not mint a name the runtime already defines.
+        self._cnames = set(RESERVED_C)
+        self.audit_vars = True   # off while previewing a single event
+        self._banks_wanted = 0   # sprites that needed a colour set and got none
+
+    def _unique_c(self, name, forms=("%s",)):
+        """`name`, or the next free variant of it.
+
+        Tables and menus both mint names from author text and neither can see
+        the other's. Colliding is a compile error in generated code; renaming
+        is a table whose C name has an underscore on the end.
+
+        `forms` are the actual SYMBOLS this name becomes — a table called
+        "score" emits `nb_row_score`, `nb_score` and `nb_score_count`, and it
+        is those, not the bare ident, that have to be free. Checking the ident
+        alone is why `RESERVED_C` did nothing on the first attempt: nothing
+        collides with `score`, and everything collided with `nb_score`."""
+        base = name
+        n = 2
+        while any((f % name) in self._cnames for f in forms):
+            name = "%s_%d" % (base, n)
+            n += 1
+        for f in forms:
+            self._cnames.add(f % name)
+        return name
 
     def w(self, line=""):
         self.out.append(line)
@@ -532,11 +756,34 @@ class _Gen:
                 self.problems.append(
                     "%s - it is painted in %d colours, and a Game Boy Advance "
                     "sprite can hold 15. The %d after the first 15 will come "
-                    "out as holes." % (s.get("id") or "?", len(cols),
-                                       len(cols) - 15))
+                    "out as holes."
+                    % (s.get("name") or s.get("id") or "?", len(cols),
+                       len(cols) - 15))
             cols = cols[:15]
             chosen = None
+            # An author may pin a sprite to a bank. Two sprites sharing a bank
+            # can share tiles and cost less VRAM, and pinning is the only way to
+            # say which two -- the allocator packs in sprite order and has no
+            # way to know that these two are the same character.
+            pin = s.get("pal_bank")
+            if isinstance(pin, int) and 0 <= pin < 16:
+                while len(banks) <= pin:
+                    banks.append({})
+                bank = banks[pin]
+                missing = [c for c in cols if c not in bank]
+                if len(bank) + len(missing) <= 15:
+                    for c in missing:
+                        bank[c] = len(bank) + 1
+                    chosen = pin
+                else:
+                    self.problems.append(
+                        "%s is pinned to colour set %d, which has room for %d "
+                        "more colours and needs %d. It has been placed "
+                        "elsewhere." % (s.get("name") or s.get("id") or "?",
+                                        pin, 15 - len(bank), len(missing)))
             for bi, bank in enumerate(banks):
+                if chosen is not None:
+                    break
                 missing = [c for c in cols if c not in bank]
                 if len(bank) + len(missing) <= 15:
                     for c in missing:
@@ -551,10 +798,16 @@ class _Gen:
                 chosen = len(banks) - 1
             if chosen is None:
                 chosen = 0          # 16 banks exhausted: fold onto bank 0
+                # Count it. Otherwise the costing pane reports "16 / 16" and
+                # calls the project fine, while check_project says four sprites
+                # will be drawn in someone else's colours — two diagnostics
+                # disagreeing about the same fact, and the reassuring one is
+                # the one an author is more likely to look at.
+                self._banks_wanted += 1
                 self.problems.append(
                     "%s - the game has run out of sprite colour sets (there are "
                     "16), so this sprite will be drawn in another sprite's "
-                    "colours." % (s.get("id") or "?"))
+                    "colours." % (s.get("name") or s.get("id") or "?"))
             self._spr_bank[si] = chosen
             cmap = {TRANSPARENT & 0x7FFF: 0}
             for c in cols:
@@ -564,6 +817,7 @@ class _Gen:
         for bi, bank in enumerate(banks):
             for c, idx in bank.items():
                 pal[bi * 16 + idx] = c
+        self._banks = banks
         return pal
 
     def _obj_tiles(self, s, si):
@@ -634,7 +888,11 @@ class _Gen:
         nxt = 1
         over = set()                        # colours that did not fit the 15
         tiles = [0] * 16                    # tile 0 = blank
-        for ts in self.tilesets:
+        # Which 8x8 charblock cells each AUTHORED tile became. A 16x16 tile is
+        # four cells and a 32x32 is sixteen, and the room tilemap addresses
+        # cells -- so marking a tile solid has to mark every cell it occupies.
+        self._cell_of = {}                  # (tileset index, tile index) -> [cells]
+        for tsi, ts in enumerate(self.tilesets):
             # A tile set is authored at 8, 16 or 32 px. The hardware only has
             # 8x8 BG tiles, so a bigger tile becomes (size/8)^2 of them in
             # BLOCK ROW-MAJOR order -- the same order gbasdk.split_tile uses
@@ -645,7 +903,8 @@ class _Gen:
             if tsz not in (8, 16, 32):
                 tsz = 8
             blocks = max(1, tsz // 8)
-            for tile in ts.get("tiles") or []:
+            for tli, tile in enumerate(ts.get("tiles") or []):
+                first_cell = len(tiles) // 16
                 whole = list(tile or [])
                 need = tsz * tsz
                 whole = (whole + [TRANSPARENT] * need)[:need]
@@ -679,6 +938,8 @@ class _Gen:
                             for k in range(4):
                                 v |= (idx[row * 8 + half * 4 + k] & 0xF) << (k * 4)
                             tiles.append(v)
+                self._cell_of[(tsi, tli)] = list(
+                    range(first_cell, len(tiles) // 16))
         self._bg_cmap = cmap
         # A 4bpp charblock holds 512 8x8 tiles, and index 0 is the blank one.
         # At 8x8 nobody reaches that; at 32x32 each tile costs SIXTEEN slots, so
@@ -703,30 +964,180 @@ class _Gen:
                % (", ".join("0x%04X" % v for v in tiles) or "0x0000"))
         self.w("const int nb_bg_tile_count = %d;" % (len(tiles) // 16))
         self.w("")
+        self._emit_tile_solid(len(tiles) // 16)
+
+    def _emit_tile_solid(self, ncells):
+        """One byte per charblock cell: nonzero means a wall or a floor.
+
+        The runtime has read this table since it was written, and the generator
+        never emitted it -- so `g_has_solid` stayed 0, every tile test returned
+        "free", and TILE COLLISION DID NOT WORK IN ANY BUILT GAME. A tile floor
+        stopped nothing and rt_on_ground could only ever see a solid object.
+        Nothing reported it, because a table of zeroes is a valid table.
+
+        Solidity is authored per TILE and consumed per CELL, so a solid 16x16
+        tile marks all four of its cells."""
+        solid = [0] * max(1, ncells)
+        any_solid = False
+        for tsi, ts in enumerate(self.tilesets):
+            flags = ts.get("solid") or []
+            for tli in range(len(ts.get("tiles") or [])):
+                if tli >= len(flags) or not flags[tli]:
+                    continue
+                for cell in self._cell_of.get((tsi, tli), ()):
+                    if 0 <= cell < len(solid):
+                        solid[cell] = 1
+                        any_solid = True
+        self._has_solid = any_solid
+        self.w("const u8 nb_tile_solid[] = { %s };"
+               % ", ".join(str(v) for v in solid))
+        self.w("")
 
     # ---- objects / events / actions ----
     def _collect_vars(self, obj):
         """Ordered unique user-variable names referenced in an object."""
         names = []
+        # A variable this object only ever READS can never be anything but
+        # zero. The language gives a slot to any identifier it does not
+        # recognise — that is what makes `wobble = 7` work, and it is also why
+        # `hspeed` misspelt as `hspee` compiles to a variable nothing looks at
+        # and the object simply does not move.
+        assigned, readonly, has_c = set(), set(), [False]
 
         def scan(actions):
             for a in actions or []:
                 if not isinstance(a, dict):
                     continue
                 k = a.get("kind")
-                if k in ("set_var", "add_var", "if_var"):
+                if k in ("set_var", "add_var", "if_var", "menu"):
                     v = str(a.get("var", "")).strip()
                     if v and v not in names:
                         names.append(v)
+                    if v:
+                        # Show Menu writes the chosen row into its variable
+                        # from the ENGINE, so it counts as setting it even
+                        # though no script line does.
+                        (readonly if k == "if_var" else assigned).add(v)
                 elif k == "execute_code":
-                    for v in self._gml_user_vars(a.get("code", "")):
-                        if v not in names:
-                            names.append(v)
+                    # A C block declares its own variables in C. Scanning it for
+                    # script names would allocate instance slots for locals and
+                    # could push a real variable past the twelve there are.
+                    if str(a.get("lang") or "").strip().lower() != "c":
+                        for v in self._gml_user_vars(a.get("code", "")):
+                            if v not in names:
+                                names.append(v)
+                        _a, _r = self._gml_var_uses(a.get("code", ""))
+                        assigned.update(_a)
+                        readonly.update(_r)
+                    else:
+                        # A C block can write self->var[] directly, so nothing
+                        # in this object can be called never-set after one.
+                        has_c[0] = True
                 scan(a.get("children"))
 
         for ev in obj.get("events") or []:
             scan(ev.get("actions"))
+        # An instance carries 12 variable slots. Past that the name has no slot,
+        # and every action using it used to emit NOTHING — no code, no message,
+        # a ROM that built clean and quietly did less than it was told. Say so.
+        if len(names) > 12:
+            self._problem(_t("%s uses %d variables; an instance holds 12. "
+                          "Dropped: %s") % (obj.get("name") or obj.get("id") or "Object",
+                                           len(names), ", ".join(names[12:])))
+        # Not while PREVIEWING. "Show C" is the teaching device: it shows one
+        # event, often one the author is still writing, and a variable set in a
+        # sibling event they have not reached yet is not a mistake. The audit
+        # belongs to the pre-export gate, which sees the finished project.
+        if not has_c[0] and self.audit_vars:
+            who = obj.get("name") or obj.get("id") or "Object"
+            for v in names:
+                near = self._did_you_mean(v)
+                hint = (" Did you mean %s?" % near) if near else ""
+                if v not in assigned and v in readonly:
+                    self._problem(
+                        _t("%s reads %s but never sets it, so it is always 0.%s")
+                        % (who, v, hint))
+                elif v in assigned and v not in readonly:
+                    # A slot lives on the instance and nothing outside the
+                    # object can read it, so setting one and never reading it
+                    # does nothing at all. This is what a misspelt built-in
+                    # looks like: `hspee = 2` compiles, and the object sits
+                    # still.
+                    self._problem(
+                        _t("%s sets %s but never reads it, so it has no effect.%s")
+                        % (who, v, hint))
         return {n: i for i, n in enumerate(names[:12])}
+
+    @staticmethod
+    def _did_you_mean(name):
+        """The built-in this name is one edit away from, if any.
+
+        Deliberately distance ONE. Two edits reaches far enough to suggest
+        `grav` for `drag`, which is a different idea and a worse guess than
+        saying nothing."""
+        if len(name) < 3:
+            # One edit away from a two-letter name is half the alphabet;
+            # "did you mean x?" for a variable called c is not a suggestion.
+            return None
+        best = None
+        for cand in sorted(set(SCRIPT_BUILTIN_VARS) | set(SCRIPT_GLOBALS)):
+            if abs(len(cand) - len(name)) > 1 or cand == name:
+                continue
+            # one substitution, insertion or deletion
+            if len(cand) == len(name):
+                if sum(1 for a, b in zip(cand, name) if a != b) == 1:
+                    best = cand
+            else:
+                lo, hi = (name, cand) if len(cand) > len(name) else (cand, name)
+                for i in range(len(hi)):
+                    if hi[:i] + hi[i + 1:] == lo:
+                        best = cand
+                        break
+            if best:
+                return best
+        return None
+
+    # A C function definition at file scope: return type, name, parameters,
+    # then an opening brace. Approximate on purpose -- the compiler is the
+    # authority on whether a script is valid C; this only has to know which
+    # NAMES a project offers so that calling one from an action is not
+    # rejected as unknown.
+    _FUNC_DEF = re.compile(
+        r"^[A-Za-z_][A-Za-z0-9_ \t]*[ \t*]+([A-Za-z_][A-Za-z0-9_]*)"
+        r"[ \t]*\(([^;{)]*)\)[ \t]*\n?[ \t]*\{", re.M)
+
+    def _collect_script_funcs(self):
+        """name -> argument count, for every function the project's scripts
+        define.
+
+        Without this a script was unreachable: the action-code compiler
+        rejected every call it did not already know, so an Execute Code action
+        calling a script function had its WHOLE block replaced by a comment.
+        The ROM still built. That is the failure this project has been bitten
+        by repeatedly -- work quietly not done, reported as a problem nobody
+        had reason to read."""
+        out = {}
+        for sc in self.m.get("scripts") or []:
+            if not isinstance(sc, dict):
+                continue
+            code = sc.get("code")
+            if not isinstance(code, str):
+                continue
+            # Strip comments and string literals first, or a function-looking
+            # line inside either is offered as a real name.
+            clean = re.sub(r"/\*.*?\*/", " ", code, flags=re.S)
+            clean = re.sub(r"//[^\n]*", " ", clean)
+            clean = re.sub(r'"(?:[^"\\]|\\.)*"', '""', clean)
+            for m in self._FUNC_DEF.finditer(clean):
+                name, params = m.group(1), m.group(2).strip()
+                if name in ("if", "while", "for", "switch", "return", "do"):
+                    continue
+                if not params or params == "void":
+                    argc = 0
+                else:
+                    argc = len([x for x in params.split(",") if x.strip()])
+                out[name] = argc
+        return out
 
     def _collect_globals(self):
         """Project-wide global.* names -> slot (persistent, saved to SRAM)."""
@@ -737,14 +1148,47 @@ class _Gen:
                 if not isinstance(a, dict):
                     continue
                 if a.get("kind") == "execute_code":
-                    for nm in self._gml_globals(a.get("code", "")):
-                        if nm not in names:
-                            names.append(nm)
+                    if str(a.get("lang") or "").strip().lower() != "c":
+                        for nm in self._gml_globals(a.get("code", "")):
+                            if nm not in names:
+                                names.append(nm)
+                        assigned.update(
+                            self._gml_globals_set(a.get("code", "")))
                 scan(a.get("children"))
+
+        assigned = set()
         for o in self.objects:
             for ev in o.get("events") or []:
                 scan(ev.get("actions"))
+        # A global read but assigned NOWHERE in the project is always zero.
+        # The message for it already existed and could never fire: every
+        # `global.x` mention won a slot, read or write alike, so the "is it
+        # known?" test it hung on always passed. Same shape as the instance
+        # variables, one scope up.
+        for nm in names:
+            if nm not in assigned:
+                self._problem(_t("global.%s is never set anywhere; set it once "
+                                 "before you read it") % nm)
+        if len(names) > 32:
+            self._problem(_t("Project uses %d globals; 32 are saved to the "
+                          "cartridge. Dropped: %s")
+                          % (len(names), ", ".join(names[32:])))
         return {n: i for i, n in enumerate(names[:32])}
+
+    @staticmethod
+    def _gml_globals_set(code):
+        """The `global.NAME`s this script ASSIGNS to, as opposed to mentions."""
+        try:
+            toks = _Gml._lex(code)
+        except GmlError:
+            return set()
+        out = set()
+        for i in range(len(toks) - 3):
+            if (toks[i][0] == "id" and toks[i][1] == "global"
+                    and toks[i + 1][1] == "." and toks[i + 2][0] == "id"
+                    and toks[i + 3][1] in ("=", "+=", "-=", "*=", "/=", "%=")):
+                out.add(toks[i + 2][1])
+        return out
 
     @staticmethod
     def _gml_globals(code):
@@ -761,8 +1205,57 @@ class _Gen:
                     out.append(nm)
         return out
 
+    @staticmethod
+    def _gml_var_uses(code):
+        """(assigned, read) identifier names in one script.
+
+        An identifier immediately followed by an assignment operator is being
+        SET; every other mention is a READ. Needed because a name that is only
+        ever read can never be anything but zero, and the language cannot tell
+        that from the name alone: it gives a slot to any identifier it does not
+        recognise, which is what makes `wobble = 7` work — and what makes
+        `hspee = 2` compile to a variable nothing looks at."""
+        try:
+            toks = _Gml._lex(code)
+        except GmlError:
+            return set(), set()
+        ASSIGN = ("=", "+=", "-=", "*=", "/=")
+        assigned, read = set(), set()
+        for i, t in enumerate(toks):
+            if t[0] != "id":
+                continue
+            if t[1] == "global":
+                continue                       # a namespace, not a variable
+            if i and toks[i - 1][1] == ".":
+                continue                       # global.NAME, not a variable
+            nxt = toks[i + 1] if i + 1 < len(toks) else None
+            if nxt and nxt[1] == "(":
+                continue                       # a call, not a variable
+            if nxt and nxt[1] == "[":
+                # `alarm[0] = 30` sets alarm. Walk to the matching bracket and
+                # look at what follows, or an indexed write reads as a read.
+                depth, j = 0, i + 1
+                while j < len(toks):
+                    if toks[j][1] == "[":
+                        depth += 1
+                    elif toks[j][1] == "]":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                after = toks[j + 1] if j + 1 < len(toks) else None
+                if after and after[1] in ASSIGN and after[1] != "==":
+                    assigned.add(t[1])
+                else:
+                    read.add(t[1])
+            elif nxt and nxt[1] in ASSIGN and nxt[1] != "==":
+                assigned.add(t[1])
+            else:
+                read.add(t[1])
+        return assigned, read
+
     def _gml_user_vars(self, code):
-        """Identifiers in GML that are user variables — not resources, built-ins,
+        """Identifiers in the script that are user variables — not resources, built-ins,
         globals, keys, keywords or function calls — so they get var[] slots."""
         try:
             toks = _Gml._lex(code)
@@ -776,8 +1269,22 @@ class _Gen:
             nxt = toks[i + 1] if i + 1 < len(toks) else None
             if nxt and nxt[1] == "(":
                 continue
-            if (name in GML_KEYWORDS or name in GML_BUILTIN_VARS
-                    or name in GML_GLOBALS or name in GML_KEYS
+            if (name in SCRIPT_KEYWORDS or name in SCRIPT_BUILTIN_VARS
+                    or name in SCRIPT_GLOBALS or name in SCRIPT_KEYS
+                    or name == "alarm"      # a built-in ARRAY, not a slot
+                    # A word the language does not have is not a variable
+                    # either: `function foo() { }` earned a slot for
+                    # "function" and then a note that it is never set, ahead
+                    # of the message that actually explains the mistake.
+                    or name in SCRIPT_NOT_HERE
+                    # `global.x` is a namespace, not a variable called
+                    # "global"; `foo[0]` is an array reference, reported as
+                    # an unknown array. Both were earning instance slots and
+                    # then a note that they are never set — noise printed
+                    # AHEAD of the message that explains the real mistake.
+                    or name == "global"
+                    or (i and toks[i - 1][1] == ".")   # global.NAME
+                    or (nxt and nxt[1] == "[")
                     or name in self.obj_ix or name in self.spr_ix
                     or name in self.room_ix or name in self.snd_ix):
                 continue
@@ -798,9 +1305,14 @@ class _Gen:
         # score read-out built entirely from actions -- Draw Number, value
         # "score" -- drew a permanent 0 and the only way to show a score was to
         # drop into code. A user variable of the same name still wins above.
-        if s in GML_GLOBALS:
-            return GML_GLOBALS[s]
+        if s in SCRIPT_GLOBALS:
+            return SCRIPT_GLOBALS[s]
         return str(_int(s, 0))
+
+    def _problem(self, text):
+        """A limit reached or a rule broken, stated plainly and once."""
+        if text not in self.problems:
+            self.problems.append(text)
 
     def _missing(self, action_label, kind_word, name):
         """Report an action that points at a resource which is not in the
@@ -866,6 +1378,10 @@ class _Gen:
             else:
                 self._missing("Go To Room", "room", a.get("room") or a.get("_was"))
         elif k == "play_sound":
+            macro = SFX_MACRO.get(str(a.get("sound") or ""))
+            if macro:
+                L.append("%srt_sfx(%s);" % (pad, macro))
+                return L
             si = self.snd_ix.get(a.get("sound"))
             if si is not None:
                 L.append("%srt_play_sound(%d);" % (pad, si))
@@ -967,6 +1483,39 @@ class _Gen:
                      (pad, self._val(a.get("x"), vars_map),
                       self._val(a.get("y"), vars_map),
                       self._val(a.get("value"), vars_map)))
+        elif k == "glide":
+            L.append("%srt_glide(self, %s, %s, %s);"
+                     % (pad, self._val(a.get("x"), vars_map),
+                        self._val(a.get("y"), vars_map),
+                        self._val(a.get("frames"), vars_map)))
+        elif k == "input_lock":
+            L.append("%srt_input_lock(%d);"
+                     % (pad, 0 if str(a.get("on", "on")).lower() == "off" else 1))
+        elif k == "menu":
+            lines = [str(a.get(key) or "").strip()
+                     for key in ("a", "b", "c", "d")]
+            lines = [x for x in lines if x]
+            slot = vars_map.get(str(a.get("var", "")).strip())
+            if not lines:
+                self._problem(_t("%s - Show Menu has no lines in it, so there is "
+                              "nothing to choose from.")
+                              % (self._where or "?"))
+            elif slot is None:
+                # Without somewhere to put the answer the menu opens and the
+                # choice is thrown away, which looks like the menu not working.
+                self._problem(_t("%s - Show Menu does not say which variable the "
+                              "answer goes in, so the choice would be lost.")
+                              % (self._where or "?"))
+            else:
+                self._menu_n += 1
+                name = self._unique_c("menu_%d" % self._menu_n)
+                name = "nb_" + name if not name.startswith("nb_") else name
+                self.menus.append((name, lines))
+                L.append("%srt_menu_open_var(%s, %d, 3, 3, %d, self, %d);"
+                         % (pad, name, len(lines),
+                            max(6, max(len(x) for x in lines) + 3), slot))
+        elif k == "say":
+            L.append("%srt_say(%s);" % (pad, _cstr(str(a.get("text") or ""))))
         elif k == "clear_text":
             L.append("%srt_clear_text();" % pad)
         elif k == "save_game":
@@ -974,11 +1523,25 @@ class _Gen:
         elif k == "load_game":
             L.append("%srt_game_load();" % pad)
         elif k == "execute_code":
+            if str(a.get("lang") or "").strip().lower() == "c":
+                # Verbatim, inside the event's function. No checking here: the
+                # compiler is the authority on C and its message names the line.
+                # The block is fenced so that message can be traced back to the
+                # row it came from.
+                code = a.get("code")
+                if isinstance(code, str) and code.strip():
+                    L.append("%s/* C: %s */" %
+                             (pad, (self._where or "action").replace("*/", "* /")))
+                    L.append("%s{" % pad)
+                    for line in code.split("\n"):
+                        L.append((pad + "    " + line) if line.strip() else "")
+                    L.append("%s}" % pad)
+                return L
             try:
                 L += _Gml(self, vars_map, self.global_ix).compile(
                     a.get("code", ""), ind)
             except GmlError as e:
-                L.append("%s/* GML error: %s */" %
+                L.append("%s/* script error: %s */" %
                          (pad, str(e).replace("*/", "* /")))
                 where = self._where
                 if getattr(e, "line", 0):
@@ -1005,7 +1568,7 @@ class _Gen:
         return (t or "?").capitalize()
 
     def _emit_event_body(self, ev, vars_map):
-        # Remember where we are so a GML mistake is reported against the object
+        # Remember where we are so a script mistake is reported against the object
         # and event the author can actually click on.
         self._where = "%s · %s" % (self._obj_id or "?", self._event_name(ev))
         L = []
@@ -1013,6 +1576,154 @@ class _Gen:
             L += self._emit_action(a, vars_map, 1)
         self._where = ""
         return L
+
+    # What a column type becomes in C. Kept here rather than imported from the
+    # editor so the generator does not depend on the GUI module.
+    COLUMN_C = {"int": "s32", "text": "const char*", "bool": "u8"}
+
+    def _emit_name_constants(self):
+        """Names for the things the editors made, so inline C can say them.
+
+        Actions resolve an object to its index in nb_objects[] and emit the
+        bare number -- `rt_meeting(self, 1)`. Inline C had nothing to resolve
+        with, so an author writing bespoke behaviour had to hard-code that 1,
+        and reordering or deleting an object silently repointed it at a
+        different one. The action layer and Execute Code each worked and did
+        not compose.
+
+        The generated names are the author's, run through the same identifier
+        rules and the same collision check as everything else, so two objects
+        called "Bone" and "bone!" cannot collide and none of them can land on
+        a C keyword or a name the runtime owns.
+        """
+        groups = (("NB_OBJ",  self.objects,  "obj"),
+                  ("NB_SPR",  self.sprites,  "spr"),
+                  ("NB_SND",  self.sounds,   "snd"),
+                  ("NB_ROOM", self.rooms,    "room"))
+        any_emitted = False
+        for prefix, items, fallback in groups:
+            if not items:
+                continue
+            if not any_emitted:
+                self.w("/* Names for what the editors made. Indices shift when "
+                       "things are")
+                self.w("   reordered; these do not. */")
+                any_emitted = True
+            seen = {}
+            for i, it in enumerate(items):
+                base = self._c_ident(it.get("name") or it.get("id") or "",
+                                     fallback).upper()
+                name = "%s_%s" % (prefix, base)
+                n = 2
+                while name in seen:            # two objects, one author name
+                    name = "%s_%s_%d" % (prefix, base, n)
+                    n += 1
+                seen[name] = i
+                self.w("#define %-28s %d" % (name, i))
+
+    @staticmethod
+    def _c_ident(name, fallback):
+        """A C identifier from an author's column or table name.
+
+        Authors write "Base HP" and "attack%"; C takes neither. Rewritten
+        rather than rejected, because a table that refuses a space in a heading
+        is a table nobody finishes filling in."""
+        out = []
+        for ch in str(name or ""):
+            out.append(ch if (ch.isalnum() or ch == "_") else "_")
+        ident = "".join(out).strip("_")
+        if not ident or ident[0].isdigit():
+            ident = fallback + ("_" + ident if ident else "")
+        if ident in C_KEYWORDS:
+            ident += "_"
+        return ident
+
+    def gen_tables(self):
+        """Each table as a struct and an array of it, plus a count.
+
+        The count is emitted beside the array because C cannot ask an array its
+        length once it has decayed to a pointer, and a game that hard-codes the
+        row count is a game that reads past the end the first time a row is
+        added."""
+        tables = self.m.get("tables") or []
+        if not tables:
+            return
+        self.w("/* ---- tables ---- */")
+        for ti, t in enumerate(tables):
+            if not isinstance(t, dict):
+                continue
+            name = self._unique_c(
+                self._c_ident(t.get("name") or t.get("id"), "table%d" % ti),
+                ("nb_row_%s", "nb_%s", "nb_%s_count"))
+            cols = [c for c in (t.get("columns") or []) if isinstance(c, dict)]
+            if not cols:
+                continue
+            fields, seen = [], set()
+            for ci, c in enumerate(cols):
+                fn = self._c_ident(c.get("name"), "col%d" % ci)
+                while fn in seen:
+                    fn += "_"
+                seen.add(fn)
+                fields.append((fn, c.get("type") if c.get("type") in
+                               self.COLUMN_C else "text"))
+            self.w("typedef struct {")
+            for fn, ty in fields:
+                self.w("    %s %s;" % (self.COLUMN_C[ty], fn))
+            self.w("} nb_row_%s;" % name)
+            self.w("const nb_row_%s nb_%s[] = {" % (name, name))
+            for row in t.get("rows") or []:
+                vals = []
+                for ci, (fn, ty) in enumerate(fields):
+                    v = row[ci] if isinstance(row, list) and ci < len(row) else None
+                    if ty == "text":
+                        vals.append(_cstr("" if v is None else str(v)))
+                    elif ty == "bool":
+                        vals.append("1" if v in (1, True, "1", "true", "yes")
+                                    else "0")
+                    else:
+                        vals.append(str(_int(v, 0)))
+                self.w("    { %s }," % ", ".join(vals))
+            self.w("};")
+            self.w("const int nb_%s_count = %d;"
+                   % (name, len(t.get("rows") or [])))
+            self.w("")
+
+    def gen_scripts(self):
+        """File-scope C, verbatim, one block per script.
+
+        Emitted verbatim rather than parsed: a script IS C, and the level-3
+        promise in the spec is that an expert writes C and gets C. A mistake in
+        one is a compiler error, reported against the script by name -- which is
+        why each block is fenced with a comment carrying that name."""
+        scripts = self.m.get("scripts") or []
+        if not scripts:
+            return
+        self.w("/* ---- scripts ---- */")
+        for sc in scripts:
+            if not isinstance(sc, dict):
+                continue
+            code = sc.get("code")
+            if not isinstance(code, str) or not code.strip():
+                continue
+            name = sc.get("name") or sc.get("id") or "script"
+            self.w("/* %s */" % str(name).replace("*/", ""))
+            for line in code.split("\n"):
+                self.w(line)
+            self.w("")
+
+    def gen_menu_arrays(self):
+        """The item lists, at file scope.
+
+        The menu holds the pointer rather than copying the strings, so an array
+        built inside an event function would be gone by the time the menu drew
+        it."""
+        if not self.menus:
+            return
+        self.w("/* ---- menu lines ---- */")
+        for name, lines in self.menus:
+            self.w("static const char *const %s[] = { %s };"
+                   % (name, ", ".join(_cstr(x) for x in lines)))
+        self.w("")
 
     def gen_objects(self):
         # per-object event functions
@@ -1110,8 +1821,19 @@ class _Gen:
             cfn = "%s_create" % cid if has_create else "0"
             sfn = "%s_step" % cid if has_step else "0"
             dfn = "%s_destroy" % cid if has_destroy else "0"
-            self.w("    { %d, %d, %d, %s, %s, 0, %s }," %
-                   (spr, vis, solid, cfn, sfn, dfn))
+            # Fields past `destroy` were never emitted, so no object ever had
+            # a drawing depth, a collision box, or -- the one that matters --
+            # tilecol. The runtime returns early when tilecol is 0 and moves
+            # the instance without consulting the tile layer at all, which is
+            # why emitting the solid-tile table alone changed nothing.
+            depth = max(0, min(7, _int(o.get("depth"), 0)))
+            tilecol = max(0, min(2, _int(o.get("tilecol"), 0)))
+            inset = max(0, min(64, _int(o.get("bb_inset"), 0)))
+            bb = [max(0, min(64, _int(o.get(k), inset)))
+                  for k in ("bb_l", "bb_t", "bb_r", "bb_b")]
+            self.w("    { %d, %d, %d, %s, %s, 0, %s, %d, %d, %d, %d, %d, %d },"
+                   % (spr, vis, solid, cfn, sfn, dfn, depth, tilecol,
+                      bb[0], bb[1], bb[2], bb[3]))
         if not self.objects:
             self.w("    { -1, 1, 0, 0, 0, 0, 0 },")
         self.w("};")
@@ -1121,6 +1843,8 @@ class _Gen:
     # ---- rooms ----
     def gen_rooms(self):
         has_tiles = {}
+        has_far = {}
+        has_warps = {}
         for i, r in enumerate(self.rooms):
             insts = r.get("instances") or []
             self.w("static const nb_InstanceDef room_%d_insts[] = {" % i)
@@ -1149,6 +1873,46 @@ class _Gen:
                 self.w("static const u16 room_%d_tiles[] = { %s };"
                        % (i, ", ".join(str(v) for v in flat)))
                 has_tiles[i] = True
+            # Room-to-room links. A warp naming a room that no longer exists
+            # is dropped and REPORTED: silently keeping it would build a door
+            # that does nothing, which is indistinguishable from a door placed
+            # in the wrong spot.
+            warps = []
+            for wp in r.get("warps") or []:
+                if not isinstance(wp, dict):
+                    continue
+                dest = self.room_ix.get(wp.get("room"))
+                if dest is None:
+                    self.problems.append(
+                        "%s - a doorway leads to a room called \u201c%s\u201d, "
+                        "and there is no such room any more, so it will not "
+                        "go anywhere."
+                        % (r.get("name") or r.get("id") or "?",
+                           wp.get("room") or wp.get("_was") or "?"))
+                    continue
+                warps.append((max(0, _int(wp.get("x"))), max(0, _int(wp.get("y"))),
+                              max(1, _int(wp.get("w"), 16)),
+                              max(1, _int(wp.get("h"), 16)), dest,
+                              max(0, _int(wp.get("tx"))),
+                              max(0, _int(wp.get("ty")))))
+            if warps:
+                self.w("static const nb_Warp room_%d_warps[] = {" % i)
+                for x, y, ww, hh, dest, tx, ty in warps:
+                    self.w("    { %d, %d, %d, %d, %d, %d, %d },"
+                           % (x, y, ww, hh, dest, tx, ty))
+                self.w("};")
+                has_warps[i] = len(warps)
+
+            # The parallax layer: a 32x32 repeating map on BG3, drawn behind
+            # everything and scrolled at a fraction of the camera. Fixed size,
+            # because the hardware wraps it -- a bigger one would not tile.
+            far = r.get("far")
+            if far:
+                ff = [max(0, _int(t)) & 0x03FF for t in far]
+                ff = (ff + [0] * 1024)[:1024]
+                self.w("static const u16 room_%d_far[] = { %s };"
+                       % (i, ", ".join(str(v) for v in ff)))
+                has_far[i] = True
         self.w("")
         self.w("const nb_Room nb_rooms[] = {")
         for i, r in enumerate(self.rooms):
@@ -1159,8 +1923,20 @@ class _Gen:
             n = len([it for it in (r.get("instances") or [])
                      if self.obj_ix.get(it.get("object")) is not None])
             tiles_ref = ("room_%d_tiles" % i) if has_tiles.get(i) else "0"
-            self.w("    { %d, %d, 0x%04X, %d, %d, room_%d_insts, %s }," %
-                   (w, h, bg, speed, n, i, tiles_ref))
+            # Fields past `tiles` were all left zero, which is why three
+            # finished runtime features -- tile collision, the parallax layer
+            # and the open-edge room -- were unreachable from the tool.
+            solid_ref = ("nb_tile_solid"
+                         if getattr(self, "_has_solid", False)
+                         and has_tiles.get(i) else "0")
+            far_ref = ("room_%d_far" % i) if has_far.get(i) else "0"
+            far_div = max(1, min(8, _int(r.get("far_div"), 2)))
+            edge_open = 1 if r.get("edge_open") else 0
+            warp_ref = ("room_%d_warps" % i) if has_warps.get(i) else "0"
+            self.w("    { %d, %d, 0x%04X, %d, %d, room_%d_insts, %s, %s, %s, "
+                   "%d, %d, %s, %d }," %
+                   (w, h, bg, speed, n, i, tiles_ref, solid_ref, far_ref,
+                    far_div, edge_open, warp_ref, has_warps.get(i, 0)))
         if not self.rooms:
             self.w("    { 240, 160, 0x0000, 60, 0, 0, 0 },")
         self.w("};")
@@ -1171,6 +1947,8 @@ class _Gen:
 
     # ---- sounds ----
     def gen_sounds(self):
+        has_drum = {}
+        has_pcm = {}
         for i, s in enumerate(self.sounds):
             lead = [max(0, min(255, _int(n, 0))) for n in (s.get("lead") or [])]
             bass = [max(0, min(255, _int(n, 0))) for n in (s.get("bass") or [])]
@@ -1181,14 +1959,49 @@ class _Gen:
                    % (i, ", ".join(str(v) for v in lead)))
             self.w("static const u8 snd_bass_%d[] = { %s };"
                    % (i, ", ".join(str(v) for v in bass)))
+            # The drum track drives the NOISE channel, which no built game has
+            # ever used: the initialiser stopped at `bass`, so this and the
+            # four settings after it were zero-filled and the runtime read
+            # defaults it was never given.
+            # A sampled sound: signed 8-bit at 16384 Hz, converted on import.
+            # ROM is 4-byte aligned and the FIFO takes 32 bits at a time, so
+            # the length is padded to a multiple of four -- a short final word
+            # would send whatever follows the array to the speaker.
+            pcm = s.get("pcm")
+            if isinstance(pcm, list) and len(pcm) >= 16:
+                b = [max(-128, min(127, _int(v, 0))) for v in pcm]
+                while len(b) % 4:
+                    b.append(0)
+                self.w("static const signed char snd_pcm_%d[] = { %s };"
+                       % (i, ", ".join(str(v) for v in b)))
+                has_pcm[i] = len(b)
+            drum = [max(0, min(4, _int(v, 0))) for v in (s.get("drum") or [])]
+            if any(drum):
+                drum = (drum + [0] * n)[:n]
+                self.w("static const u8 snd_drum_%d[] = { %s };"
+                       % (i, ", ".join(str(v) for v in drum)))
+                has_drum[i] = True
         self.w("")
         self.w("const nb_Sound nb_sounds[] = {")
         for i, s in enumerate(self.sounds):
             tempo = max(1, min(60, _int(s.get("tempo"), 6)))
             loop = 1 if s.get("loop") else 0
             n = max(len(s.get("lead") or []), len(s.get("bass") or []), 1)
-            self.w("    { %d, %d, %d, snd_lead_%d, snd_bass_%d },"
-                   % (tempo, loop, n, i, i))
+            drum_ref = ("snd_drum_%d" % i) if has_drum.get(i) else "0"
+            # kind 1 is a sound effect: it plays on the wave channel and layers
+            # OVER the music instead of stopping it. Left at 0, every effect in
+            # every game silenced the music for its duration.
+            kind = 1 if str(s.get("kind", "")).lower() in ("1", "sfx",
+                                                           "effect") else 0
+            duty = max(0, min(4, _int(s.get("duty"), 0)))
+            vol = max(0, min(15, _int(s.get("vol"), 0)))
+            decay = max(0, min(7, _int(s.get("decay"), 0)))
+            prio = max(0, min(7, _int(s.get("prio"), 0)))
+            pcm_ref = ("snd_pcm_%d" % i) if has_pcm.get(i) else "0"
+            self.w("    { %d, %d, %d, snd_lead_%d, snd_bass_%d, %s, %d, %d, "
+                   "%d, %d, %d, %s, %d },"
+                   % (tempo, loop, n, i, i, drum_ref, kind, duty, vol, decay,
+                      prio, pcm_ref, has_pcm.get(i, 0)))
         if not self.sounds:
             self.w("    { 6, 0, 0, 0, 0 },")
         self.w("};")
@@ -1199,12 +2012,230 @@ class _Gen:
         self.w("/* auto-generated by the Notebook OS GBA SDK — do not edit */")
         self.w('#include "runtime.h"')
         self.w("")
+        # Before anything else: inline C in a SCRIPT is emitted further down
+        # but may name any object, sprite, sound or room, so the names have to
+        # be in scope from the first line of user code.
+        self._emit_name_constants()
         self.gen_sprites()
         self.gen_bg()
         self.gen_sounds()
+        # Scripts come BEFORE objects: C requires a function to be declared
+        # before it is called, and the whole point of a script is being called
+        # from an object's events.
+        # Tables before scripts, and scripts before objects: each may use what
+        # the one before it declared, and C wants a declaration first.
+        self.gen_tables()
+        self.gen_scripts()
+        # The object bodies are generated first so their menus are known, then
+        # written after the arrays they point at.
+        body_at = len(self.out)
         self.gen_objects()
+        head = self.out[body_at:]
+        del self.out[body_at:]
+        self.gen_menu_arrays()
+        self.out.extend(head)
         self.gen_rooms()
         return "\n".join(self.out) + "\n"
+
+
+# What the hardware actually has. Named here rather than written into the
+# messages, because a limit quoted in three places is a limit that will one day
+# disagree with itself.
+BUDGET = {
+    "obj_tiles":  1024,     # 32 KB of OBJ VRAM at 4bpp
+    "bg_tiles":    512,     # charblock 0
+    "obj_banks":    16,     # 16-colour sprite palettes
+    "instances":   128,
+    "oam":         128,
+    "globals":      32,
+    "rom":    32 * 1024 * 1024,
+}
+
+
+def budget_report(model):
+    """What this project costs against what the console has.
+
+    The point is NOT a total. A project that will not fit needs to know WHICH
+    ASSET to blame, so every line carries the largest contributors -- "over by
+    40 tiles" is a fact nobody can act on, and "Boss is 64x64 with 12 frames,
+    which is 192 of them" is a decision.
+
+    Estimates are marked as estimates. ROM in particular cannot be known
+    without compiling, and a confident wrong number is worse than a range."""
+    m = model if isinstance(model, dict) else {}
+    lines = []
+
+    # --- sprite tiles: the one that actually runs out ---
+    spr_cost = []
+    for s in m.get("sprites") or []:
+        if not isinstance(s, dict):
+            continue
+        w = max(8, _int(s.get("w"), 16))
+        h = max(8, _int(s.get("h"), w))
+        frames = len(s.get("frames") or []) or 1
+        per = ((w + 7) // 8) * ((h + 7) // 8)
+        # Two whole sentences, not a "%s" plural slot: nbi18n hands back the
+        # English whenever a translation's placeholders differ from the
+        # source's, and most languages do not form a plural by adding -s.
+        detail = (_t("%dx%d, one frame") % (w, h) if frames == 1
+                  else _t("%dx%d, %d frames") % (w, h, frames))
+        spr_cost.append((per * frames, s.get("name") or s.get("id") or "?",
+                         detail))
+    spr_cost.sort(reverse=True)
+    obj_used = sum(c for c, _n, _d in spr_cost)
+
+    # --- background tiles ---
+    bg_cost = []
+    for t in m.get("tilesets") or []:
+        if not isinstance(t, dict):
+            continue
+        size = _int(t.get("size"), 8) or 8
+        per = max(1, (size // 8) ** 2)
+        n = len(t.get("tiles") or [])
+        bg_cost.append((per * n, t.get("name") or t.get("id") or "?",
+                        _t("%d tiles at %dx%d") % (n, size, size)))
+    bg_cost.sort(reverse=True)
+    bg_used = sum(c for c, _n, _d in bg_cost) + 1     # +1 for the blank tile
+
+    # --- sampled audio, which is where ROM goes ---
+    pcm_cost = []
+    for s in m.get("sounds") or []:
+        if not isinstance(s, dict):
+            continue
+        n = len(s.get("pcm") or [])
+        if n >= 16:
+            pcm_cost.append((n, s.get("name") or s.get("id") or "?",
+                             _t("%.1f seconds") % (n / 16384.0)))
+    pcm_cost.sort(reverse=True)
+
+    # --- instances placed in one room ---
+    room_cost = []
+    for r in m.get("rooms") or []:
+        if not isinstance(r, dict):
+            continue
+        room_cost.append((len(r.get("instances") or []),
+                          r.get("name") or r.get("id") or "?", ""))
+    room_cost.sort(reverse=True)
+
+    pal = palette_report(m)
+
+    def line(name, used, cap, worst, unit="", note=""):
+        return {"name": name, "used": used, "cap": cap,
+                "over": used > cap, "unit": unit, "note": note,
+                "worst": [{"cost": c, "name": n, "detail": d}
+                          for c, n, d in worst[:3]]}
+
+    lines.append(line("Sprite tiles", obj_used, BUDGET["obj_tiles"], spr_cost,
+                      note="every frame of every sprite is in memory at once"))
+    lines.append(line("Background tiles", bg_used, BUDGET["bg_tiles"], bg_cost))
+    lines.append(line("Sprite colour sets",
+                      pal.get("wanted", pal["used"]), BUDGET["obj_banks"],
+                      [(len(b["sprites"]), _t("set %d") % b["index"],
+                        ", ".join(b["sprites"])) for b in pal["banks"]]))
+    lines.append(line("Objects in a room",
+                      room_cost[0][0] if room_cost else 0,
+                      BUDGET["instances"], room_cost,
+                      note="objects created while playing count too"))
+    if pcm_cost:
+        lines.append(line("Sampled audio", sum(c for c, _n, _d in pcm_cost),
+                          BUDGET["rom"], pcm_cost, unit="bytes",
+                          note="16 KB per second"))
+    return {"lines": lines,
+            "over": [l for l in lines if l["over"]],
+            "problems": pal["problems"]}
+
+
+def palette_report(model):
+    """What the build will do with this project's colours, before building it.
+
+    The spec names palettes as the constraint every GBA project eventually
+    hits, and says a tool that hides it badly produces games that look wrong
+    and authors who cannot find out why. Hiding it badly is what the tool did:
+    the allocator already refused to overflow and already reported it, but the
+    report only appeared in a build log, after the fact, phrased per sprite. It
+    never said how much room was left, which sprites were sharing, or which one
+    was about to cost the sixteenth bank.
+
+    Runs the REAL allocator -- the same call the generator makes -- so the
+    report cannot describe a different allocation than the one that ships.
+
+    Returns:
+      banks    [{"index", "colours"[], "sprites"[], "free"}]  used banks only
+      sprites  [{"index", "id", "name", "bank", "colours", "over"}]
+      used     banks in use, of 16
+      total    colours placed, of 240
+    """
+    g = _Gen(model if isinstance(model, dict) else {})
+    g._build_obj_palette()
+    banks = getattr(g, "_banks", []) or []
+    by_bank = {}
+    sprites = []
+    for si, s in enumerate(g.sprites):
+        cols = []
+        for fr in s.get("frames") or []:
+            for px in fr:
+                c = _int(px, TRANSPARENT) & 0x7FFF
+                if c != (TRANSPARENT & 0x7FFF) and c not in cols:
+                    cols.append(c)
+        bank = g._spr_bank.get(si, 0)
+        name = s.get("name") or s.get("id") or ("Sprite %d" % (si + 1))
+        sprites.append({"index": si, "id": s.get("id"), "name": name,
+                        "bank": bank, "colours": len(cols),
+                        "over": max(0, len(cols) - 15),
+                        "pinned": isinstance(s.get("pal_bank"), int)})
+        by_bank.setdefault(bank, []).append(name)
+    out = []
+    for bi, bank in enumerate(banks):
+        if not bank and bi not in by_bank:
+            continue
+        ordered = [0] * 16
+        for colour, idx in bank.items():
+            if 0 <= idx < 16:
+                ordered[idx] = colour
+        out.append({"index": bi, "colours": ordered,
+                    "sprites": by_bank.get(bi, []),
+                    "used": len(bank), "free": 15 - len(bank)})
+    return {"banks": out,
+            "sprites": sprites,
+            "used": len(out),
+            # What the project ASKED for, which is what a budget line has to
+            # show: `used` is capped at the 16 that exist and can never be over.
+            "wanted": len(out) + getattr(g, "_banks_wanted", 0),
+            "total": sum(b["used"] for b in out),
+            "problems": list(g.problems)}
+
+
+def preview_event_c(model, obj, ev):
+    """The C one event compiles to, for reading rather than building.
+
+    This exists for teaching. Part 0 of the spec makes one rule binding on every
+    level of the tool: any action can show the script it produces, and any script
+    the C. A row of drag-drop actions and a page of C are then not two ways of
+    working but one thing seen at two depths, and the step up is reading
+    something already written rather than starting from nothing.
+
+    Returns (code, problems). Problems are the same ones a build would report,
+    so a mistake is visible here before a build is ever run."""
+    g = _Gen(model if isinstance(model, dict) else {})
+    g.audit_vars = False
+    g._obj_id = (obj or {}).get("id") or "?"
+    # Slots are allocated across the WHOLE object, so an event previewed in
+    # isolation must still be weighed with its siblings or its variables land in
+    # different slots here than in the build -- a preview that lies about the
+    # thing it is teaching. If the event is not yet saved into the object, add it.
+    o = dict(obj or {})
+    evs = list(o.get("events") or [])
+    if ev is not None and not any(e is ev for e in evs):
+        evs.append(ev)
+    o["events"] = evs
+    vars_map = g._collect_vars(o)
+    body = g._emit_event_body(ev or {}, vars_map)
+    head = "void %s_%s(int i)" % (_cid((obj or {}).get("id"), "obj"),
+                                  _cid(_Gen._event_name(ev or {}).lower(), "ev"))
+    lines = [head, "{"]
+    lines += body or ["    /* no actions */"]
+    lines.append("}")
+    return "\n".join(lines), list(g.problems)
 
 
 def generate_c(model):
@@ -1215,11 +2246,19 @@ def check_project(model):
     """Every mistake in `model` that the compiler would otherwise swallow, as a
     list of plain sentences ready to show the author.
 
-    A line of GML the compiler cannot understand used to become a C comment: the
+    A line of script the compiler cannot understand used to become a C comment: the
     ROM built, that code silently did nothing, and nobody was told. This runs the
     same generation pass and hands back what it found, so the IDE can say
-    "obj_player · Step · line 3 — hspee is not a word this code knows" before it
-    exports something that will not work. Never raises."""
+    "obj_player · Step · line 3 — = does not belong here" before it exports
+    something that will not work. Never raises.
+
+    A misspelt NAME is a different case and was not caught for a long time. The
+    language gives a slot to any identifier it does not recognise — that is what
+    makes `wobble = 7` work without a declaration, and it is also why `hspee =
+    2` compiled to a variable nothing reads while the object sat still. It is
+    reported now, but as what it is: a variable set and never read, or read and
+    never set, with the near-miss named when there is one.
+    """
     try:
         g = _Gen(model)
         g.generate()
@@ -1237,10 +2276,25 @@ def find_gcc(toolchain_dir=TOOLCHAIN_DIR):
     return shutil.which("arm-none-eabi-gcc")
 
 
-def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DIR):
-    """Compile `model` into <outdir>/game.gba. Returns (ok, gba_path, log)."""
+# A multiboot image runs from EWRAM, and the loader will not send more than
+# EWRAM holds. Checked before the build rather than after, because "it linked
+# and then nothing happened" is the worst way to learn a size limit.
+MULTIBOOT_MAX = 256 * 1024
+
+
+def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DIR,
+              multiboot=False):
+    """Compile `model` into <outdir>/game.gba. Returns (ok, gba_path, log).
+
+    multiboot=True builds game.mb instead: the same program linked to run from
+    EWRAM, for sending over the link cable to a console with no cartridge."""
     gcc = find_gcc(toolchain_dir)
     if not gcc:
+        # ENGLISH, deliberately, and not through _t(): the build log is
+        # matched by gbasdk._failure_reason to choose the sentence the
+        # author actually reads, which IS translated. Translating this one
+        # would stop that match and every failure would report the generic
+        # "the compiler stopped part-way through".
         return False, None, "The GBA toolchain (arm-none-eabi-gcc) isn't installed."
     tdir = os.path.dirname(gcc)
     objcopy = os.path.join(tdir, "arm-none-eabi-objcopy")
@@ -1254,6 +2308,7 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
         source = gen.generate()
         problems = list(gen.problems)
     except Exception as e:
+        # English, and matched by _failure_reason -- see the note above.
         return False, None, ("Could not turn this project into code: %s: %s"
                              % (type(e).__name__, e))
     try:
@@ -1261,6 +2316,7 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
         with open(os.path.join(outdir, "game_data.c"), "w") as fh:
             fh.write(source)
     except Exception as e:
+        # English, and matched by _failure_reason -- see the note above.
         return False, None, "Could not write generated source: %s" % e
 
     head = ""
@@ -1268,19 +2324,27 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
         head = ("This game has %d problem%s the compiler could not use:\n  %s\n\n"
                 % (len(problems), "" if len(problems) == 1 else "s",
                    "\n  ".join(problems)))
-    elf = os.path.join(outdir, "game.elf")
-    gba = os.path.join(outdir, "game.gba")
+    elf = os.path.join(outdir, "game_mb.elf" if multiboot else "game.elf")
+    gba = os.path.join(outdir, "game.mb" if multiboot else "game.gba")
+    ldscript = "gba_mb.ld" if multiboot else "gba.ld"
     cmd = [
         gcc, "-mcpu=arm7tdmi", "-mthumb-interwork", "-ffreestanding",
         "-nostdlib", "-O2", "-Wall",
         "-I", runtime_dir,
-        "-T", os.path.join(runtime_dir, "gba.ld"),
+        "-T", os.path.join(runtime_dir, ldscript),
         os.path.join(runtime_dir, "crt0.s"),
         os.path.join(runtime_dir, "runtime.c"),
         os.path.join(outdir, "game_data.c"),
         # ARM7TDMI has no hardware divide; the compiler emits calls to libgcc's
         # __aeabi_*div helpers, so link libgcc even though we're freestanding.
         "-lgcc",
+        # IWRAM holds code AND data in one load segment, so that segment is
+        # readable, writable and executable. On a console with no MMU that is
+        # what IWRAM IS -- the warning describes a hardening concern that does
+        # not exist here. Silenced deliberately rather than left to appear in
+        # every build, because a warning nobody can act on is a warning
+        # everybody learns to scroll past.
+        "-Wl,--no-warn-rwx-segments",
         "-o", elf,
     ]
     log = head + " ".join(cmd) + "\n"
@@ -1300,7 +2364,15 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
         _gbafix(gba, model.get("name") or "")
     except Exception as e:
         return False, None, log + "\nlink/fix failed: %s" % e
-    return True, gba, log + "\nBuilt %s (%d bytes)\n" % (gba, os.path.getsize(gba))
+    size = os.path.getsize(gba)
+    if multiboot and size > MULTIBOOT_MAX:
+        # Refused rather than shipped: an oversized image links, writes a file
+        # and is then silently not sent, which looks like a cable fault.
+        return False, None, log + (
+            "\nThis game is %d KB and a link-cable image can be %d KB. "
+            "It builds as a cartridge; it cannot be sent over a cable.\n"
+            % (size // 1024, MULTIBOOT_MAX // 1024))
+    return True, gba, log + "\nBuilt %s (%d bytes)\n" % (gba, size)
 
 
 # The boot logo bitmap every GBA cartridge must carry at header offset

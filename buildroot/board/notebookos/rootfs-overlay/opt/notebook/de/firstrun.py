@@ -57,7 +57,19 @@ def _xkb_parts(code):
     VARIANT (writing it as XkbLayout yields no keymap at all) and "ru,us" is a
     dual layout that needs a switch key, or its Latin half is unreachable — and
     for Russian, Hindi, Greek and Yiddish that means no way to type a password.
+
+    nbkeyboard owns these rules now, and it gets the case this body never
+    could: a VARIANT INSIDE A MULTI-GROUP CODE. "jp(kana),us" fell through the
+    regex whole, so XkbLayout was written as the literal string "jp(kana),us"
+    — a layout name the server has never heard of — and the machine came up
+    with no keymap. The old body is kept as the fallback, because this screen
+    runs before anything has proved the de/ tree is intact.
     """
+    try:
+        import nbkeyboard                                      # noqa: PLC0415
+        return nbkeyboard.xorg_parts(code)
+    except Exception:                                          # noqa: BLE001
+        pass
     variant = ""
     m = re.match(r"^([^(]+)\((.+)\)$", code or "")
     if m:
@@ -166,15 +178,36 @@ def write_user_name(name):
 
 
 def write_hostname(name):
+    """Persist the computer's name, and set it on the running system too.
+
+    THE ANSWER IS THE FILE, AND ONLY THE FILE. Setting the name on the running
+    kernel is a nicety that saves a reboot; it is not the state the machine
+    keeps, and it used to share this function's one try: a `hostname` that was
+    missing, unrunnable or slow enough to hit the timeout raised, this returned
+    False, apply() put "Computer name" in the failed list and therefore NEVER
+    CLEARED THE MARKER. The name was already correctly on disk, so there was
+    nothing for the new owner to correct and no way to correct it: pressing
+    Finish again ran the same command and failed the same way, and the machine
+    came back to this setup screen on every boot with no route past it -- on
+    the one screen that has to be completed before the computer can be used.
+
+    write_keyboard already keeps the two apart for exactly this reason: it
+    returns whether the CONFIG FILE was written and applies the layout to the
+    running server as a separate best effort.
+    """
     try:
         os.makedirs(os.path.dirname(HOSTNAME_FILE), exist_ok=True)
         with open(HOSTNAME_FILE, "w") as fh:
             fh.write(name + "\n")
-        # Take effect now as well, so the name is right without a reboot.
-        subprocess.run(["hostname", name], capture_output=True, timeout=10)
-        return True
     except Exception:
         return False
+    # Take effect now as well, so the name is right without a reboot. Best
+    # effort, deliberately outside the answer above.
+    try:
+        subprocess.run(["hostname", name], capture_output=True, timeout=10)
+    except Exception:
+        pass
+    return True
 
 
 def write_keyboard(code):
@@ -196,13 +229,13 @@ def write_keyboard(code):
             fh.write("\n".join(conf) + "\n")
     except OSError:
         ok = False
+    # Through nbi18n rather than assembled here: the argv it returns also
+    # CLEARS the options the server is already carrying, so a machine that
+    # loaded a dual layout earlier in this same session does not keep Alt+Shift
+    # bound after moving to a single one.
     try:
-        args = ["setxkbmap", layout]
-        if variant:
-            args += ["-variant", variant]
-        if options:
-            args += ["-option", options]
-        subprocess.run(args, capture_output=True, timeout=10)
+        import nbi18n                                          # noqa: PLC0415
+        subprocess.run(nbi18n.xkb_args(code), capture_output=True, timeout=10)
     except Exception:
         pass
     return ok
@@ -348,8 +381,8 @@ def main():
     .fr-sub { font-size: 14px; color: #6E695E; }
     .fr-label { font-size: 12px; letter-spacing: 0.08em; color: #6E695E; }
     .fr-entry { font-size: 15px; padding: 8px 10px; background: #FCFBF8;
-                border: 1px solid #C9C4B6; border-radius: 3px; color: #1A1916; }
-    .fr-go { background: #1A1916; border: 1px solid #1A1916; border-radius: 3px;
+                border: 1px solid #C9C4B6; border-radius: 8px; color: #1A1916; }
+    .fr-go { background: #1A1916; border: 1px solid #1A1916; border-radius: 8px;
              padding: 9px 26px; font-size: 15px; }
     .fr-go label { color: #FCFBF8; }
     .fr-err { font-size: 13px; color: #C8341E; }
@@ -534,8 +567,17 @@ def main():
             # NEVER horizontally: the form has a fixed measure, so a horizontal
             # scrollbar could only ever mean the window is narrower than its own
             # minimum, which is a layout bug rather than something to scroll.
-            outer.set_margin_top(24)
-            outer.set_margin_bottom(24)
+            # 12, not 24. CJK line boxes are taller than Latin ones, and the
+            # six stacked fields carried that difference into a form 51px
+            # taller in ja/zh/ko than in English — 758px against the 1024x740
+            # budget, so the one screen a machine cannot be used without had to
+            # be scrolled in three languages. Trimming the outer margin is the
+            # least invasive 24px available: it touches no type, no field
+            # spacing and no rhythm between the rows, and it leaves ja/zh/ko at
+            # 734 with room to spare rather than exactly on the line, where one
+            # longer translation would put them back over.
+            outer.set_margin_top(12)
+            outer.set_margin_bottom(12)
             # `page` is a FULL-WIDTH painted box that the centred form sits in,
             # and it is not decoration. A GTK viewport's own bin-window is not
             # reachable by any CSS rule, and on the software render stack an

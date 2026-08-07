@@ -2,312 +2,685 @@
  "code": "eo",
  "name": "Esperanto",
  "from": "English",
+ "note": "Spelling is regular and stress always falls on the second-to-last syllable",
+ "alphabet": [
+  {
+   "c": "c",
+   "ipa": "t͡s",
+   "e": "ts, as in cats -- never the k sound"
+  },
+  {
+   "c": "ĉ",
+   "ipa": "t͡ʃ",
+   "e": "ch, as in church"
+  },
+  {
+   "c": "ĝ",
+   "ipa": "d͡ʒ",
+   "e": "j, as in judge"
+  },
+  {
+   "c": "ĥ",
+   "ipa": "x",
+   "e": "ch, as in Scottish loch"
+  },
+  {
+   "c": "ĵ",
+   "ipa": "ʒ",
+   "e": "s, as in measure"
+  },
+  {
+   "c": "ŝ",
+   "ipa": "ʃ",
+   "e": "sh, as in ship"
+  },
+  {
+   "c": "ŭ",
+   "ipa": "w",
+   "e": "w, and only after a or e: aŭ, eŭ"
+  },
+  {
+   "c": "j",
+   "ipa": "j",
+   "e": "y, as in yes"
+  },
+  {
+   "c": "g",
+   "ipa": "ɡ",
+   "e": "g, as in go -- never as in gem"
+  },
+  {
+   "c": "r",
+   "ipa": "r",
+   "e": "rolled with the tip of the tongue"
+  }
+ ],
  "units": [
   {
    "title": "BASICS",
+   "subtitle": "Greet people, name who is who, and count to ten",
    "skills": [
     {
      "name": "Greetings",
+     "tips": [
+      {
+       "h": "Word endings name the part of speech",
+       "b": "An Esperanto word ends in a letter that states its class: -o marks a noun, -a an adjective, -e an adverb, -i a verb in the dictionary form. One root takes any of them, so a single root learned is four words.",
+       "eg": [
+        [
+         "muziko",
+         "music"
+        ],
+        [
+         "muzika",
+         "musical"
+        ],
+        [
+         "muzike",
+         "musically"
+        ],
+        [
+         "muziki",
+         "to make music"
+        ]
+       ]
+      },
+      {
+       "h": "Greetings carry the ending -n",
+       "b": "A greeting appears with -n because it is the object of an unspoken verb: saluton stands for mi diras saluton, I say a greeting. The plain noun saluto also exists and means a greeting.",
+       "eg": [
+        [
+         "Saluton",
+         "Hello"
+        ],
+        [
+         "Dankon",
+         "Thank you"
+        ],
+        [
+         "Bonan tagon",
+         "Good day"
+        ]
+       ]
+      },
+      {
+       "h": "One letter, one sound",
+       "b": "Every letter has one sound and every letter is pronounced. No letter is silent and none changes value beside another. Stress falls on the second-to-last syllable of every word, without exception.",
+       "eg": [
+        [
+         "saluton",
+         "stress on LU"
+        ],
+        [
+         "sinjorino",
+         "stress on RI"
+        ],
+        [
+         "dankon",
+         "stress on DAN"
+        ]
+       ]
+      }
+     ],
      "words": [
       {
        "t": "saluton",
        "e": "hello",
-       "ipa": "sa.ˈlu.ton"
+       "ipa": "sa.ˈlu.ton",
+       "pos": "interj",
+       "note": "accusative of saluto"
+      },
+      {
+       "t": "saluto",
+       "e": "greeting",
+       "ipa": "sa.ˈlu.to",
+       "pos": "noun"
       },
       {
        "t": "ĝis",
        "e": "bye",
-       "ipa": "ˈd͡ʒis"
+       "ipa": "ˈd͡ʒis",
+       "pos": "interj",
+       "note": "short for ĝis revido"
       },
       {
        "t": "dankon",
        "e": "thank you",
-       "ipa": "ˈdan.kon"
+       "ipa": "ˈdan.kon",
+       "pos": "interj",
+       "note": "dank- + -on"
       },
       {
        "t": "bonvolu",
        "e": "please",
-       "ipa": "bon.ˈvo.lu"
-      },
-      {
-       "t": "jes",
-       "e": "yes",
-       "ipa": "ˈjes"
-      },
-      {
-       "t": "ne",
-       "e": "no",
-       "ipa": "ˈne"
+       "ipa": "bon.ˈvo.lu",
+       "pos": "interj",
+       "note": "bon- + vol- + -u"
       },
       {
        "t": "pardonu",
        "e": "sorry",
-       "ipa": "par.ˈdo.nu"
+       "ipa": "par.ˈdo.nu",
+       "pos": "interj",
+       "note": "imperative of pardoni"
+      },
+      {
+       "t": "bonvenon",
+       "e": "welcome",
+       "ipa": "bon.ˈve.non",
+       "pos": "interj",
+       "note": "bone + veni + -on"
+      },
+      {
+       "t": "bonan tagon",
+       "e": "good day",
+       "ipa": "ˈbo.nan ˈta.ɡon",
+       "pos": "interj"
       },
       {
        "t": "bonan matenon",
        "e": "good morning",
-       "ipa": "ˈbo.nan ma.ˈte.non"
+       "ipa": "ˈbo.nan ma.ˈte.non",
+       "pos": "interj"
       },
       {
        "t": "bonan nokton",
        "e": "good night",
-       "ipa": "ˈbo.nan ˈnok.ton"
+       "ipa": "ˈbo.nan ˈnok.ton",
+       "pos": "interj"
+      },
+      {
+       "t": "sinjoro",
+       "e": "sir",
+       "ipa": "sin.ˈjo.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "sinjorino",
+       "e": "madam",
+       "ipa": "sin.jo.ˈri.no",
+       "pos": "noun",
+       "note": "sinjoro + -in-"
       }
      ],
      "phrases": [
       {
        "t": "Kiel vi fartas?",
        "e": "How are you?",
-       "ipa": "ˈki.el vi ˈfar.tas"
+       "ipa": "ˈki.el vi ˈfar.tas",
+       "lit": "how you fare"
       },
       {
-       "t": "Mi fartas bone",
-       "e": "I am fine",
-       "ipa": "mi ˈfar.tas ˈbo.ne"
+       "t": "Mi fartas tre bone",
+       "e": "I am doing very well",
+       "ipa": "mi ˈfar.tas tre ˈbo.ne"
       },
       {
-       "t": "Mi nomiĝas Ana",
-       "e": "My name is Ana",
-       "ipa": "mi no.ˈmi.d͡ʒas ˈa.na"
+       "t": "Ĝis la revido",
+       "e": "Goodbye for now",
+       "ipa": "d͡ʒis la re.ˈvi.do",
+       "lit": "until the seeing-again"
+      },
+      {
+       "t": "Bonan tagon sinjorino",
+       "e": "Good day madam",
+       "ipa": "ˈbo.nan ˈta.ɡon sin.jo.ˈri.no"
       }
      ]
     },
     {
      "name": "People",
+     "tips": [
+      {
+       "h": "The plural ending is -j",
+       "b": "A plural noun adds -j after the -o ending: viro, viroj. An adjective standing with it takes -j as well, so both words show the plural.",
+       "eg": [
+        [
+         "viro",
+         "a man"
+        ],
+        [
+         "viroj",
+         "men"
+        ],
+        [
+         "granda viro",
+         "a big man"
+        ],
+        [
+         "grandaj viroj",
+         "big men"
+        ]
+       ]
+      },
+      {
+       "h": "One article, la, for everything",
+       "b": "Esperanto has one definite article, la. It never changes for gender, number or case. There is no indefinite article, so viro means both man and a man.",
+       "eg": [
+        [
+         "la viro",
+         "the man"
+        ],
+        [
+         "viro",
+         "a man"
+        ],
+        [
+         "la viroj",
+         "the men"
+        ]
+       ]
+      },
+      {
+       "h": "The personal pronouns",
+       "b": "The pronouns are mi, vi, li, ŝi, ĝi, ni and ili. The one form vi covers singular and plural alike. ĝi stands for a thing or an animal, and for a child whose sex is not stated.",
+       "eg": [
+        [
+         "mi / ni",
+         "I / we"
+        ],
+        [
+         "li / ŝi / ĝi",
+         "he / she / it"
+        ],
+        [
+         "vi / ili",
+         "you / they"
+        ]
+       ]
+      }
+     ],
      "words": [
       {
        "t": "mi",
        "e": "I",
-       "ipa": "mi"
+       "ipa": "ˈmi",
+       "pos": "pron"
       },
       {
        "t": "vi",
        "e": "you",
-       "ipa": "vi"
+       "ipa": "ˈvi",
+       "pos": "pron"
       },
       {
        "t": "li",
        "e": "he",
-       "ipa": "li"
+       "ipa": "ˈli",
+       "pos": "pron"
       },
       {
        "t": "ŝi",
        "e": "she",
-       "ipa": "ʃi"
+       "ipa": "ˈʃi",
+       "pos": "pron"
+      },
+      {
+       "t": "ĝi",
+       "e": "it",
+       "ipa": "ˈd͡ʒi",
+       "pos": "pron"
       },
       {
        "t": "ni",
        "e": "we",
-       "ipa": "ni"
+       "ipa": "ˈni",
+       "pos": "pron"
       },
       {
        "t": "ili",
        "e": "they",
-       "ipa": "ˈi.li"
+       "ipa": "ˈi.li",
+       "pos": "pron"
+      },
+      {
+       "t": "homo",
+       "e": "person",
+       "ipa": "ˈho.mo",
+       "pos": "noun"
       },
       {
        "t": "viro",
        "e": "man",
-       "ipa": "ˈvi.ro"
+       "ipa": "ˈvi.ro",
+       "pos": "noun"
       },
       {
        "t": "virino",
        "e": "woman",
-       "ipa": "vi.ˈri.no"
+       "ipa": "vi.ˈri.no",
+       "pos": "noun",
+       "note": "viro + -in-"
       },
       {
        "t": "knabo",
        "e": "boy",
-       "ipa": "ˈkna.bo"
+       "ipa": "ˈkna.bo",
+       "pos": "noun"
       },
       {
        "t": "knabino",
        "e": "girl",
-       "ipa": "kna.ˈbi.no"
+       "ipa": "kna.ˈbi.no",
+       "pos": "noun",
+       "note": "knabo + -in-"
       }
      ],
      "phrases": [
       {
-       "t": "Li estas viro",
-       "e": "He is a man",
-       "ipa": "li ˈes.tas ˈvi.ro"
-      },
-      {
        "t": "Ŝi estas virino",
        "e": "She is a woman",
        "ipa": "ʃi ˈes.tas vi.ˈri.no"
+      },
+      {
+       "t": "Li estas knabo",
+       "e": "He is a boy",
+       "ipa": "li ˈes.tas ˈkna.bo"
+      },
+      {
+       "t": "Ni estas homoj",
+       "e": "We are people",
+       "ipa": "ni ˈes.tas ˈho.moj"
+      },
+      {
+       "t": "Ili estas knaboj kaj knabinoj",
+       "e": "They are boys and girls",
+       "ipa": "ˈi.li ˈes.tas ˈkna.boj kaj kna.ˈbi.noj"
+      }
+     ]
+    },
+    {
+     "name": "Phrases",
+     "tips": [
+      {
+       "h": "ĉu turns a statement into a question",
+       "b": "A question answered by yes or no is made by putting ĉu at the front of the statement. Nothing else moves and no verb changes form. The answer is jes or ne.",
+       "eg": [
+        [
+         "Vi estas knabo",
+         "You are a boy"
+        ],
+        [
+         "Ĉu vi estas knabo?",
+         "Are you a boy?"
+        ],
+        [
+         "Jes / Ne",
+         "Yes / No"
+        ]
+       ]
+      },
+      {
+       "h": "ne denies what follows it",
+       "b": "ne before a verb denies the whole sentence; before any other word it denies only that word. Standing alone it answers a question.",
+       "eg": [
+        [
+         "Mi ne estas viro",
+         "I am not a man"
+        ],
+        [
+         "Ne li sed ŝi",
+         "Not he but she"
+        ]
+       ]
+      },
+      {
+       "h": "-e makes an adverb from any root",
+       "b": "The ending -e forms an adverb exactly as -o forms a noun and -a an adjective. bona is good and bone is well; certa is certain and certe is certainly.",
+       "eg": [
+        [
+         "bona / bone",
+         "good / well"
+        ],
+        [
+         "certa / certe",
+         "certain / certainly"
+        ],
+        [
+         "bela / bele",
+         "beautiful / beautifully"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "jes",
+       "e": "yes",
+       "ipa": "ˈjes",
+       "pos": "adv"
+      },
+      {
+       "t": "ne",
+       "e": "no",
+       "ipa": "ˈne",
+       "pos": "adv"
+      },
+      {
+       "t": "kaj",
+       "e": "and",
+       "ipa": "ˈkaj",
+       "pos": "conj"
+      },
+      {
+       "t": "sed",
+       "e": "but",
+       "ipa": "ˈsed",
+       "pos": "conj"
+      },
+      {
+       "t": "ĉu",
+       "e": "whether",
+       "ipa": "ˈt͡ʃu",
+       "pos": "conj",
+       "note": "yes-no question word"
+      },
+      {
+       "t": "ankaŭ",
+       "e": "also",
+       "ipa": "ˈan.kaw",
+       "pos": "adv"
+      },
+      {
+       "t": "tre",
+       "e": "very",
+       "ipa": "ˈtre",
+       "pos": "adv"
+      },
+      {
+       "t": "bone",
+       "e": "well",
+       "ipa": "ˈbo.ne",
+       "pos": "adv",
+       "note": "bona + -e adverb"
+      },
+      {
+       "t": "eble",
+       "e": "maybe",
+       "ipa": "ˈeb.le",
+       "pos": "adv",
+       "note": "ebla + -e"
+      },
+      {
+       "t": "certe",
+       "e": "certainly",
+       "ipa": "ˈt͡ʃer.te",
+       "pos": "adv",
+       "note": "certa + -e"
+      },
+      {
+       "t": "kompreneble",
+       "e": "of course",
+       "ipa": "kom.pre.ˈneb.le",
+       "pos": "adv",
+       "note": "kompreni + -ebl- + -e"
+      },
+      {
+       "t": "nedankinde",
+       "e": "not at all",
+       "ipa": "ne.dan.ˈkin.de",
+       "pos": "adv",
+       "note": "ne + dank- + -ind- + -e"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Jes mi estas knabino",
+       "e": "Yes I am a girl",
+       "ipa": "jes mi ˈes.tas kna.ˈbi.no"
+      },
+      {
+       "t": "Li kaj ŝi estas homoj",
+       "e": "He and she are people",
+       "ipa": "li kaj ʃi ˈes.tas ˈho.moj"
+      },
+      {
+       "t": "Vi fartas tre bone",
+       "e": "You are doing very well",
+       "ipa": "vi ˈfar.tas tre ˈbo.ne"
+      },
+      {
+       "t": "Ankaŭ mi estas homo",
+       "e": "I am a person too",
+       "ipa": "ˈan.kaw mi ˈes.tas ˈho.mo",
+       "lit": "also I am person"
       }
      ]
     },
     {
      "name": "Numbers",
+     "tips": [
+      {
+       "h": "Numerals take no endings",
+       "b": "The numerals unu through dek never change: they take no plural -j and no accusative -n. The noun counted carries the plural instead.",
+       "eg": [
+        [
+         "tri knaboj",
+         "three boys"
+        ],
+        [
+         "dek tagoj",
+         "ten days"
+        ],
+        [
+         "Mi vidas tri knabojn",
+         "I see three boys"
+        ]
+       ]
+      },
+      {
+       "h": "Tens and units combine",
+       "b": "Numbers above ten are built from the same ten roots. A multiple of ten joins into one word and a sum stays two words, so dek unu is eleven and dudek is twenty.",
+       "eg": [
+        [
+         "dek unu",
+         "eleven"
+        ],
+        [
+         "dudek",
+         "twenty"
+        ],
+        [
+         "dudek tri",
+         "twenty-three"
+        ]
+       ]
+      }
+     ],
      "words": [
+      {
+       "t": "nulo",
+       "e": "zero",
+       "ipa": "ˈnu.lo",
+       "pos": "num"
+      },
       {
        "t": "unu",
        "e": "one",
-       "ipa": "ˈu.nu"
+       "ipa": "ˈu.nu",
+       "pos": "num"
       },
       {
        "t": "du",
        "e": "two",
-       "ipa": "du"
+       "ipa": "ˈdu",
+       "pos": "num"
       },
       {
        "t": "tri",
        "e": "three",
-       "ipa": "tri"
+       "ipa": "ˈtri",
+       "pos": "num"
       },
       {
        "t": "kvar",
        "e": "four",
-       "ipa": "kvar"
+       "ipa": "ˈkvar",
+       "pos": "num"
       },
       {
        "t": "kvin",
        "e": "five",
-       "ipa": "kvin"
+       "ipa": "ˈkvin",
+       "pos": "num"
       },
       {
        "t": "ses",
        "e": "six",
-       "ipa": "ses"
+       "ipa": "ˈses",
+       "pos": "num"
       },
       {
        "t": "sep",
        "e": "seven",
-       "ipa": "sep"
+       "ipa": "ˈsep",
+       "pos": "num"
       },
       {
        "t": "ok",
        "e": "eight",
-       "ipa": "ok"
+       "ipa": "ˈok",
+       "pos": "num"
       },
       {
        "t": "naŭ",
        "e": "nine",
-       "ipa": "naw"
+       "ipa": "ˈnaw",
+       "pos": "num"
       },
       {
        "t": "dek",
        "e": "ten",
-       "ipa": "dek"
+       "ipa": "ˈdek",
+       "pos": "num"
+      },
+      {
+       "t": "nombro",
+       "e": "number",
+       "ipa": "ˈnom.bro",
+       "pos": "noun"
       }
      ],
      "phrases": [
       {
-       "t": "Mi havas du fratojn",
-       "e": "I have two brothers",
-       "ipa": "mi ˈha.vas du ˈfra.tojn"
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "title": "PEOPLE",
-   "skills": [
-    {
-     "name": "Family",
-     "words": [
-      {
-       "t": "patro",
-       "e": "father",
-       "ipa": "ˈpa.tro"
+       "t": "Ni estas kvin homoj",
+       "e": "We are five people",
+       "ipa": "ni ˈes.tas kvin ˈho.moj"
       },
       {
-       "t": "patrino",
-       "e": "mother",
-       "ipa": "pa.ˈtri.no"
+       "t": "Tri kaj kvar estas sep",
+       "e": "Three and four are seven",
+       "ipa": "tri kaj kvar ˈes.tas sep"
       },
       {
-       "t": "filo",
-       "e": "son",
-       "ipa": "ˈfi.lo"
+       "t": "Ili estas ok knaboj",
+       "e": "They are eight boys",
+       "ipa": "ˈi.li ˈes.tas ok ˈkna.boj"
       },
       {
-       "t": "filino",
-       "e": "daughter",
-       "ipa": "fi.ˈli.no"
-      },
-      {
-       "t": "frato",
-       "e": "brother",
-       "ipa": "ˈfra.to"
-      },
-      {
-       "t": "fratino",
-       "e": "sister",
-       "ipa": "fra.ˈti.no"
-      },
-      {
-       "t": "familio",
-       "e": "family",
-       "ipa": "fa.mi.ˈli.o"
-      },
-      {
-       "t": "amiko",
-       "e": "friend",
-       "ipa": "a.ˈmi.ko"
-      }
-     ],
-     "phrases": [
-      {
-       "t": "Mia patro estas alta",
-       "e": "My father is tall",
-       "ipa": "ˈmi.a ˈpa.tro ˈes.tas ˈal.ta"
-      },
-      {
-       "t": "Ŝi estas mia amiko",
-       "e": "She is my friend",
-       "ipa": "ʃi ˈes.tas ˈmi.a a.ˈmi.ko"
-      }
-     ]
-    },
-    {
-     "name": "Colors",
-     "words": [
-      {
-       "t": "ruĝa",
-       "e": "red",
-       "ipa": "ˈru.d͡ʒa"
-      },
-      {
-       "t": "blua",
-       "e": "blue",
-       "ipa": "ˈblu.a"
-      },
-      {
-       "t": "verda",
-       "e": "green",
-       "ipa": "ˈver.da"
-      },
-      {
-       "t": "flava",
-       "e": "yellow",
-       "ipa": "ˈfla.va"
-      },
-      {
-       "t": "nigra",
-       "e": "black",
-       "ipa": "ˈni.ɡra"
-      },
-      {
-       "t": "blanka",
-       "e": "white",
-       "ipa": "ˈblan.ka"
-      },
-      {
-       "t": "koloro",
-       "e": "color",
-       "ipa": "ko.ˈlo.ro"
-      }
-     ],
-     "phrases": [
-      {
-       "t": "La pomo estas ruĝa",
-       "e": "The apple is red",
-       "ipa": "la ˈpo.mo ˈes.tas ˈru.d͡ʒa"
+       "t": "La nombro estas naŭ",
+       "e": "The number is nine",
+       "ipa": "la ˈnom.bro ˈes.tas naw"
       }
      ]
     }
@@ -315,49 +688,139 @@
   },
   {
    "title": "EVERYDAY",
+   "subtitle": "Food, drink, colour and the people of a household",
    "skills": [
     {
      "name": "Food",
+     "tips": [
+      {
+       "h": "The present tense ends in -as",
+       "b": "A verb in the present tense ends in -as whatever its subject: mi manĝas, ŝi manĝas, ili manĝas. The dictionary form of the same verb ends in -i.",
+       "eg": [
+        [
+         "manĝi",
+         "to eat"
+        ],
+        [
+         "mi manĝas",
+         "I eat"
+        ],
+        [
+         "ili manĝas",
+         "they eat"
+        ]
+       ]
+      },
+      {
+       "h": "The object takes -n",
+       "b": "The noun that receives the action adds -n, while the subject stays plain: mi manĝas panon. A plural object carries both endings and becomes -ojn.",
+       "eg": [
+        [
+         "Mi manĝas panon",
+         "I eat bread"
+        ],
+        [
+         "Mi manĝas pomojn",
+         "I eat apples"
+        ],
+        [
+         "La knabo manĝas fiŝon",
+         "The boy eats fish"
+        ]
+       ]
+      },
+      {
+       "h": "-aĵ- names a concrete thing",
+       "b": "The suffix -aĵ- turns a root into a thing made of it or produced by it: manĝi to eat gives manĝaĵo food, nova new gives novaĵo a piece of news.",
+       "eg": [
+        [
+         "manĝaĵo",
+         "food"
+        ],
+        [
+         "trinkaĵo",
+         "a drink"
+        ],
+        [
+         "novaĵo",
+         "news item"
+        ]
+       ]
+      }
+     ],
      "words": [
       {
-       "t": "akvo",
-       "e": "water",
-       "ipa": "ˈak.vo"
+       "t": "manĝi",
+       "e": "to eat",
+       "ipa": "ˈman.d͡ʒi",
+       "pos": "verb"
+      },
+      {
+       "t": "manĝaĵo",
+       "e": "food",
+       "ipa": "man.ˈd͡ʒa.ʒo",
+       "pos": "noun",
+       "note": "manĝi + -aĵ- thing"
       },
       {
        "t": "pano",
        "e": "bread",
-       "ipa": "ˈpa.no"
-      },
-      {
-       "t": "lakto",
-       "e": "milk",
-       "ipa": "ˈlak.to"
+       "ipa": "ˈpa.no",
+       "pos": "noun"
       },
       {
        "t": "pomo",
        "e": "apple",
-       "ipa": "ˈpo.mo"
+       "ipa": "ˈpo.mo",
+       "pos": "noun"
       },
       {
        "t": "viando",
        "e": "meat",
-       "ipa": "vi.ˈan.do"
-      },
-      {
-       "t": "kafo",
-       "e": "coffee",
-       "ipa": "ˈka.fo"
-      },
-      {
-       "t": "teo",
-       "e": "tea",
-       "ipa": "ˈte.o"
+       "ipa": "vi.ˈan.do",
+       "pos": "noun"
       },
       {
        "t": "fromaĝo",
        "e": "cheese",
-       "ipa": "fro.ˈma.d͡ʒo"
+       "ipa": "fro.ˈma.d͡ʒo",
+       "pos": "noun"
+      },
+      {
+       "t": "ovo",
+       "e": "egg",
+       "ipa": "ˈo.vo",
+       "pos": "noun"
+      },
+      {
+       "t": "rizo",
+       "e": "rice",
+       "ipa": "ˈri.zo",
+       "pos": "noun"
+      },
+      {
+       "t": "supo",
+       "e": "soup",
+       "ipa": "ˈsu.po",
+       "pos": "noun"
+      },
+      {
+       "t": "legomo",
+       "e": "vegetable",
+       "ipa": "le.ˈɡo.mo",
+       "pos": "noun"
+      },
+      {
+       "t": "frukto",
+       "e": "fruit",
+       "ipa": "ˈfruk.to",
+       "pos": "noun"
+      },
+      {
+       "t": "fiŝo",
+       "e": "fish",
+       "ipa": "ˈfi.ʃo",
+       "pos": "noun"
       }
      ],
      "phrases": [
@@ -367,54 +830,592 @@
        "ipa": "mi ˈman.d͡ʒas ˈpa.non"
       },
       {
-       "t": "Mi trinkas akvon",
-       "e": "I drink water",
-       "ipa": "mi ˈtrin.kas ˈak.von"
+       "t": "La knabo manĝas pomon",
+       "e": "The boy eats an apple",
+       "ipa": "la ˈkna.bo ˈman.d͡ʒas ˈpo.mon"
+      },
+      {
+       "t": "Ŝi ne manĝas viandon",
+       "e": "She does not eat meat",
+       "ipa": "ʃi ne ˈman.d͡ʒas vi.ˈan.don"
+      },
+      {
+       "t": "Ni manĝas fiŝon kaj rizon",
+       "e": "We eat fish and rice",
+       "ipa": "ni ˈman.d͡ʒas ˈfi.ʃon kaj ˈri.zon"
       }
      ]
     },
     {
+     "name": "Drinks",
+     "tips": [
+      {
+       "h": "-n makes word order free",
+       "b": "Because -n marks the object, the words of a sentence may stand in any order without changing who does what. La knabo trinkas sukon and Sukon trinkas la knabo state the same fact.",
+       "eg": [
+        [
+         "La knabo trinkas sukon",
+         "The boy drinks juice"
+        ],
+        [
+         "Sukon trinkas la knabo",
+         "The boy drinks juice"
+        ],
+        [
+         "Trinkas la knabo sukon",
+         "The boy drinks juice"
+        ]
+       ]
+      },
+      {
+       "h": "Containers and their contents",
+       "b": "A container names what it holds with da: glaso da akvo, a glass of water. With de it names the kind of vessel instead, so glaso de vino is a wine glass whether or not it is full.",
+       "eg": [
+        [
+         "glaso da akvo",
+         "a glass of water"
+        ],
+        [
+         "taso da teo",
+         "a cup of tea"
+        ],
+        [
+         "botelo da lakto",
+         "a bottle of milk"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "trinki",
+       "e": "to drink",
+       "ipa": "ˈtrin.ki",
+       "pos": "verb"
+      },
+      {
+       "t": "trinkaĵo",
+       "e": "a drink",
+       "ipa": "trin.ˈka.ʒo",
+       "pos": "noun",
+       "note": "trinki + -aĵ-"
+      },
+      {
+       "t": "akvo",
+       "e": "water",
+       "ipa": "ˈak.vo",
+       "pos": "noun"
+      },
+      {
+       "t": "lakto",
+       "e": "milk",
+       "ipa": "ˈlak.to",
+       "pos": "noun"
+      },
+      {
+       "t": "kafo",
+       "e": "coffee",
+       "ipa": "ˈka.fo",
+       "pos": "noun"
+      },
+      {
+       "t": "teo",
+       "e": "tea",
+       "ipa": "ˈte.o",
+       "pos": "noun"
+      },
+      {
+       "t": "suko",
+       "e": "juice",
+       "ipa": "ˈsu.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "vino",
+       "e": "wine",
+       "ipa": "ˈvi.no",
+       "pos": "noun"
+      },
+      {
+       "t": "biero",
+       "e": "beer",
+       "ipa": "bi.ˈe.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "glaso",
+       "e": "glass",
+       "ipa": "ˈɡla.so",
+       "pos": "noun"
+      },
+      {
+       "t": "taso",
+       "e": "cup",
+       "ipa": "ˈta.so",
+       "pos": "noun"
+      },
+      {
+       "t": "botelo",
+       "e": "bottle",
+       "ipa": "bo.ˈte.lo",
+       "pos": "noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi trinkas akvon",
+       "e": "I drink water",
+       "ipa": "mi ˈtrin.kas ˈak.von"
+      },
+      {
+       "t": "Ĉu vi trinkas kafon?",
+       "e": "Do you drink coffee?",
+       "ipa": "t͡ʃu vi ˈtrin.kas ˈka.fon"
+      },
+      {
+       "t": "La virino trinkas teon",
+       "e": "The woman drinks tea",
+       "ipa": "la vi.ˈri.no ˈtrin.kas ˈte.on"
+      },
+      {
+       "t": "Sukon trinkas la knabo",
+       "e": "The boy drinks juice",
+       "ipa": "ˈsu.kon ˈtrin.kas la ˈkna.bo",
+       "lit": "juice drinks the boy"
+      }
+     ]
+    },
+    {
+     "name": "Colors",
+     "tips": [
+      {
+       "h": "mal- reverses a root",
+       "b": "The prefix mal- makes the exact opposite of a root: hela bright gives malhela dark, granda big gives malgranda small. It supplies one half of most opposed pairs in the language.",
+       "eg": [
+        [
+         "hela / malhela",
+         "bright / dark"
+        ],
+        [
+         "bona / malbona",
+         "good / bad"
+        ],
+        [
+         "varma / malvarma",
+         "warm / cold"
+        ]
+       ]
+      },
+      {
+       "h": "Adjectives copy the noun's endings",
+       "b": "An adjective takes -j when its noun is plural and -n when its noun is an object, in that order: ruĝajn pomojn. It agrees whether it stands before or after the noun.",
+       "eg": [
+        [
+         "ruĝa pomo",
+         "a red apple"
+        ],
+        [
+         "ruĝaj pomoj",
+         "red apples"
+        ],
+        [
+         "Mi manĝas ruĝajn pomojn",
+         "I eat red apples"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "koloro",
+       "e": "color",
+       "ipa": "ko.ˈlo.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "ruĝa",
+       "e": "red",
+       "ipa": "ˈru.d͡ʒa",
+       "pos": "adj"
+      },
+      {
+       "t": "blua",
+       "e": "blue",
+       "ipa": "ˈblu.a",
+       "pos": "adj"
+      },
+      {
+       "t": "verda",
+       "e": "green",
+       "ipa": "ˈver.da",
+       "pos": "adj"
+      },
+      {
+       "t": "flava",
+       "e": "yellow",
+       "ipa": "ˈfla.va",
+       "pos": "adj"
+      },
+      {
+       "t": "nigra",
+       "e": "black",
+       "ipa": "ˈni.ɡra",
+       "pos": "adj"
+      },
+      {
+       "t": "blanka",
+       "e": "white",
+       "ipa": "ˈblan.ka",
+       "pos": "adj"
+      },
+      {
+       "t": "bruna",
+       "e": "brown",
+       "ipa": "ˈbru.na",
+       "pos": "adj"
+      },
+      {
+       "t": "griza",
+       "e": "grey",
+       "ipa": "ˈɡri.za",
+       "pos": "adj"
+      },
+      {
+       "t": "oranĝa",
+       "e": "orange",
+       "ipa": "o.ˈran.d͡ʒa",
+       "pos": "adj"
+      },
+      {
+       "t": "hela",
+       "e": "bright",
+       "ipa": "ˈhe.la",
+       "pos": "adj"
+      },
+      {
+       "t": "malhela",
+       "e": "dark",
+       "ipa": "mal.ˈhe.la",
+       "pos": "adj",
+       "note": "mal- + hela"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La pomo estas ruĝa",
+       "e": "The apple is red",
+       "ipa": "la ˈpo.mo ˈes.tas ˈru.d͡ʒa"
+      },
+      {
+       "t": "Mi trinkas nigran kafon",
+       "e": "I drink black coffee",
+       "ipa": "mi ˈtrin.kas ˈni.ɡran ˈka.fon"
+      },
+      {
+       "t": "La lakto estas blanka",
+       "e": "The milk is white",
+       "ipa": "la ˈlak.to ˈes.tas ˈblan.ka"
+      },
+      {
+       "t": "Ŝi manĝas verdajn legomojn",
+       "e": "She eats green vegetables",
+       "ipa": "ʃi ˈman.d͡ʒas ˈver.dajn le.ˈɡo.mojn"
+      }
+     ]
+    },
+    {
+     "name": "Family",
+     "tips": [
+      {
+       "h": "-in- makes the female counterpart",
+       "b": "The suffix -in- placed before the ending gives the female of a root: patro father, patrino mother; frato brother, fratino sister. The bare root names the male or, in current use, either.",
+       "eg": [
+        [
+         "viro / virino",
+         "man / woman"
+        ],
+        [
+         "filo / filino",
+         "son / daughter"
+        ],
+        [
+         "avo / avino",
+         "grandfather / grandmother"
+        ]
+       ]
+      },
+      {
+       "h": "ge- covers both sexes together",
+       "b": "The prefix ge- names a group containing both sexes and is used with the plural: gepatroj parents, gefratoj siblings, geknaboj boys and girls.",
+       "eg": [
+        [
+         "gepatroj",
+         "parents"
+        ],
+        [
+         "gefratoj",
+         "siblings"
+        ],
+        [
+         "geamikoj",
+         "friends of both sexes"
+        ]
+       ]
+      },
+      {
+       "h": "Possessives are pronouns plus -a",
+       "b": "A possessive is the personal pronoun with the adjective ending -a: mia my, via your, lia his, ŝia her, nia our, ilia their. It agrees like any other adjective.",
+       "eg": [
+        [
+         "mia patro",
+         "my father"
+        ],
+        [
+         "ŝia filino",
+         "her daughter"
+        ],
+        [
+         "niaj gepatroj",
+         "our parents"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "familio",
+       "e": "family",
+       "ipa": "fa.mi.ˈli.o",
+       "pos": "noun"
+      },
+      {
+       "t": "patro",
+       "e": "father",
+       "ipa": "ˈpa.tro",
+       "pos": "noun"
+      },
+      {
+       "t": "patrino",
+       "e": "mother",
+       "ipa": "pa.ˈtri.no",
+       "pos": "noun",
+       "note": "patro + -in-"
+      },
+      {
+       "t": "gepatroj",
+       "e": "parents",
+       "ipa": "ɡe.ˈpa.troj",
+       "pos": "noun",
+       "note": "ge- + patroj"
+      },
+      {
+       "t": "filo",
+       "e": "son",
+       "ipa": "ˈfi.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "filino",
+       "e": "daughter",
+       "ipa": "fi.ˈli.no",
+       "pos": "noun",
+       "note": "filo + -in-"
+      },
+      {
+       "t": "frato",
+       "e": "brother",
+       "ipa": "ˈfra.to",
+       "pos": "noun"
+      },
+      {
+       "t": "fratino",
+       "e": "sister",
+       "ipa": "fra.ˈti.no",
+       "pos": "noun",
+       "note": "frato + -in-"
+      },
+      {
+       "t": "avo",
+       "e": "grandfather",
+       "ipa": "ˈa.vo",
+       "pos": "noun"
+      },
+      {
+       "t": "avino",
+       "e": "grandmother",
+       "ipa": "a.ˈvi.no",
+       "pos": "noun",
+       "note": "avo + -in-"
+      },
+      {
+       "t": "infano",
+       "e": "child",
+       "ipa": "in.ˈfa.no",
+       "pos": "noun"
+      },
+      {
+       "t": "edzino",
+       "e": "wife",
+       "ipa": "ed.ˈzi.no",
+       "pos": "noun",
+       "note": "edzo + -in-, husband"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mia patro manĝas panon",
+       "e": "My father eats bread",
+       "ipa": "ˈmi.a ˈpa.tro ˈman.d͡ʒas ˈpa.non"
+      },
+      {
+       "t": "Ŝia filino estas infano",
+       "e": "Her daughter is a child",
+       "ipa": "ˈʃi.a fi.ˈli.no ˈes.tas in.ˈfa.no"
+      },
+      {
+       "t": "Mia frato trinkas lakton",
+       "e": "My brother drinks milk",
+       "ipa": "ˈmi.a ˈfra.to ˈtrin.kas ˈlak.ton"
+      },
+      {
+       "t": "Ĉu ŝi estas via avino?",
+       "e": "Is she your grandmother?",
+       "ipa": "t͡ʃu ʃi ˈes.tas ˈvi.a a.ˈvi.no"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "ACTIONS",
+   "subtitle": "The tenses, describing things, asking a question and denying",
+   "skills": [
+    {
      "name": "Verbs",
+     "tips": [
+      {
+       "h": "One ending per tense, no persons",
+       "b": "A verb has one form per tense and it never changes for person or number: -as for the present, -is for the past, -os for the future. mi estas, ni estas and ili estas share the same word.",
+       "eg": [
+        [
+         "mi lernas",
+         "I learn"
+        ],
+        [
+         "mi lernis",
+         "I learned"
+        ],
+        [
+         "mi lernos",
+         "I will learn"
+        ]
+       ]
+      },
+      {
+       "h": "-i is the dictionary form",
+       "b": "The infinitive ends in -i and carries no tense of its own. It follows another verb directly, with no linking word between them.",
+       "eg": [
+        [
+         "lerni",
+         "to learn"
+        ],
+        [
+         "Mi volas lerni",
+         "I want to learn"
+        ],
+        [
+         "Ŝi povas veni",
+         "She can come"
+        ]
+       ]
+      },
+      {
+       "h": "esti links, it does not act",
+       "b": "esti joins a subject to a noun or an adjective. What follows it takes no -n, because nothing receives an action: Li estas knabo, La pano estas nova.",
+       "eg": [
+        [
+         "Li estas knabo",
+         "He is a boy"
+        ],
+        [
+         "Mi vidas knabon",
+         "I see a boy"
+        ]
+       ]
+      }
+     ],
      "words": [
       {
        "t": "esti",
        "e": "to be",
-       "ipa": "ˈes.ti"
+       "ipa": "ˈes.ti",
+       "pos": "verb"
       },
       {
        "t": "havi",
        "e": "to have",
-       "ipa": "ˈha.vi"
+       "ipa": "ˈha.vi",
+       "pos": "verb"
       },
       {
        "t": "iri",
        "e": "to go",
-       "ipa": "ˈi.ri"
+       "ipa": "ˈi.ri",
+       "pos": "verb"
+      },
+      {
+       "t": "veni",
+       "e": "to come",
+       "ipa": "ˈve.ni",
+       "pos": "verb"
       },
       {
        "t": "vidi",
        "e": "to see",
-       "ipa": "ˈvi.di"
+       "ipa": "ˈvi.di",
+       "pos": "verb"
+      },
+      {
+       "t": "aŭdi",
+       "e": "to hear",
+       "ipa": "ˈaw.di",
+       "pos": "verb"
       },
       {
        "t": "paroli",
        "e": "to speak",
-       "ipa": "pa.ˈro.li"
+       "ipa": "pa.ˈro.li",
+       "pos": "verb"
       },
       {
        "t": "lerni",
        "e": "to learn",
-       "ipa": "ˈler.ni"
+       "ipa": "ˈler.ni",
+       "pos": "verb"
       },
       {
        "t": "legi",
        "e": "to read",
-       "ipa": "ˈle.ɡi"
+       "ipa": "ˈle.ɡi",
+       "pos": "verb"
       },
       {
        "t": "skribi",
        "e": "to write",
-       "ipa": "ˈskri.bi"
+       "ipa": "ˈskri.bi",
+       "pos": "verb"
+      },
+      {
+       "t": "doni",
+       "e": "to give",
+       "ipa": "ˈdo.ni",
+       "pos": "verb"
+      },
+      {
+       "t": "preni",
+       "e": "to take",
+       "ipa": "ˈpre.ni",
+       "pos": "verb"
       }
      ],
      "phrases": [
@@ -424,61 +1425,1664 @@
        "ipa": "mi ˈler.nas es.pe.ˈran.ton"
       },
       {
-       "t": "Ĉu vi parolas Esperante?",
-       "e": "Do you speak Esperanto?",
-       "ipa": "t͡ʃu vi pa.ˈro.las es.pe.ˈran.te"
+       "t": "Ŝi parolas kaj mi aŭdas",
+       "e": "She speaks and I hear",
+       "ipa": "ʃi pa.ˈro.las kaj mi ˈaw.das"
+      },
+      {
+       "t": "Ni vidis vin",
+       "e": "We saw you",
+       "ipa": "ni ˈvi.dis vin"
+      },
+      {
+       "t": "Mi prenos la pomon",
+       "e": "I will take the apple",
+       "ipa": "mi ˈpre.nos la ˈpo.mon"
       }
      ]
     },
     {
-     "name": "Describing",
+     "name": "Adjectives",
+     "tips": [
+      {
+       "h": "pli and plej compare",
+       "b": "pli before an adjective means more and plej means most. The thing compared against follows ol, and the superlative takes la: la plej granda domo.",
+       "eg": [
+        [
+         "pli granda",
+         "bigger"
+        ],
+        [
+         "pli granda ol mi",
+         "bigger than me"
+        ],
+        [
+         "la plej granda",
+         "the biggest"
+        ]
+       ]
+      },
+      {
+       "h": "-eg- enlarges, -et- diminishes",
+       "b": "The suffix -eg- makes a root extreme and -et- makes it slight: granda big gives grandega enormous, domo house gives dometo cottage. Both attach to any root at all.",
+       "eg": [
+        [
+         "varma / varmega",
+         "warm / boiling hot"
+        ],
+        [
+         "varma / varmeta",
+         "warm / lukewarm"
+        ],
+        [
+         "domo / domego",
+         "house / mansion"
+        ]
+       ]
+      },
+      {
+       "h": "Adjectives stand on either side",
+       "b": "An adjective may precede or follow its noun with no change of meaning: granda domo and domo granda. It agrees in number and case wherever it stands.",
+       "eg": [
+        [
+         "granda domo",
+         "a big house"
+        ],
+        [
+         "domo granda",
+         "a big house"
+        ]
+       ]
+      }
+     ],
      "words": [
       {
        "t": "granda",
        "e": "big",
-       "ipa": "ˈɡran.da"
+       "ipa": "ˈɡran.da",
+       "pos": "adj"
       },
       {
        "t": "malgranda",
        "e": "small",
-       "ipa": "mal.ˈɡran.da"
+       "ipa": "mal.ˈɡran.da",
+       "pos": "adj",
+       "note": "mal- + granda"
       },
       {
        "t": "bona",
        "e": "good",
-       "ipa": "ˈbo.na"
+       "ipa": "ˈbo.na",
+       "pos": "adj"
       },
       {
-       "t": "bela",
-       "e": "beautiful",
-       "ipa": "ˈbe.la"
+       "t": "malbona",
+       "e": "bad",
+       "ipa": "mal.ˈbo.na",
+       "pos": "adj",
+       "note": "mal- + bona"
       },
       {
        "t": "nova",
        "e": "new",
-       "ipa": "ˈno.va"
+       "ipa": "ˈno.va",
+       "pos": "adj"
       },
       {
-       "t": "alta",
-       "e": "tall",
-       "ipa": "ˈal.ta"
+       "t": "malnova",
+       "e": "old",
+       "ipa": "mal.ˈno.va",
+       "pos": "adj",
+       "note": "mal- + nova, of things"
       },
       {
-       "t": "varma",
-       "e": "warm",
-       "ipa": "ˈvar.ma"
+       "t": "juna",
+       "e": "young",
+       "ipa": "ˈju.na",
+       "pos": "adj"
       },
       {
-       "t": "malvarma",
-       "e": "cold",
-       "ipa": "mal.ˈvar.ma"
+       "t": "maljuna",
+       "e": "elderly",
+       "ipa": "mal.ˈju.na",
+       "pos": "adj",
+       "note": "mal- + juna, of people"
+      },
+      {
+       "t": "bela",
+       "e": "beautiful",
+       "ipa": "ˈbe.la",
+       "pos": "adj"
+      },
+      {
+       "t": "longa",
+       "e": "long",
+       "ipa": "ˈlon.ɡa",
+       "pos": "adj"
+      },
+      {
+       "t": "facila",
+       "e": "easy",
+       "ipa": "fa.ˈt͡si.la",
+       "pos": "adj"
+      },
+      {
+       "t": "forta",
+       "e": "strong",
+       "ipa": "ˈfor.ta",
+       "pos": "adj"
       }
      ],
      "phrases": [
       {
-       "t": "Granda bela domo",
-       "e": "A big beautiful house",
-       "ipa": "ˈɡran.da ˈbe.la ˈdo.mo"
+       "t": "Mia patro estas maljuna",
+       "e": "My father is elderly",
+       "ipa": "ˈmi.a ˈpa.tro ˈes.tas mal.ˈju.na"
+      },
+      {
+       "t": "Mi havas malgrandan familion",
+       "e": "I have a small family",
+       "ipa": "mi ˈha.vas mal.ˈɡran.dan fa.mi.ˈli.on"
+      },
+      {
+       "t": "La pano estas malnova",
+       "e": "The bread is old",
+       "ipa": "la ˈpa.no ˈes.tas mal.ˈno.va"
+      },
+      {
+       "t": "Ŝi estas pli juna ol mi",
+       "e": "She is younger than I am",
+       "ipa": "ʃi ˈes.tas pli ˈju.na ol mi"
+      }
+     ]
+    },
+    {
+     "name": "Questions",
+     "tips": [
+      {
+       "h": "The ki- words ask",
+       "b": "Question words begin with ki- and end in a letter naming the category asked about: -o a thing, -u a person or a choice, -a a kind, -e a place, -am a time, -al a reason, -el a manner, -om an amount, -es a possessor.",
+       "eg": [
+        [
+         "kio / kiu",
+         "what / who"
+        ],
+        [
+         "kie / kiam",
+         "where / when"
+        ],
+        [
+         "kial / kiel",
+         "why / how"
+        ],
+        [
+         "kiom / kies",
+         "how much / whose"
+        ]
+       ]
+      },
+      {
+       "h": "kiu and kio take -j and -n",
+       "b": "kiu and kio behave like nouns: they add -n when they are the object, and kiu adds -j in the plural. kia takes the full set of adjective endings.",
+       "eg": [
+        [
+         "Kion vi manĝas?",
+         "What are you eating?"
+        ],
+        [
+         "Kiun vi vidas?",
+         "Whom do you see?"
+        ],
+        [
+         "Kiujn librojn?",
+         "Which books?"
+        ]
+       ]
+      },
+      {
+       "h": "A question word replaces ĉu",
+       "b": "A sentence beginning with a ki- word does not also take ĉu. ĉu marks only the question that is answered by jes or ne.",
+       "eg": [
+        [
+         "Ĉu vi venas?",
+         "Are you coming?"
+        ],
+        [
+         "Kiam vi venas?",
+         "When are you coming?"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "kio",
+       "e": "what",
+       "ipa": "ˈki.o",
+       "pos": "pron"
+      },
+      {
+       "t": "kiu",
+       "e": "who",
+       "ipa": "ˈki.u",
+       "pos": "pron"
+      },
+      {
+       "t": "kia",
+       "e": "what kind of",
+       "ipa": "ˈki.a",
+       "pos": "adj"
+      },
+      {
+       "t": "kie",
+       "e": "where",
+       "ipa": "ˈki.e",
+       "pos": "adv"
+      },
+      {
+       "t": "kiam",
+       "e": "when",
+       "ipa": "ˈki.am",
+       "pos": "adv"
+      },
+      {
+       "t": "kial",
+       "e": "why",
+       "ipa": "ˈki.al",
+       "pos": "adv"
+      },
+      {
+       "t": "kiel",
+       "e": "how",
+       "ipa": "ˈki.el",
+       "pos": "adv"
+      },
+      {
+       "t": "kiom",
+       "e": "how much",
+       "ipa": "ˈki.om",
+       "pos": "adv"
+      },
+      {
+       "t": "kies",
+       "e": "whose",
+       "ipa": "ˈki.es",
+       "pos": "pron"
+      },
+      {
+       "t": "demando",
+       "e": "question",
+       "ipa": "de.ˈman.do",
+       "pos": "noun"
+      },
+      {
+       "t": "demandi",
+       "e": "to ask",
+       "ipa": "de.ˈman.di",
+       "pos": "verb"
+      },
+      {
+       "t": "respondi",
+       "e": "to answer",
+       "ipa": "re.ˈspon.di",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Kion vi manĝas?",
+       "e": "What are you eating?",
+       "ipa": "ˈki.on vi ˈman.d͡ʒas"
+      },
+      {
+       "t": "Kiu estas via patro?",
+       "e": "Who is your father?",
+       "ipa": "ˈki.u ˈes.tas ˈvi.a ˈpa.tro"
+      },
+      {
+       "t": "Kial vi ne venas?",
+       "e": "Why are you not coming?",
+       "ipa": "ˈki.al vi ne ˈve.nas"
+      },
+      {
+       "t": "Kiom da akvo vi trinkas?",
+       "e": "How much water do you drink?",
+       "ipa": "ˈki.om da ˈak.vo vi ˈtrin.kas"
+      }
+     ]
+    },
+    {
+     "name": "Negation",
+     "tips": [
+      {
+       "h": "One negative is enough",
+       "b": "A neni- word already negates the sentence, so ne is not added beside it: Mi vidas nenion means I see nothing. Two negatives in one clause cancel each other out.",
+       "eg": [
+        [
+         "Mi vidas nenion",
+         "I see nothing"
+        ],
+        [
+         "Neniu venis",
+         "Nobody came"
+        ],
+        [
+         "Mi neniam manĝas viandon",
+         "I never eat meat"
+        ]
+       ]
+      },
+      {
+       "h": "neni- mirrors ki- exactly",
+       "b": "The neni- series takes the same final letters as the ki- series, with the same meanings: kio and nenio, kiu and neniu, kie and nenie, kiam and neniam.",
+       "eg": [
+        [
+         "kio / nenio",
+         "what / nothing"
+        ],
+        [
+         "kiu / neniu",
+         "who / nobody"
+        ],
+        [
+         "kie / nenie",
+         "where / nowhere"
+        ],
+        [
+         "kiam / neniam",
+         "when / never"
+        ]
+       ]
+      },
+      {
+       "h": "mal- attaches to any root",
+       "b": "mal- is not restricted to adjectives. It reverses verbs and adverbs as readily: bone well gives malbone badly, pli more gives malpli less, fermi to close gives malfermi to open.",
+       "eg": [
+        [
+         "bone / malbone",
+         "well / badly"
+        ],
+        [
+         "pli / malpli",
+         "more / less"
+        ],
+        [
+         "fermi / malfermi",
+         "to close / to open"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "nenio",
+       "e": "nothing",
+       "ipa": "ne.ˈni.o",
+       "pos": "pron"
+      },
+      {
+       "t": "neniu",
+       "e": "nobody",
+       "ipa": "ne.ˈni.u",
+       "pos": "pron"
+      },
+      {
+       "t": "nenia",
+       "e": "of no kind",
+       "ipa": "ne.ˈni.a",
+       "pos": "adj"
+      },
+      {
+       "t": "nenie",
+       "e": "nowhere",
+       "ipa": "ne.ˈni.e",
+       "pos": "adv"
+      },
+      {
+       "t": "neniam",
+       "e": "never",
+       "ipa": "ne.ˈni.am",
+       "pos": "adv"
+      },
+      {
+       "t": "nenial",
+       "e": "for no reason",
+       "ipa": "ne.ˈni.al",
+       "pos": "adv"
+      },
+      {
+       "t": "neniel",
+       "e": "in no way",
+       "ipa": "ne.ˈni.el",
+       "pos": "adv"
+      },
+      {
+       "t": "neniom",
+       "e": "none at all",
+       "ipa": "ne.ˈni.om",
+       "pos": "adv"
+      },
+      {
+       "t": "sen",
+       "e": "without",
+       "ipa": "ˈsen",
+       "pos": "prep"
+      },
+      {
+       "t": "nek",
+       "e": "nor",
+       "ipa": "ˈnek",
+       "pos": "conj"
+      },
+      {
+       "t": "malbone",
+       "e": "badly",
+       "ipa": "mal.ˈbo.ne",
+       "pos": "adv",
+       "note": "mal- + bone"
+      },
+      {
+       "t": "malpli",
+       "e": "less",
+       "ipa": "ˈmal.pli",
+       "pos": "adv",
+       "note": "mal- + pli, more"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi vidas nenion",
+       "e": "I see nothing",
+       "ipa": "mi ˈvi.das ne.ˈni.on"
+      },
+      {
+       "t": "Neniu knabo venas",
+       "e": "No boy is coming",
+       "ipa": "ne.ˈni.u ˈkna.bo ˈve.nas"
+      },
+      {
+       "t": "Ŝi neniam trinkas vinon",
+       "e": "She never drinks wine",
+       "ipa": "ʃi ne.ˈni.am ˈtrin.kas ˈvi.non"
+      },
+      {
+       "t": "Nenio estas malbona",
+       "e": "Nothing is bad",
+       "ipa": "ne.ˈni.o ˈes.tas mal.ˈbo.na"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "AT HOME",
+   "subtitle": "The house, what stands in it, what people wear and keep",
+   "skills": [
+    {
+     "name": "House",
+     "tips": [
+      {
+       "h": "-ej- names the place for a root",
+       "b": "The suffix -ej- makes the place where the root happens: kuiri to cook gives kuirejo kitchen, lerni to learn gives lernejo school, dormi to sleep gives dormejo dormitory.",
+       "eg": [
+        [
+         "kuirejo",
+         "kitchen"
+        ],
+        [
+         "lernejo",
+         "school"
+        ],
+        [
+         "vendejo",
+         "shop"
+        ],
+        [
+         "preĝejo",
+         "church"
+        ]
+       ]
+      },
+      {
+       "h": "Compounds join root to root",
+       "b": "Two roots join into one word and the last one carries the ending and the main meaning: dormoĉambro is a sleeping room. An -o is kept between the roots where it helps pronunciation.",
+       "eg": [
+        [
+         "dormoĉambro",
+         "bedroom"
+        ],
+        [
+         "banĉambro",
+         "bathroom"
+        ],
+        [
+         "skribotablo",
+         "writing desk"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "domo",
+       "e": "house",
+       "ipa": "ˈdo.mo",
+       "pos": "noun"
+      },
+      {
+       "t": "ĉambro",
+       "e": "room",
+       "ipa": "ˈt͡ʃam.bro",
+       "pos": "noun"
+      },
+      {
+       "t": "kuirejo",
+       "e": "kitchen",
+       "ipa": "ku.i.ˈre.jo",
+       "pos": "noun",
+       "note": "kuiri + -ej- place"
+      },
+      {
+       "t": "dormoĉambro",
+       "e": "bedroom",
+       "ipa": "dor.mo.ˈt͡ʃam.bro",
+       "pos": "noun",
+       "note": "dormo + ĉambro"
+      },
+      {
+       "t": "banĉambro",
+       "e": "bathroom",
+       "ipa": "ban.ˈt͡ʃam.bro",
+       "pos": "noun",
+       "note": "bano + ĉambro"
+      },
+      {
+       "t": "pordo",
+       "e": "door",
+       "ipa": "ˈpor.do",
+       "pos": "noun"
+      },
+      {
+       "t": "fenestro",
+       "e": "window",
+       "ipa": "fe.ˈnes.tro",
+       "pos": "noun"
+      },
+      {
+       "t": "planko",
+       "e": "floor",
+       "ipa": "ˈplan.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "muro",
+       "e": "wall",
+       "ipa": "ˈmu.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "tegmento",
+       "e": "roof",
+       "ipa": "teɡ.ˈmen.to",
+       "pos": "noun"
+      },
+      {
+       "t": "ĝardeno",
+       "e": "garden",
+       "ipa": "d͡ʒar.ˈde.no",
+       "pos": "noun"
+      },
+      {
+       "t": "ŝlosilo",
+       "e": "key",
+       "ipa": "ʃlo.ˈsi.lo",
+       "pos": "noun",
+       "note": "ŝlosi + -il- tool"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La domo havas kvar ĉambrojn",
+       "e": "The house has four rooms",
+       "ipa": "la ˈdo.mo ˈha.vas kvar ˈt͡ʃam.brojn"
+      },
+      {
+       "t": "Mi estas en la kuirejo",
+       "e": "I am in the kitchen",
+       "ipa": "mi ˈes.tas en la ku.i.ˈre.jo"
+      },
+      {
+       "t": "La fenestro estas malgranda",
+       "e": "The window is small",
+       "ipa": "la fe.ˈnes.tro ˈes.tas mal.ˈɡran.da"
+      },
+      {
+       "t": "Ŝi malfermas la pordon",
+       "e": "She opens the door",
+       "ipa": "ʃi mal.ˈfer.mas la ˈpor.don"
+      }
+     ]
+    },
+    {
+     "name": "Objects",
+     "tips": [
+      {
+       "h": "-il- names the tool for a root",
+       "b": "The suffix -il- makes the instrument that performs the action: tranĉi to cut gives tranĉilo knife, ŝlosi to lock gives ŝlosilo key, kombi to comb gives kombilo comb.",
+       "eg": [
+        [
+         "tranĉilo",
+         "knife"
+        ],
+        [
+         "ŝlosilo",
+         "key"
+        ],
+        [
+         "skribilo",
+         "writing tool"
+        ],
+        [
+         "flugilo",
+         "wing"
+        ]
+       ]
+      },
+      {
+       "h": "Suffixes stack outward from the root",
+       "b": "Several suffixes may follow one root, and each is read outward from it: manĝ-il-ar-o is the set of eating tools, cutlery. The last ending states the part of speech.",
+       "eg": [
+        [
+         "manĝilaro",
+         "cutlery"
+        ],
+        [
+         "laborilo",
+         "a tool"
+        ],
+        [
+         "libreto",
+         "a booklet"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "tablo",
+       "e": "table",
+       "ipa": "ˈta.blo",
+       "pos": "noun"
+      },
+      {
+       "t": "seĝo",
+       "e": "chair",
+       "ipa": "ˈse.d͡ʒo",
+       "pos": "noun"
+      },
+      {
+       "t": "lito",
+       "e": "bed",
+       "ipa": "ˈli.to",
+       "pos": "noun"
+      },
+      {
+       "t": "libro",
+       "e": "book",
+       "ipa": "ˈli.bro",
+       "pos": "noun"
+      },
+      {
+       "t": "papero",
+       "e": "paper",
+       "ipa": "pa.ˈpe.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "krajono",
+       "e": "pencil",
+       "ipa": "kra.ˈjo.no",
+       "pos": "noun"
+      },
+      {
+       "t": "plumo",
+       "e": "pen",
+       "ipa": "ˈplu.mo",
+       "pos": "noun"
+      },
+      {
+       "t": "tranĉilo",
+       "e": "knife",
+       "ipa": "tran.ˈt͡ʃi.lo",
+       "pos": "noun",
+       "note": "tranĉi + -il- tool"
+      },
+      {
+       "t": "kulero",
+       "e": "spoon",
+       "ipa": "ku.ˈle.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "forko",
+       "e": "fork",
+       "ipa": "ˈfor.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "telero",
+       "e": "plate",
+       "ipa": "te.ˈle.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "lampo",
+       "e": "lamp",
+       "ipa": "ˈlam.po",
+       "pos": "noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La libro estas sur la tablo",
+       "e": "The book is on the table",
+       "ipa": "la ˈli.bro ˈes.tas sur la ˈta.blo"
+      },
+      {
+       "t": "Mi skribas per krajono",
+       "e": "I write with a pencil",
+       "ipa": "mi ˈskri.bas per kra.ˈjo.no"
+      },
+      {
+       "t": "Mi prenas la kuleron",
+       "e": "I take the spoon",
+       "ipa": "mi ˈpre.nas la ku.ˈle.ron"
+      },
+      {
+       "t": "Ŝi legas malnovan libron",
+       "e": "She reads an old book",
+       "ipa": "ʃi ˈle.ɡas mal.ˈno.van ˈli.bron"
+      }
+     ]
+    },
+    {
+     "name": "Clothing",
+     "tips": [
+      {
+       "h": "Prepositions take the plain form",
+       "b": "A noun after a preposition keeps its plain -o form: en la domo, sur la tablo, kun amiko. The accusative appears after a preposition for one reason only, to show movement toward.",
+       "eg": [
+        [
+         "en la domo",
+         "in the house"
+        ],
+        [
+         "sur la seĝo",
+         "on the chair"
+        ],
+        [
+         "kun la knabo",
+         "with the boy"
+        ]
+       ]
+      },
+      {
+       "h": "-n after a preposition means motion",
+       "b": "en la domo is inside the house and en la domon is into it. The accusative added after a preposition of place turns a location into a destination.",
+       "eg": [
+        [
+         "en la domo / en la domon",
+         "in the house / into the house"
+        ],
+        [
+         "sur la tablo / sur la tablon",
+         "on the table / onto the table"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "vesto",
+       "e": "garment",
+       "ipa": "ˈves.to",
+       "pos": "noun"
+      },
+      {
+       "t": "ĉemizo",
+       "e": "shirt",
+       "ipa": "t͡ʃe.ˈmi.zo",
+       "pos": "noun"
+      },
+      {
+       "t": "pantalono",
+       "e": "trousers",
+       "ipa": "pan.ta.ˈlo.no",
+       "pos": "noun"
+      },
+      {
+       "t": "jupo",
+       "e": "skirt",
+       "ipa": "ˈju.po",
+       "pos": "noun"
+      },
+      {
+       "t": "robo",
+       "e": "dress",
+       "ipa": "ˈro.bo",
+       "pos": "noun"
+      },
+      {
+       "t": "jako",
+       "e": "jacket",
+       "ipa": "ˈja.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "mantelo",
+       "e": "coat",
+       "ipa": "man.ˈte.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "ŝuo",
+       "e": "shoe",
+       "ipa": "ˈʃu.o",
+       "pos": "noun"
+      },
+      {
+       "t": "ŝtrumpo",
+       "e": "sock",
+       "ipa": "ˈʃtrum.po",
+       "pos": "noun"
+      },
+      {
+       "t": "ĉapelo",
+       "e": "hat",
+       "ipa": "t͡ʃa.ˈpe.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "ganto",
+       "e": "glove",
+       "ipa": "ˈɡan.to",
+       "pos": "noun"
+      },
+      {
+       "t": "porti",
+       "e": "to wear",
+       "ipa": "ˈpor.ti",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi portas bluan ĉemizon",
+       "e": "I wear a blue shirt",
+       "ipa": "mi ˈpor.tas ˈblu.an t͡ʃe.ˈmi.zon"
+      },
+      {
+       "t": "Ŝiaj ŝuoj estas nigraj",
+       "e": "Her shoes are black",
+       "ipa": "ˈʃi.aj ˈʃu.oj ˈes.tas ˈni.ɡraj"
+      },
+      {
+       "t": "La knabino portas ruĝan robon",
+       "e": "The girl wears a red dress",
+       "ipa": "la kna.ˈbi.no ˈpor.tas ˈru.d͡ʒan ˈro.bon"
+      },
+      {
+       "t": "Li portas mantelon kaj gantojn",
+       "e": "He wears a coat and gloves",
+       "ipa": "li ˈpor.tas man.ˈte.lon kaj ˈɡan.tojn"
+      }
+     ]
+    },
+    {
+     "name": "Animals",
+     "tips": [
+      {
+       "h": "-id- names the young",
+       "b": "The suffix -id- makes the offspring of a root: hundo dog gives hundido puppy, kato gives katido kitten, ŝafo sheep gives ŝafido lamb.",
+       "eg": [
+        [
+         "hundido",
+         "puppy"
+        ],
+        [
+         "katido",
+         "kitten"
+        ],
+        [
+         "ŝafido",
+         "lamb"
+        ]
+       ]
+      },
+      {
+       "h": "vir- and -in- mark the sex",
+       "b": "An animal root names the species without regard to sex. vir- prefixed marks the male and -in- the female: koko chicken, virkoko rooster, kokino hen.",
+       "eg": [
+        [
+         "koko / virkoko",
+         "chicken / rooster"
+        ],
+        [
+         "bovo / bovino",
+         "cattle / cow"
+        ],
+        [
+         "ĉevalo / ĉevalino",
+         "horse / mare"
+        ]
+       ]
+      },
+      {
+       "h": "-ar- collects into a group",
+       "b": "The suffix -ar- makes a collection of the root: arbo tree gives arbaro forest, ŝafo gives ŝafaro flock, vorto word gives vortaro dictionary.",
+       "eg": [
+        [
+         "arbaro",
+         "forest"
+        ],
+        [
+         "ŝafaro",
+         "flock"
+        ],
+        [
+         "vortaro",
+         "dictionary"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "besto",
+       "e": "animal",
+       "ipa": "ˈbes.to",
+       "pos": "noun"
+      },
+      {
+       "t": "hundo",
+       "e": "dog",
+       "ipa": "ˈhun.do",
+       "pos": "noun"
+      },
+      {
+       "t": "hundido",
+       "e": "puppy",
+       "ipa": "hun.ˈdi.do",
+       "pos": "noun",
+       "note": "hundo + -id- young"
+      },
+      {
+       "t": "kato",
+       "e": "cat",
+       "ipa": "ˈka.to",
+       "pos": "noun"
+      },
+      {
+       "t": "birdo",
+       "e": "bird",
+       "ipa": "ˈbir.do",
+       "pos": "noun"
+      },
+      {
+       "t": "ĉevalo",
+       "e": "horse",
+       "ipa": "t͡ʃe.ˈva.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "bovino",
+       "e": "cow",
+       "ipa": "bo.ˈvi.no",
+       "pos": "noun",
+       "note": "bovo + -in-, cattle"
+      },
+      {
+       "t": "porko",
+       "e": "pig",
+       "ipa": "ˈpor.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "ŝafo",
+       "e": "sheep",
+       "ipa": "ˈʃa.fo",
+       "pos": "noun"
+      },
+      {
+       "t": "kokino",
+       "e": "hen",
+       "ipa": "ko.ˈki.no",
+       "pos": "noun",
+       "note": "koko + -in-, chicken"
+      },
+      {
+       "t": "muso",
+       "e": "mouse",
+       "ipa": "ˈmu.so",
+       "pos": "noun"
+      },
+      {
+       "t": "urso",
+       "e": "bear",
+       "ipa": "ˈur.so",
+       "pos": "noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi havas hundon kaj katon",
+       "e": "I have a dog and a cat",
+       "ipa": "mi ˈha.vas ˈhun.don kaj ˈka.ton"
+      },
+      {
+       "t": "La ĉevalo estas granda besto",
+       "e": "The horse is a big animal",
+       "ipa": "la t͡ʃe.ˈva.lo ˈes.tas ˈɡran.da ˈbes.to"
+      },
+      {
+       "t": "La kato manĝas muson",
+       "e": "The cat eats a mouse",
+       "ipa": "la ˈka.to ˈman.d͡ʒas ˈmu.son"
+      },
+      {
+       "t": "Ĉu vi vidas la birdon?",
+       "e": "Do you see the bird?",
+       "ipa": "t͡ʃu vi ˈvi.das la ˈbir.don"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "TIME",
+   "subtitle": "The week, the calendar, the clock and the weather",
+   "skills": [
+    {
+     "name": "Days",
+     "tips": [
+      {
+       "h": "The ti- words point",
+       "b": "The ti- series answers the ki- series letter for letter: tio that thing, tiu that one, tie there, tiam then, tial therefore, tiel so, tiom that much. The particle ĉi added to any of them makes it near instead of far.",
+       "eg": [
+        [
+         "kio / tio",
+         "what / that"
+        ],
+        [
+         "kie / tie",
+         "where / there"
+        ],
+        [
+         "tie / tie ĉi",
+         "there / here"
+        ]
+       ]
+      },
+      {
+       "h": "Days name a time with -e",
+       "b": "A time noun takes -e to say when something happens: lundo Monday gives lunde on Mondays, dimanĉo gives dimanĉe on Sundays. hodiaŭ, hieraŭ and morgaŭ are already adverbs and take no ending.",
+       "eg": [
+        [
+         "lunde",
+         "on Mondays"
+        ],
+        [
+         "dimanĉe",
+         "on Sundays"
+        ],
+        [
+         "hodiaŭ",
+         "today"
+        ]
+       ]
+      },
+      {
+       "h": "Weekday names are common nouns",
+       "b": "The days of the week are ordinary nouns written in lower case: lundo, mardo, merkredo. They take -n and -j like any other noun.",
+       "eg": [
+        [
+         "la lundo",
+         "the Monday"
+        ],
+        [
+         "du lundoj",
+         "two Mondays"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "tago",
+       "e": "day",
+       "ipa": "ˈta.ɡo",
+       "pos": "noun"
+      },
+      {
+       "t": "semajno",
+       "e": "week",
+       "ipa": "se.ˈmaj.no",
+       "pos": "noun"
+      },
+      {
+       "t": "lundo",
+       "e": "Monday",
+       "ipa": "ˈlun.do",
+       "pos": "noun"
+      },
+      {
+       "t": "mardo",
+       "e": "Tuesday",
+       "ipa": "ˈmar.do",
+       "pos": "noun"
+      },
+      {
+       "t": "merkredo",
+       "e": "Wednesday",
+       "ipa": "mer.ˈkre.do",
+       "pos": "noun"
+      },
+      {
+       "t": "ĵaŭdo",
+       "e": "Thursday",
+       "ipa": "ˈʒaw.do",
+       "pos": "noun"
+      },
+      {
+       "t": "vendredo",
+       "e": "Friday",
+       "ipa": "ven.ˈdre.do",
+       "pos": "noun"
+      },
+      {
+       "t": "sabato",
+       "e": "Saturday",
+       "ipa": "sa.ˈba.to",
+       "pos": "noun"
+      },
+      {
+       "t": "dimanĉo",
+       "e": "Sunday",
+       "ipa": "di.ˈman.t͡ʃo",
+       "pos": "noun"
+      },
+      {
+       "t": "hodiaŭ",
+       "e": "today",
+       "ipa": "ho.ˈdi.aw",
+       "pos": "adv"
+      },
+      {
+       "t": "hieraŭ",
+       "e": "yesterday",
+       "ipa": "hi.ˈe.raw",
+       "pos": "adv"
+      },
+      {
+       "t": "morgaŭ",
+       "e": "tomorrow",
+       "ipa": "ˈmor.ɡaw",
+       "pos": "adv"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Hodiaŭ estas lundo",
+       "e": "Today is Monday",
+       "ipa": "ho.ˈdi.aw ˈes.tas ˈlun.do"
+      },
+      {
+       "t": "Morgaŭ mi vidos vin",
+       "e": "Tomorrow I will see you",
+       "ipa": "ˈmor.ɡaw mi ˈvi.dos vin"
+      },
+      {
+       "t": "La semajno havas sep tagojn",
+       "e": "The week has seven days",
+       "ipa": "la se.ˈmaj.no ˈha.vas sep ˈta.ɡojn"
+      },
+      {
+       "t": "Hieraŭ estis dimanĉo",
+       "e": "Yesterday was Sunday",
+       "ipa": "hi.ˈe.raw ˈes.tis di.ˈman.t͡ʃo"
+      }
+     ]
+    },
+    {
+     "name": "Months",
+     "tips": [
+      {
+       "h": "Months are common nouns",
+       "b": "The year is jaro and the month is monato. The twelve month names are ordinary nouns written in lower case, and en before one says in that month: en januaro.",
+       "eg": [
+        [
+         "en januaro",
+         "in January"
+        ],
+        [
+         "la monato",
+         "the month"
+        ],
+        [
+         "du monatoj",
+         "two months"
+        ]
+       ]
+      },
+      {
+       "h": "Ordinals add -a to a numeral",
+       "b": "A numeral takes -a to become an ordinal: unu one gives unua first, du gives dua second, ok gives oka eighth. A date names the day with an ordinal after la.",
+       "eg": [
+        [
+         "unua",
+         "first"
+        ],
+        [
+         "oka",
+         "eighth"
+        ],
+        [
+         "la tria de majo",
+         "the third of May"
+        ]
+       ]
+      },
+      {
+       "h": "c is pronounced ts",
+       "b": "The letter c always stands for the sound ts, as in decembro and centro. It never carries the k sound it has in some English words.",
+       "eg": [
+        [
+         "decembro",
+         "December"
+        ],
+        [
+         "centro",
+         "centre"
+        ],
+        [
+         "dancas",
+         "dances"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "januaro",
+       "e": "January",
+       "ipa": "ja.nu.ˈa.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "februaro",
+       "e": "February",
+       "ipa": "fe.bru.ˈa.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "marto",
+       "e": "March",
+       "ipa": "ˈmar.to",
+       "pos": "noun"
+      },
+      {
+       "t": "aprilo",
+       "e": "April",
+       "ipa": "a.ˈpri.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "majo",
+       "e": "May",
+       "ipa": "ˈma.jo",
+       "pos": "noun"
+      },
+      {
+       "t": "junio",
+       "e": "June",
+       "ipa": "ju.ˈni.o",
+       "pos": "noun"
+      },
+      {
+       "t": "julio",
+       "e": "July",
+       "ipa": "ju.ˈli.o",
+       "pos": "noun"
+      },
+      {
+       "t": "aŭgusto",
+       "e": "August",
+       "ipa": "aw.ˈɡus.to",
+       "pos": "noun"
+      },
+      {
+       "t": "septembro",
+       "e": "September",
+       "ipa": "sep.ˈtem.bro",
+       "pos": "noun"
+      },
+      {
+       "t": "oktobro",
+       "e": "October",
+       "ipa": "ok.ˈto.bro",
+       "pos": "noun"
+      },
+      {
+       "t": "novembro",
+       "e": "November",
+       "ipa": "no.ˈvem.bro",
+       "pos": "noun"
+      },
+      {
+       "t": "decembro",
+       "e": "December",
+       "ipa": "de.ˈt͡sem.bro",
+       "pos": "noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Aŭgusto estas la oka monato",
+       "e": "August is the eighth month",
+       "ipa": "aw.ˈɡus.to ˈes.tas la ˈo.ka mo.ˈna.to"
+      },
+      {
+       "t": "La jaro havas dek du monatojn",
+       "e": "The year has twelve months",
+       "ipa": "la ˈja.ro ˈha.vas dek du mo.ˈna.tojn"
+      },
+      {
+       "t": "Julio venas post junio",
+       "e": "July comes after June",
+       "ipa": "ju.ˈli.o ˈve.nas post ju.ˈni.o"
+      },
+      {
+       "t": "Ŝi venos en aprilo",
+       "e": "She will come in April",
+       "ipa": "ʃi ˈve.nos en a.ˈpri.lo"
+      }
+     ]
+    },
+    {
+     "name": "Time of Day",
+     "tips": [
+      {
+       "h": "Telling the hour",
+       "b": "The hour is named with estas la and an ordinal: estas la tria, it is three o'clock. Minutes follow with kaj, and je states the time at which something happens.",
+       "eg": [
+        [
+         "Estas la sesa",
+         "It is six o'clock"
+        ],
+        [
+         "la sepa kaj dudek",
+         "twenty past seven"
+        ],
+        [
+         "je la oka",
+         "at eight"
+        ]
+       ]
+      },
+      {
+       "h": "-e turns a time noun into when",
+       "b": "A part of the day takes -e to say when an action falls: mateno morning gives matene in the morning, vespero gives vespere in the evening, nokto gives nokte at night.",
+       "eg": [
+        [
+         "matene",
+         "in the morning"
+        ],
+        [
+         "vespere",
+         "in the evening"
+        ],
+        [
+         "nokte",
+         "at night"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "mateno",
+       "e": "morning",
+       "ipa": "ma.ˈte.no",
+       "pos": "noun"
+      },
+      {
+       "t": "tagmezo",
+       "e": "noon",
+       "ipa": "taɡ.ˈme.zo",
+       "pos": "noun",
+       "note": "tago + mezo, middle"
+      },
+      {
+       "t": "posttagmezo",
+       "e": "afternoon",
+       "ipa": "post.taɡ.ˈme.zo",
+       "pos": "noun",
+       "note": "post + tagmezo"
+      },
+      {
+       "t": "vespero",
+       "e": "evening",
+       "ipa": "ves.ˈpe.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "nokto",
+       "e": "night",
+       "ipa": "ˈnok.to",
+       "pos": "noun"
+      },
+      {
+       "t": "horo",
+       "e": "hour",
+       "ipa": "ˈho.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "minuto",
+       "e": "minute",
+       "ipa": "mi.ˈnu.to",
+       "pos": "noun"
+      },
+      {
+       "t": "horloĝo",
+       "e": "clock",
+       "ipa": "hor.ˈlo.d͡ʒo",
+       "pos": "noun"
+      },
+      {
+       "t": "matene",
+       "e": "in the morning",
+       "ipa": "ma.ˈte.ne",
+       "pos": "adv",
+       "note": "mateno + -e"
+      },
+      {
+       "t": "frue",
+       "e": "early",
+       "ipa": "ˈfru.e",
+       "pos": "adv",
+       "note": "frua + -e"
+      },
+      {
+       "t": "malfrue",
+       "e": "late",
+       "ipa": "mal.ˈfru.e",
+       "pos": "adv",
+       "note": "mal- + frue"
+      },
+      {
+       "t": "nun",
+       "e": "now",
+       "ipa": "ˈnun",
+       "pos": "adv"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Estas la sepa horo",
+       "e": "It is seven o'clock",
+       "ipa": "ˈes.tas la ˈse.pa ˈho.ro"
+      },
+      {
+       "t": "Matene mi trinkas kafon",
+       "e": "In the morning I drink coffee",
+       "ipa": "ma.ˈte.ne mi ˈtrin.kas ˈka.fon"
+      },
+      {
+       "t": "Li venis malfrue vespere",
+       "e": "He came late in the evening",
+       "ipa": "li ˈve.nis mal.ˈfru.e ves.ˈpe.re"
+      },
+      {
+       "t": "La nokto estas longa",
+       "e": "The night is long",
+       "ipa": "la ˈnok.to ˈes.tas ˈlon.ɡa"
+      }
+     ]
+    },
+    {
+     "name": "Weather",
+     "tips": [
+      {
+       "h": "Weather verbs have no subject",
+       "b": "A verb of weather stands alone with nothing before it: pluvas it is raining, neĝas it is snowing, ventas it is windy. The English it has no counterpart here.",
+       "eg": [
+        [
+         "Pluvas",
+         "It is raining"
+        ],
+        [
+         "Neĝas",
+         "It is snowing"
+        ],
+        [
+         "Hieraŭ pluvis",
+         "It rained yesterday"
+        ]
+       ]
+      },
+      {
+       "h": "Adverb, not adjective, for the air",
+       "b": "estas varma describes a named thing and agrees with it. With no noun to agree with, the -e form is used for the situation at large: hodiaŭ estas malvarme.",
+       "eg": [
+        [
+         "La supo estas varma",
+         "The soup is warm"
+        ],
+        [
+         "Estas varme",
+         "It is warm out"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "vetero",
+       "e": "weather",
+       "ipa": "ve.ˈte.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "pluvo",
+       "e": "rain",
+       "ipa": "ˈplu.vo",
+       "pos": "noun"
+      },
+      {
+       "t": "pluvi",
+       "e": "to rain",
+       "ipa": "ˈplu.vi",
+       "pos": "verb"
+      },
+      {
+       "t": "neĝo",
+       "e": "snow",
+       "ipa": "ˈne.d͡ʒo",
+       "pos": "noun"
+      },
+      {
+       "t": "vento",
+       "e": "wind",
+       "ipa": "ˈven.to",
+       "pos": "noun"
+      },
+      {
+       "t": "nubo",
+       "e": "cloud",
+       "ipa": "ˈnu.bo",
+       "pos": "noun"
+      },
+      {
+       "t": "varma",
+       "e": "warm",
+       "ipa": "ˈvar.ma",
+       "pos": "adj"
+      },
+      {
+       "t": "malvarma",
+       "e": "cold",
+       "ipa": "mal.ˈvar.ma",
+       "pos": "adj",
+       "note": "mal- + varma"
+      },
+      {
+       "t": "suna",
+       "e": "sunny",
+       "ipa": "ˈsu.na",
+       "pos": "adj",
+       "note": "suno + -a"
+      },
+      {
+       "t": "seka",
+       "e": "dry",
+       "ipa": "ˈse.ka",
+       "pos": "adj"
+      },
+      {
+       "t": "malseka",
+       "e": "wet",
+       "ipa": "mal.ˈse.ka",
+       "pos": "adj",
+       "note": "mal- + seka"
+      },
+      {
+       "t": "temperaturo",
+       "e": "temperature",
+       "ipa": "tem.pe.ra.ˈtu.ro",
+       "pos": "noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Hodiaŭ estas malvarme",
+       "e": "Today it is cold",
+       "ipa": "ho.ˈdi.aw ˈes.tas mal.ˈvar.me"
+      },
+      {
+       "t": "La vetero estas bona",
+       "e": "The weather is good",
+       "ipa": "la ve.ˈte.ro ˈes.tas ˈbo.na"
+      },
+      {
+       "t": "En januaro kaj februaro neĝas",
+       "e": "In January and February it snows",
+       "ipa": "en ja.nu.ˈa.ro kaj fe.bru.ˈa.ro ˈne.d͡ʒas"
+      },
+      {
+       "t": "La vento estas forta",
+       "e": "The wind is strong",
+       "ipa": "la ˈven.to ˈes.tas ˈfor.ta"
       }
      ]
     }
@@ -486,165 +3090,2278 @@
   },
   {
    "title": "GETTING AROUND",
+   "subtitle": "Places in a town, which way to go and how to get there",
    "skills": [
     {
      "name": "Places",
+     "tips": [
+      {
+       "h": "-n on a place means going there",
+       "b": "al la urbo and la urbon both express movement toward. After a verb of motion a bare place word with -n names the destination, and without -n it names where one already is.",
+       "eg": [
+        [
+         "Mi iras al la urbo",
+         "I go to the city"
+        ],
+        [
+         "Mi iras hejmen",
+         "I go home"
+        ],
+        [
+         "Mi estas hejme",
+         "I am at home"
+        ]
+       ]
+      },
+      {
+       "h": "Naming a shop by what it sells",
+       "b": "-ej- attached to a trade root names its premises: vendi to sell gives vendejo a shop, pano gives panejo a bakery, preĝi to pray gives preĝejo a church.",
+       "eg": [
+        [
+         "vendejo",
+         "shop"
+        ],
+        [
+         "panejo",
+         "bakery"
+        ],
+        [
+         "librejo",
+         "bookshop"
+        ]
+       ]
+      }
+     ],
      "words": [
       {
-       "t": "domo",
-       "e": "house",
-       "ipa": "ˈdo.mo"
-      },
-      {
-       "t": "lernejo",
-       "e": "school",
-       "ipa": "ler.ˈne.jo"
-      },
-      {
-       "t": "vendejo",
-       "e": "store",
-       "ipa": "ven.ˈde.jo"
+       "t": "loko",
+       "e": "place",
+       "ipa": "ˈlo.ko",
+       "pos": "noun"
       },
       {
        "t": "urbo",
        "e": "city",
-       "ipa": "ˈur.bo"
+       "ipa": "ˈur.bo",
+       "pos": "noun"
+      },
+      {
+       "t": "vilaĝo",
+       "e": "village",
+       "ipa": "vi.ˈla.d͡ʒo",
+       "pos": "noun"
       },
       {
        "t": "strato",
        "e": "street",
-       "ipa": "ˈstra.to"
+       "ipa": "ˈstra.to",
+       "pos": "noun"
+      },
+      {
+       "t": "placo",
+       "e": "square",
+       "ipa": "ˈpla.t͡so",
+       "pos": "noun"
+      },
+      {
+       "t": "vendejo",
+       "e": "shop",
+       "ipa": "ven.ˈde.jo",
+       "pos": "noun",
+       "note": "vendi + -ej- place"
       },
       {
        "t": "bazaro",
        "e": "market",
-       "ipa": "ba.ˈza.ro"
+       "ipa": "ba.ˈza.ro",
+       "pos": "noun"
       },
       {
-       "t": "pordo",
-       "e": "door",
-       "ipa": "ˈpor.do"
+       "t": "hotelo",
+       "e": "hotel",
+       "ipa": "ho.ˈte.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "muzeo",
+       "e": "museum",
+       "ipa": "mu.ˈze.o",
+       "pos": "noun"
+      },
+      {
+       "t": "biblioteko",
+       "e": "library",
+       "ipa": "bi.bli.o.ˈte.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "parko",
+       "e": "park",
+       "ipa": "ˈpar.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "preĝejo",
+       "e": "church",
+       "ipa": "pre.ˈd͡ʒe.jo",
+       "pos": "noun",
+       "note": "preĝi + -ej- place"
       }
      ],
      "phrases": [
       {
-       "t": "La lernejo estas granda",
-       "e": "The school is big",
-       "ipa": "la ler.ˈne.jo ˈes.tas ˈɡran.da"
+       "t": "Mi iras al la bazaro",
+       "e": "I go to the market",
+       "ipa": "mi ˈi.ras al la ba.ˈza.ro"
       },
       {
-       "t": "Mi iras al la lernejo",
-       "e": "I go to the school",
-       "ipa": "mi ˈi.ras al la ler.ˈne.jo"
+       "t": "La muzeo estas en la urbo",
+       "e": "The museum is in the city",
+       "ipa": "la mu.ˈze.o ˈes.tas en la ˈur.bo"
+      },
+      {
+       "t": "Ni estas en la parko",
+       "e": "We are in the park",
+       "ipa": "ni ˈes.tas en la ˈpar.ko"
+      },
+      {
+       "t": "Kie estas la hotelo?",
+       "e": "Where is the hotel?",
+       "ipa": "ˈki.e ˈes.tas la ho.ˈte.lo"
       }
      ]
     },
     {
-     "name": "Time",
+     "name": "Directions",
+     "tips": [
+      {
+       "h": "Place words take -n to go",
+       "b": "An adverb of place adds -n for movement toward it: dekstre on the right gives dekstren to the right, tie there gives tien to there, hejme at home gives hejmen homeward.",
+       "eg": [
+        [
+         "dekstre / dekstren",
+         "on the right / to the right"
+        ],
+        [
+         "tie / tien",
+         "there / to there"
+        ],
+        [
+         "hejme / hejmen",
+         "at home / homeward"
+        ]
+       ]
+      },
+      {
+       "h": "al and de need no accusative",
+       "b": "al already means toward and de already means away from, so the noun after them stays plain. The accusative follows only a preposition that states a position, such as en, sur or sub.",
+       "eg": [
+        [
+         "al la domo",
+         "to the house"
+        ],
+        [
+         "en la domo",
+         "in the house"
+        ],
+        [
+         "en la domon",
+         "into the house"
+        ]
+       ]
+      },
+      {
+       "h": "ĉi- and i- complete the table",
+       "b": "Beside ki-, ti- and neni- stand ĉi- for every and i- for some: ĉie everywhere and ie somewhere, ĉiam always and iam sometime, ĉio everything and io something.",
+       "eg": [
+        [
+         "ĉie / ie",
+         "everywhere / somewhere"
+        ],
+        [
+         "ĉiam / iam",
+         "always / sometime"
+        ],
+        [
+         "ĉio / io",
+         "everything / something"
+        ]
+       ]
+      }
+     ],
      "words": [
       {
-       "t": "hodiaŭ",
-       "e": "today",
-       "ipa": "ho.ˈdi.aw"
+       "t": "al",
+       "e": "to",
+       "ipa": "ˈal",
+       "pos": "prep"
       },
       {
-       "t": "morgaŭ",
-       "e": "tomorrow",
-       "ipa": "ˈmor.ɡaw"
+       "t": "de",
+       "e": "from",
+       "ipa": "ˈde",
+       "pos": "prep"
       },
       {
-       "t": "nun",
-       "e": "now",
-       "ipa": "nun"
+       "t": "en",
+       "e": "in",
+       "ipa": "ˈen",
+       "pos": "prep"
       },
       {
-       "t": "tago",
-       "e": "day",
-       "ipa": "ˈta.ɡo"
+       "t": "sur",
+       "e": "on",
+       "ipa": "ˈsur",
+       "pos": "prep"
       },
       {
-       "t": "nokto",
-       "e": "night",
-       "ipa": "ˈnok.to"
+       "t": "sub",
+       "e": "under",
+       "ipa": "ˈsub",
+       "pos": "prep"
       },
       {
-       "t": "semajno",
-       "e": "week",
-       "ipa": "se.ˈmaj.no"
+       "t": "super",
+       "e": "above",
+       "ipa": "ˈsu.per",
+       "pos": "prep"
       },
       {
-       "t": "horo",
-       "e": "hour",
-       "ipa": "ˈho.ro"
+       "t": "antaŭ",
+       "e": "in front of",
+       "ipa": "ˈan.taw",
+       "pos": "prep"
       },
       {
-       "t": "jaro",
-       "e": "year",
-       "ipa": "ˈja.ro"
+       "t": "malantaŭ",
+       "e": "behind",
+       "ipa": "mal.ˈan.taw",
+       "pos": "prep",
+       "note": "mal- + antaŭ"
+      },
+      {
+       "t": "apud",
+       "e": "beside",
+       "ipa": "ˈa.pud",
+       "pos": "prep"
+      },
+      {
+       "t": "inter",
+       "e": "between",
+       "ipa": "ˈin.ter",
+       "pos": "prep"
+      },
+      {
+       "t": "dekstren",
+       "e": "to the right",
+       "ipa": "ˈdek.stren",
+       "pos": "adv",
+       "note": "dekstra + -e + -n"
+      },
+      {
+       "t": "maldekstren",
+       "e": "to the left",
+       "ipa": "mal.ˈdek.stren",
+       "pos": "adv",
+       "note": "mal- + dekstren"
       }
      ],
      "phrases": [
       {
-       "t": "La semajno havas sep tagojn",
-       "e": "The week has seven days",
-       "ipa": "la se.ˈmaj.no ˈha.vas sep ˈta.ɡojn"
+       "t": "La kato estas sub la tablo",
+       "e": "The cat is under the table",
+       "ipa": "la ˈka.to ˈes.tas sub la ˈta.blo"
       },
       {
-       "t": "Hodiaŭ mi lernas",
-       "e": "Today I learn",
-       "ipa": "ho.ˈdi.aw mi ˈler.nas"
+       "t": "Mi iras dekstren",
+       "e": "I go to the right",
+       "ipa": "mi ˈi.ras ˈdek.stren"
+      },
+      {
+       "t": "La lampo estas super la lito",
+       "e": "The lamp is above the bed",
+       "ipa": "la ˈlam.po ˈes.tas ˈsu.per la ˈli.to"
+      },
+      {
+       "t": "La parko estas apud la muzeo",
+       "e": "The park is beside the museum",
+       "ipa": "la ˈpar.ko ˈes.tas ˈa.pud la mu.ˈze.o"
+      }
+     ]
+    },
+    {
+     "name": "Transport",
+     "tips": [
+      {
+       "h": "per names the means",
+       "b": "The preposition per states the instrument or the means by which something is done: per trajno by train, per aŭto by car, per krajono with a pencil.",
+       "eg": [
+        [
+         "per trajno",
+         "by train"
+        ],
+        [
+         "per aŭto",
+         "by car"
+        ],
+        [
+         "per la mano",
+         "by hand"
+        ]
+       ]
+      },
+      {
+       "h": "Compounds name what a place is for",
+       "b": "A place of transport is usually two roots, and the final one carries the ending: stacidomo is a station building and flughaveno a flight harbour.",
+       "eg": [
+        [
+         "stacidomo",
+         "station"
+        ],
+        [
+         "flughaveno",
+         "airport"
+        ],
+        [
+         "vagonaro",
+         "train"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "aŭto",
+       "e": "car",
+       "ipa": "ˈaw.to",
+       "pos": "noun"
+      },
+      {
+       "t": "aŭtobuso",
+       "e": "bus",
+       "ipa": "aw.to.ˈbu.so",
+       "pos": "noun",
+       "note": "aŭto + buso"
+      },
+      {
+       "t": "trajno",
+       "e": "train",
+       "ipa": "ˈtraj.no",
+       "pos": "noun"
+      },
+      {
+       "t": "aviadilo",
+       "e": "airplane",
+       "ipa": "a.vi.a.ˈdi.lo",
+       "pos": "noun",
+       "note": "aviadi + -il- tool"
+      },
+      {
+       "t": "biciklo",
+       "e": "bicycle",
+       "ipa": "bi.ˈt͡si.klo",
+       "pos": "noun"
+      },
+      {
+       "t": "ŝipo",
+       "e": "ship",
+       "ipa": "ˈʃi.po",
+       "pos": "noun"
+      },
+      {
+       "t": "stacidomo",
+       "e": "station",
+       "ipa": "sta.t͡si.ˈdo.mo",
+       "pos": "noun",
+       "note": "stacio + domo"
+      },
+      {
+       "t": "flughaveno",
+       "e": "airport",
+       "ipa": "fluɡ.ha.ˈve.no",
+       "pos": "noun",
+       "note": "flugo + haveno, port"
+      },
+      {
+       "t": "vojo",
+       "e": "road",
+       "ipa": "ˈvo.jo",
+       "pos": "noun"
+      },
+      {
+       "t": "veturi",
+       "e": "to ride",
+       "ipa": "ve.ˈtu.ri",
+       "pos": "verb",
+       "note": "to go by vehicle"
+      },
+      {
+       "t": "flugi",
+       "e": "to fly",
+       "ipa": "ˈflu.ɡi",
+       "pos": "verb"
+      },
+      {
+       "t": "halti",
+       "e": "to stop",
+       "ipa": "ˈhal.ti",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi veturas per aŭtobuso",
+       "e": "I travel by bus",
+       "ipa": "mi ve.ˈtu.ras per aw.to.ˈbu.so"
+      },
+      {
+       "t": "La trajno haltas en la stacidomo",
+       "e": "The train stops at the station",
+       "ipa": "la ˈtraj.no ˈhal.tas en la sta.t͡si.ˈdo.mo"
+      },
+      {
+       "t": "Ni flugos morgaŭ",
+       "e": "We will fly tomorrow",
+       "ipa": "ni ˈflu.ɡos ˈmor.ɡaw"
+      },
+      {
+       "t": "Ŝia biciklo estas verda",
+       "e": "Her bicycle is green",
+       "ipa": "ˈʃi.a bi.ˈt͡si.klo ˈes.tas ˈver.da"
       }
      ]
     },
     {
      "name": "Travel",
+     "tips": [
+      {
+       "h": "-os states the future",
+       "b": "The future tense ends in -os for every subject alike: mi vojaĝos, ni vojaĝos, ili vojaĝos. There is no separate form for will and shall.",
+       "eg": [
+        [
+         "mi vojaĝas",
+         "I travel"
+        ],
+        [
+         "mi vojaĝis",
+         "I travelled"
+        ],
+        [
+         "mi vojaĝos",
+         "I will travel"
+        ]
+       ]
+      },
+      {
+       "h": "Prefixes of coming and going",
+       "b": "A preposition used as a prefix fixes the direction of a verb: al-veni to arrive, for-iri to go away, en-iri to enter, el-iri to go out.",
+       "eg": [
+        [
+         "alveni",
+         "to arrive"
+        ],
+        [
+         "foriri",
+         "to depart"
+        ],
+        [
+         "eniri",
+         "to enter"
+        ],
+        [
+         "eliri",
+         "to exit"
+        ]
+       ]
+      }
+     ],
      "words": [
       {
-       "t": "aŭto",
-       "e": "car",
-       "ipa": "ˈaw.to"
+       "t": "vojaĝo",
+       "e": "journey",
+       "ipa": "vo.ˈja.d͡ʒo",
+       "pos": "noun"
       },
       {
-       "t": "trajno",
-       "e": "train",
-       "ipa": "ˈtraj.no"
+       "t": "vojaĝi",
+       "e": "to travel",
+       "ipa": "vo.ˈja.d͡ʒi",
+       "pos": "verb"
       },
       {
-       "t": "aviadilo",
-       "e": "airplane",
-       "ipa": "a.vi.a.ˈdi.lo"
+       "t": "valizo",
+       "e": "suitcase",
+       "ipa": "va.ˈli.zo",
+       "pos": "noun"
       },
       {
-       "t": "ĉi tie",
-       "e": "here",
-       "ipa": "t͡ʃi ˈti.e"
+       "t": "bileto",
+       "e": "ticket",
+       "ipa": "bi.ˈle.to",
+       "pos": "noun"
       },
       {
-       "t": "tie",
-       "e": "there",
-       "ipa": "ˈti.e"
+       "t": "pasporto",
+       "e": "passport",
+       "ipa": "pas.ˈpor.to",
+       "pos": "noun"
+      },
+      {
+       "t": "mapo",
+       "e": "map",
+       "ipa": "ˈma.po",
+       "pos": "noun"
+      },
+      {
+       "t": "alveni",
+       "e": "to arrive",
+       "ipa": "al.ˈve.ni",
+       "pos": "verb",
+       "note": "al + veni"
+      },
+      {
+       "t": "foriri",
+       "e": "to depart",
+       "ipa": "for.ˈi.ri",
+       "pos": "verb",
+       "note": "for + iri, away"
+      },
+      {
+       "t": "resti",
+       "e": "to stay",
+       "ipa": "ˈres.ti",
+       "pos": "verb"
+      },
+      {
+       "t": "atendi",
+       "e": "to wait",
+       "ipa": "a.ˈten.di",
+       "pos": "verb"
       },
       {
        "t": "proksima",
        "e": "near",
-       "ipa": "prok.ˈsi.ma"
+       "ipa": "prok.ˈsi.ma",
+       "pos": "adj"
       },
       {
        "t": "malproksima",
        "e": "far",
-       "ipa": "mal.prok.ˈsi.ma"
+       "ipa": "mal.prok.ˈsi.ma",
+       "pos": "adj",
+       "note": "mal- + proksima"
       }
      ],
      "phrases": [
       {
-       "t": "La aŭto estas nova",
-       "e": "The car is new",
-       "ipa": "la ˈaw.to ˈes.tas ˈno.va"
+       "t": "Mi atendas la trajnon",
+       "e": "I wait for the train",
+       "ipa": "mi a.ˈten.das la ˈtraj.non"
       },
       {
-       "t": "La aviadilo estas granda",
-       "e": "The airplane is big",
-       "ipa": "la a.vi.a.ˈdi.lo ˈes.tas ˈɡran.da"
+       "t": "Ni vojaĝos per ŝipo",
+       "e": "We will travel by ship",
+       "ipa": "ni vo.ˈja.d͡ʒos per ˈʃi.po"
+      },
+      {
+       "t": "Kie estas mia bileto?",
+       "e": "Where is my ticket?",
+       "ipa": "ˈki.e ˈes.tas ˈmi.a bi.ˈle.to"
+      },
+      {
+       "t": "La hotelo estas proksima",
+       "e": "The hotel is near",
+       "ipa": "la ho.ˈte.lo ˈes.tas prok.ˈsi.ma"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "PEOPLE",
+   "subtitle": "Feeling, the body, being ill and describing a person",
+   "skills": [
+    {
+     "name": "Feelings",
+     "tips": [
+      {
+       "h": "-ec- names the quality itself",
+       "b": "The suffix -ec- turns a description into the abstract quality: bela beautiful gives beleco beauty, amiko friend gives amikeco friendship, feliĉa gives feliĉeco happiness.",
+       "eg": [
+        [
+         "beleco",
+         "beauty"
+        ],
+        [
+         "amikeco",
+         "friendship"
+        ],
+        [
+         "libereco",
+         "freedom"
+        ]
+       ]
+      },
+      {
+       "h": "ŝati takes an object, plaĉi a subject",
+       "b": "ŝati means to like and takes the thing liked as its object: mi ŝatas kafon. plaĉi turns the sentence round, so the thing liked becomes the subject: kafo plaĉas al mi.",
+       "eg": [
+        [
+         "Mi ŝatas kafon",
+         "I like coffee"
+        ],
+        [
+         "Kafo plaĉas al mi",
+         "Coffee pleases me"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "sento",
+       "e": "feeling",
+       "ipa": "ˈsen.to",
+       "pos": "noun"
+      },
+      {
+       "t": "senti",
+       "e": "to feel",
+       "ipa": "ˈsen.ti",
+       "pos": "verb"
+      },
+      {
+       "t": "feliĉa",
+       "e": "happy",
+       "ipa": "fe.ˈli.t͡ʃa",
+       "pos": "adj"
+      },
+      {
+       "t": "malfeliĉa",
+       "e": "unhappy",
+       "ipa": "mal.fe.ˈli.t͡ʃa",
+       "pos": "adj",
+       "note": "mal- + feliĉa"
+      },
+      {
+       "t": "ĝoja",
+       "e": "glad",
+       "ipa": "ˈd͡ʒo.ja",
+       "pos": "adj"
+      },
+      {
+       "t": "trista",
+       "e": "sad",
+       "ipa": "ˈtris.ta",
+       "pos": "adj"
+      },
+      {
+       "t": "kolera",
+       "e": "angry",
+       "ipa": "ko.ˈle.ra",
+       "pos": "adj"
+      },
+      {
+       "t": "laca",
+       "e": "tired",
+       "ipa": "ˈla.t͡sa",
+       "pos": "adj"
+      },
+      {
+       "t": "kontenta",
+       "e": "satisfied",
+       "ipa": "kon.ˈten.ta",
+       "pos": "adj"
+      },
+      {
+       "t": "timi",
+       "e": "to fear",
+       "ipa": "ˈti.mi",
+       "pos": "verb"
+      },
+      {
+       "t": "ami",
+       "e": "to love",
+       "ipa": "ˈa.mi",
+       "pos": "verb"
+      },
+      {
+       "t": "ŝati",
+       "e": "to like",
+       "ipa": "ˈʃa.ti",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi estas tre feliĉa",
+       "e": "I am very happy",
+       "ipa": "mi ˈes.tas tre fe.ˈli.t͡ʃa"
+      },
+      {
+       "t": "Ŝi ŝatas legi librojn",
+       "e": "She likes to read books",
+       "ipa": "ʃi ˈʃa.tas ˈle.ɡi ˈli.brojn"
+      },
+      {
+       "t": "La infano estas laca",
+       "e": "The child is tired",
+       "ipa": "la in.ˈfa.no ˈes.tas ˈla.t͡sa"
+      },
+      {
+       "t": "Mi amas mian familion",
+       "e": "I love my family",
+       "ipa": "mi ˈa.mas ˈmi.an fa.mi.ˈli.on"
+      }
+     ]
+    },
+    {
+     "name": "Body",
+     "tips": [
+      {
+       "h": "la, not a possessive, for the body",
+       "b": "A body part belonging to the subject usually takes la rather than a possessive: mi lavas la manojn, I wash my hands. A possessive appears only where the owner would otherwise be unclear.",
+       "eg": [
+        [
+         "Mi lavas la manojn",
+         "I wash my hands"
+        ],
+        [
+         "Ŝi fermis la okulojn",
+         "She closed her eyes"
+        ]
+       ]
+      },
+      {
+       "h": "Pairs are plural, and agree",
+       "b": "A pair of body parts is an ordinary plural: la okuloj, la manoj. Any adjective with it takes -j, and both words take -n when they are the object.",
+       "eg": [
+        [
+         "bluaj okuloj",
+         "blue eyes"
+        ],
+        [
+         "Ŝi havas bluajn okulojn",
+         "She has blue eyes"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "korpo",
+       "e": "body",
+       "ipa": "ˈkor.po",
+       "pos": "noun"
+      },
+      {
+       "t": "kapo",
+       "e": "head",
+       "ipa": "ˈka.po",
+       "pos": "noun"
+      },
+      {
+       "t": "okulo",
+       "e": "eye",
+       "ipa": "o.ˈku.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "orelo",
+       "e": "ear",
+       "ipa": "o.ˈre.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "nazo",
+       "e": "nose",
+       "ipa": "ˈna.zo",
+       "pos": "noun"
+      },
+      {
+       "t": "buŝo",
+       "e": "mouth",
+       "ipa": "ˈbu.ʃo",
+       "pos": "noun"
+      },
+      {
+       "t": "dento",
+       "e": "tooth",
+       "ipa": "ˈden.to",
+       "pos": "noun"
+      },
+      {
+       "t": "mano",
+       "e": "hand",
+       "ipa": "ˈma.no",
+       "pos": "noun"
+      },
+      {
+       "t": "brako",
+       "e": "arm",
+       "ipa": "ˈbra.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "piedo",
+       "e": "foot",
+       "ipa": "pi.ˈe.do",
+       "pos": "noun"
+      },
+      {
+       "t": "kruro",
+       "e": "leg",
+       "ipa": "ˈkru.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "koro",
+       "e": "heart",
+       "ipa": "ˈko.ro",
+       "pos": "noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ŝi havas bluajn okulojn",
+       "e": "She has blue eyes",
+       "ipa": "ʃi ˈha.vas ˈblu.ajn o.ˈku.lojn"
+      },
+      {
+       "t": "Mia mano estas malgranda",
+       "e": "My hand is small",
+       "ipa": "ˈmi.a ˈma.no ˈes.tas mal.ˈɡran.da"
+      },
+      {
+       "t": "La hundo havas kvar piedojn",
+       "e": "The dog has four feet",
+       "ipa": "la ˈhun.do ˈha.vas kvar pi.ˈe.dojn"
+      },
+      {
+       "t": "Li fermis la buŝon",
+       "e": "He closed his mouth",
+       "ipa": "li ˈfer.mis la ˈbu.ʃon",
+       "lit": "he closed the mouth"
+      }
+     ]
+    },
+    {
+     "name": "Health",
+     "tips": [
+      {
+       "h": "-u gives an order or a request",
+       "b": "The ending -u forms the imperative, and it serves every subject: venu come, ni iru let us go, li venu have him come. bonvolu before an infinitive turns an order into a request.",
+       "eg": [
+        [
+         "Venu",
+         "Come"
+        ],
+        [
+         "Ripozu",
+         "Rest"
+        ],
+        [
+         "Bonvolu helpi min",
+         "Please help me"
+        ]
+       ]
+      },
+      {
+       "h": "-ul- names a person by a trait",
+       "b": "The suffix -ul- makes a person marked by the root: juna young gives junulo a youth, malsana ill gives malsanulo a patient, riĉa gives riĉulo a rich person.",
+       "eg": [
+        [
+         "junulo",
+         "a youth"
+        ],
+        [
+         "malsanulo",
+         "a patient"
+        ],
+        [
+         "riĉulo",
+         "a rich person"
+        ]
+       ]
+      },
+      {
+       "h": "-ist- names the occupation",
+       "b": "The suffix -ist- names the person who does the root as a trade: kuraci to treat gives kuracisto doctor, instrui to teach gives instruisto teacher, kanti gives kantisto singer.",
+       "eg": [
+        [
+         "kuracisto",
+         "doctor"
+        ],
+        [
+         "instruisto",
+         "teacher"
+        ],
+        [
+         "kantisto",
+         "singer"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "sano",
+       "e": "health",
+       "ipa": "ˈsa.no",
+       "pos": "noun"
+      },
+      {
+       "t": "sana",
+       "e": "healthy",
+       "ipa": "ˈsa.na",
+       "pos": "adj"
+      },
+      {
+       "t": "malsana",
+       "e": "ill",
+       "ipa": "mal.ˈsa.na",
+       "pos": "adj",
+       "note": "mal- + sana"
+      },
+      {
+       "t": "malsanulo",
+       "e": "patient",
+       "ipa": "mal.sa.ˈnu.lo",
+       "pos": "noun",
+       "note": "malsana + -ul- person"
+      },
+      {
+       "t": "kuracisto",
+       "e": "doctor",
+       "ipa": "ku.ra.ˈt͡sis.to",
+       "pos": "noun",
+       "note": "kuraci + -ist- trade"
+      },
+      {
+       "t": "hospitalo",
+       "e": "hospital",
+       "ipa": "hos.pi.ˈta.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "medikamento",
+       "e": "medicine",
+       "ipa": "me.di.ka.ˈmen.to",
+       "pos": "noun"
+      },
+      {
+       "t": "doloro",
+       "e": "pain",
+       "ipa": "do.ˈlo.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "dolori",
+       "e": "to hurt",
+       "ipa": "do.ˈlo.ri",
+       "pos": "verb"
+      },
+      {
+       "t": "febro",
+       "e": "fever",
+       "ipa": "ˈfe.bro",
+       "pos": "noun"
+      },
+      {
+       "t": "ripozi",
+       "e": "to rest",
+       "ipa": "ri.ˈpo.zi",
+       "pos": "verb"
+      },
+      {
+       "t": "helpi",
+       "e": "to help",
+       "ipa": "ˈhel.pi",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi estas malsana",
+       "e": "I am ill",
+       "ipa": "mi ˈes.tas mal.ˈsa.na"
+      },
+      {
+       "t": "La kuracisto helpas la malsanulon",
+       "e": "The doctor helps the patient",
+       "ipa": "la ku.ra.ˈt͡sis.to ˈhel.pas la mal.sa.ˈnu.lon"
+      },
+      {
+       "t": "Mia kapo doloras",
+       "e": "My head hurts",
+       "ipa": "ˈmi.a ˈka.po do.ˈlo.ras"
+      },
+      {
+       "t": "Bonvolu doni al mi akvon",
+       "e": "Please give me water",
+       "ipa": "bon.ˈvo.lu ˈdo.ni al mi ˈak.von"
+      }
+     ]
+    },
+    {
+     "name": "Describing",
+     "tips": [
+      {
+       "h": "The ĉi- series covers all",
+       "b": "ĉiu each, ĉio everything, ĉie everywhere, ĉiam always, ĉies everyone's. ĉiu and ĉio take -n as objects, and ĉiu takes -j for a plural, ĉiuj homoj meaning all people.",
+       "eg": [
+        [
+         "ĉiu tago",
+         "every day"
+        ],
+        [
+         "ĉiuj homoj",
+         "all people"
+        ],
+        [
+         "ĉiam",
+         "always"
+        ]
+       ]
+      },
+      {
+       "h": "-anta describes what is doing",
+       "b": "A verb root with -ant- and an adjective ending describes the doer in the act: la kuranta hundo, the running dog. -int- gives what has done and -ont- what is about to do.",
+       "eg": [
+        [
+         "la kuranta knabo",
+         "the running boy"
+        ],
+        [
+         "la kurinta knabo",
+         "the boy who has run"
+        ],
+        [
+         "la kuronta knabo",
+         "the boy about to run"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "alta",
+       "e": "tall",
+       "ipa": "ˈal.ta",
+       "pos": "adj"
+      },
+      {
+       "t": "mallonga",
+       "e": "short",
+       "ipa": "mal.ˈlon.ɡa",
+       "pos": "adj",
+       "note": "mal- + longa"
+      },
+      {
+       "t": "dika",
+       "e": "thick",
+       "ipa": "ˈdi.ka",
+       "pos": "adj"
+      },
+      {
+       "t": "maldika",
+       "e": "thin",
+       "ipa": "mal.ˈdi.ka",
+       "pos": "adj",
+       "note": "mal- + dika"
+      },
+      {
+       "t": "saĝa",
+       "e": "wise",
+       "ipa": "ˈsa.d͡ʒa",
+       "pos": "adj"
+      },
+      {
+       "t": "malsaĝa",
+       "e": "foolish",
+       "ipa": "mal.ˈsa.d͡ʒa",
+       "pos": "adj",
+       "note": "mal- + saĝa"
+      },
+      {
+       "t": "riĉa",
+       "e": "rich",
+       "ipa": "ˈri.t͡ʃa",
+       "pos": "adj"
+      },
+      {
+       "t": "malriĉa",
+       "e": "poor",
+       "ipa": "mal.ˈri.t͡ʃa",
+       "pos": "adj",
+       "note": "mal- + riĉa"
+      },
+      {
+       "t": "amika",
+       "e": "friendly",
+       "ipa": "a.ˈmi.ka",
+       "pos": "adj",
+       "note": "amiko + -a"
+      },
+      {
+       "t": "afabla",
+       "e": "kind",
+       "ipa": "a.ˈfa.bla",
+       "pos": "adj"
+      },
+      {
+       "t": "kara",
+       "e": "dear",
+       "ipa": "ˈka.ra",
+       "pos": "adj"
+      },
+      {
+       "t": "aspekti",
+       "e": "to look",
+       "ipa": "as.ˈpek.ti",
+       "pos": "verb",
+       "note": "to have an appearance"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mia avo estas saĝa",
+       "e": "My grandfather is wise",
+       "ipa": "ˈmi.a ˈa.vo ˈes.tas ˈsa.d͡ʒa"
+      },
+      {
+       "t": "Ŝi estas alta kaj maldika",
+       "e": "She is tall and thin",
+       "ipa": "ʃi ˈes.tas ˈal.ta kaj mal.ˈdi.ka"
+      },
+      {
+       "t": "Ĉiu homo estas kara",
+       "e": "Every person is dear",
+       "ipa": "ˈt͡ʃi.u ˈho.mo ˈes.tas ˈka.ra"
+      },
+      {
+       "t": "La riĉulo ne estas feliĉa",
+       "e": "The rich man is not happy",
+       "ipa": "la ri.ˈt͡ʃu.lo ne ˈes.tas fe.ˈli.t͡ʃa"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "WORK AND SCHOOL",
+   "subtitle": "The classroom, jobs, the numbers past ten and paying",
+   "skills": [
+    {
+     "name": "School",
+     "tips": [
+      {
+       "h": "-ant- names the one doing it",
+       "b": "The active participle -ant- with a noun ending names whoever is performing the action now: lerni gives lernanto a learner, instrui gives instruanto the one teaching. -ist- names it as a trade instead.",
+       "eg": [
+        [
+         "lernanto",
+         "a learner"
+        ],
+        [
+         "instruanto",
+         "one who is teaching"
+        ],
+        [
+         "instruisto",
+         "a teacher"
+        ]
+       ]
+      },
+      {
+       "h": "Nouns from verb roots",
+       "b": "A verb root with -o names the act or its result: labori to work gives laboro work, demandi to ask gives demando a question, respondi gives respondo an answer.",
+       "eg": [
+        [
+         "demandi / demando",
+         "to ask / a question"
+        ],
+        [
+         "respondi / respondo",
+         "to answer / an answer"
+        ],
+        [
+         "studi / studo",
+         "to study / a study"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "lernejo",
+       "e": "school",
+       "ipa": "ler.ˈne.jo",
+       "pos": "noun",
+       "note": "lerni + -ej- place"
+      },
+      {
+       "t": "lernanto",
+       "e": "pupil",
+       "ipa": "ler.ˈnan.to",
+       "pos": "noun",
+       "note": "lerni + -ant-, doer"
+      },
+      {
+       "t": "instruisto",
+       "e": "teacher",
+       "ipa": "in.stru.ˈis.to",
+       "pos": "noun",
+       "note": "instrui + -ist- trade"
+      },
+      {
+       "t": "instrui",
+       "e": "to teach",
+       "ipa": "in.ˈstru.i",
+       "pos": "verb"
+      },
+      {
+       "t": "studi",
+       "e": "to study",
+       "ipa": "ˈstu.di",
+       "pos": "verb"
+      },
+      {
+       "t": "klaso",
+       "e": "class",
+       "ipa": "ˈkla.so",
+       "pos": "noun"
+      },
+      {
+       "t": "leciono",
+       "e": "lesson",
+       "ipa": "le.t͡si.ˈo.no",
+       "pos": "noun"
+      },
+      {
+       "t": "studento",
+       "e": "student",
+       "ipa": "stu.ˈden.to",
+       "pos": "noun",
+       "note": "at a university"
+      },
+      {
+       "t": "universitato",
+       "e": "university",
+       "ipa": "u.ni.ver.si.ˈta.to",
+       "pos": "noun"
+      },
+      {
+       "t": "ekzameno",
+       "e": "exam",
+       "ipa": "ek.za.ˈme.no",
+       "pos": "noun"
+      },
+      {
+       "t": "kajero",
+       "e": "notebook",
+       "ipa": "ka.ˈje.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "tabulo",
+       "e": "board",
+       "ipa": "ta.ˈbu.lo",
+       "pos": "noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La lernantoj studas en la lernejo",
+       "e": "The pupils study at school",
+       "ipa": "la ler.ˈnan.toj ˈstu.das en la ler.ˈne.jo"
+      },
+      {
+       "t": "Nia instruisto parolas Esperanton",
+       "e": "Our teacher speaks Esperanto",
+       "ipa": "ˈni.a in.stru.ˈis.to pa.ˈro.las es.pe.ˈran.ton"
+      },
+      {
+       "t": "Mi skribas en mia kajero",
+       "e": "I write in my notebook",
+       "ipa": "mi ˈskri.bas en ˈmi.a ka.ˈje.ro"
+      },
+      {
+       "t": "La leciono estis longa",
+       "e": "The lesson was long",
+       "ipa": "la le.t͡si.ˈo.no ˈes.tis ˈlon.ɡa"
+      }
+     ]
+    },
+    {
+     "name": "Work",
+     "tips": [
+      {
+       "h": "kiel names the role",
+       "b": "kiel before a bare noun says in what capacity a person acts: mi laboras kiel kuiristo, I work as a cook. The noun after it takes no article and no -n.",
+       "eg": [
+        [
+         "kiel kuiristo",
+         "as a cook"
+        ],
+        [
+         "labori kiel ŝoforo",
+         "to work as a driver"
+        ]
+       ]
+      },
+      {
+       "h": "-ist- and -ej- build a trade",
+       "b": "One trade root yields both the worker and the workplace: kuiri gives kuiristo a cook and kuirejo a kitchen; vendi gives vendisto a seller and vendejo a shop.",
+       "eg": [
+        [
+         "kuiristo / kuirejo",
+         "cook / kitchen"
+        ],
+        [
+         "vendisto / vendejo",
+         "seller / shop"
+        ],
+        [
+         "instruisto / lernejo",
+         "teacher / school"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "laboro",
+       "e": "work",
+       "ipa": "la.ˈbo.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "labori",
+       "e": "to work",
+       "ipa": "la.ˈbo.ri",
+       "pos": "verb"
+      },
+      {
+       "t": "oficejo",
+       "e": "office",
+       "ipa": "o.fi.ˈt͡se.jo",
+       "pos": "noun",
+       "note": "ofico + -ej- place"
+      },
+      {
+       "t": "kuiristo",
+       "e": "cook",
+       "ipa": "ku.i.ˈris.to",
+       "pos": "noun",
+       "note": "kuiri + -ist- trade"
+      },
+      {
+       "t": "vendisto",
+       "e": "seller",
+       "ipa": "ven.ˈdis.to",
+       "pos": "noun",
+       "note": "vendi + -ist- trade"
+      },
+      {
+       "t": "ŝoforo",
+       "e": "driver",
+       "ipa": "ʃo.ˈfo.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "policisto",
+       "e": "police officer",
+       "ipa": "po.li.ˈt͡sis.to",
+       "pos": "noun",
+       "note": "polico + -ist-"
+      },
+      {
+       "t": "farmisto",
+       "e": "farmer",
+       "ipa": "far.ˈmis.to",
+       "pos": "noun",
+       "note": "farmo + -ist- trade"
+      },
+      {
+       "t": "verkisto",
+       "e": "writer",
+       "ipa": "ver.ˈkis.to",
+       "pos": "noun",
+       "note": "verki + -ist-, author"
+      },
+      {
+       "t": "inĝeniero",
+       "e": "engineer",
+       "ipa": "in.d͡ʒe.ni.ˈe.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "kolego",
+       "e": "colleague",
+       "ipa": "ko.ˈle.ɡo",
+       "pos": "noun"
+      },
+      {
+       "t": "dungi",
+       "e": "to hire",
+       "ipa": "ˈdun.ɡi",
+       "pos": "verb"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mia patro laboras en oficejo",
+       "e": "My father works in an office",
+       "ipa": "ˈmi.a ˈpa.tro la.ˈbo.ras en o.fi.ˈt͡se.jo"
+      },
+      {
+       "t": "Ŝi laboras kiel kuracisto",
+       "e": "She works as a doctor",
+       "ipa": "ʃi la.ˈbo.ras ˈki.el ku.ra.ˈt͡sis.to"
+      },
+      {
+       "t": "La vendisto vendas panon",
+       "e": "The seller sells bread",
+       "ipa": "la ven.ˈdis.to ˈven.das ˈpa.non"
+      },
+      {
+       "t": "Mi ŝatas mian laboron",
+       "e": "I like my work",
+       "ipa": "mi ˈʃa.tas ˈmi.an la.ˈbo.ron"
+      }
+     ]
+    },
+    {
+     "name": "Big Numbers",
+     "tips": [
+      {
+       "h": "Tens join, sums stay apart",
+       "b": "A multiple of ten is written as one word, dudek, tridek; a sum keeps its parts separate, dudek unu. Hundreds and thousands follow the same rule: ducent, tri mil.",
+       "eg": [
+        [
+         "dudek",
+         "twenty"
+        ],
+        [
+         "dudek unu",
+         "twenty-one"
+        ],
+        [
+         "ducent kvindek",
+         "two hundred and fifty"
+        ]
+       ]
+      },
+      {
+       "h": "-a makes an ordinal, -e an order",
+       "b": "A numeral takes -a for the ordinal and -e for the adverb: unu gives unua first and unue firstly, du gives dua second and due secondly. -obl- gives a multiple, so duobla is double.",
+       "eg": [
+        [
+         "unua / unue",
+         "first / firstly"
+        ],
+        [
+         "dua / due",
+         "second / secondly"
+        ],
+        [
+         "duobla",
+         "double"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "dek unu",
+       "e": "eleven",
+       "ipa": "ˈdek ˈu.nu",
+       "pos": "num"
+      },
+      {
+       "t": "dek du",
+       "e": "twelve",
+       "ipa": "ˈdek ˈdu",
+       "pos": "num"
+      },
+      {
+       "t": "dudek",
+       "e": "twenty",
+       "ipa": "ˈdu.dek",
+       "pos": "num"
+      },
+      {
+       "t": "tridek",
+       "e": "thirty",
+       "ipa": "ˈtri.dek",
+       "pos": "num"
+      },
+      {
+       "t": "kvardek",
+       "e": "forty",
+       "ipa": "ˈkvar.dek",
+       "pos": "num"
+      },
+      {
+       "t": "kvindek",
+       "e": "fifty",
+       "ipa": "ˈkvin.dek",
+       "pos": "num"
+      },
+      {
+       "t": "cent",
+       "e": "hundred",
+       "ipa": "ˈt͡sent",
+       "pos": "num"
+      },
+      {
+       "t": "ducent",
+       "e": "two hundred",
+       "ipa": "ˈdu.t͡sent",
+       "pos": "num",
+       "note": "du + cent"
+      },
+      {
+       "t": "mil",
+       "e": "thousand",
+       "ipa": "ˈmil",
+       "pos": "num"
+      },
+      {
+       "t": "miliono",
+       "e": "million",
+       "ipa": "mi.li.ˈo.no",
+       "pos": "num"
+      },
+      {
+       "t": "unua",
+       "e": "first",
+       "ipa": "u.ˈnu.a",
+       "pos": "adj",
+       "note": "unu + -a, ordinal"
+      },
+      {
+       "t": "dua",
+       "e": "second",
+       "ipa": "ˈdu.a",
+       "pos": "adj",
+       "note": "du + -a, ordinal"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi havas dudek librojn",
+       "e": "I have twenty books",
+       "ipa": "mi ˈha.vas ˈdu.dek ˈli.brojn"
+      },
+      {
+       "t": "La klaso havas tridek lernantojn",
+       "e": "The class has thirty pupils",
+       "ipa": "la ˈkla.so ˈha.vas ˈtri.dek ler.ˈnan.tojn"
+      },
+      {
+       "t": "Ŝi estas la unua",
+       "e": "She is the first",
+       "ipa": "ʃi ˈes.tas la u.ˈnu.a"
+      },
+      {
+       "t": "Cent jaroj estas jarcento",
+       "e": "A hundred years is a century",
+       "ipa": "t͡sent ˈja.roj ˈes.tas jar.ˈt͡sen.to"
+      }
+     ]
+    },
+    {
+     "name": "Money",
+     "tips": [
+      {
+       "h": "kiom kostas asks the price",
+       "b": "A price is asked with kiom kostas and answered with a numeral and the currency. The amount is the object of kosti and takes -n.",
+       "eg": [
+        [
+         "Kiom kostas la pano?",
+         "How much is the bread?"
+        ],
+        [
+         "Ĝi kostas du eŭrojn",
+         "It costs two euros"
+        ]
+       ]
+      },
+      {
+       "h": "-er- names one piece of a mass",
+       "b": "The suffix -er- takes a single unit out of a mass: mono money gives monero a coin, sablo sand gives sablero a grain, neĝo gives neĝero a snowflake.",
+       "eg": [
+        [
+         "monero",
+         "a coin"
+        ],
+        [
+         "sablero",
+         "a grain of sand"
+        ],
+        [
+         "neĝero",
+         "a snowflake"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "mono",
+       "e": "money",
+       "ipa": "ˈmo.no",
+       "pos": "noun"
+      },
+      {
+       "t": "monero",
+       "e": "coin",
+       "ipa": "mo.ˈne.ro",
+       "pos": "noun",
+       "note": "mono + -er- particle"
+      },
+      {
+       "t": "prezo",
+       "e": "price",
+       "ipa": "ˈpre.zo",
+       "pos": "noun"
+      },
+      {
+       "t": "kosti",
+       "e": "to cost",
+       "ipa": "ˈkos.ti",
+       "pos": "verb"
+      },
+      {
+       "t": "pagi",
+       "e": "to pay",
+       "ipa": "ˈpa.ɡi",
+       "pos": "verb"
+      },
+      {
+       "t": "aĉeti",
+       "e": "to buy",
+       "ipa": "a.ˈt͡ʃe.ti",
+       "pos": "verb"
+      },
+      {
+       "t": "vendi",
+       "e": "to sell",
+       "ipa": "ˈven.di",
+       "pos": "verb"
+      },
+      {
+       "t": "multekosta",
+       "e": "expensive",
+       "ipa": "mul.te.ˈkos.ta",
+       "pos": "adj",
+       "note": "multe + kosta"
+      },
+      {
+       "t": "malmultekosta",
+       "e": "cheap",
+       "ipa": "mal.mul.te.ˈkos.ta",
+       "pos": "adj",
+       "note": "mal- + multekosta"
+      },
+      {
+       "t": "banko",
+       "e": "bank",
+       "ipa": "ˈban.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "karto",
+       "e": "card",
+       "ipa": "ˈkar.to",
+       "pos": "noun"
+      },
+      {
+       "t": "ŝuldo",
+       "e": "debt",
+       "ipa": "ˈʃul.do",
+       "pos": "noun"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Kiom kostas la libro?",
+       "e": "How much does the book cost?",
+       "ipa": "ˈki.om ˈkos.tas la ˈli.bro"
+      },
+      {
+       "t": "Mi pagas per karto",
+       "e": "I pay by card",
+       "ipa": "mi ˈpa.ɡas per ˈkar.to"
+      },
+      {
+       "t": "La aŭto estas multekosta",
+       "e": "The car is expensive",
+       "ipa": "la ˈaw.to ˈes.tas mul.te.ˈkos.ta"
+      },
+      {
+       "t": "Ŝi aĉetis panon kaj lakton",
+       "e": "She bought bread and milk",
+       "ipa": "ʃi a.ˈt͡ʃe.tis ˈpa.non kaj ˈlak.ton"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "OUT AND ABOUT",
+   "subtitle": "Ordering, buying and what people do for pleasure",
+   "skills": [
+    {
+     "name": "Restaurant",
+     "tips": [
+      {
+       "h": "bonvolu makes a request polite",
+       "b": "An order in -u is direct: donu al mi la menuon. bonvolu before the infinitive softens it into a request, and mi petas after a phrase does the same work.",
+       "eg": [
+        [
+         "Donu la menuon",
+         "Give me the menu"
+        ],
+        [
+         "Bonvolu doni la menuon",
+         "Please give me the menu"
+        ],
+        [
+         "La kalkulon, mi petas",
+         "The bill, please"
+        ]
+       ]
+      },
+      {
+       "h": "ek- marks the start of an action",
+       "b": "The prefix ek- states that an action begins or happens all at once: iri to go gives ekiri to set off, vidi to see gives ekvidi to catch sight of, dormi gives ekdormi to fall asleep.",
+       "eg": [
+        [
+         "ekiri",
+         "to set off"
+        ],
+        [
+         "ekvidi",
+         "to catch sight of"
+        ],
+        [
+         "ekdormi",
+         "to fall asleep"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "restoracio",
+       "e": "restaurant",
+       "ipa": "res.to.ra.ˈt͡si.o",
+       "pos": "noun"
+      },
+      {
+       "t": "menuo",
+       "e": "menu",
+       "ipa": "me.ˈnu.o",
+       "pos": "noun"
+      },
+      {
+       "t": "kelnero",
+       "e": "waiter",
+       "ipa": "kel.ˈne.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "mendi",
+       "e": "to order",
+       "ipa": "ˈmen.di",
+       "pos": "verb"
+      },
+      {
+       "t": "servi",
+       "e": "to serve",
+       "ipa": "ˈser.vi",
+       "pos": "verb"
+      },
+      {
+       "t": "gusto",
+       "e": "taste",
+       "ipa": "ˈɡus.to",
+       "pos": "noun"
+      },
+      {
+       "t": "bongusta",
+       "e": "tasty",
+       "ipa": "bon.ˈɡus.ta",
+       "pos": "adj",
+       "note": "bona + gusto + -a"
+      },
+      {
+       "t": "salo",
+       "e": "salt",
+       "ipa": "ˈsa.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "pipro",
+       "e": "pepper",
+       "ipa": "ˈpi.pro",
+       "pos": "noun"
+      },
+      {
+       "t": "deserto",
+       "e": "dessert",
+       "ipa": "de.ˈser.to",
+       "pos": "noun"
+      },
+      {
+       "t": "kuko",
+       "e": "cake",
+       "ipa": "ˈku.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "kalkulo",
+       "e": "bill",
+       "ipa": "kal.ˈku.lo",
+       "pos": "noun",
+       "note": "kalkuli + -o, to count"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi mendas supon kaj panon",
+       "e": "I order soup and bread",
+       "ipa": "mi ˈmen.das ˈsu.pon kaj ˈpa.non"
+      },
+      {
+       "t": "La kuko estas tre bongusta",
+       "e": "The cake is very tasty",
+       "ipa": "la ˈku.ko ˈes.tas tre bon.ˈɡus.ta"
+      },
+      {
+       "t": "Bonvolu doni al mi la kalkulon",
+       "e": "Please give me the bill",
+       "ipa": "bon.ˈvo.lu ˈdo.ni al mi la kal.ˈku.lon"
+      },
+      {
+       "t": "La kelnero servas la manĝaĵon",
+       "e": "The waiter serves the food",
+       "ipa": "la kel.ˈne.ro ˈser.vas la man.ˈd͡ʒa.ʒon"
+      }
+     ]
+    },
+    {
+     "name": "Shopping",
+     "tips": [
+      {
+       "h": "-us states a condition",
+       "b": "The conditional ends in -us and has one form for every subject: mi aĉetus, I would buy. It is used in a wish and in both halves of an if-sentence, after se.",
+       "eg": [
+        [
+         "Mi aĉetus ĝin",
+         "I would buy it"
+        ],
+        [
+         "Mi volus vidi",
+         "I would like to see"
+        ],
+        [
+         "Se mi havus monon",
+         "If I had money"
+        ]
+       ]
+      },
+      {
+       "h": "The pronoun oni",
+       "b": "oni names a subject left unnamed, as English one or people: oni diras, people say. It has no plural, and its possessive is onia.",
+       "eg": [
+        [
+         "Oni diras",
+         "People say"
+        ],
+        [
+         "Oni ne fumas ĉi tie",
+         "One does not smoke here"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "butiko",
+       "e": "store",
+       "ipa": "bu.ˈti.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "superbazaro",
+       "e": "supermarket",
+       "ipa": "su.per.ba.ˈza.ro",
+       "pos": "noun",
+       "note": "super + bazaro"
+      },
+      {
+       "t": "kliento",
+       "e": "customer",
+       "ipa": "kli.ˈen.to",
+       "pos": "noun"
+      },
+      {
+       "t": "sako",
+       "e": "bag",
+       "ipa": "ˈsa.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "listo",
+       "e": "list",
+       "ipa": "ˈlis.to",
+       "pos": "noun"
+      },
+      {
+       "t": "rabato",
+       "e": "discount",
+       "ipa": "ra.ˈba.to",
+       "pos": "noun"
+      },
+      {
+       "t": "elekti",
+       "e": "to choose",
+       "ipa": "e.ˈlek.ti",
+       "pos": "verb"
+      },
+      {
+       "t": "serĉi",
+       "e": "to look for",
+       "ipa": "ˈser.t͡ʃi",
+       "pos": "verb"
+      },
+      {
+       "t": "trovi",
+       "e": "to find",
+       "ipa": "ˈtro.vi",
+       "pos": "verb"
+      },
+      {
+       "t": "multa",
+       "e": "many",
+       "ipa": "ˈmul.ta",
+       "pos": "adj"
+      },
+      {
+       "t": "peza",
+       "e": "heavy",
+       "ipa": "ˈpe.za",
+       "pos": "adj"
+      },
+      {
+       "t": "malpeza",
+       "e": "light",
+       "ipa": "mal.ˈpe.za",
+       "pos": "adj",
+       "note": "mal- + peza, in weight"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi serĉas malpezan sakon",
+       "e": "I look for a light bag",
+       "ipa": "mi ˈser.t͡ʃas mal.ˈpe.zan ˈsa.kon"
+      },
+      {
+       "t": "Ŝi trovis belan robon",
+       "e": "She found a beautiful dress",
+       "ipa": "ʃi ˈtro.vis ˈbe.lan ˈro.bon"
+      },
+      {
+       "t": "Mi volus aĉeti tiun libron",
+       "e": "I would like to buy that book",
+       "ipa": "mi ˈvo.lus a.ˈt͡ʃe.ti ˈti.un ˈli.bron"
+      },
+      {
+       "t": "La kliento pagas en la butiko",
+       "e": "The customer pays in the store",
+       "ipa": "la kli.ˈen.to ˈpa.ɡas en la bu.ˈti.ko"
+      }
+     ]
+    },
+    {
+     "name": "Hobbies",
+     "tips": [
+      {
+       "h": "ŝati and voli take an infinitive",
+       "b": "A verb of liking, wanting or being able is followed straight by the infinitive, with no linking word: mi ŝatas kanti, ŝi volas danci, ni povas ludi.",
+       "eg": [
+        [
+         "Mi ŝatas kanti",
+         "I like to sing"
+        ],
+        [
+         "Ŝi volas danci",
+         "She wants to dance"
+        ],
+        [
+         "Ni povas ludi",
+         "We can play"
+        ]
+       ]
+      },
+      {
+       "h": "-ad- turns an act into a pastime",
+       "b": "The suffix -ad- names an action carried on over time: kanti to sing gives kantado singing, legi to read gives legado reading, danci gives dancado dancing.",
+       "eg": [
+        [
+         "kantado",
+         "singing"
+        ],
+        [
+         "legado",
+         "reading"
+        ],
+        [
+         "dancado",
+         "dancing"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "ŝatokupo",
+       "e": "hobby",
+       "ipa": "ʃa.to.ˈku.po",
+       "pos": "noun",
+       "note": "ŝati + okupo"
+      },
+      {
+       "t": "amiko",
+       "e": "friend",
+       "ipa": "a.ˈmi.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "muziko",
+       "e": "music",
+       "ipa": "mu.ˈzi.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "kanti",
+       "e": "to sing",
+       "ipa": "ˈkan.ti",
+       "pos": "verb"
+      },
+      {
+       "t": "danci",
+       "e": "to dance",
+       "ipa": "ˈdan.t͡si",
+       "pos": "verb"
+      },
+      {
+       "t": "desegni",
+       "e": "to draw",
+       "ipa": "de.ˈseɡ.ni",
+       "pos": "verb"
+      },
+      {
+       "t": "pentri",
+       "e": "to paint",
+       "ipa": "ˈpen.tri",
+       "pos": "verb"
+      },
+      {
+       "t": "ludi",
+       "e": "to play",
+       "ipa": "ˈlu.di",
+       "pos": "verb"
+      },
+      {
+       "t": "ludo",
+       "e": "game",
+       "ipa": "ˈlu.do",
+       "pos": "noun"
+      },
+      {
+       "t": "filmo",
+       "e": "film",
+       "ipa": "ˈfil.mo",
+       "pos": "noun"
+      },
+      {
+       "t": "kolekti",
+       "e": "to collect",
+       "ipa": "ko.ˈlek.ti",
+       "pos": "verb"
+      },
+      {
+       "t": "kunveni",
+       "e": "to gather",
+       "ipa": "kun.ˈve.ni",
+       "pos": "verb",
+       "note": "kun + veni, together"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Mi ludas kun miaj amikoj",
+       "e": "I play with my friends",
+       "ipa": "mi ˈlu.das kun ˈmi.aj a.ˈmi.koj"
+      },
+      {
+       "t": "Ŝi ŝatas kanti kaj danci",
+       "e": "She likes to sing and dance",
+       "ipa": "ʃi ˈʃa.tas ˈkan.ti kaj ˈdan.t͡si"
+      },
+      {
+       "t": "La filmo estas tre bona",
+       "e": "The film is very good",
+       "ipa": "la ˈfil.mo ˈes.tas tre ˈbo.na"
+      },
+      {
+       "t": "Li kolektas malnovajn monerojn",
+       "e": "He collects old coins",
+       "ipa": "li ko.ˈlek.tas mal.ˈno.vajn mo.ˈne.rojn"
+      }
+     ]
+    },
+    {
+     "name": "Sports",
+     "tips": [
+      {
+       "h": "-int- and -ont- place the doer in time",
+       "b": "Beside -ant-, the doer in the act, stand -int- for the one who has finished and -ont- for the one about to begin. All three take the ordinary adjective and noun endings.",
+       "eg": [
+        [
+         "kuranta",
+         "running"
+        ],
+        [
+         "kurinta",
+         "having run"
+        ],
+        [
+         "kuronta",
+         "about to run"
+        ]
+       ]
+      },
+      {
+       "h": "The reflexive si",
+       "b": "si refers back to the subject of its own clause, and only in the third person: li lavas sin, he washes himself. mi and vi use their own accusative forms instead.",
+       "eg": [
+        [
+         "Li lavas sin",
+         "He washes himself"
+        ],
+        [
+         "Ili amuzas sin",
+         "They amuse themselves"
+        ],
+        [
+         "Mi lavas min",
+         "I wash myself"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "sporto",
+       "e": "sport",
+       "ipa": "ˈspor.to",
+       "pos": "noun"
+      },
+      {
+       "t": "futbalo",
+       "e": "football",
+       "ipa": "fut.ˈba.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "pilko",
+       "e": "ball",
+       "ipa": "ˈpil.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "teamo",
+       "e": "team",
+       "ipa": "te.ˈa.mo",
+       "pos": "noun"
+      },
+      {
+       "t": "ludanto",
+       "e": "player",
+       "ipa": "lu.ˈdan.to",
+       "pos": "noun",
+       "note": "ludi + -ant-, doer"
+      },
+      {
+       "t": "konkurso",
+       "e": "competition",
+       "ipa": "kon.ˈkur.so",
+       "pos": "noun"
+      },
+      {
+       "t": "kuri",
+       "e": "to run",
+       "ipa": "ˈku.ri",
+       "pos": "verb"
+      },
+      {
+       "t": "naĝi",
+       "e": "to swim",
+       "ipa": "ˈna.d͡ʒi",
+       "pos": "verb"
+      },
+      {
+       "t": "salti",
+       "e": "to jump",
+       "ipa": "ˈsal.ti",
+       "pos": "verb"
+      },
+      {
+       "t": "gajni",
+       "e": "to win",
+       "ipa": "ˈɡaj.ni",
+       "pos": "verb"
+      },
+      {
+       "t": "perdi",
+       "e": "to lose",
+       "ipa": "ˈper.di",
+       "pos": "verb"
+      },
+      {
+       "t": "rapida",
+       "e": "fast",
+       "ipa": "ra.ˈpi.da",
+       "pos": "adj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Ni ludas futbalon en la parko",
+       "e": "We play football in the park",
+       "ipa": "ni ˈlu.das fut.ˈba.lon en la ˈpar.ko"
+      },
+      {
+       "t": "Li kuras pli rapide ol mi",
+       "e": "He runs faster than I do",
+       "ipa": "li ˈku.ras pli ra.ˈpi.de ol mi"
+      },
+      {
+       "t": "Nia teamo gajnis la konkurson",
+       "e": "Our team won the competition",
+       "ipa": "ˈni.a te.ˈa.mo ˈɡaj.nis la kon.ˈkur.son"
+      },
+      {
+       "t": "Ŝi naĝas ĉiutage",
+       "e": "She swims every day",
+       "ipa": "ʃi ˈna.d͡ʒas t͡ʃi.u.ˈta.ɡe"
       }
      ]
     }
@@ -652,96 +5369,121 @@
   },
   {
    "title": "THE WORLD",
+   "subtitle": "Nature, the city, the countries and more everyday verbs",
    "skills": [
     {
-     "name": "Animals",
-     "words": [
+     "name": "Nature",
+     "tips": [
       {
-       "t": "hundo",
-       "e": "dog",
-       "ipa": "ˈhun.do"
+       "h": "Compounds describe the natural world",
+       "b": "Two roots make one noun and the second carries the meaning: sunsubiro is a sun-going-under, a sunset; terpomo an earth-apple, a potato; akvofalo a water-fall.",
+       "eg": [
+        [
+         "sunsubiro",
+         "sunset"
+        ],
+        [
+         "terpomo",
+         "potato"
+        ],
+        [
+         "akvofalo",
+         "waterfall"
+        ]
+       ]
       },
       {
-       "t": "kato",
-       "e": "cat",
-       "ipa": "ˈka.to"
-      },
-      {
-       "t": "birdo",
-       "e": "bird",
-       "ipa": "ˈbir.do"
-      },
-      {
-       "t": "ĉevalo",
-       "e": "horse",
-       "ipa": "t͡ʃe.ˈva.lo"
-      },
-      {
-       "t": "fiŝo",
-       "e": "fish",
-       "ipa": "ˈfi.ʃo"
-      },
-      {
-       "t": "bovino",
-       "e": "cow",
-       "ipa": "bo.ˈvi.no"
-      },
-      {
-       "t": "kokino",
-       "e": "chicken",
-       "ipa": "ko.ˈki.no"
+       "h": "re- repeats the action",
+       "b": "The prefix re- returns or repeats: veni to come gives reveni to come back, vidi to see gives revidi to see again, legi gives relegi to read once more.",
+       "eg": [
+        [
+         "reveni",
+         "to return"
+        ],
+        [
+         "revidi",
+         "to see again"
+        ],
+        [
+         "relegi",
+         "to reread"
+        ]
+       ]
       }
      ],
-     "phrases": [
-      {
-       "t": "Mi havas hundon",
-       "e": "I have a dog",
-       "ipa": "mi ˈha.vas ˈhun.don"
-      },
-      {
-       "t": "La kato estas nigra",
-       "e": "The cat is black",
-       "ipa": "la ˈka.to ˈes.tas ˈni.ɡra"
-      }
-     ]
-    },
-    {
-     "name": "Nature",
      "words": [
+      {
+       "t": "naturo",
+       "e": "nature",
+       "ipa": "na.ˈtu.ro",
+       "pos": "noun"
+      },
       {
        "t": "suno",
        "e": "sun",
-       "ipa": "ˈsu.no"
+       "ipa": "ˈsu.no",
+       "pos": "noun"
       },
       {
        "t": "luno",
        "e": "moon",
-       "ipa": "ˈlu.no"
+       "ipa": "ˈlu.no",
+       "pos": "noun"
       },
       {
-       "t": "arbo",
-       "e": "tree",
-       "ipa": "ˈar.bo"
-      },
-      {
-       "t": "floro",
-       "e": "flower",
-       "ipa": "ˈflo.ro"
-      },
-      {
-       "t": "pluvo",
-       "e": "rain",
-       "ipa": "ˈplu.vo"
-      },
-      {
-       "t": "maro",
-       "e": "sea",
-       "ipa": "ˈma.ro"
+       "t": "stelo",
+       "e": "star",
+       "ipa": "ˈste.lo",
+       "pos": "noun"
       },
       {
        "t": "ĉielo",
        "e": "sky",
-       "ipa": "t͡ʃi.ˈe.lo"
+       "ipa": "t͡ʃi.ˈe.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "arbo",
+       "e": "tree",
+       "ipa": "ˈar.bo",
+       "pos": "noun"
+      },
+      {
+       "t": "arbaro",
+       "e": "forest",
+       "ipa": "ar.ˈba.ro",
+       "pos": "noun",
+       "note": "arbo + -ar- group"
+      },
+      {
+       "t": "floro",
+       "e": "flower",
+       "ipa": "ˈflo.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "herbo",
+       "e": "grass",
+       "ipa": "ˈher.bo",
+       "pos": "noun"
+      },
+      {
+       "t": "monto",
+       "e": "mountain",
+       "ipa": "ˈmon.to",
+       "pos": "noun"
+      },
+      {
+       "t": "rivero",
+       "e": "river",
+       "ipa": "ri.ˈve.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "maro",
+       "e": "sea",
+       "ipa": "ˈma.ro",
+       "pos": "noun"
       }
      ],
      "phrases": [
@@ -751,61 +5493,480 @@
        "ipa": "la t͡ʃi.ˈe.lo ˈes.tas ˈblu.a"
       },
       {
-       "t": "Mi vidas la sunon",
-       "e": "I see the sun",
-       "ipa": "mi ˈvi.das la ˈsu.non"
+       "t": "Mi vidas la sunon kaj la lunon",
+       "e": "I see the sun and the moon",
+       "ipa": "mi ˈvi.das la ˈsu.non kaj la ˈlu.non"
+      },
+      {
+       "t": "La montoj estas altaj",
+       "e": "The mountains are tall",
+       "ipa": "la ˈmon.toj ˈes.tas ˈal.taj"
+      },
+      {
+       "t": "Ŝi kolektas florojn en la ĝardeno",
+       "e": "She gathers flowers in the garden",
+       "ipa": "ʃi ko.ˈlek.tas ˈflo.rojn en la d͡ʒar.ˈde.no"
+      }
+     ]
+    },
+    {
+     "name": "City",
+     "tips": [
+      {
+       "h": "Prepositions as adverbs and prefixes",
+       "b": "A preposition also serves as a prefix on a verb and, with -e, as an adverb of its own: antaŭ before gives antaŭe in front and antaŭiri to go ahead of.",
+       "eg": [
+        [
+         "antaŭe",
+         "in front"
+        ],
+        [
+         "poste",
+         "afterwards"
+        ],
+        [
+         "kunveni",
+         "to come together"
+        ]
+       ]
+      },
+      {
+       "h": "kies asks and ties answers",
+       "b": "The -es forms name a possessor: kies whose, ties that one's, ĉies everyone's, nenies nobody's. They never take -j or -n, because the thing owned carries those endings.",
+       "eg": [
+        [
+         "Kies domo?",
+         "Whose house?"
+        ],
+        [
+         "ties domo",
+         "that one's house"
+        ],
+        [
+         "ĉies domo",
+         "everyone's house"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "centro",
+       "e": "centre",
+       "ipa": "ˈt͡sen.tro",
+       "pos": "noun"
+      },
+      {
+       "t": "konstruaĵo",
+       "e": "building",
+       "ipa": "kon.stru.ˈa.ʒo",
+       "pos": "noun",
+       "note": "konstrui + -aĵ- thing"
+      },
+      {
+       "t": "ponto",
+       "e": "bridge",
+       "ipa": "ˈpon.to",
+       "pos": "noun"
+      },
+      {
+       "t": "teatro",
+       "e": "theatre",
+       "ipa": "te.ˈa.tro",
+       "pos": "noun"
+      },
+      {
+       "t": "kinejo",
+       "e": "cinema",
+       "ipa": "ki.ˈne.jo",
+       "pos": "noun",
+       "note": "kino + -ej- place"
+      },
+      {
+       "t": "kafejo",
+       "e": "café",
+       "ipa": "ka.ˈfe.jo",
+       "pos": "noun",
+       "note": "kafo + -ej- place"
+      },
+      {
+       "t": "poŝtoficejo",
+       "e": "post office",
+       "ipa": "poʃ.to.fi.ˈt͡se.jo",
+       "pos": "noun",
+       "note": "poŝto + oficejo"
+      },
+      {
+       "t": "loĝanto",
+       "e": "inhabitant",
+       "ipa": "lo.ˈd͡ʒan.to",
+       "pos": "noun",
+       "note": "loĝi + -ant-, doer"
+      },
+      {
+       "t": "najbaro",
+       "e": "neighbour",
+       "ipa": "naj.ˈba.ro",
+       "pos": "noun"
+      },
+      {
+       "t": "trafiko",
+       "e": "traffic",
+       "ipa": "tra.ˈfi.ko",
+       "pos": "noun"
+      },
+      {
+       "t": "angulo",
+       "e": "corner",
+       "ipa": "an.ˈɡu.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "publika",
+       "e": "public",
+       "ipa": "pu.ˈbli.ka",
+       "pos": "adj"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "La ponto estas en la centro",
+       "e": "The bridge is in the centre",
+       "ipa": "la ˈpon.to ˈes.tas en la ˈt͡sen.tro"
+      },
+      {
+       "t": "Mia najbaro laboras en kafejo",
+       "e": "My neighbour works in a café",
+       "ipa": "ˈmi.a naj.ˈba.ro la.ˈbo.ras en ka.ˈfe.jo"
+      },
+      {
+       "t": "Ni iras al la teatro",
+       "e": "We go to the theatre",
+       "ipa": "ni ˈi.ras al la te.ˈa.tro"
+      },
+      {
+       "t": "La konstruaĵo estas alta",
+       "e": "The building is tall",
+       "ipa": "la kon.stru.ˈa.ʒo ˈes.tas ˈal.ta"
+      }
+     ]
+    },
+    {
+     "name": "Countries",
+     "tips": [
+      {
+       "h": "-io names most countries",
+       "b": "A country is usually the name of its people plus -io: franco a French person gives Francio, germano gives Germanio. A land named for its territory keeps its own root, as Brazilo and Nederlando do.",
+       "eg": [
+        [
+         "franco / Francio",
+         "a French person / France"
+        ],
+        [
+         "ĉino / Ĉinio",
+         "a Chinese person / China"
+        ],
+        [
+         "Brazilo",
+         "Brazil"
+        ]
+       ]
+      },
+      {
+       "h": "-an- names a member",
+       "b": "The suffix -an- names a member or an inhabitant: urbo gives urbano a townsman, klubo gives klubano a club member, Eŭropo gives eŭropano a European.",
+       "eg": [
+        [
+         "urbano",
+         "a townsman"
+        ],
+        [
+         "klubano",
+         "a club member"
+        ],
+        [
+         "eŭropano",
+         "a European"
+        ]
+       ]
+      },
+      {
+       "h": "Languages take the adverb too",
+       "b": "A language is named with the adjective of its people and the noun lingvo, or with the adjective alone: la angla lingvo, la angla. The -e form says in what language something is done.",
+       "eg": [
+        [
+         "la angla lingvo",
+         "the English language"
+        ],
+        [
+         "paroli angle",
+         "to speak English"
+        ],
+        [
+         "skribi Esperante",
+         "to write in Esperanto"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "lando",
+       "e": "country",
+       "ipa": "ˈlan.do",
+       "pos": "noun"
+      },
+      {
+       "t": "mondo",
+       "e": "world",
+       "ipa": "ˈmon.do",
+       "pos": "noun"
+      },
+      {
+       "t": "lingvo",
+       "e": "language",
+       "ipa": "ˈlin.ɡvo",
+       "pos": "noun"
+      },
+      {
+       "t": "popolo",
+       "e": "a people",
+       "ipa": "po.ˈpo.lo",
+       "pos": "noun"
+      },
+      {
+       "t": "landlimo",
+       "e": "border",
+       "ipa": "land.ˈli.mo",
+       "pos": "noun",
+       "note": "lando + limo, edge"
+      },
+      {
+       "t": "Francio",
+       "e": "France",
+       "ipa": "fran.ˈt͡si.o",
+       "pos": "noun",
+       "note": "franco + -io"
+      },
+      {
+       "t": "Germanio",
+       "e": "Germany",
+       "ipa": "ɡer.ma.ˈni.o",
+       "pos": "noun",
+       "note": "germano + -io"
+      },
+      {
+       "t": "Italio",
+       "e": "Italy",
+       "ipa": "i.ta.ˈli.o",
+       "pos": "noun",
+       "note": "italo + -io"
+      },
+      {
+       "t": "Hispanio",
+       "e": "Spain",
+       "ipa": "his.pa.ˈni.o",
+       "pos": "noun",
+       "note": "hispano + -io"
+      },
+      {
+       "t": "Ĉinio",
+       "e": "China",
+       "ipa": "t͡ʃi.ˈni.o",
+       "pos": "noun",
+       "note": "ĉino + -io"
+      },
+      {
+       "t": "Japanio",
+       "e": "Japan",
+       "ipa": "ja.pa.ˈni.o",
+       "pos": "noun",
+       "note": "japano + -io"
+      },
+      {
+       "t": "Brazilo",
+       "e": "Brazil",
+       "ipa": "bra.ˈzi.lo",
+       "pos": "noun",
+       "note": "a territory name"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "Francio estas bela lando",
+       "e": "France is a beautiful country",
+       "ipa": "fran.ˈt͡si.o ˈes.tas ˈbe.la ˈlan.do"
+      },
+      {
+       "t": "Ŝi parolas tri lingvojn",
+       "e": "She speaks three languages",
+       "ipa": "ʃi pa.ˈro.las tri ˈlin.ɡvojn"
+      },
+      {
+       "t": "La mondo havas multajn landojn",
+       "e": "The world has many countries",
+       "ipa": "la ˈmon.do ˈha.vas ˈmul.tajn ˈlan.dojn"
+      },
+      {
+       "t": "Mi loĝas en Italio",
+       "e": "I live in Italy",
+       "ipa": "mi ˈlo.d͡ʒas en i.ta.ˈli.o"
       }
      ]
     },
     {
      "name": "More Verbs",
-     "words": [
+     "tips": [
       {
-       "t": "fari",
-       "e": "to do",
-       "ipa": "ˈfa.ri"
+       "h": "-at- and -it- make the passive",
+       "b": "The passive participles describe what receives the action: la libro estas legata, the book is being read; legita, already read. The one who does it follows de.",
+       "eg": [
+        [
+         "legata",
+         "being read"
+        ],
+        [
+         "legita",
+         "having been read"
+        ],
+        [
+         "skribita de mi",
+         "written by me"
+        ]
+       ]
       },
+      {
+       "h": "The full tense set on one root",
+       "b": "One root carries every form the verb has: fari to do, faras does, faris did, faros will do, farus would do, faru do. Nothing else in the sentence changes.",
+       "eg": [
+        [
+         "mi faras",
+         "I do"
+        ],
+        [
+         "mi faris",
+         "I did"
+        ],
+        [
+         "mi faros",
+         "I will do"
+        ],
+        [
+         "mi farus",
+         "I would do"
+        ]
+       ]
+      },
+      {
+       "h": "ke joins two clauses",
+       "b": "ke introduces a whole clause after a verb of saying, thinking or knowing. The verb inside keeps the tense it would have had standing alone.",
+       "eg": [
+        [
+         "Mi pensas ke ŝi pravas",
+         "I think that she is right"
+        ],
+        [
+         "Li diris ke li venos",
+         "He said that he will come"
+        ]
+       ]
+      }
+     ],
+     "words": [
       {
        "t": "voli",
        "e": "to want",
-       "ipa": "ˈvo.li"
+       "ipa": "ˈvo.li",
+       "pos": "verb"
       },
       {
        "t": "povi",
        "e": "to be able",
-       "ipa": "ˈpo.vi"
+       "ipa": "ˈpo.vi",
+       "pos": "verb"
+      },
+      {
+       "t": "devi",
+       "e": "to have to",
+       "ipa": "ˈde.vi",
+       "pos": "verb"
+      },
+      {
+       "t": "scii",
+       "e": "to know",
+       "ipa": "ˈst͡si.i",
+       "pos": "verb"
+      },
+      {
+       "t": "pensi",
+       "e": "to think",
+       "ipa": "ˈpen.si",
+       "pos": "verb"
+      },
+      {
+       "t": "kredi",
+       "e": "to believe",
+       "ipa": "ˈkre.di",
+       "pos": "verb"
       },
       {
        "t": "diri",
        "e": "to say",
-       "ipa": "ˈdi.ri"
+       "ipa": "ˈdi.ri",
+       "pos": "verb"
       },
       {
-       "t": "veni",
-       "e": "to come",
-       "ipa": "ˈve.ni"
-      },
-      {
-       "t": "aĉeti",
-       "e": "to buy",
-       "ipa": "a.ˈt͡ʃe.ti"
+       "t": "fari",
+       "e": "to do",
+       "ipa": "ˈfa.ri",
+       "pos": "verb"
       },
       {
        "t": "loĝi",
-       "e": "to live",
-       "ipa": "ˈlo.d͡ʒi"
+       "e": "to reside",
+       "ipa": "ˈlo.d͡ʒi",
+       "pos": "verb"
+      },
+      {
+       "t": "dormi",
+       "e": "to sleep",
+       "ipa": "ˈdor.mi",
+       "pos": "verb"
+      },
+      {
+       "t": "malfermi",
+       "e": "to open",
+       "ipa": "mal.ˈfer.mi",
+       "pos": "verb",
+       "note": "mal- + fermi, close"
+      },
+      {
+       "t": "komenci",
+       "e": "to begin",
+       "ipa": "ko.ˈmen.t͡si",
+       "pos": "verb"
       }
      ],
      "phrases": [
       {
-       "t": "Mi volas lerni Esperanton",
-       "e": "I want to learn Esperanto",
-       "ipa": "mi ˈvo.las ˈler.ni es.pe.ˈran.ton"
+       "t": "Mi devas iri hejmen",
+       "e": "I must go home",
+       "ipa": "mi ˈde.vas ˈi.ri ˈhej.men"
       },
       {
-       "t": "Mi volas aĉeti panon",
-       "e": "I want to buy bread",
-       "ipa": "mi ˈvo.las a.ˈt͡ʃe.ti ˈpa.non"
+       "t": "Ŝi diris ke ŝi venos",
+       "e": "She said that she will come",
+       "ipa": "ʃi ˈdi.ris ke ʃi ˈve.nos"
+      },
+      {
+       "t": "Ni loĝas en malgranda vilaĝo",
+       "e": "We live in a small village",
+       "ipa": "ni ˈlo.d͡ʒas en mal.ˈɡran.da vi.ˈla.d͡ʒo"
+      },
+      {
+       "t": "Ĉu vi povas malfermi la fenestron?",
+       "e": "Can you open the window?",
+       "ipa": "t͡ʃu vi ˈpo.vas mal.ˈfer.mi la fe.ˈnes.tron"
       }
      ]
     }

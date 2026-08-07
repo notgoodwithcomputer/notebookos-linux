@@ -17,8 +17,11 @@ Design notes for THIS stack:
    the grabbed KeyPress events fine.
  - GTK is not thread-safe, so the worker only ever touches the OSD via
    GLib.idle_add — every GTK call happens on the main loop.
- - Brightness needs a backlight device (real hardware); with none present (QEMU,
-   a desktop with no panel) the brightness keys simply no-op — no OSD, no error.
+ - Brightness needs a backlight device (real hardware). With none present
+   (QEMU, a desktop with no panel) the key SAYS SO — see _OSD.show_note. It
+   used to no-op with no OSD and no error, which is the same dead key this
+   file already argues against for volume over HDMI: nothing on screen cannot
+   be told apart from a broken keyboard.
 """
 import ctypes
 import glob
@@ -213,7 +216,13 @@ def _brightness(delta):
             return None
         step = max(1, mx * abs(delta) // 100)
         new = cur + step if delta > 0 else cur - step
-        new = max(0, min(mx, new))
+        # Never all the way off. A backlight at 0 is a black panel, and the
+        # only controls for getting back are on the screen you can no longer
+        # read — two presses from 16% used to reach it. 5% of the device's own
+        # range, and at least one step, so a panel whose max_brightness is 7
+        # still lands somewhere visible.
+        floor = max(1, mx // 20)
+        new = max(floor, min(mx, new))
         with open(os.path.join(dev, "brightness"), "w") as fh:
             fh.write(str(new))
         return int(round(new * 100.0 / mx))
@@ -440,22 +449,35 @@ class MediaKeys:
             pct, muted = _volume(delta=VOL_STEP)
             if pct is not None:
                 self.osd.show_level("volume", pct, muted)
+            else:
+                self.osd.show_note("volume",
+                                   _t("Volume cannot be adjusted from here."))
         elif sym == XF86_AudioLowerVolume:
             pct, muted = _volume(delta=-VOL_STEP)
             if pct is not None:
                 self.osd.show_level("volume", pct, muted)
+            else:
+                self.osd.show_note("volume",
+                                   _t("Volume cannot be adjusted from here."))
         elif sym == XF86_AudioMute:
             pct, muted = _volume(toggle=True)
             if pct is not None:
                 self.osd.show_level("volume", pct, muted)
-        elif sym == XF86_MonBrightnessUp:
-            pct = _brightness(BRIGHT_STEP)
+            else:
+                self.osd.show_note("volume",
+                                   _t("Volume cannot be adjusted from here."))
+        elif sym in (XF86_MonBrightnessUp, XF86_MonBrightnessDown):
+            step = BRIGHT_STEP if sym == XF86_MonBrightnessUp else -BRIGHT_STEP
+            pct = _brightness(step)
             if pct is not None:
                 self.osd.show_level("brightness", pct)
-        elif sym == XF86_MonBrightnessDown:
-            pct = _brightness(-BRIGHT_STEP)
-            if pct is not None:
-                self.osd.show_level("brightness", pct)
+            else:
+                # No backlight: the same sentence the Displays page uses for
+                # the same situation. Showing nothing reads as a dead key —
+                # the argument this file already makes about volume.
+                self.osd.show_note("brightness",
+                                   _t("This screen cannot be adjusted "
+                                      "from here."))
         return False
 
 

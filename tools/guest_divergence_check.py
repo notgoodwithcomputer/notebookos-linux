@@ -49,6 +49,7 @@ cannot find the target interpreter reports SKIP, never a pass.
 """
 import argparse
 import ast
+import collections
 import glob
 import json
 import os
@@ -454,6 +455,10 @@ _NUMERIC_SPECS = set("diouxXeEfFgGc%")
 _SPEC_RE = re.compile(r'%[-#0 +]*[\d*]*(?:\.[\d*]+)?([a-zA-Z%])')
 # Calls whose result is always ASCII regardless of what goes in.
 _ASCII_CALLS = {"int", "len", "round", "abs", "hex", "oct", "id", "ord"}
+# strftime directives that can only ever produce digits and punctuation. The
+# NAME-producing ones (%a %A %b %B %c %p %x %X %Z) are excluded on purpose.
+_NUMERIC_STRFTIME = set("YmdHMSjyUWGVuwCsnt%eIfF-_0")
+_STRFTIME_RE = re.compile(r'%[-_0^#]*([a-zA-Z%])')
 
 
 def _ascii_safe(node, assigns, depth=0):
@@ -475,6 +480,21 @@ def _ascii_safe(node, assigns, depth=0):
             return False
         # "%d" is safe whatever the argument; "%s" is only as safe as the value.
         return all(s in _NUMERIC_SPECS for s in _SPEC_RE.findall(tmpl.value))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return (_ascii_safe(node.left, assigns, depth + 1)
+                and _ascii_safe(node.right, assigns, depth + 1))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+            and node.func.attr == "strftime" and node.args:
+        # A date formatted with numeric directives only. %a/%A/%b/%B/%Z would
+        # be month and day NAMES and are deliberately excluded -- they are the
+        # locale-dependent ones, and the only reason they are ASCII on this
+        # image is that it ships no locales at all, which is not a fact worth
+        # building a font verdict on.
+        f = node.args[0]
+        return (isinstance(f, ast.Constant) and isinstance(f.value, str)
+                and f.value.isascii()
+                and all(s in _NUMERIC_STRFTIME
+                        for s in _STRFTIME_RE.findall(f.value)))
     if isinstance(node, ast.JoinedStr):
         return all(_ascii_safe(v, assigns, depth + 1) for v in node.values)
     if isinstance(node, ast.FormattedValue):
@@ -498,9 +518,79 @@ def _ascii_safe(node, assigns, depth=0):
     return False
 
 
+def _iter_elts(node, assigns, depth=0):
+    """The element expressions of a literal list/tuple, following Name hops."""
+    if depth > 4 or node is None:
+        return None
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return list(node.elts)
+    if isinstance(node, ast.Name):
+        out = []
+        for v in assigns.get(node.id, []):
+            e = _iter_elts(v, assigns, depth + 1)
+            if e is None:
+                return None
+            out += e
+        return out or None
+    return None
+
+
+def _literal_values(node, assigns, depth=0):
+    """Every string this node can evaluate to, or None if that is not knowable.
+
+    Distinct from _ascii_safe, which asks "is this always ASCII". This asks the
+    narrower question "is the set of possible strings FIXED and visible in the
+    source" -- because a site whose text comes from a fixed set of literals can
+    never draw a catalog string, however many scripts the bound face lacks.
+    Without it, writer.py's list gutter (`mark = "•" if bullet else "%d." % n`)
+    was reported as drawing hi/ja/ko/zh as empty boxes: the bullet made it
+    non-ASCII, so it fell through to "could be any translated string" and was
+    judged against every language in the catalogs. It draws U+2022 or an ASCII
+    number and nothing else, and Liberation Serif has both (measured: ink laid
+    down for • and digits, none for ▶ ✓ あ 中)."""
+    if depth > 6 or node is None:
+        return None
+    if isinstance(node, ast.Constant):
+        return {node.value} if isinstance(node.value, str) else None
+    if isinstance(node, ast.IfExp):
+        a = _literal_values(node.body, assigns, depth + 1)
+        b = _literal_values(node.orelse, assigns, depth + 1)
+        return None if a is None or b is None else a | b
+    if isinstance(node, ast.BoolOp):
+        out = set()
+        for v in node.values:
+            r = _literal_values(v, assigns, depth + 1)
+            if r is None:
+                return None
+            out |= r
+        return out
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        # "%d." % n -- only the TEMPLATE's own characters reach the face, and a
+        # numeric spec can contribute nothing but ASCII digits.
+        tmpl = _literal_values(node.left, assigns, depth + 1)
+        if tmpl is None:
+            return None
+        if all(all(s in _NUMERIC_SPECS for s in _SPEC_RE.findall(t))
+               for t in tmpl):
+            return tmpl
+        return None
+    if isinstance(node, ast.Name):
+        vals = assigns.get(node.id)
+        if not vals:
+            return None
+        out = set()
+        for v in vals:
+            r = _literal_values(v, assigns, depth + 1)
+            if r is None:
+                return None
+            out |= r
+        return out
+    return None
+
+
 def _toy_sites():
     """Every cairo toy-font drawing site that can draw non-ASCII text, as
-    (rel, line, family, text_src, literal_chars)."""
+    (rel, line, family, text_src, literal_chars, literal_only)."""
     sites = []
     for rel, path in overlay_py():
         src = open(path, encoding="utf-8", errors="replace").read()
@@ -511,22 +601,71 @@ def _toy_sites():
         # the most recent select_font_face family textually above each show_text
         faces = [(src[:m.start()].count("\n") + 1, m.group(1))
                  for m in TOY_FACE_RE.finditer(src)]
-        # local assignments, per enclosing function, so a name like `label` that
-        # is only ever set to "Muted" or "%d%%" is recognised as ASCII-only.
-        assigns = {}
-        for fn in ast.walk(tree):
-            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for st in ast.walk(fn):
+        # Name bindings, scoped PER FUNCTION -- which is what the comment here
+        # always claimed and what the code did not do. Collecting into one
+        # file-wide dict meant every binding of a name had to be resolvable or
+        # none of them were, and short loop variables are reused constantly:
+        # `ln` is a loop variable twelve times in settings.py (over file handles
+        # and over out.splitlines()), so the three hardcoded ASCII strings of the
+        # printer test page could never resolve, and the one page in the OS that
+        # is deliberately Latin-only was reported as drawing translated text in
+        # five scripts. A name is now looked up innermost-scope-first, the way
+        # Python itself binds it.
+        parents = {}
+        for p in ast.walk(tree):
+            for c in ast.iter_child_nodes(p):
+                parents[c] = p
+
+        def enclosing(node):
+            """Enclosing function scopes, innermost first, then the module."""
+            chain, cur = [], parents.get(node)
+            while cur is not None:
+                if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    chain.append(cur)
+                cur = parents.get(cur)
+            chain.append(tree)
+            return chain
+
+        def own_nodes(scope):
+            """Nodes belonging to `scope` itself, excluding nested functions --
+            an inner helper's loop variable must not leak into its parent."""
+            nested = set()
+            for f in ast.walk(scope):
+                if f is not scope and isinstance(
+                        f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    nested.update(id(x) for x in ast.walk(f))
+            return [st for st in ast.walk(scope) if id(st) not in nested]
+
+        binds = {}
+
+        def scope_binds(scope):
+            got = binds.get(id(scope))
+            if got is not None:
+                return got
+            got = {}
+            body = own_nodes(scope)
+            for st in body:
                 if isinstance(st, ast.Assign):
                     for tgt in st.targets:
                         if isinstance(tgt, ast.Name):
-                            assigns.setdefault(tgt.id, []).append(st.value)
+                            got.setdefault(tgt.id, []).append(st.value)
+            # `for ln in lines:` binds as definitely as an assignment. Resolved
+            # after the assignments of the same scope, so `lines` is known.
+            for st in body:
+                if isinstance(st, ast.For) and isinstance(st.target, ast.Name):
+                    elts = _iter_elts(st.iter, got)
+                    if elts:
+                        got.setdefault(st.target.id, []).extend(elts)
+            binds[id(scope)] = got
+            return got
+
         for n in ast.walk(tree):
             if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                     and n.func.attr == "show_text" and n.args):
                 continue
             arg = n.args[0]
+            assigns = collections.ChainMap(
+                *[scope_binds(s) for s in enclosing(n)])
             if _ascii_safe(arg, assigns):
                 continue
             fam = "?"
@@ -537,10 +676,19 @@ def _toy_sites():
                 text_src = ast.unparse(arg)
             except Exception:
                 text_src = lines[n.lineno - 1].strip() if n.lineno <= len(lines) else "?"
+            # Resolve the argument to its full set of possible strings. When
+            # that succeeds the site draws a FIXED vocabulary and cannot reach
+            # a catalog string, so only its own characters are worth checking.
+            vals = _literal_values(arg, assigns)
+            if vals is None and isinstance(arg, ast.Constant) \
+                    and isinstance(arg.value, str):
+                vals = {arg.value}
             lit = ""
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                lit = "".join(sorted({c for c in arg.value if not c.isascii()}))
-            sites.append((rel, n.lineno, fam, text_src[:70], lit))
+            if vals is not None:
+                lit = "".join(sorted({c for v in vals for c in v
+                                      if not c.isascii()}))
+            sites.append((rel, n.lineno, fam, text_src[:70], lit,
+                          vals is not None))
     return sites
 
 
@@ -618,14 +766,28 @@ def check_toyfont(rep):
     # apart, or the second drowns in the first.
     DEAD = 0.5
     by_file, symbols = {}, {}
-    for rel, line, fam, text, lit in sites:
+    for rel, line, fam, text, lit, fixed in sites:
         langs = broken.get(fam) or {}
-        dead = sorted(c for c, (miss, tot) in langs.items()
-                      if c != "#literals" and tot and len(miss) / tot > DEAD)
+        # `dead` is a property of the FACE, not of this call. Charging it to a
+        # site whose text is a fixed set of source literals says a bullet is
+        # "drawn as empty boxes in ja" -- true of the face, impossible at that
+        # call, and the tool's loudest verdict. Only what this site can really
+        # draw counts against it.
+        dead = [] if fixed else sorted(
+            c for c, (miss, tot) in langs.items()
+            if c != "#literals" and tot and len(miss) / tot > DEAD)
         lit_missing = "".join(c for c in lit if c in
                               (langs.get("#literals") or ("", 0))[0])
         if dead or lit_missing:
             by_file.setdefault(rel, []).append((line, fam, text, dead, lit_missing))
+        if fixed:
+            # Same reasoning as `dead` above: the "these catalog characters have
+            # no glyph in that face" warning is only meaningful for a site that
+            # could actually receive one. Letting a fixed-vocabulary site feed it
+            # turned the warning into a dump of every CJK character in the
+            # catalogs, which is a fact about Liberation Serif and not about any
+            # line of code in this OS.
+            continue
         for c, (miss, _tot) in langs.items():
             if c != "#literals" and miss and c not in dead:
                 symbols.setdefault(fam, set()).update(miss)

@@ -1,0 +1,4 @@
+# Suites failing as of the last --update-baseline.
+# This file is a LEDGER OF DEBT, not a permission slip:
+# every line is a gate that is not protecting anything.
+# Shrink it.

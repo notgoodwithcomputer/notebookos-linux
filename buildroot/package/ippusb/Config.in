@@ -1,0 +1,23 @@
+config BR2_PACKAGE_IPPUSB
+	bool "ippusb (driverless USB printing)"
+	depends on BR2_PACKAGE_CUPS
+	depends on BR2_PACKAGE_LIBUSB
+	help
+	  Driverless printing for USB printers, for printers that have no
+	  classic driver.
+
+	  Printers made since roughly 2016 advertise IPP Everywhere /
+	  AirPrint and rasterise pages themselves, so the host sends them a
+	  PDF and no per-model driver is involved. Manufacturers stopped
+	  shipping drivers for them, so the Gutenprint / brlaser / splix
+	  driver library does not cover them, and handing one a driver it
+	  cannot parse makes it accept the job and print nothing.
+
+	  The usual answer, the ipp-usb daemon, proxies a localhost TCP port
+	  onto the printer. That is impossible on this kernel, which has no
+	  IP stack at all. But the IPP-USB protocol is HTTP carried on USB
+	  bulk endpoints, so this backend speaks it directly over libusb and
+	  builds the queue's PPD from the printer's own reported attributes.
+
+comment "ippusb needs CUPS and libusb"
+	depends on !BR2_PACKAGE_CUPS || !BR2_PACKAGE_LIBUSB

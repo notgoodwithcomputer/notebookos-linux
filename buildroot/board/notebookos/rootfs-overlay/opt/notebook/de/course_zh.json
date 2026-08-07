@@ -1,258 +1,6189 @@
 {
-  "code": "zh",
-  "name": "Mandarin",
-  "from": "English",
-  "note": "Pinyin only — learning to speak, not to read characters.",
-  "units": [
+ "code": "zh",
+ "name": "Mandarin",
+ "from": "English",
+ "note": "Pinyin only — learning to speak, not to read characters.",
+ "alphabet": [
+  {
+   "c": "zh",
+   "ipa": "tʂ",
+   "e": "j in jar, tongue curled back"
+  },
+  {
+   "c": "ch",
+   "ipa": "tʂʰ",
+   "e": "ch in chart, tongue curled back"
+  },
+  {
+   "c": "sh",
+   "ipa": "ʂ",
+   "e": "sh in shirt, tongue curled back"
+  },
+  {
+   "c": "r",
+   "ipa": "ʐ",
+   "e": "r in rue, tongue curled back"
+  },
+  {
+   "c": "j",
+   "ipa": "tɕ",
+   "e": "j in jeep, tongue flat and forward"
+  },
+  {
+   "c": "q",
+   "ipa": "tɕʰ",
+   "e": "ch in cheap, with a puff of air"
+  },
+  {
+   "c": "x",
+   "ipa": "ɕ",
+   "e": "sh in sheep, tongue flat and forward"
+  },
+  {
+   "c": "z",
+   "ipa": "ts",
+   "e": "ds in beds"
+  },
+  {
+   "c": "c",
+   "ipa": "tsʰ",
+   "e": "ts in cats, with a puff of air"
+  },
+  {
+   "c": "h",
+   "ipa": "x",
+   "e": "ch in Scottish loch"
+  },
+  {
+   "c": "ü",
+   "ipa": "y",
+   "e": "ee said with rounded lips"
+  },
+  {
+   "c": "e",
+   "ipa": "ɤ",
+   "e": "u in but, further back"
+  },
+  {
+   "c": "-i",
+   "ipa": "ɹ̩",
+   "e": "after z, c, s: a buzzing held vowel"
+  },
+  {
+   "c": "ou",
+   "ipa": "ou̯",
+   "e": "o in go"
+  },
+  {
+   "c": "ao",
+   "ipa": "ɑu̯",
+   "e": "ow in cow"
+  },
+  {
+   "c": "ian",
+   "ipa": "i̯ɛn",
+   "e": "yen"
+  }
+ ],
+ "units": [
+  {
+   "title": "BASICS",
+   "subtitle": "Greet people, name who is who, and count to ten",
+   "skills": [
     {
-      "title": "BASICS",
-      "skills": [
-        {
-          "name": "Greetings",
-          "words": [
-            {"t": "nǐ hǎo", "e": "hello", "ipa": "ni²¹⁴ xau²¹⁴"},
-            {"t": "zàijiàn", "e": "goodbye", "ipa": "tsai⁵¹ tɕjɛn⁵¹"},
-            {"t": "xièxie", "e": "thank you", "ipa": "ɕjɛ⁵¹ ɕjɛ"},
-            {"t": "qǐng", "e": "please", "ipa": "tɕʰiŋ²¹⁴"},
-            {"t": "duìbuqǐ", "e": "sorry", "ipa": "twei⁵¹ pu tɕʰi²¹⁴"},
-            {"t": "shì", "e": "yes", "ipa": "ʂʐ̩⁵¹"},
-            {"t": "bù", "e": "no", "ipa": "pu⁵¹"},
-            {"t": "zǎoshang hǎo", "e": "good morning", "ipa": "tsau²¹⁴ ʂaŋ xau²¹⁴"}
-          ],
-          "phrases": [
-            {"t": "nǐ hǎo ma", "e": "how are you", "ipa": "ni²¹⁴ xau²¹⁴ ma"},
-            {"t": "wǒ hěn hǎo", "e": "I am fine", "ipa": "wo²¹⁴ xən²¹⁴ xau²¹⁴"}
-          ]
-        },
-        {
-          "name": "People",
-          "words": [
-            {"t": "wǒ", "e": "I", "ipa": "wo²¹⁴"},
-            {"t": "nǐ", "e": "you", "ipa": "ni²¹⁴"},
-            {"t": "tā", "e": "he", "ipa": "tʰa⁵"},
-            {"t": "wǒmen", "e": "we", "ipa": "wo²¹⁴ mən"},
-            {"t": "tāmen", "e": "they", "ipa": "tʰa⁵ mən"},
-            {"t": "rén", "e": "person", "ipa": "ʐən³⁵"},
-            {"t": "nánrén", "e": "man", "ipa": "nan³⁵ ʐən³⁵"},
-            {"t": "nǚrén", "e": "woman", "ipa": "ny²¹⁴ ʐən³⁵"},
-            {"t": "péngyou", "e": "friend", "ipa": "pʰəŋ³⁵ jou"}
-          ],
-          "phrases": [
-            {"t": "wǒ jiào Ana", "e": "my name is Ana", "ipa": "wo²¹⁴ tɕjau⁵¹ a na"}
-          ]
-        },
-        {
-          "name": "Numbers",
-          "words": [
-            {"t": "yī", "e": "one", "ipa": "i⁵"},
-            {"t": "èr", "e": "two", "ipa": "ɑɻ⁵¹"},
-            {"t": "sān", "e": "three", "ipa": "san⁵"},
-            {"t": "sì", "e": "four", "ipa": "sɹ̩⁵¹"},
-            {"t": "wǔ", "e": "five", "ipa": "u²¹⁴"},
-            {"t": "liù", "e": "six", "ipa": "ljou⁵¹"},
-            {"t": "qī", "e": "seven", "ipa": "tɕʰi⁵"},
-            {"t": "bā", "e": "eight", "ipa": "pa⁵"},
-            {"t": "jiǔ", "e": "nine", "ipa": "tɕjou²¹⁴"},
-            {"t": "shí", "e": "ten", "ipa": "ʂʐ̩³⁵"}
-          ],
-          "phrases": [
-            {"t": "wǒ yǒu sān", "e": "I have three", "ipa": "wo²¹⁴ jou²¹⁴ san⁵"}
-          ]
-        }
-      ]
+     "name": "Greetings",
+     "tips": [
+      {
+       "h": "The four tones",
+       "b": "Every full syllable carries one of four pitch shapes, and the shape is part of the word. The mark over the vowel gives it: level, rising, dipping, falling.",
+       "eg": [
+        [
+         "mā",
+         "mother"
+        ],
+        [
+         "má",
+         "hemp"
+        ],
+        [
+         "mǎ",
+         "horse"
+        ],
+        [
+         "mà",
+         "to scold"
+        ]
+       ]
+      },
+      {
+       "h": "The neutral tone",
+       "b": "A syllable written without a tone mark is neutral: short, light, and pitched by the syllable in front of it. The second half of a doubled word is neutral, as in xièxie.",
+       "eg": [
+        [
+         "xièxie",
+         "thank you"
+        ],
+        [
+         "māma",
+         "mother"
+        ]
+       ]
+      },
+      {
+       "h": "Third tone before third tone",
+       "b": "When two third tones meet, the first is said as a second tone. The spelling keeps both third-tone marks, so nǐ hǎo is written with two and spoken as ní hǎo.",
+       "eg": [
+        [
+         "nǐ hǎo",
+         "said ní hǎo"
+        ],
+        [
+         "hěn hǎo",
+         "said hén hǎo"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "nǐ hǎo",
+       "e": "hello",
+       "ipa": "ni²¹⁴ xɑu̯²¹⁴",
+       "pos": "interj",
+       "note": "你好"
+      },
+      {
+       "t": "nín hǎo",
+       "e": "hello (polite)",
+       "ipa": "nin³⁵ xɑu̯²¹⁴",
+       "pos": "interj",
+       "note": "您好"
+      },
+      {
+       "t": "zàijiàn",
+       "e": "goodbye",
+       "ipa": "tsai̯⁵¹.tɕi̯ɛn⁵¹",
+       "pos": "interj",
+       "note": "再见"
+      },
+      {
+       "t": "xièxie",
+       "e": "thank you",
+       "ipa": "ɕi̯ɛ⁵¹.ɕi̯ɛ",
+       "pos": "interj",
+       "note": "谢谢"
+      },
+      {
+       "t": "bú kèqi",
+       "e": "you are welcome",
+       "ipa": "pu³⁵ kʰɤ⁵¹.tɕʰi",
+       "pos": "interj",
+       "note": "不客气"
+      },
+      {
+       "t": "duìbuqǐ",
+       "e": "sorry",
+       "ipa": "tu̯ei̯⁵¹.pu.tɕʰi²¹⁴",
+       "pos": "interj",
+       "note": "对不起"
+      },
+      {
+       "t": "méi guānxi",
+       "e": "never mind",
+       "ipa": "mei̯³⁵ ku̯an⁵.ɕi",
+       "pos": "interj",
+       "note": "没关系"
+      },
+      {
+       "t": "qǐng",
+       "e": "please",
+       "ipa": "tɕʰiŋ²¹⁴",
+       "pos": "interj",
+       "note": "请"
+      },
+      {
+       "t": "zǎoshang hǎo",
+       "e": "good morning",
+       "ipa": "tsɑu̯²¹⁴.ʂɑŋ xɑu̯²¹⁴",
+       "pos": "interj",
+       "note": "早上好"
+      },
+      {
+       "t": "wǎn'ān",
+       "e": "good night",
+       "ipa": "u̯an²¹⁴.an⁵",
+       "pos": "interj",
+       "note": "晚安"
+      },
+      {
+       "t": "shì",
+       "e": "yes",
+       "ipa": "ʂʐ̩⁵¹",
+       "pos": "verb",
+       "note": "是"
+      },
+      {
+       "t": "bù",
+       "e": "no",
+       "ipa": "pu⁵¹",
+       "pos": "adv",
+       "note": "不"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "nǐ hǎo ma",
+       "e": "how are you",
+       "ipa": "ni²¹⁴ xɑu̯²¹⁴ ma",
+       "lit": "you good QUESTION",
+       "note": "你好吗"
+      },
+      {
+       "t": "wǒ hěn hǎo",
+       "e": "I am fine",
+       "ipa": "u̯ɔ²¹⁴ xən²¹⁴ xɑu̯²¹⁴",
+       "lit": "I very good",
+       "note": "我很好"
+      },
+      {
+       "t": "hěn gāoxìng rènshi nǐ",
+       "e": "nice to meet you",
+       "ipa": "xən²¹⁴ kɑu̯⁵.ɕiŋ⁵¹ ʐən⁵¹.ʂʐ̩ ni²¹⁴",
+       "lit": "very glad know you",
+       "note": "很高兴认识你"
+      },
+      {
+       "t": "wǒ yě hěn hǎo",
+       "e": "I am fine too",
+       "ipa": "u̯ɔ²¹⁴ i̯ɛ²¹⁴ xən²¹⁴ xɑu̯²¹⁴",
+       "lit": "I also very good",
+       "note": "我也很好"
+      }
+     ]
     },
     {
-      "title": "PEOPLE",
-      "skills": [
-        {
-          "name": "Family",
-          "words": [
-            {"t": "bàba", "e": "dad", "ipa": "pa⁵¹ pa"},
-            {"t": "māma", "e": "mom", "ipa": "ma⁵ ma"},
-            {"t": "érzi", "e": "son", "ipa": "ɑɻ³⁵ tsɹ̩"},
-            {"t": "nǚ'ér", "e": "daughter", "ipa": "ny²¹⁴ ɑɻ³⁵"},
-            {"t": "gēge", "e": "older brother", "ipa": "kɤ⁵ kɤ"},
-            {"t": "mèimei", "e": "younger sister", "ipa": "mei⁵¹ mei"},
-            {"t": "jiā", "e": "home", "ipa": "tɕja⁵"}
-          ],
-          "phrases": [
-            {"t": "wǒ ài wǒ jiā", "e": "I love my home", "ipa": "wo²¹⁴ ai⁵¹ wo²¹⁴ tɕja⁵"}
-          ]
-        },
-        {
-          "name": "Colors",
-          "words": [
-            {"t": "hóng", "e": "red", "ipa": "xʊŋ³⁵"},
-            {"t": "lán", "e": "blue", "ipa": "lan³⁵"},
-            {"t": "lǜ", "e": "green", "ipa": "ly⁵¹"},
-            {"t": "huáng", "e": "yellow", "ipa": "xwaŋ³⁵"},
-            {"t": "hēi", "e": "black", "ipa": "xei⁵"},
-            {"t": "bái", "e": "white", "ipa": "pai³⁵"}
-          ],
-          "phrases": [
-            {"t": "hóng píngguǒ", "e": "a red apple", "ipa": "xʊŋ³⁵ pʰiŋ³⁵ kwo²¹⁴"}
-          ]
-        }
-      ]
+     "name": "People",
+     "tips": [
+      {
+       "h": "One spoken word for he and she",
+       "b": "Mandarin says tā for he, she and it. The characters differ, 他 for a man and 她 for a woman, but the sound is one word, so context carries the difference.",
+       "eg": [
+        [
+         "tā shì lǎoshī",
+         "he is a teacher"
+        ],
+        [
+         "tā shì nǚrén",
+         "she is a woman"
+        ]
+       ]
+      },
+      {
+       "h": "men makes a pronoun plural",
+       "b": "The neutral-tone syllable men turns a pronoun into its plural: wǒ becomes wǒmen. Nouns keep one form for one and for many, so rén covers person and people alike.",
+       "eg": [
+        [
+         "wǒ / wǒmen",
+         "I / we"
+        ],
+        [
+         "tā / tāmen",
+         "he / they"
+        ]
+       ]
+      },
+      {
+       "h": "shì links a noun to a noun",
+       "b": "The verb shì joins two nouns and never changes for person or number: wǒ shì, tā shì, wǒmen shì. Before an adjective Mandarin uses hěn instead, so wǒ hěn hǎo carries no shì.",
+       "eg": [
+        [
+         "wǒ shì lǎoshī",
+         "I am a teacher"
+        ],
+        [
+         "wǒ hěn hǎo",
+         "I am well"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "wǒ",
+       "e": "I",
+       "ipa": "u̯ɔ²¹⁴",
+       "pos": "pron",
+       "note": "我"
+      },
+      {
+       "t": "nǐ",
+       "e": "you",
+       "ipa": "ni²¹⁴",
+       "pos": "pron",
+       "note": "你"
+      },
+      {
+       "t": "tā",
+       "e": "he",
+       "ipa": "tʰa⁵",
+       "pos": "pron",
+       "note": "他 / 她 also she"
+      },
+      {
+       "t": "wǒmen",
+       "e": "we",
+       "ipa": "u̯ɔ²¹⁴.mən",
+       "pos": "pron",
+       "note": "我们"
+      },
+      {
+       "t": "nǐmen",
+       "e": "you all",
+       "ipa": "ni²¹⁴.mən",
+       "pos": "pron",
+       "note": "你们"
+      },
+      {
+       "t": "tāmen",
+       "e": "they",
+       "ipa": "tʰa⁵.mən",
+       "pos": "pron",
+       "note": "他们"
+      },
+      {
+       "t": "rén",
+       "e": "person",
+       "ipa": "ʐən³⁵",
+       "pos": "noun",
+       "note": "人"
+      },
+      {
+       "t": "nánrén",
+       "e": "man",
+       "ipa": "nan³⁵.ʐən³⁵",
+       "pos": "noun",
+       "note": "男人"
+      },
+      {
+       "t": "nǚrén",
+       "e": "woman",
+       "ipa": "ny²¹⁴.ʐən³⁵",
+       "pos": "noun",
+       "note": "女人"
+      },
+      {
+       "t": "háizi",
+       "e": "child",
+       "ipa": "xai̯³⁵.tsɹ̩",
+       "pos": "noun",
+       "note": "孩子"
+      },
+      {
+       "t": "péngyou",
+       "e": "friend",
+       "ipa": "pʰəŋ³⁵.i̯ou̯",
+       "pos": "noun",
+       "note": "朋友"
+      },
+      {
+       "t": "lǎoshī",
+       "e": "teacher",
+       "ipa": "lɑu̯²¹⁴.ʂʐ̩⁵",
+       "pos": "noun",
+       "note": "老师"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ shì lǎoshī",
+       "e": "I am a teacher",
+       "ipa": "u̯ɔ²¹⁴ ʂʐ̩⁵¹ lɑu̯²¹⁴.ʂʐ̩⁵",
+       "note": "我是老师"
+      },
+      {
+       "t": "tā shì wǒ péngyou",
+       "e": "he is my friend",
+       "ipa": "tʰa⁵ ʂʐ̩⁵¹ u̯ɔ²¹⁴ pʰəŋ³⁵.i̯ou̯",
+       "lit": "he is I friend",
+       "note": "他是我朋友"
+      },
+      {
+       "t": "tāmen shì hǎo rén",
+       "e": "they are good people",
+       "ipa": "tʰa⁵.mən ʂʐ̩⁵¹ xɑu̯²¹⁴ ʐən³⁵",
+       "note": "他们是好人"
+      },
+      {
+       "t": "nǐmen shì péngyou ma",
+       "e": "are you friends",
+       "ipa": "ni²¹⁴.mən ʂʐ̩⁵¹ pʰəŋ³⁵.i̯ou̯ ma",
+       "lit": "you-all are friend QUESTION",
+       "note": "你们是朋友吗"
+      }
+     ]
     },
     {
-      "title": "EVERYDAY",
-      "skills": [
-        {
-          "name": "Food",
-          "words": [
-            {"t": "shuǐ", "e": "water", "ipa": "ʂwei²¹⁴"},
-            {"t": "chá", "e": "tea", "ipa": "tʂʰa³⁵"},
-            {"t": "fàn", "e": "rice", "ipa": "fan⁵¹"},
-            {"t": "miànbāo", "e": "bread", "ipa": "mjɛn⁵¹ pau⁵"},
-            {"t": "ròu", "e": "meat", "ipa": "ʐou⁵¹"},
-            {"t": "chī", "e": "to eat", "ipa": "tʂʰʐ̩⁵"},
-            {"t": "hē", "e": "to drink", "ipa": "xɤ⁵"}
-          ],
-          "phrases": [
-            {"t": "wǒ chī fàn", "e": "I eat rice", "ipa": "wo²¹⁴ tʂʰʐ̩⁵ fan⁵¹"},
-            {"t": "wǒ hē chá", "e": "I drink tea", "ipa": "wo²¹⁴ xɤ⁵ tʂʰa³⁵"}
-          ]
-        },
-        {
-          "name": "Verbs",
-          "words": [
-            {"t": "shì", "e": "to be", "ipa": "ʂʐ̩⁵¹"},
-            {"t": "yǒu", "e": "to have", "ipa": "jou²¹⁴"},
-            {"t": "qù", "e": "to go", "ipa": "tɕʰy⁵¹"},
-            {"t": "kàn", "e": "to see", "ipa": "kʰan⁵¹"},
-            {"t": "shuō", "e": "to speak", "ipa": "ʂwo⁵"},
-            {"t": "xué", "e": "to learn", "ipa": "ɕɥe³⁵"},
-            {"t": "ài", "e": "to love", "ipa": "ai⁵¹"}
-          ],
-          "phrases": [
-            {"t": "wǒ xué zhōngwén", "e": "I learn Chinese", "ipa": "wo²¹⁴ ɕɥe³⁵ tʂʊŋ⁵ wən³⁵"},
-            {"t": "nǐ shuō zhōngwén ma", "e": "do you speak Chinese", "ipa": "ni²¹⁴ ʂwo⁵ tʂʊŋ⁵ wən³⁵ ma"}
-          ]
-        },
-        {
-          "name": "Describing",
-          "words": [
-            {"t": "dà", "e": "big", "ipa": "ta⁵¹"},
-            {"t": "xiǎo", "e": "small", "ipa": "ɕjau²¹⁴"},
-            {"t": "hǎo", "e": "good", "ipa": "xau²¹⁴"},
-            {"t": "měi", "e": "beautiful", "ipa": "mei²¹⁴"},
-            {"t": "xīn", "e": "new", "ipa": "ɕin⁵"},
-            {"t": "rè", "e": "hot", "ipa": "ʐɤ⁵¹"},
-            {"t": "lěng", "e": "cold", "ipa": "ləŋ²¹⁴"}
-          ],
-          "phrases": [
-            {"t": "dà fángzi", "e": "a big house", "ipa": "ta⁵¹ faŋ³⁵ tsɹ̩"}
-          ]
-        }
-      ]
+     "name": "Phrases",
+     "tips": [
+      {
+       "h": "Answering without a word for yes",
+       "b": "Mandarin answers a question by giving the verb back, positive or negative. To a question with shì the answer is shì or bú shì; to a question about being right it is duì or bú duì.",
+       "eg": [
+        [
+         "nǐ shì lǎoshī ma",
+         "are you a teacher"
+        ],
+        [
+         "shì",
+         "yes, I am"
+        ],
+        [
+         "bú shì",
+         "no, I am not"
+        ]
+       ]
+      },
+      {
+       "h": "yě and dōu sit before the verb",
+       "b": "An adverb such as yě or dōu stands between the subject and the verb, never at the end of the sentence. Both may appear together, in that order: yě dōu.",
+       "eg": [
+        [
+         "wǒ yě shì",
+         "I am too"
+        ],
+        [
+         "tāmen dōu shì",
+         "they all are"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "qǐngwèn",
+       "e": "excuse me",
+       "ipa": "tɕʰiŋ²¹⁴.u̯ən⁵¹",
+       "pos": "interj",
+       "note": "请问"
+      },
+      {
+       "t": "duì",
+       "e": "correct",
+       "ipa": "tu̯ei̯⁵¹",
+       "pos": "adj",
+       "note": "对"
+      },
+      {
+       "t": "cuò",
+       "e": "wrong",
+       "ipa": "tsʰu̯ɔ⁵¹",
+       "pos": "adj",
+       "note": "错"
+      },
+      {
+       "t": "dāngrán",
+       "e": "of course",
+       "ipa": "tɑŋ⁵.ʐan³⁵",
+       "pos": "adv",
+       "note": "当然"
+      },
+      {
+       "t": "yěxǔ",
+       "e": "maybe",
+       "ipa": "i̯ɛ²¹⁴.ɕy²¹⁴",
+       "pos": "adv",
+       "note": "也许"
+      },
+      {
+       "t": "hǎo de",
+       "e": "all right",
+       "ipa": "xɑu̯²¹⁴ tə",
+       "pos": "interj",
+       "note": "好的"
+      },
+      {
+       "t": "méi wèntí",
+       "e": "no problem",
+       "ipa": "mei̯³⁵ u̯ən⁵¹.tʰi³⁵",
+       "pos": "interj",
+       "note": "没问题"
+      },
+      {
+       "t": "yìdiǎn",
+       "e": "a little",
+       "ipa": "i⁵¹.ti̯ɛn²¹⁴",
+       "pos": "adv",
+       "note": "一点"
+      },
+      {
+       "t": "fēicháng",
+       "e": "extremely",
+       "ipa": "fei̯⁵.tʂʰɑŋ³⁵",
+       "pos": "adv",
+       "note": "非常"
+      },
+      {
+       "t": "zhēnde",
+       "e": "really",
+       "ipa": "tʂən⁵.tə",
+       "pos": "adv",
+       "note": "真的"
+      },
+      {
+       "t": "yě",
+       "e": "also",
+       "ipa": "i̯ɛ²¹⁴",
+       "pos": "adv",
+       "note": "也"
+      },
+      {
+       "t": "dōu",
+       "e": "all",
+       "ipa": "tou̯⁵",
+       "pos": "adv",
+       "note": "都"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ yě shì lǎoshī",
+       "e": "I am a teacher too",
+       "ipa": "u̯ɔ²¹⁴ i̯ɛ²¹⁴ ʂʐ̩⁵¹ lɑu̯²¹⁴.ʂʐ̩⁵",
+       "note": "我也是老师"
+      },
+      {
+       "t": "tāmen dōu shì wǒ péngyou",
+       "e": "they are all my friends",
+       "ipa": "tʰa⁵.mən tou̯⁵ ʂʐ̩⁵¹ u̯ɔ²¹⁴ pʰəŋ³⁵.i̯ou̯",
+       "note": "他们都是我朋友"
+      },
+      {
+       "t": "tā yěxǔ shì lǎoshī",
+       "e": "he might be a teacher",
+       "ipa": "tʰa⁵ i̯ɛ²¹⁴.ɕy²¹⁴ ʂʐ̩⁵¹ lɑu̯²¹⁴.ʂʐ̩⁵",
+       "lit": "he maybe is teacher",
+       "note": "他也许是老师"
+      },
+      {
+       "t": "qǐngwèn, nǐ shì lǎoshī ma",
+       "e": "excuse me, are you the teacher",
+       "ipa": "tɕʰiŋ²¹⁴.u̯ən⁵¹ ni²¹⁴ ʂʐ̩⁵¹ lɑu̯²¹⁴.ʂʐ̩⁵ ma",
+       "note": "请问你是老师吗"
+      }
+     ]
     },
     {
-      "title": "GETTING AROUND",
-      "skills": [
-        {
-          "name": "Places",
-          "words": [
-            {"t": "fángzi", "e": "house", "ipa": "faŋ³⁵ tsɹ̩"},
-            {"t": "xuéxiào", "e": "school", "ipa": "ɕɥe³⁵ ɕjau⁵¹"},
-            {"t": "shāngdiàn", "e": "store", "ipa": "ʂaŋ⁵ tjɛn⁵¹"},
-            {"t": "chéngshì", "e": "city", "ipa": "tʂʰəŋ³⁵ ʂʐ̩⁵¹"},
-            {"t": "lù", "e": "road", "ipa": "lu⁵¹"},
-            {"t": "shìchǎng", "e": "market", "ipa": "ʂʐ̩⁵¹ tʂʰaŋ²¹⁴"},
-            {"t": "mén", "e": "door", "ipa": "mən³⁵"}
-          ],
-          "phrases": [
-            {"t": "xuéxiào hěn dà", "e": "the school is big", "ipa": "ɕɥe³⁵ ɕjau⁵¹ xən²¹⁴ ta⁵¹"},
-            {"t": "wǒ qù xuéxiào", "e": "I go to school", "ipa": "wo²¹⁴ tɕʰy⁵¹ ɕɥe³⁵ ɕjau⁵¹"}
-          ]
-        },
-        {
-          "name": "Time",
-          "words": [
-            {"t": "jīntiān", "e": "today", "ipa": "tɕin⁵ tʰjɛn⁵"},
-            {"t": "míngtiān", "e": "tomorrow", "ipa": "miŋ³⁵ tʰjɛn⁵"},
-            {"t": "xiànzài", "e": "now", "ipa": "ɕjɛn⁵¹ tsai⁵¹"},
-            {"t": "tiān", "e": "day", "ipa": "tʰjɛn⁵"},
-            {"t": "wǎnshang", "e": "evening", "ipa": "wan²¹⁴ ʂaŋ"},
-            {"t": "xīngqī", "e": "week", "ipa": "ɕiŋ⁵ tɕʰi⁵"},
-            {"t": "xiǎoshí", "e": "hour", "ipa": "ɕjau²¹⁴ ʂʐ̩³⁵"},
-            {"t": "nián", "e": "year", "ipa": "njɛn³⁵"}
-          ],
-          "phrases": [
-            {"t": "jīntiān hěn rè", "e": "today is hot", "ipa": "tɕin⁵ tʰjɛn⁵ xən²¹⁴ ʐɤ⁵¹"},
-            {"t": "jīntiān hěn lěng", "e": "today is cold", "ipa": "tɕin⁵ tʰjɛn⁵ xən²¹⁴ ləŋ²¹⁴"}
-          ]
-        },
-        {
-          "name": "Travel",
-          "words": [
-            {"t": "chē", "e": "car", "ipa": "tʂʰɤ⁵"},
-            {"t": "huǒchē", "e": "train", "ipa": "xwo²¹⁴ tʂʰɤ⁵"},
-            {"t": "fēijī", "e": "airplane", "ipa": "fei⁵ tɕi⁵"},
-            {"t": "zhèlǐ", "e": "here", "ipa": "tʂɤ⁵¹ li²¹⁴"},
-            {"t": "nàlǐ", "e": "there", "ipa": "na⁵¹ li²¹⁴"},
-            {"t": "yuǎn", "e": "far", "ipa": "ɥɛn²¹⁴"},
-            {"t": "jìn", "e": "near", "ipa": "tɕin⁵¹"}
-          ],
-          "phrases": [
-            {"t": "chē hěn xīn", "e": "the car is new", "ipa": "tʂʰɤ⁵ xən²¹⁴ ɕin⁵"},
-            {"t": "chē hěn dà", "e": "the car is big", "ipa": "tʂʰɤ⁵ xən²¹⁴ ta⁵¹"}
-          ]
-        }
-      ]
-    },
-    {
-      "title": "THE WORLD",
-      "skills": [
-        {
-          "name": "Animals",
-          "words": [
-            {"t": "gǒu", "e": "dog", "ipa": "kou²¹⁴"},
-            {"t": "māo", "e": "cat", "ipa": "mau⁵"},
-            {"t": "niǎo", "e": "bird", "ipa": "njau²¹⁴"},
-            {"t": "mǎ", "e": "horse", "ipa": "ma²¹⁴"},
-            {"t": "yú", "e": "fish", "ipa": "y³⁵"},
-            {"t": "niú", "e": "cow", "ipa": "njou³⁵"},
-            {"t": "jī", "e": "chicken", "ipa": "tɕi⁵"}
-          ],
-          "phrases": [
-            {"t": "wǒ yǒu gǒu", "e": "I have a dog", "ipa": "wo²¹⁴ jou²¹⁴ kou²¹⁴"},
-            {"t": "wǒ yǒu māo", "e": "I have a cat", "ipa": "wo²¹⁴ jou²¹⁴ mau⁵"}
-          ]
-        },
-        {
-          "name": "Nature",
-          "words": [
-            {"t": "tàiyáng", "e": "sun", "ipa": "tʰai⁵¹ jaŋ³⁵"},
-            {"t": "yuèliang", "e": "moon", "ipa": "ɥe⁵¹ ljaŋ"},
-            {"t": "shù", "e": "tree", "ipa": "ʂu⁵¹"},
-            {"t": "huā", "e": "flower", "ipa": "xwa⁵"},
-            {"t": "yǔ", "e": "rain", "ipa": "y²¹⁴"},
-            {"t": "hǎi", "e": "sea", "ipa": "xai²¹⁴"},
-            {"t": "tiānkōng", "e": "sky", "ipa": "tʰjɛn⁵ kʰʊŋ⁵"}
-          ],
-          "phrases": [
-            {"t": "tiānkōng hěn lán", "e": "the sky is blue", "ipa": "tʰjɛn⁵ kʰʊŋ⁵ xən²¹⁴ lan³⁵"},
-            {"t": "tàiyáng hěn dà", "e": "the sun is big", "ipa": "tʰai⁵¹ jaŋ³⁵ xən²¹⁴ ta⁵¹"}
-          ]
-        },
-        {
-          "name": "More Verbs",
-          "words": [
-            {"t": "zuò", "e": "to do", "ipa": "tswo⁵¹"},
-            {"t": "yào", "e": "to want", "ipa": "jau⁵¹"},
-            {"t": "néng", "e": "to be able", "ipa": "nəŋ³⁵"},
-            {"t": "mǎi", "e": "to buy", "ipa": "mai²¹⁴"},
-            {"t": "lái", "e": "to come", "ipa": "lai³⁵"},
-            {"t": "zhù", "e": "to live", "ipa": "tʂu⁵¹"},
-            {"t": "xiě", "e": "to write", "ipa": "ɕjɛ²¹⁴"}
-          ],
-          "phrases": [
-            {"t": "wǒ yào xué zhōngwén", "e": "I want to learn Chinese", "ipa": "wo²¹⁴ jau⁵¹ ɕɥe³⁵ tʂʊŋ⁵ wən³⁵"},
-            {"t": "wǒ yào hē chá", "e": "I want to drink tea", "ipa": "wo²¹⁴ jau⁵¹ xɤ⁵ tʂʰa³⁵"}
-          ]
-        }
-      ]
+     "name": "Numbers",
+     "tips": [
+      {
+       "h": "Every count needs a measure word",
+       "b": "A number never attaches straight to a noun. A measure word stands between them, and gè is the general one that fits most nouns: sān gè rén, three people.",
+       "eg": [
+        [
+         "sān gè rén",
+         "three people"
+        ],
+        [
+         "wǔ gè háizi",
+         "five children"
+        ]
+       ]
+      },
+      {
+       "h": "Eleven to ninety-nine",
+       "b": "Numbers above ten are built from ten: shíyī is ten-one, èrshí is two-ten, èrshíwǔ is two-ten-five. Nothing in the pattern is irregular.",
+       "eg": [
+        [
+         "shíyī",
+         "eleven"
+        ],
+        [
+         "èrshí",
+         "twenty"
+        ],
+        [
+         "èrshíwǔ",
+         "twenty-five"
+        ]
+       ]
+      },
+      {
+       "h": "The two tones of yī",
+       "b": "In counting, yī keeps its first tone. Standing before a noun it changes: before a fourth tone it becomes yí, and before any other tone it becomes yì. Pinyin writes the change.",
+       "eg": [
+        [
+         "yī, èr, sān",
+         "one, two, three"
+        ],
+        [
+         "yí gè rén",
+         "one person"
+        ],
+        [
+         "yìdiǎn",
+         "a little"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "líng",
+       "e": "zero",
+       "ipa": "liŋ³⁵",
+       "pos": "num",
+       "note": "零"
+      },
+      {
+       "t": "yī",
+       "e": "one",
+       "ipa": "i⁵",
+       "pos": "num",
+       "note": "一"
+      },
+      {
+       "t": "èr",
+       "e": "two",
+       "ipa": "ɑɻ⁵¹",
+       "pos": "num",
+       "note": "二"
+      },
+      {
+       "t": "sān",
+       "e": "three",
+       "ipa": "san⁵",
+       "pos": "num",
+       "note": "三"
+      },
+      {
+       "t": "sì",
+       "e": "four",
+       "ipa": "sɹ̩⁵¹",
+       "pos": "num",
+       "note": "四"
+      },
+      {
+       "t": "wǔ",
+       "e": "five",
+       "ipa": "u²¹⁴",
+       "pos": "num",
+       "note": "五"
+      },
+      {
+       "t": "liù",
+       "e": "six",
+       "ipa": "li̯ou̯⁵¹",
+       "pos": "num",
+       "note": "六"
+      },
+      {
+       "t": "qī",
+       "e": "seven",
+       "ipa": "tɕʰi⁵",
+       "pos": "num",
+       "note": "七"
+      },
+      {
+       "t": "bā",
+       "e": "eight",
+       "ipa": "pa⁵",
+       "pos": "num",
+       "note": "八"
+      },
+      {
+       "t": "jiǔ",
+       "e": "nine",
+       "ipa": "tɕi̯ou̯²¹⁴",
+       "pos": "num",
+       "note": "九"
+      },
+      {
+       "t": "shí",
+       "e": "ten",
+       "ipa": "ʂʐ̩³⁵",
+       "pos": "num",
+       "note": "十"
+      },
+      {
+       "t": "gè",
+       "e": "measure word",
+       "ipa": "kɤ⁵¹",
+       "pos": "det",
+       "note": "个"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ yǒu sān gè péngyou",
+       "e": "I have three friends",
+       "ipa": "u̯ɔ²¹⁴ i̯ou̯²¹⁴ san⁵ kɤ⁵¹ pʰəŋ³⁵.i̯ou̯",
+       "note": "我有三个朋友"
+      },
+      {
+       "t": "tāmen yǒu liù gè háizi",
+       "e": "they have six children",
+       "ipa": "tʰa⁵.mən i̯ou̯²¹⁴ li̯ou̯⁵¹ kɤ⁵¹ xai̯³⁵.tsɹ̩",
+       "note": "他们有六个孩子"
+      },
+      {
+       "t": "tā yǒu jiǔ gè xuésheng",
+       "e": "she has nine students",
+       "ipa": "tʰa⁵ i̯ou̯²¹⁴ tɕi̯ou̯²¹⁴ kɤ⁵¹ ɕɥɛ³⁵.ʂəŋ",
+       "note": "她有九个学生"
+      },
+      {
+       "t": "wǒ jiā yǒu sì gè rén",
+       "e": "there are four people in my family",
+       "ipa": "u̯ɔ²¹⁴ tɕi̯a⁵ i̯ou̯²¹⁴ sɹ̩⁵¹ kɤ⁵¹ ʐən³⁵",
+       "lit": "my home has four people",
+       "note": "我家有四个人"
+      }
+     ]
     }
-  ]
+   ]
+  },
+  {
+   "title": "EVERYDAY",
+   "subtitle": "Food, drink, colour, and the people at home",
+   "skills": [
+    {
+     "name": "Food",
+     "tips": [
+      {
+       "h": "A verb has one form",
+       "b": "Mandarin verbs do not change for person, number or tense: wǒ chī, tā chī, wǒmen chī. Time is given by a time word such as jīntiān, not by the verb.",
+       "eg": [
+        [
+         "wǒ chī",
+         "I eat"
+        ],
+        [
+         "tā chī",
+         "he eats"
+        ],
+        [
+         "tāmen chī",
+         "they eat"
+        ]
+       ]
+      },
+      {
+       "h": "An adjective needs no verb",
+       "b": "An adjective is its own predicate, so shì does not appear before it. The adverb hěn holds the slot instead and is much weaker than the English very.",
+       "eg": [
+        [
+         "jiǎozi hěn hǎochī",
+         "the dumplings are good"
+        ],
+        [
+         "fàn hěn hǎo",
+         "the rice is good"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "chī",
+       "e": "to eat",
+       "ipa": "tʂʰʐ̩⁵",
+       "pos": "verb",
+       "note": "吃"
+      },
+      {
+       "t": "fàn",
+       "e": "cooked rice",
+       "ipa": "fan⁵¹",
+       "pos": "noun",
+       "note": "饭"
+      },
+      {
+       "t": "miànbāo",
+       "e": "bread",
+       "ipa": "mi̯ɛn⁵¹.pɑu̯⁵",
+       "pos": "noun",
+       "note": "面包"
+      },
+      {
+       "t": "ròu",
+       "e": "meat",
+       "ipa": "ʐou̯⁵¹",
+       "pos": "noun",
+       "note": "肉"
+      },
+      {
+       "t": "jīdàn",
+       "e": "egg",
+       "ipa": "tɕi⁵.tan⁵¹",
+       "pos": "noun",
+       "note": "鸡蛋"
+      },
+      {
+       "t": "yú",
+       "e": "fish",
+       "ipa": "y³⁵",
+       "pos": "noun",
+       "note": "鱼"
+      },
+      {
+       "t": "shūcài",
+       "e": "vegetable",
+       "ipa": "ʂu⁵.tsʰai̯⁵¹",
+       "pos": "noun",
+       "note": "蔬菜"
+      },
+      {
+       "t": "shuǐguǒ",
+       "e": "fruit",
+       "ipa": "ʂu̯ei̯²¹⁴.ku̯ɔ²¹⁴",
+       "pos": "noun",
+       "note": "水果"
+      },
+      {
+       "t": "píngguǒ",
+       "e": "apple",
+       "ipa": "pʰiŋ³⁵.ku̯ɔ²¹⁴",
+       "pos": "noun",
+       "note": "苹果"
+      },
+      {
+       "t": "miàntiáo",
+       "e": "noodles",
+       "ipa": "mi̯ɛn⁵¹.tʰi̯ɑu̯³⁵",
+       "pos": "noun",
+       "note": "面条"
+      },
+      {
+       "t": "jiǎozi",
+       "e": "dumpling",
+       "ipa": "tɕi̯ɑu̯²¹⁴.tsɹ̩",
+       "pos": "noun",
+       "note": "饺子"
+      },
+      {
+       "t": "hǎochī",
+       "e": "delicious",
+       "ipa": "xɑu̯²¹⁴.tʂʰʐ̩⁵",
+       "pos": "adj",
+       "note": "好吃"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ chī miànbāo",
+       "e": "I eat bread",
+       "ipa": "u̯ɔ²¹⁴ tʂʰʐ̩⁵ mi̯ɛn⁵¹.pɑu̯⁵",
+       "note": "我吃面包"
+      },
+      {
+       "t": "tā bù chī ròu",
+       "e": "he does not eat meat",
+       "ipa": "tʰa⁵ pu⁵¹ tʂʰʐ̩⁵ ʐou̯⁵¹",
+       "note": "他不吃肉"
+      },
+      {
+       "t": "jiǎozi hěn hǎochī",
+       "e": "the dumplings are delicious",
+       "ipa": "tɕi̯ɑu̯²¹⁴.tsɹ̩ xən²¹⁴ xɑu̯²¹⁴.tʂʰʐ̩⁵",
+       "lit": "dumpling very delicious",
+       "note": "饺子很好吃"
+      },
+      {
+       "t": "nǐ chī shuǐguǒ ma",
+       "e": "do you eat fruit",
+       "ipa": "ni²¹⁴ tʂʰʐ̩⁵ ʂu̯ei̯²¹⁴.ku̯ɔ²¹⁴ ma",
+       "note": "你吃水果吗"
+      }
+     ]
+    },
+    {
+     "name": "Drinks",
+     "tips": [
+      {
+       "h": "bēi counts cups and glasses",
+       "b": "Measure words are chosen by what is counted. A served drink takes bēi, not the general gè: yì bēi chá, sān bēi shuǐ.",
+       "eg": [
+        [
+         "yì bēi chá",
+         "a cup of tea"
+        ],
+        [
+         "liǎng bēi kāfēi",
+         "two coffees"
+        ]
+       ]
+      },
+      {
+       "h": "The tone of bù",
+       "b": "The negative bù is fourth tone, and before another fourth tone it rises to bú. Pinyin writes the change: bù hē, bú shì, bú kèqi.",
+       "eg": [
+        [
+         "bù hē",
+         "does not drink"
+        ],
+        [
+         "bú shì",
+         "is not"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "hē",
+       "e": "to drink",
+       "ipa": "xɤ⁵",
+       "pos": "verb",
+       "note": "喝"
+      },
+      {
+       "t": "shuǐ",
+       "e": "water",
+       "ipa": "ʂu̯ei̯²¹⁴",
+       "pos": "noun",
+       "note": "水"
+      },
+      {
+       "t": "chá",
+       "e": "tea",
+       "ipa": "tʂʰa³⁵",
+       "pos": "noun",
+       "note": "茶"
+      },
+      {
+       "t": "kāfēi",
+       "e": "coffee",
+       "ipa": "kʰa⁵.fei̯⁵",
+       "pos": "noun",
+       "note": "咖啡"
+      },
+      {
+       "t": "niúnǎi",
+       "e": "milk",
+       "ipa": "ni̯ou̯³⁵.nai̯²¹⁴",
+       "pos": "noun",
+       "note": "牛奶"
+      },
+      {
+       "t": "guǒzhī",
+       "e": "juice",
+       "ipa": "ku̯ɔ²¹⁴.tʂʐ̩⁵",
+       "pos": "noun",
+       "note": "果汁"
+      },
+      {
+       "t": "píjiǔ",
+       "e": "beer",
+       "ipa": "pʰi³⁵.tɕi̯ou̯²¹⁴",
+       "pos": "noun",
+       "note": "啤酒"
+      },
+      {
+       "t": "hóngjiǔ",
+       "e": "red wine",
+       "ipa": "xʊŋ³⁵.tɕi̯ou̯²¹⁴",
+       "pos": "noun",
+       "note": "红酒"
+      },
+      {
+       "t": "kělè",
+       "e": "cola",
+       "ipa": "kʰɤ²¹⁴.lɤ⁵¹",
+       "pos": "noun",
+       "note": "可乐"
+      },
+      {
+       "t": "tāng",
+       "e": "soup",
+       "ipa": "tʰɑŋ⁵",
+       "pos": "noun",
+       "note": "汤"
+      },
+      {
+       "t": "bēi",
+       "e": "cup of",
+       "ipa": "pei̯⁵",
+       "pos": "det",
+       "note": "杯"
+      },
+      {
+       "t": "kǒukě",
+       "e": "thirsty",
+       "ipa": "kʰou̯²¹⁴.kʰɤ²¹⁴",
+       "pos": "adj",
+       "note": "口渴"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ hē yì bēi chá",
+       "e": "I drink a cup of tea",
+       "ipa": "u̯ɔ²¹⁴ xɤ⁵ i⁵¹ pei̯⁵ tʂʰa³⁵",
+       "note": "我喝一杯茶"
+      },
+      {
+       "t": "wǒmen dōu hē niúnǎi",
+       "e": "we all drink milk",
+       "ipa": "u̯ɔ²¹⁴.mən tou̯⁵ xɤ⁵ ni̯ou̯³⁵.nai̯²¹⁴",
+       "note": "我们都喝牛奶"
+      },
+      {
+       "t": "wǒ hěn kǒukě",
+       "e": "I am very thirsty",
+       "ipa": "u̯ɔ²¹⁴ xən²¹⁴ kʰou̯²¹⁴.kʰɤ²¹⁴",
+       "note": "我很口渴"
+      },
+      {
+       "t": "tāmen bù hē píjiǔ",
+       "e": "they do not drink beer",
+       "ipa": "tʰa⁵.mən pu⁵¹ xɤ⁵ pʰi³⁵.tɕi̯ou̯²¹⁴",
+       "note": "他们不喝啤酒"
+      }
+     ]
+    },
+    {
+     "name": "Colors",
+     "tips": [
+      {
+       "h": "de ties a modifier to its noun",
+       "b": "The particle de attaches a describing word to the noun that follows it: hóngsè de píngguǒ. The same de marks possession, standing between owner and thing: wǒ de chá.",
+       "eg": [
+        [
+         "hóngsè de píngguǒ",
+         "a red apple"
+        ],
+        [
+         "wǒ de chá",
+         "my tea"
+        ]
+       ]
+      },
+      {
+       "h": "sè names the colour itself",
+       "b": "The bare syllable hóng or lán works straight in front of a noun. Adding sè makes it the name of the colour, which is the form used after shì and before de.",
+       "eg": [
+        [
+         "hóng píngguǒ",
+         "red apple"
+        ],
+        [
+         "shì hóngsè de",
+         "is red"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "yánsè",
+       "e": "colour",
+       "ipa": "i̯ɛn³⁵.sɤ⁵¹",
+       "pos": "noun",
+       "note": "颜色"
+      },
+      {
+       "t": "hóng",
+       "e": "red",
+       "ipa": "xʊŋ³⁵",
+       "pos": "adj",
+       "note": "红"
+      },
+      {
+       "t": "lán",
+       "e": "blue",
+       "ipa": "lan³⁵",
+       "pos": "adj",
+       "note": "蓝"
+      },
+      {
+       "t": "lǜ",
+       "e": "green",
+       "ipa": "ly⁵¹",
+       "pos": "adj",
+       "note": "绿"
+      },
+      {
+       "t": "huáng",
+       "e": "yellow",
+       "ipa": "xu̯ɑŋ³⁵",
+       "pos": "adj",
+       "note": "黄"
+      },
+      {
+       "t": "hēi",
+       "e": "black",
+       "ipa": "xei̯⁵",
+       "pos": "adj",
+       "note": "黑"
+      },
+      {
+       "t": "bái",
+       "e": "white",
+       "ipa": "pai̯³⁵",
+       "pos": "adj",
+       "note": "白"
+      },
+      {
+       "t": "fěnhóngsè",
+       "e": "pink",
+       "ipa": "fən²¹⁴.xʊŋ³⁵.sɤ⁵¹",
+       "pos": "adj",
+       "note": "粉红色"
+      },
+      {
+       "t": "huīsè",
+       "e": "grey",
+       "ipa": "xu̯ei̯⁵.sɤ⁵¹",
+       "pos": "adj",
+       "note": "灰色"
+      },
+      {
+       "t": "zōngsè",
+       "e": "brown",
+       "ipa": "tsʊŋ⁵.sɤ⁵¹",
+       "pos": "adj",
+       "note": "棕色"
+      },
+      {
+       "t": "chéngsè",
+       "e": "orange",
+       "ipa": "tʂʰəŋ³⁵.sɤ⁵¹",
+       "pos": "adj",
+       "note": "橙色"
+      },
+      {
+       "t": "zǐsè",
+       "e": "purple",
+       "ipa": "tsɹ̩²¹⁴.sɤ⁵¹",
+       "pos": "adj",
+       "note": "紫色"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "píngguǒ shì hóngsè de",
+       "e": "the apple is red",
+       "ipa": "pʰiŋ³⁵.ku̯ɔ²¹⁴ ʂʐ̩⁵¹ xʊŋ³⁵.sɤ⁵¹ tə",
+       "note": "苹果是红色的"
+      },
+      {
+       "t": "niúnǎi shì báisè de",
+       "e": "milk is white",
+       "ipa": "ni̯ou̯³⁵.nai̯²¹⁴ ʂʐ̩⁵¹ pai̯³⁵.sɤ⁵¹ tə",
+       "note": "牛奶是白色的"
+      },
+      {
+       "t": "hóngsè de píngguǒ hěn hǎochī",
+       "e": "the red apple is delicious",
+       "ipa": "xʊŋ³⁵.sɤ⁵¹ tə pʰiŋ³⁵.ku̯ɔ²¹⁴ xən²¹⁴ xɑu̯²¹⁴.tʂʰʐ̩⁵",
+       "note": "红色的苹果很好吃"
+      },
+      {
+       "t": "wǒ yǒu yí gè huángsè de bēizi",
+       "e": "I have a yellow cup",
+       "ipa": "u̯ɔ²¹⁴ i̯ou̯²¹⁴ i³⁵ kɤ⁵¹ xu̯ɑŋ³⁵.sɤ⁵¹ tə pei̯⁵.tsɹ̩",
+       "note": "我有一个黄色的杯子"
+      }
+     ]
+    },
+    {
+     "name": "Family",
+     "tips": [
+      {
+       "h": "de is dropped for close family",
+       "b": "Possession normally takes de, but a family member or a close relation is said without it: wǒ māma, tā gēge. A thing keeps the de: wǒ de chá.",
+       "eg": [
+        [
+         "wǒ māma",
+         "my mother"
+        ],
+        [
+         "tā de bēizi",
+         "his cup"
+        ]
+       ]
+      },
+      {
+       "h": "Brothers and sisters carry rank",
+       "b": "Mandarin has no plain word for brother or sister. The older and the younger one are separate words: gēge and dìdi, jiějie and mèimei.",
+       "eg": [
+        [
+         "gēge / dìdi",
+         "older / younger brother"
+        ],
+        [
+         "jiějie / mèimei",
+         "older / younger sister"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "jiā",
+       "e": "home",
+       "ipa": "tɕi̯a⁵",
+       "pos": "noun",
+       "note": "家"
+      },
+      {
+       "t": "bàba",
+       "e": "dad",
+       "ipa": "pa⁵¹.pa",
+       "pos": "noun",
+       "note": "爸爸"
+      },
+      {
+       "t": "māma",
+       "e": "mum",
+       "ipa": "ma⁵.ma",
+       "pos": "noun",
+       "note": "妈妈"
+      },
+      {
+       "t": "gēge",
+       "e": "older brother",
+       "ipa": "kɤ⁵.kɤ",
+       "pos": "noun",
+       "note": "哥哥"
+      },
+      {
+       "t": "dìdi",
+       "e": "younger brother",
+       "ipa": "ti⁵¹.ti",
+       "pos": "noun",
+       "note": "弟弟"
+      },
+      {
+       "t": "jiějie",
+       "e": "older sister",
+       "ipa": "tɕi̯ɛ²¹⁴.tɕi̯ɛ",
+       "pos": "noun",
+       "note": "姐姐"
+      },
+      {
+       "t": "mèimei",
+       "e": "younger sister",
+       "ipa": "mei̯⁵¹.mei̯",
+       "pos": "noun",
+       "note": "妹妹"
+      },
+      {
+       "t": "érzi",
+       "e": "son",
+       "ipa": "ɑɻ³⁵.tsɹ̩",
+       "pos": "noun",
+       "note": "儿子"
+      },
+      {
+       "t": "nǚ'ér",
+       "e": "daughter",
+       "ipa": "ny²¹⁴.ɑɻ³⁵",
+       "pos": "noun",
+       "note": "女儿"
+      },
+      {
+       "t": "yéye",
+       "e": "grandfather",
+       "ipa": "i̯ɛ³⁵.i̯ɛ",
+       "pos": "noun",
+       "note": "爷爷"
+      },
+      {
+       "t": "nǎinai",
+       "e": "grandmother",
+       "ipa": "nai̯²¹⁴.nai̯",
+       "pos": "noun",
+       "note": "奶奶"
+      },
+      {
+       "t": "hé",
+       "e": "and",
+       "ipa": "xɤ³⁵",
+       "pos": "conj",
+       "note": "和"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "tā shì wǒ māma",
+       "e": "she is my mother",
+       "ipa": "tʰa⁵ ʂʐ̩⁵¹ u̯ɔ²¹⁴ ma⁵.ma",
+       "note": "她是我妈妈"
+      },
+      {
+       "t": "wǒ yǒu yí gè dìdi",
+       "e": "I have a younger brother",
+       "ipa": "u̯ɔ²¹⁴ i̯ou̯²¹⁴ i³⁵ kɤ⁵¹ ti⁵¹.ti",
+       "note": "我有一个弟弟"
+      },
+      {
+       "t": "bàba hé māma dōu shì lǎoshī",
+       "e": "dad and mum are both teachers",
+       "ipa": "pa⁵¹.pa xɤ³⁵ ma⁵.ma tou̯⁵ ʂʐ̩⁵¹ lɑu̯²¹⁴.ʂʐ̩⁵",
+       "note": "爸爸和妈妈都是老师"
+      },
+      {
+       "t": "wǒ de nǎinai hěn hǎo",
+       "e": "my grandmother is well",
+       "ipa": "u̯ɔ²¹⁴ tə nai̯²¹⁴.nai̯ xən²¹⁴ xɑu̯²¹⁴",
+       "note": "我的奶奶很好"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "ACTIONS",
+   "subtitle": "Say what people do, describe it, ask about it, and deny it",
+   "skills": [
+    {
+     "name": "Verbs",
+     "tips": [
+      {
+       "h": "Subject, verb, object",
+       "b": "The basic order matches English: wǒ chī fàn. Mandarin has no articles, so fàn covers rice, the rice and some rice, and nothing marks the noun as singular or plural.",
+       "eg": [
+        [
+         "wǒ chī fàn",
+         "I eat rice"
+        ],
+        [
+         "tā hē chá",
+         "he drinks tea"
+        ]
+       ]
+      },
+      {
+       "h": "Two verbs in a row",
+       "b": "A verb that takes another verb is followed by it directly, with no particle between them. English to has no equivalent here.",
+       "eg": [
+        [
+         "wǒ yào xué",
+         "I want to learn"
+        ],
+        [
+         "tā xǐhuan chī",
+         "he likes to eat"
+        ]
+       ]
+      },
+      {
+       "h": "yǒu for having and for there is",
+       "b": "yǒu covers possession and existence alike. With a person in front it is has; with a place in front it states what is there.",
+       "eg": [
+        [
+         "wǒ yǒu péngyou",
+         "I have friends"
+        ],
+        [
+         "jiā yǒu sì gè rén",
+         "there are four people at home"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "shì",
+       "e": "to be",
+       "ipa": "ʂʐ̩⁵¹",
+       "pos": "verb",
+       "note": "是"
+      },
+      {
+       "t": "yǒu",
+       "e": "to have",
+       "ipa": "i̯ou̯²¹⁴",
+       "pos": "verb",
+       "note": "有"
+      },
+      {
+       "t": "qù",
+       "e": "to go",
+       "ipa": "tɕʰy⁵¹",
+       "pos": "verb",
+       "note": "去"
+      },
+      {
+       "t": "lái",
+       "e": "to come",
+       "ipa": "lai̯³⁵",
+       "pos": "verb",
+       "note": "来"
+      },
+      {
+       "t": "kàn",
+       "e": "to look at",
+       "ipa": "kʰan⁵¹",
+       "pos": "verb",
+       "note": "看"
+      },
+      {
+       "t": "shuō",
+       "e": "to speak",
+       "ipa": "ʂu̯ɔ⁵",
+       "pos": "verb",
+       "note": "说"
+      },
+      {
+       "t": "tīng",
+       "e": "to listen",
+       "ipa": "tʰiŋ⁵",
+       "pos": "verb",
+       "note": "听"
+      },
+      {
+       "t": "xué",
+       "e": "to learn",
+       "ipa": "ɕɥɛ³⁵",
+       "pos": "verb",
+       "note": "学"
+      },
+      {
+       "t": "zuò",
+       "e": "to do",
+       "ipa": "tsu̯ɔ⁵¹",
+       "pos": "verb",
+       "note": "做"
+      },
+      {
+       "t": "yào",
+       "e": "to want",
+       "ipa": "i̯ɑu̯⁵¹",
+       "pos": "verb",
+       "note": "要"
+      },
+      {
+       "t": "xǐhuan",
+       "e": "to like",
+       "ipa": "ɕi²¹⁴.xu̯an",
+       "pos": "verb",
+       "note": "喜欢"
+      },
+      {
+       "t": "zhīdào",
+       "e": "to know",
+       "ipa": "tʂʐ̩⁵.tɑu̯⁵¹",
+       "pos": "verb",
+       "note": "知道"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ xǐhuan chī jiǎozi",
+       "e": "I like eating dumplings",
+       "ipa": "u̯ɔ²¹⁴ ɕi²¹⁴.xu̯an tʂʰʐ̩⁵ tɕi̯ɑu̯²¹⁴.tsɹ̩",
+       "note": "我喜欢吃饺子"
+      },
+      {
+       "t": "tā yào xué zhōngwén",
+       "e": "he wants to learn Chinese",
+       "ipa": "tʰa⁵ i̯ɑu̯⁵¹ ɕɥɛ³⁵ tʂʊŋ⁵.u̯ən³⁵",
+       "note": "他要学中文"
+      },
+      {
+       "t": "wǒmen qù tā jiā",
+       "e": "we go to his home",
+       "ipa": "u̯ɔ²¹⁴.mən tɕʰy⁵¹ tʰa⁵ tɕi̯a⁵",
+       "note": "我们去他家"
+      },
+      {
+       "t": "nǐ shuō zhōngwén ma",
+       "e": "do you speak Chinese",
+       "ipa": "ni²¹⁴ ʂu̯ɔ⁵ tʂʊŋ⁵.u̯ən³⁵ ma",
+       "note": "你说中文吗"
+      }
+     ]
+    },
+    {
+     "name": "Adjectives",
+     "tips": [
+      {
+       "h": "hěn holds the predicate slot",
+       "b": "A bare adjective after a noun reads as a comparison: chá hǎo suggests the tea is better than something else. hěn fills the slot and carries almost none of its literal force.",
+       "eg": [
+        [
+         "chá hěn hǎo",
+         "the tea is good"
+        ],
+        [
+         "fàn hěn duō",
+         "there is a lot of rice"
+        ]
+       ]
+      },
+      {
+       "h": "An adjective before its noun",
+       "b": "Used as a modifier the adjective stands in front of the noun. One syllable attaches directly; two syllables take de between them.",
+       "eg": [
+        [
+         "dà fángzi",
+         "a big house"
+        ],
+        [
+         "hóngsè de chē",
+         "a red car"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "dà",
+       "e": "big",
+       "ipa": "ta⁵¹",
+       "pos": "adj",
+       "note": "大"
+      },
+      {
+       "t": "xiǎo",
+       "e": "small",
+       "ipa": "ɕi̯ɑu̯²¹⁴",
+       "pos": "adj",
+       "note": "小"
+      },
+      {
+       "t": "duō",
+       "e": "many",
+       "ipa": "tu̯ɔ⁵",
+       "pos": "adj",
+       "note": "多"
+      },
+      {
+       "t": "shǎo",
+       "e": "few",
+       "ipa": "ʂɑu̯²¹⁴",
+       "pos": "adj",
+       "note": "少"
+      },
+      {
+       "t": "xīn",
+       "e": "new",
+       "ipa": "ɕin⁵",
+       "pos": "adj",
+       "note": "新"
+      },
+      {
+       "t": "jiù",
+       "e": "used",
+       "ipa": "tɕi̯ou̯⁵¹",
+       "pos": "adj",
+       "note": "旧"
+      },
+      {
+       "t": "gāo",
+       "e": "tall",
+       "ipa": "kɑu̯⁵",
+       "pos": "adj",
+       "note": "高"
+      },
+      {
+       "t": "duǎn",
+       "e": "short",
+       "ipa": "tu̯an²¹⁴",
+       "pos": "adj",
+       "note": "短"
+      },
+      {
+       "t": "cháng",
+       "e": "long",
+       "ipa": "tʂʰɑŋ³⁵",
+       "pos": "adj",
+       "note": "长"
+      },
+      {
+       "t": "kuài",
+       "e": "fast",
+       "ipa": "kʰu̯ai̯⁵¹",
+       "pos": "adj",
+       "note": "快"
+      },
+      {
+       "t": "màn",
+       "e": "slow",
+       "ipa": "man⁵¹",
+       "pos": "adj",
+       "note": "慢"
+      },
+      {
+       "t": "hěn",
+       "e": "very",
+       "ipa": "xən²¹⁴",
+       "pos": "adv",
+       "note": "很"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ dìdi hěn gāo",
+       "e": "my younger brother is tall",
+       "ipa": "u̯ɔ²¹⁴ ti⁵¹.ti xən²¹⁴ kɑu̯⁵",
+       "note": "我弟弟很高"
+      },
+      {
+       "t": "wǒ de bēizi hěn xiǎo",
+       "e": "my cup is small",
+       "ipa": "u̯ɔ²¹⁴ tə pei̯⁵.tsɹ̩ xən²¹⁴ ɕi̯ɑu̯²¹⁴",
+       "note": "我的杯子很小"
+      },
+      {
+       "t": "tā de chē hěn xīn",
+       "e": "her car is new",
+       "ipa": "tʰa⁵ tə tʂʰɤ⁵ xən²¹⁴ ɕin⁵",
+       "note": "她的车很新"
+      },
+      {
+       "t": "wǒ jiā de rén bù duō",
+       "e": "my family is not large",
+       "ipa": "u̯ɔ²¹⁴ tɕi̯a⁵ tə ʐən³⁵ pu⁵¹ tu̯ɔ⁵",
+       "lit": "my home DE people not many",
+       "note": "我家的人不多"
+      }
+     ]
+    },
+    {
+     "name": "Questions",
+     "tips": [
+      {
+       "h": "A question word keeps its place",
+       "b": "Mandarin leaves the question word where the answer belongs, so the question and its answer have the same word order.",
+       "eg": [
+        [
+         "nǐ yào shénme",
+         "what do you want"
+        ],
+        [
+         "wǒ yào chá",
+         "I want tea"
+        ]
+       ]
+      },
+      {
+       "h": "ma makes a yes-no question",
+       "b": "Adding ma to the end of a statement turns it into a question and changes nothing else. A sentence that already carries a question word takes no ma.",
+       "eg": [
+        [
+         "tā shì lǎoshī",
+         "he is a teacher"
+        ],
+        [
+         "tā shì lǎoshī ma",
+         "is he a teacher"
+        ]
+       ]
+      },
+      {
+       "h": "The A-not-A question",
+       "b": "A second way to ask is to say the verb, then its negative: shì bu shì, hǎo bu hǎo. It carries the same meaning as ma and takes no ma.",
+       "eg": [
+        [
+         "nǐ qù bu qù",
+         "are you going"
+        ],
+        [
+         "chá hǎo bu hǎo",
+         "is the tea good"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "shénme",
+       "e": "what",
+       "ipa": "ʂən³⁵.mə",
+       "pos": "pron",
+       "note": "什么"
+      },
+      {
+       "t": "shéi",
+       "e": "who",
+       "ipa": "ʂei̯³⁵",
+       "pos": "pron",
+       "note": "谁"
+      },
+      {
+       "t": "nǎr",
+       "e": "where",
+       "ipa": "nɑɻ²¹⁴",
+       "pos": "pron",
+       "note": "哪儿"
+      },
+      {
+       "t": "nǎge",
+       "e": "which one",
+       "ipa": "na²¹⁴.kɤ",
+       "pos": "det",
+       "note": "哪个"
+      },
+      {
+       "t": "shénme shíhou",
+       "e": "when",
+       "ipa": "ʂən³⁵.mə ʂʐ̩³⁵.xou̯",
+       "pos": "adv",
+       "note": "什么时候"
+      },
+      {
+       "t": "wèishénme",
+       "e": "why",
+       "ipa": "u̯ei̯⁵¹.ʂən³⁵.mə",
+       "pos": "adv",
+       "note": "为什么"
+      },
+      {
+       "t": "zěnme",
+       "e": "how",
+       "ipa": "tsən²¹⁴.mə",
+       "pos": "adv",
+       "note": "怎么"
+      },
+      {
+       "t": "jǐ",
+       "e": "how many",
+       "ipa": "tɕi²¹⁴",
+       "pos": "det",
+       "note": "几"
+      },
+      {
+       "t": "duōshao",
+       "e": "how much",
+       "ipa": "tu̯ɔ⁵.ʂɑu̯",
+       "pos": "det",
+       "note": "多少"
+      },
+      {
+       "t": "ma",
+       "e": "question particle",
+       "ipa": "ma",
+       "pos": "interj",
+       "note": "吗"
+      },
+      {
+       "t": "ne",
+       "e": "and what about",
+       "ipa": "nɤ",
+       "pos": "interj",
+       "note": "呢"
+      },
+      {
+       "t": "wèn",
+       "e": "to ask",
+       "ipa": "u̯ən⁵¹",
+       "pos": "verb",
+       "note": "问"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "nǐ shì shéi",
+       "e": "who are you",
+       "ipa": "ni²¹⁴ ʂʐ̩⁵¹ ʂei̯³⁵",
+       "note": "你是谁"
+      },
+      {
+       "t": "nǐ yào shénme",
+       "e": "what do you want",
+       "ipa": "ni²¹⁴ i̯ɑu̯⁵¹ ʂən³⁵.mə",
+       "note": "你要什么"
+      },
+      {
+       "t": "nǐ yǒu jǐ gè háizi",
+       "e": "how many children do you have",
+       "ipa": "ni²¹⁴ i̯ou̯²¹⁴ tɕi²¹⁴ kɤ⁵¹ xai̯³⁵.tsɹ̩",
+       "note": "你有几个孩子"
+      },
+      {
+       "t": "tā wèishénme bù chī ròu",
+       "e": "why does he not eat meat",
+       "ipa": "tʰa⁵ u̯ei̯⁵¹.ʂən³⁵.mə pu⁵¹ tʂʰʐ̩⁵ ʐou̯⁵¹",
+       "note": "他为什么不吃肉"
+      }
+     ]
+    },
+    {
+     "name": "Negation",
+     "tips": [
+      {
+       "h": "bù and méi divide the work",
+       "b": "bù denies the present, the habitual and the future: tā bù chī ròu. méi denies that something happened: tā méi chī fàn.",
+       "eg": [
+        [
+         "wǒ bù qù",
+         "I am not going"
+        ],
+        [
+         "wǒ méi qù",
+         "I did not go"
+        ]
+       ]
+      },
+      {
+       "h": "yǒu is negated only by méi",
+       "b": "The verb yǒu never takes bù. Its negative is méiyǒu, which shortens to méi in front of another verb.",
+       "eg": [
+        [
+         "wǒ méiyǒu chē",
+         "I have no car"
+        ],
+        [
+         "wǒ hái méi chī",
+         "I have not eaten yet"
+        ]
+       ]
+      },
+      {
+       "h": "bié forms a negative command",
+       "b": "bié in front of a verb tells someone not to do it. búyòng says the action is unnecessary rather than unwanted.",
+       "eg": [
+        [
+         "bié shuō",
+         "do not speak"
+        ],
+        [
+         "búyòng lái",
+         "no need to come"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "méiyǒu",
+       "e": "to not have",
+       "ipa": "mei̯³⁵.i̯ou̯²¹⁴",
+       "pos": "verb",
+       "note": "没有"
+      },
+      {
+       "t": "méi",
+       "e": "did not",
+       "ipa": "mei̯³⁵",
+       "pos": "adv",
+       "note": "没"
+      },
+      {
+       "t": "bú shì",
+       "e": "is not",
+       "ipa": "pu³⁵ ʂʐ̩⁵¹",
+       "pos": "verb",
+       "note": "不是"
+      },
+      {
+       "t": "bié",
+       "e": "do not",
+       "ipa": "pi̯ɛ³⁵",
+       "pos": "adv",
+       "note": "别"
+      },
+      {
+       "t": "búyòng",
+       "e": "no need",
+       "ipa": "pu³⁵.i̯ʊŋ⁵¹",
+       "pos": "adv",
+       "note": "不用"
+      },
+      {
+       "t": "cónglái bù",
+       "e": "never",
+       "ipa": "tsʰʊŋ³⁵.lai̯³⁵ pu⁵¹",
+       "pos": "adv",
+       "note": "从来不"
+      },
+      {
+       "t": "méi rén",
+       "e": "nobody",
+       "ipa": "mei̯³⁵ ʐən³⁵",
+       "pos": "pron",
+       "note": "没人"
+      },
+      {
+       "t": "hái méi",
+       "e": "not yet",
+       "ipa": "xai̯³⁵ mei̯³⁵",
+       "pos": "adv",
+       "note": "还没"
+      },
+      {
+       "t": "bú tài",
+       "e": "not very",
+       "ipa": "pu³⁵ tʰai̯⁵¹",
+       "pos": "adv",
+       "note": "不太"
+      },
+      {
+       "t": "dànshì",
+       "e": "but",
+       "ipa": "tan⁵¹.ʂʐ̩⁵¹",
+       "pos": "conj",
+       "note": "但是"
+      },
+      {
+       "t": "yīnwèi",
+       "e": "because",
+       "ipa": "in⁵.u̯ei̯⁵¹",
+       "pos": "conj",
+       "note": "因为"
+      },
+      {
+       "t": "suǒyǐ",
+       "e": "so",
+       "ipa": "su̯ɔ²¹⁴.i²¹⁴",
+       "pos": "conj",
+       "note": "所以"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ méiyǒu jiějie",
+       "e": "I do not have an older sister",
+       "ipa": "u̯ɔ²¹⁴ mei̯³⁵.i̯ou̯²¹⁴ tɕi̯ɛ²¹⁴.tɕi̯ɛ",
+       "note": "我没有姐姐"
+      },
+      {
+       "t": "tā bú shì lǎoshī",
+       "e": "he is not a teacher",
+       "ipa": "tʰa⁵ pu³⁵ ʂʐ̩⁵¹ lɑu̯²¹⁴.ʂʐ̩⁵",
+       "note": "他不是老师"
+      },
+      {
+       "t": "wǒ xǐhuan chá, dànshì bù xǐhuan kāfēi",
+       "e": "I like tea but not coffee",
+       "ipa": "u̯ɔ²¹⁴ ɕi²¹⁴.xu̯an tʂʰa³⁵ tan⁵¹.ʂʐ̩⁵¹ pu⁵¹ ɕi²¹⁴.xu̯an kʰa⁵.fei̯⁵",
+       "note": "我喜欢茶但是不喜欢咖啡"
+      },
+      {
+       "t": "wǒ hái méi chī fàn",
+       "e": "I have not eaten yet",
+       "ipa": "u̯ɔ²¹⁴ xai̯³⁵ mei̯³⁵ tʂʰʐ̩⁵ fan⁵¹",
+       "note": "我还没吃饭"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "AT HOME",
+   "subtitle": "The rooms of a house, what stands in them, clothes and animals",
+   "skills": [
+    {
+     "name": "House",
+     "tips": [
+      {
+       "h": "zài places a person or a thing",
+       "b": "zài states where something is and needs no other verb: wǒ zài jiā. The place always follows zài, and the whole group stands after the subject.",
+       "eg": [
+        [
+         "wǒ zài jiā",
+         "I am at home"
+        ],
+        [
+         "māma zài chúfáng",
+         "mum is in the kitchen"
+        ]
+       ]
+      },
+      {
+       "h": "Asking where with zài nǎr",
+       "b": "A where question puts nǎr in the place slot, and the answer replaces nǎr with the place. No other word moves.",
+       "eg": [
+        [
+         "cèsuǒ zài nǎr",
+         "where is the toilet"
+        ],
+        [
+         "cèsuǒ zài nàlǐ",
+         "the toilet is over there"
+        ]
+       ]
+      },
+      {
+       "h": "Furniture picks its measure word",
+       "b": "A flat-topped thing is counted with zhāng, a thing held by a handle with bǎ. The measure word is fixed by the noun, not chosen freely.",
+       "eg": [
+        [
+         "yì zhāng zhuōzi",
+         "one table"
+        ],
+        [
+         "yì bǎ yǐzi",
+         "one chair"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "fángzi",
+       "e": "house",
+       "ipa": "fɑŋ³⁵.tsɹ̩",
+       "pos": "noun",
+       "note": "房子"
+      },
+      {
+       "t": "fángjiān",
+       "e": "room",
+       "ipa": "fɑŋ³⁵.tɕi̯ɛn⁵",
+       "pos": "noun",
+       "note": "房间"
+      },
+      {
+       "t": "chúfáng",
+       "e": "kitchen",
+       "ipa": "tʂʰu³⁵.fɑŋ³⁵",
+       "pos": "noun",
+       "note": "厨房"
+      },
+      {
+       "t": "wòshì",
+       "e": "bedroom",
+       "ipa": "u̯ɔ⁵¹.ʂʐ̩⁵¹",
+       "pos": "noun",
+       "note": "卧室"
+      },
+      {
+       "t": "cèsuǒ",
+       "e": "toilet",
+       "ipa": "tsʰɤ⁵¹.su̯ɔ²¹⁴",
+       "pos": "noun",
+       "note": "厕所"
+      },
+      {
+       "t": "mén",
+       "e": "door",
+       "ipa": "mən³⁵",
+       "pos": "noun",
+       "note": "门"
+      },
+      {
+       "t": "chuānghu",
+       "e": "window",
+       "ipa": "tʂʰu̯ɑŋ⁵.xu",
+       "pos": "noun",
+       "note": "窗户"
+      },
+      {
+       "t": "zhuōzi",
+       "e": "table",
+       "ipa": "tʂu̯ɔ⁵.tsɹ̩",
+       "pos": "noun",
+       "note": "桌子"
+      },
+      {
+       "t": "yǐzi",
+       "e": "chair",
+       "ipa": "i²¹⁴.tsɹ̩",
+       "pos": "noun",
+       "note": "椅子"
+      },
+      {
+       "t": "chuáng",
+       "e": "bed",
+       "ipa": "tʂʰu̯ɑŋ³⁵",
+       "pos": "noun",
+       "note": "床"
+      },
+      {
+       "t": "táidēng",
+       "e": "lamp",
+       "ipa": "tʰai̯³⁵.təŋ⁵",
+       "pos": "noun",
+       "note": "台灯"
+      },
+      {
+       "t": "zài",
+       "e": "at",
+       "ipa": "tsai̯⁵¹",
+       "pos": "prep",
+       "note": "在"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ zài jiā",
+       "e": "I am at home",
+       "ipa": "u̯ɔ²¹⁴ tsai̯⁵¹ tɕi̯a⁵",
+       "note": "我在家"
+      },
+      {
+       "t": "māma zài chúfáng",
+       "e": "mum is in the kitchen",
+       "ipa": "ma⁵.ma tsai̯⁵¹ tʂʰu³⁵.fɑŋ³⁵",
+       "note": "妈妈在厨房"
+      },
+      {
+       "t": "wǒ de fángzi hěn dà",
+       "e": "my house is big",
+       "ipa": "u̯ɔ²¹⁴ tə fɑŋ³⁵.tsɹ̩ xən²¹⁴ ta⁵¹",
+       "note": "我的房子很大"
+      },
+      {
+       "t": "cèsuǒ zài nǎr",
+       "e": "where is the toilet",
+       "ipa": "tsʰɤ⁵¹.su̯ɔ²¹⁴ tsai̯⁵¹ nɑɻ²¹⁴",
+       "note": "厕所在哪儿"
+      }
+     ]
+    },
+    {
+     "name": "Objects",
+     "tips": [
+      {
+       "h": "zhè and nà need a measure word",
+       "b": "This and that behave like numbers: a measure word stands between them and the noun. zhè gè rén, nà běn shū.",
+       "eg": [
+        [
+         "zhè gè dōngxi",
+         "this thing"
+        ],
+        [
+         "nà běn shū",
+         "that book"
+        ]
+       ]
+      },
+      {
+       "h": "shéi de asks whose",
+       "b": "de after a question word builds the possessive, and the phrase stays where the answer would stand.",
+       "eg": [
+        [
+         "nà shì shéi de bāo",
+         "whose bag is that"
+        ],
+        [
+         "shì wǒ de",
+         "it is mine"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "shū",
+       "e": "book",
+       "ipa": "ʂu⁵",
+       "pos": "noun",
+       "note": "书"
+      },
+      {
+       "t": "běn",
+       "e": "volume of",
+       "ipa": "pən²¹⁴",
+       "pos": "det",
+       "note": "本"
+      },
+      {
+       "t": "qiānbǐ",
+       "e": "pencil",
+       "ipa": "tɕʰi̯ɛn⁵.pi²¹⁴",
+       "pos": "noun",
+       "note": "铅笔"
+      },
+      {
+       "t": "zhǐ",
+       "e": "paper",
+       "ipa": "tʂʐ̩²¹⁴",
+       "pos": "noun",
+       "note": "纸"
+      },
+      {
+       "t": "shǒujī",
+       "e": "mobile phone",
+       "ipa": "ʂou̯²¹⁴.tɕi⁵",
+       "pos": "noun",
+       "note": "手机"
+      },
+      {
+       "t": "diànnǎo",
+       "e": "computer",
+       "ipa": "ti̯ɛn⁵¹.nɑu̯²¹⁴",
+       "pos": "noun",
+       "note": "电脑"
+      },
+      {
+       "t": "zhōng",
+       "e": "clock",
+       "ipa": "tʂʊŋ⁵",
+       "pos": "noun",
+       "note": "钟"
+      },
+      {
+       "t": "yàoshi",
+       "e": "key",
+       "ipa": "i̯ɑu̯⁵¹.ʂʐ̩",
+       "pos": "noun",
+       "note": "钥匙"
+      },
+      {
+       "t": "bāo",
+       "e": "bag",
+       "ipa": "pɑu̯⁵",
+       "pos": "noun",
+       "note": "包"
+      },
+      {
+       "t": "dōngxi",
+       "e": "thing",
+       "ipa": "tʊŋ⁵.ɕi",
+       "pos": "noun",
+       "note": "东西"
+      },
+      {
+       "t": "zhè",
+       "e": "this",
+       "ipa": "tʂɤ⁵¹",
+       "pos": "det",
+       "note": "这"
+      },
+      {
+       "t": "nà",
+       "e": "that",
+       "ipa": "na⁵¹",
+       "pos": "det",
+       "note": "那"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "zhè shì wǒ de shū",
+       "e": "this is my book",
+       "ipa": "tʂɤ⁵¹ ʂʐ̩⁵¹ u̯ɔ²¹⁴ tə ʂu⁵",
+       "note": "这是我的书"
+      },
+      {
+       "t": "nà shì shéi de bāo",
+       "e": "whose bag is that",
+       "ipa": "na⁵¹ ʂʐ̩⁵¹ ʂei̯³⁵ tə pɑu̯⁵",
+       "note": "那是谁的包"
+      },
+      {
+       "t": "wǒ yǒu sān běn shū",
+       "e": "I have three books",
+       "ipa": "u̯ɔ²¹⁴ i̯ou̯²¹⁴ san⁵ pən²¹⁴ ʂu⁵",
+       "note": "我有三本书"
+      },
+      {
+       "t": "zhè gè dōngxi shì shénme",
+       "e": "what is this thing",
+       "ipa": "tʂɤ⁵¹ kɤ⁵¹ tʊŋ⁵.ɕi ʂʐ̩⁵¹ ʂən³⁵.mə",
+       "note": "这个东西是什么"
+      }
+     ]
+    },
+    {
+     "name": "Clothing",
+     "tips": [
+      {
+       "h": "chuān and dài",
+       "b": "chuān is used for what the body goes into: clothes and shoes. dài is used for what is put on: a hat, glasses, a watch.",
+       "eg": [
+        [
+         "chuān xiézi",
+         "put shoes on"
+        ],
+        [
+         "dài màozi",
+         "put a hat on"
+        ]
+       ]
+      },
+      {
+       "h": "Clothes and their measure words",
+       "b": "jiàn counts a garment for the upper body, tiáo counts a long one such as trousers or a skirt, and shuāng counts what comes in pairs.",
+       "eg": [
+        [
+         "yí jiàn chènshān",
+         "one shirt"
+        ],
+        [
+         "yì tiáo kùzi",
+         "one pair of trousers"
+        ],
+        [
+         "yì shuāng xiézi",
+         "one pair of shoes"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "yīfu",
+       "e": "clothes",
+       "ipa": "i⁵.fu",
+       "pos": "noun",
+       "note": "衣服"
+      },
+      {
+       "t": "chènshān",
+       "e": "shirt",
+       "ipa": "tʂʰən⁵¹.ʂan⁵",
+       "pos": "noun",
+       "note": "衬衫"
+      },
+      {
+       "t": "kùzi",
+       "e": "trousers",
+       "ipa": "kʰu⁵¹.tsɹ̩",
+       "pos": "noun",
+       "note": "裤子"
+      },
+      {
+       "t": "qúnzi",
+       "e": "skirt",
+       "ipa": "tɕʰyn³⁵.tsɹ̩",
+       "pos": "noun",
+       "note": "裙子"
+      },
+      {
+       "t": "xiézi",
+       "e": "shoes",
+       "ipa": "ɕi̯ɛ³⁵.tsɹ̩",
+       "pos": "noun",
+       "note": "鞋子"
+      },
+      {
+       "t": "wàitào",
+       "e": "coat",
+       "ipa": "u̯ai̯⁵¹.tʰɑu̯⁵¹",
+       "pos": "noun",
+       "note": "外套"
+      },
+      {
+       "t": "màozi",
+       "e": "hat",
+       "ipa": "mɑu̯⁵¹.tsɹ̩",
+       "pos": "noun",
+       "note": "帽子"
+      },
+      {
+       "t": "wàzi",
+       "e": "socks",
+       "ipa": "u̯a⁵¹.tsɹ̩",
+       "pos": "noun",
+       "note": "袜子"
+      },
+      {
+       "t": "chuān",
+       "e": "to put on",
+       "ipa": "tʂʰu̯an⁵",
+       "pos": "verb",
+       "note": "穿"
+      },
+      {
+       "t": "dài",
+       "e": "to wear on the head",
+       "ipa": "tai̯⁵¹",
+       "pos": "verb",
+       "note": "戴"
+      },
+      {
+       "t": "jiàn",
+       "e": "garment of",
+       "ipa": "tɕi̯ɛn⁵¹",
+       "pos": "det",
+       "note": "件"
+      },
+      {
+       "t": "shuāng",
+       "e": "pair of",
+       "ipa": "ʂu̯ɑŋ⁵",
+       "pos": "det",
+       "note": "双"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ chuān yí jiàn wàitào",
+       "e": "I am wearing a coat",
+       "ipa": "u̯ɔ²¹⁴ tʂʰu̯an⁵ i³⁵ tɕi̯ɛn⁵¹ u̯ai̯⁵¹.tʰɑu̯⁵¹",
+       "note": "我穿一件外套"
+      },
+      {
+       "t": "tā de xiézi shì hēisè de",
+       "e": "her shoes are black",
+       "ipa": "tʰa⁵ tə ɕi̯ɛ³⁵.tsɹ̩ ʂʐ̩⁵¹ xei̯⁵.sɤ⁵¹ tə",
+       "note": "她的鞋子是黑色的"
+      },
+      {
+       "t": "wǒ yǒu sān shuāng wàzi",
+       "e": "I have three pairs of socks",
+       "ipa": "u̯ɔ²¹⁴ i̯ou̯²¹⁴ san⁵ ʂu̯ɑŋ⁵ u̯a⁵¹.tsɹ̩",
+       "note": "我有三双袜子"
+      },
+      {
+       "t": "zhè jiàn chènshān hěn xiǎo",
+       "e": "this shirt is small",
+       "ipa": "tʂɤ⁵¹ tɕi̯ɛn⁵¹ tʂʰən⁵¹.ʂan⁵ xən²¹⁴ ɕi̯ɑu̯²¹⁴",
+       "note": "这件衬衫很小"
+      }
+     ]
+    },
+    {
+     "name": "Animals",
+     "tips": [
+      {
+       "h": "zhī counts most animals",
+       "b": "The measure word for an animal is usually zhī: yì zhī gǒu, sān zhī māo. A horse takes pǐ and a fish takes tiáo.",
+       "eg": [
+        [
+         "yì zhī māo",
+         "one cat"
+        ],
+        [
+         "yì pǐ mǎ",
+         "one horse"
+        ]
+       ]
+      },
+      {
+       "h": "A noun counts as one or as many",
+       "b": "gǒu is dog and dogs alike; nothing is added for the plural. Number comes from the count phrase in front of the noun.",
+       "eg": [
+        [
+         "wǒ yǒu gǒu",
+         "I have a dog"
+        ],
+        [
+         "wǒ yǒu sān zhī gǒu",
+         "I have three dogs"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "dòngwù",
+       "e": "animal",
+       "ipa": "tʊŋ⁵¹.u⁵¹",
+       "pos": "noun",
+       "note": "动物"
+      },
+      {
+       "t": "gǒu",
+       "e": "dog",
+       "ipa": "kou̯²¹⁴",
+       "pos": "noun",
+       "note": "狗"
+      },
+      {
+       "t": "māo",
+       "e": "cat",
+       "ipa": "mɑu̯⁵",
+       "pos": "noun",
+       "note": "猫"
+      },
+      {
+       "t": "niǎo",
+       "e": "bird",
+       "ipa": "ni̯ɑu̯²¹⁴",
+       "pos": "noun",
+       "note": "鸟"
+      },
+      {
+       "t": "mǎ",
+       "e": "horse",
+       "ipa": "ma²¹⁴",
+       "pos": "noun",
+       "note": "马"
+      },
+      {
+       "t": "niú",
+       "e": "cow",
+       "ipa": "ni̯ou̯³⁵",
+       "pos": "noun",
+       "note": "牛"
+      },
+      {
+       "t": "zhū",
+       "e": "pig",
+       "ipa": "tʂu⁵",
+       "pos": "noun",
+       "note": "猪"
+      },
+      {
+       "t": "yáng",
+       "e": "sheep",
+       "ipa": "i̯ɑŋ³⁵",
+       "pos": "noun",
+       "note": "羊"
+      },
+      {
+       "t": "jī",
+       "e": "chicken",
+       "ipa": "tɕi⁵",
+       "pos": "noun",
+       "note": "鸡"
+      },
+      {
+       "t": "yā",
+       "e": "duck",
+       "ipa": "i̯a⁵",
+       "pos": "noun",
+       "note": "鸭"
+      },
+      {
+       "t": "zhī",
+       "e": "animal of",
+       "ipa": "tʂʐ̩⁵",
+       "pos": "det",
+       "note": "只"
+      },
+      {
+       "t": "wèi",
+       "e": "to feed",
+       "ipa": "u̯ei̯⁵¹",
+       "pos": "verb",
+       "note": "喂"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ yǒu yì zhī gǒu",
+       "e": "I have a dog",
+       "ipa": "u̯ɔ²¹⁴ i̯ou̯²¹⁴ i⁵¹ tʂʐ̩⁵ kou̯²¹⁴",
+       "note": "我有一只狗"
+      },
+      {
+       "t": "tā jiā yǒu sān zhī māo",
+       "e": "there are three cats at his home",
+       "ipa": "tʰa⁵ tɕi̯a⁵ i̯ou̯²¹⁴ san⁵ tʂʐ̩⁵ mɑu̯⁵",
+       "note": "他家有三只猫"
+      },
+      {
+       "t": "niǎo hěn xiǎo, mǎ hěn dà",
+       "e": "birds are small, horses are big",
+       "ipa": "ni̯ɑu̯²¹⁴ xən²¹⁴ ɕi̯ɑu̯²¹⁴ ma²¹⁴ xən²¹⁴ ta⁵¹",
+       "note": "鸟很小马很大"
+      },
+      {
+       "t": "nǐ xǐhuan shénme dòngwù",
+       "e": "which animals do you like",
+       "ipa": "ni²¹⁴ ɕi²¹⁴.xu̯an ʂən³⁵.mə tʊŋ⁵¹.u⁵¹",
+       "note": "你喜欢什么动物"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "TIME",
+   "subtitle": "The week, the calendar, the clock and the weather",
+   "skills": [
+    {
+     "name": "Days",
+     "tips": [
+      {
+       "h": "A time word comes before the verb",
+       "b": "A time expression stands at the head of the sentence or straight after the subject, and never after the verb: míngtiān wǒ qù, or wǒ míngtiān qù.",
+       "eg": [
+        [
+         "míngtiān wǒ qù",
+         "tomorrow I go"
+        ],
+        [
+         "wǒ míngtiān qù",
+         "I go tomorrow"
+        ]
+       ]
+      },
+      {
+       "h": "The days of the week are numbered",
+       "b": "xīngqī plus a number gives the day, counting from Monday as one. Sunday breaks the count and is xīngqītiān.",
+       "eg": [
+        [
+         "xīngqīyī",
+         "Monday"
+        ],
+        [
+         "xīngqīsì",
+         "Thursday"
+        ],
+        [
+         "xīngqītiān",
+         "Sunday"
+        ]
+       ]
+      },
+      {
+       "h": "The verb does not mark the past",
+       "b": "zuótiān wǒ chī fàn is yesterday I ate. The time word places the action, and the verb keeps the one form it has.",
+       "eg": [
+        [
+         "zuótiān wǒ chī fàn",
+         "yesterday I ate"
+        ],
+        [
+         "míngtiān wǒ chī fàn",
+         "tomorrow I eat"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "xīngqī",
+       "e": "week",
+       "ipa": "ɕiŋ⁵.tɕʰi⁵",
+       "pos": "noun",
+       "note": "星期"
+      },
+      {
+       "t": "xīngqīyī",
+       "e": "Monday",
+       "ipa": "ɕiŋ⁵.tɕʰi⁵.i⁵",
+       "pos": "noun",
+       "note": "星期一"
+      },
+      {
+       "t": "xīngqī'èr",
+       "e": "Tuesday",
+       "ipa": "ɕiŋ⁵.tɕʰi⁵.ɑɻ⁵¹",
+       "pos": "noun",
+       "note": "星期二"
+      },
+      {
+       "t": "xīngqīsān",
+       "e": "Wednesday",
+       "ipa": "ɕiŋ⁵.tɕʰi⁵.san⁵",
+       "pos": "noun",
+       "note": "星期三"
+      },
+      {
+       "t": "xīngqīsì",
+       "e": "Thursday",
+       "ipa": "ɕiŋ⁵.tɕʰi⁵.sɹ̩⁵¹",
+       "pos": "noun",
+       "note": "星期四"
+      },
+      {
+       "t": "xīngqīwǔ",
+       "e": "Friday",
+       "ipa": "ɕiŋ⁵.tɕʰi⁵.u²¹⁴",
+       "pos": "noun",
+       "note": "星期五"
+      },
+      {
+       "t": "xīngqīliù",
+       "e": "Saturday",
+       "ipa": "ɕiŋ⁵.tɕʰi⁵.li̯ou̯⁵¹",
+       "pos": "noun",
+       "note": "星期六"
+      },
+      {
+       "t": "xīngqītiān",
+       "e": "Sunday",
+       "ipa": "ɕiŋ⁵.tɕʰi⁵.tʰi̯ɛn⁵",
+       "pos": "noun",
+       "note": "星期天"
+      },
+      {
+       "t": "jīntiān",
+       "e": "today",
+       "ipa": "tɕin⁵.tʰi̯ɛn⁵",
+       "pos": "noun",
+       "note": "今天"
+      },
+      {
+       "t": "míngtiān",
+       "e": "tomorrow",
+       "ipa": "miŋ³⁵.tʰi̯ɛn⁵",
+       "pos": "noun",
+       "note": "明天"
+      },
+      {
+       "t": "zuótiān",
+       "e": "yesterday",
+       "ipa": "tsu̯ɔ³⁵.tʰi̯ɛn⁵",
+       "pos": "noun",
+       "note": "昨天"
+      },
+      {
+       "t": "zhōumò",
+       "e": "weekend",
+       "ipa": "tʂou̯⁵.mu̯ɔ⁵¹",
+       "pos": "noun",
+       "note": "周末"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "jīntiān shì xīngqīyī",
+       "e": "today is Monday",
+       "ipa": "tɕin⁵.tʰi̯ɛn⁵ ʂʐ̩⁵¹ ɕiŋ⁵.tɕʰi⁵.i⁵",
+       "note": "今天是星期一"
+      },
+      {
+       "t": "míngtiān wǒ qù nǐ jiā",
+       "e": "tomorrow I go to your home",
+       "ipa": "miŋ³⁵.tʰi̯ɛn⁵ u̯ɔ²¹⁴ tɕʰy⁵¹ ni²¹⁴ tɕi̯a⁵",
+       "note": "明天我去你家"
+      },
+      {
+       "t": "zhōumò nǐ zuò shénme",
+       "e": "what do you do at the weekend",
+       "ipa": "tʂou̯⁵.mu̯ɔ⁵¹ ni²¹⁴ tsu̯ɔ⁵¹ ʂən³⁵.mə",
+       "note": "周末你做什么"
+      },
+      {
+       "t": "zuótiān wǒ méi chī fàn",
+       "e": "yesterday I did not eat",
+       "ipa": "tsu̯ɔ³⁵.tʰi̯ɛn⁵ u̯ɔ²¹⁴ mei̯³⁵ tʂʰʐ̩⁵ fan⁵¹",
+       "note": "昨天我没吃饭"
+      }
+     ]
+    },
+    {
+     "name": "Months",
+     "tips": [
+      {
+       "h": "Months are a number plus yuè",
+       "b": "No month carries a name of its own: yīyuè is month one, shí'èryuè is month twelve. The same yuè is the word for month itself.",
+       "eg": [
+        [
+         "yīyuè",
+         "January"
+        ],
+        [
+         "liùyuè",
+         "June"
+        ],
+        [
+         "shí'èryuè",
+         "December"
+        ]
+       ]
+      },
+      {
+       "h": "Dates run from large to small",
+       "b": "A date names the year, then the month, then the day: wǔyuè sì hào. Every Mandarin time expression narrows in the same direction.",
+       "eg": [
+        [
+         "wǔyuè sì hào",
+         "the fourth of May"
+        ],
+        [
+         "jǐ yuè jǐ hào",
+         "what date"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "yuè",
+       "e": "month",
+       "ipa": "ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "月"
+      },
+      {
+       "t": "yīyuè",
+       "e": "January",
+       "ipa": "i⁵.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "一月"
+      },
+      {
+       "t": "èryuè",
+       "e": "February",
+       "ipa": "ɑɻ⁵¹.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "二月"
+      },
+      {
+       "t": "sānyuè",
+       "e": "March",
+       "ipa": "san⁵.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "三月"
+      },
+      {
+       "t": "sìyuè",
+       "e": "April",
+       "ipa": "sɹ̩⁵¹.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "四月"
+      },
+      {
+       "t": "wǔyuè",
+       "e": "May",
+       "ipa": "u²¹⁴.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "五月"
+      },
+      {
+       "t": "liùyuè",
+       "e": "June",
+       "ipa": "li̯ou̯⁵¹.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "六月"
+      },
+      {
+       "t": "jiǔyuè",
+       "e": "September",
+       "ipa": "tɕi̯ou̯²¹⁴.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "九月"
+      },
+      {
+       "t": "shí'èryuè",
+       "e": "December",
+       "ipa": "ʂʐ̩³⁵.ɑɻ⁵¹.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "十二月"
+      },
+      {
+       "t": "nián",
+       "e": "year",
+       "ipa": "ni̯ɛn³⁵",
+       "pos": "noun",
+       "note": "年"
+      },
+      {
+       "t": "hào",
+       "e": "day of the month",
+       "ipa": "xɑu̯⁵¹",
+       "pos": "noun",
+       "note": "号"
+      },
+      {
+       "t": "shēngrì",
+       "e": "birthday",
+       "ipa": "ʂəŋ⁵.ʐʐ̩⁵¹",
+       "pos": "noun",
+       "note": "生日"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ de shēngrì zài sìyuè",
+       "e": "my birthday is in April",
+       "ipa": "u̯ɔ²¹⁴ tə ʂəŋ⁵.ʐʐ̩⁵¹ tsai̯⁵¹ sɹ̩⁵¹.ɥɛ⁵¹",
+       "note": "我的生日在四月"
+      },
+      {
+       "t": "jīntiān shì wǔyuè sì hào",
+       "e": "today is the fourth of May",
+       "ipa": "tɕin⁵.tʰi̯ɛn⁵ ʂʐ̩⁵¹ u²¹⁴.ɥɛ⁵¹ sɹ̩⁵¹ xɑu̯⁵¹",
+       "note": "今天是五月四号"
+      },
+      {
+       "t": "yī nián yǒu shí'èr gè yuè",
+       "e": "a year has twelve months",
+       "ipa": "i⁵ ni̯ɛn³⁵ i̯ou̯²¹⁴ ʂʐ̩³⁵.ɑɻ⁵¹ kɤ⁵¹ ɥɛ⁵¹",
+       "note": "一年有十二个月"
+      },
+      {
+       "t": "nǐ de shēngrì shì jǐ hào",
+       "e": "what date is your birthday",
+       "ipa": "ni²¹⁴ tə ʂəŋ⁵.ʐʐ̩⁵¹ ʂʐ̩⁵¹ tɕi²¹⁴ xɑu̯⁵¹",
+       "note": "你的生日是几号"
+      }
+     ]
+    },
+    {
+     "name": "Time of Day",
+     "tips": [
+      {
+       "h": "Telling the clock",
+       "b": "The hour is a number plus diǎn, and minutes follow it: sān diǎn shí fēn. bàn after diǎn gives half past.",
+       "eg": [
+        [
+         "sān diǎn",
+         "three o'clock"
+        ],
+        [
+         "sān diǎn bàn",
+         "half past three"
+        ],
+        [
+         "xiànzài jǐ diǎn",
+         "what time is it"
+        ]
+       ]
+      },
+      {
+       "h": "Time, then place, then verb",
+       "b": "A Mandarin sentence sets the frame before the action: subject, time, place, verb. English puts both at the end, which reverses the order.",
+       "eg": [
+        [
+         "wǒ wǎnshang zài jiā chī fàn",
+         "I eat at home in the evening"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "shíjiān",
+       "e": "time",
+       "ipa": "ʂʐ̩³⁵.tɕi̯ɛn⁵",
+       "pos": "noun",
+       "note": "时间"
+      },
+      {
+       "t": "zǎoshang",
+       "e": "morning",
+       "ipa": "tsɑu̯²¹⁴.ʂɑŋ",
+       "pos": "noun",
+       "note": "早上"
+      },
+      {
+       "t": "zhōngwǔ",
+       "e": "noon",
+       "ipa": "tʂʊŋ⁵.u²¹⁴",
+       "pos": "noun",
+       "note": "中午"
+      },
+      {
+       "t": "xiàwǔ",
+       "e": "afternoon",
+       "ipa": "ɕi̯a⁵¹.u²¹⁴",
+       "pos": "noun",
+       "note": "下午"
+      },
+      {
+       "t": "wǎnshang",
+       "e": "evening",
+       "ipa": "u̯an²¹⁴.ʂɑŋ",
+       "pos": "noun",
+       "note": "晚上"
+      },
+      {
+       "t": "diǎn",
+       "e": "o'clock",
+       "ipa": "ti̯ɛn²¹⁴",
+       "pos": "noun",
+       "note": "点"
+      },
+      {
+       "t": "fēn",
+       "e": "minute",
+       "ipa": "fən⁵",
+       "pos": "noun",
+       "note": "分"
+      },
+      {
+       "t": "bàn",
+       "e": "half",
+       "ipa": "pan⁵¹",
+       "pos": "num",
+       "note": "半"
+      },
+      {
+       "t": "xiǎoshí",
+       "e": "hour",
+       "ipa": "ɕi̯ɑu̯²¹⁴.ʂʐ̩³⁵",
+       "pos": "noun",
+       "note": "小时"
+      },
+      {
+       "t": "xiànzài",
+       "e": "now",
+       "ipa": "ɕi̯ɛn⁵¹.tsai̯⁵¹",
+       "pos": "adv",
+       "note": "现在"
+      },
+      {
+       "t": "měitiān",
+       "e": "every day",
+       "ipa": "mei̯²¹⁴.tʰi̯ɛn⁵",
+       "pos": "adv",
+       "note": "每天"
+      },
+      {
+       "t": "qǐchuáng",
+       "e": "to get up",
+       "ipa": "tɕʰi²¹⁴.tʂʰu̯ɑŋ³⁵",
+       "pos": "verb",
+       "note": "起床"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "xiànzài jǐ diǎn",
+       "e": "what time is it now",
+       "ipa": "ɕi̯ɛn⁵¹.tsai̯⁵¹ tɕi²¹⁴ ti̯ɛn²¹⁴",
+       "note": "现在几点"
+      },
+      {
+       "t": "xiànzài sān diǎn bàn",
+       "e": "it is half past three",
+       "ipa": "ɕi̯ɛn⁵¹.tsai̯⁵¹ san⁵ ti̯ɛn²¹⁴ pan⁵¹",
+       "note": "现在三点半"
+      },
+      {
+       "t": "wǒ měitiān liù diǎn qǐchuáng",
+       "e": "I get up at six every day",
+       "ipa": "u̯ɔ²¹⁴ mei̯²¹⁴.tʰi̯ɛn⁵ li̯ou̯⁵¹ ti̯ɛn²¹⁴ tɕʰi²¹⁴.tʂʰu̯ɑŋ³⁵",
+       "note": "我每天六点起床"
+      },
+      {
+       "t": "wǎnshang wǒ zài jiā",
+       "e": "in the evening I am at home",
+       "ipa": "u̯an²¹⁴.ʂɑŋ u̯ɔ²¹⁴ tsai̯⁵¹ tɕi̯a⁵",
+       "note": "晚上我在家"
+      }
+     ]
+    },
+    {
+     "name": "Weather",
+     "tips": [
+      {
+       "h": "le marks a change of state",
+       "b": "le at the end of a sentence says the situation is new: xiàyǔ le, it has started raining. tài plus an adjective plus le says it has gone too far.",
+       "eg": [
+        [
+         "xiàyǔ le",
+         "it is raining now"
+        ],
+        [
+         "tài rè le",
+         "it is too hot"
+        ]
+       ]
+      },
+      {
+       "h": "Weather sentences need no subject",
+       "b": "xiàyǔ and xiàxuě are complete sentences on their own, with nothing standing for the English it. Naming the weather uses tiānqì.",
+       "eg": [
+        [
+         "xiàyǔ",
+         "it rains"
+        ],
+        [
+         "jīntiān tiānqì hěn hǎo",
+         "the weather is good today"
+        ]
+       ]
+      },
+      {
+       "h": "The seasons are built on tiān",
+       "b": "Each season is a syllable plus tiān, the word for day: chūntiān, xiàtiān, qiūtiān, dōngtiān.",
+       "eg": [
+        [
+         "xiàtiān",
+         "summer"
+        ],
+        [
+         "dōngtiān",
+         "winter"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "tiānqì",
+       "e": "weather",
+       "ipa": "tʰi̯ɛn⁵.tɕʰi⁵¹",
+       "pos": "noun",
+       "note": "天气"
+      },
+      {
+       "t": "rè",
+       "e": "hot",
+       "ipa": "ʐɤ⁵¹",
+       "pos": "adj",
+       "note": "热"
+      },
+      {
+       "t": "lěng",
+       "e": "cold",
+       "ipa": "ləŋ²¹⁴",
+       "pos": "adj",
+       "note": "冷"
+      },
+      {
+       "t": "nuǎnhuo",
+       "e": "warm",
+       "ipa": "nu̯an²¹⁴.xu̯ɔ",
+       "pos": "adj",
+       "note": "暖和"
+      },
+      {
+       "t": "xiàyǔ",
+       "e": "to rain",
+       "ipa": "ɕi̯a⁵¹.y²¹⁴",
+       "pos": "verb",
+       "note": "下雨"
+      },
+      {
+       "t": "xiàxuě",
+       "e": "to snow",
+       "ipa": "ɕi̯a⁵¹.ɕɥɛ²¹⁴",
+       "pos": "verb",
+       "note": "下雪"
+      },
+      {
+       "t": "fēng",
+       "e": "wind",
+       "ipa": "fəŋ⁵",
+       "pos": "noun",
+       "note": "风"
+      },
+      {
+       "t": "yún",
+       "e": "cloud",
+       "ipa": "yn³⁵",
+       "pos": "noun",
+       "note": "云"
+      },
+      {
+       "t": "qíngtiān",
+       "e": "clear day",
+       "ipa": "tɕʰiŋ³⁵.tʰi̯ɛn⁵",
+       "pos": "noun",
+       "note": "晴天"
+      },
+      {
+       "t": "yīntiān",
+       "e": "overcast day",
+       "ipa": "in⁵.tʰi̯ɛn⁵",
+       "pos": "noun",
+       "note": "阴天"
+      },
+      {
+       "t": "xiàtiān",
+       "e": "summer",
+       "ipa": "ɕi̯a⁵¹.tʰi̯ɛn⁵",
+       "pos": "noun",
+       "note": "夏天"
+      },
+      {
+       "t": "dōngtiān",
+       "e": "winter",
+       "ipa": "tʊŋ⁵.tʰi̯ɛn⁵",
+       "pos": "noun",
+       "note": "冬天"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "jīntiān hěn rè",
+       "e": "today is hot",
+       "ipa": "tɕin⁵.tʰi̯ɛn⁵ xən²¹⁴ ʐɤ⁵¹",
+       "note": "今天很热"
+      },
+      {
+       "t": "míngtiān xiàyǔ ma",
+       "e": "will it rain tomorrow",
+       "ipa": "miŋ³⁵.tʰi̯ɛn⁵ ɕi̯a⁵¹.y²¹⁴ ma",
+       "note": "明天下雨吗"
+      },
+      {
+       "t": "dōngtiān hěn lěng, xiàtiān hěn rè",
+       "e": "winter is cold, summer is hot",
+       "ipa": "tʊŋ⁵.tʰi̯ɛn⁵ xən²¹⁴ ləŋ²¹⁴ ɕi̯a⁵¹.tʰi̯ɛn⁵ xən²¹⁴ ʐɤ⁵¹",
+       "note": "冬天很冷夏天很热"
+      },
+      {
+       "t": "jīntiān tiānqì bú tài hǎo",
+       "e": "the weather is not very good today",
+       "ipa": "tɕin⁵.tʰi̯ɛn⁵ tʰi̯ɛn⁵.tɕʰi⁵¹ pu³⁵ tʰai̯⁵¹ xɑu̯²¹⁴",
+       "note": "今天天气不太好"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "GETTING AROUND",
+   "subtitle": "Places in town, where things stand, and how to reach them",
+   "skills": [
+    {
+     "name": "Places",
+     "tips": [
+      {
+       "h": "The place stands before the verb",
+       "b": "A zài phrase that says where an action happens comes between the subject and the verb: wǒ zài túshūguǎn kàn shū. It cannot follow the verb.",
+       "eg": [
+        [
+         "wǒ zài jiā chī fàn",
+         "I eat at home"
+        ],
+        [
+         "tā zài xuéxiào xué zhōngwén",
+         "he studies Chinese at school"
+        ]
+       ]
+      },
+      {
+       "h": "qù takes its destination bare",
+       "b": "No preposition stands between qù and the place: wǒ qù xuéxiào. The same holds for lái and for dào.",
+       "eg": [
+        [
+         "wǒ qù shāngdiàn",
+         "I go to the shop"
+        ],
+        [
+         "tā lái wǒ jiā",
+         "he comes to my home"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "dìfang",
+       "e": "place",
+       "ipa": "ti⁵¹.fɑŋ",
+       "pos": "noun",
+       "note": "地方"
+      },
+      {
+       "t": "xuéxiào",
+       "e": "school",
+       "ipa": "ɕɥɛ³⁵.ɕi̯ɑu̯⁵¹",
+       "pos": "noun",
+       "note": "学校"
+      },
+      {
+       "t": "shāngdiàn",
+       "e": "shop",
+       "ipa": "ʂɑŋ⁵.ti̯ɛn⁵¹",
+       "pos": "noun",
+       "note": "商店"
+      },
+      {
+       "t": "fànguǎn",
+       "e": "restaurant",
+       "ipa": "fan⁵¹.ku̯an²¹⁴",
+       "pos": "noun",
+       "note": "饭馆"
+      },
+      {
+       "t": "yīyuàn",
+       "e": "hospital",
+       "ipa": "i⁵.ɥɛn⁵¹",
+       "pos": "noun",
+       "note": "医院"
+      },
+      {
+       "t": "gōngyuán",
+       "e": "park",
+       "ipa": "kʊŋ⁵.ɥɛn³⁵",
+       "pos": "noun",
+       "note": "公园"
+      },
+      {
+       "t": "yínháng",
+       "e": "bank",
+       "ipa": "in³⁵.xɑŋ³⁵",
+       "pos": "noun",
+       "note": "银行"
+      },
+      {
+       "t": "chēzhàn",
+       "e": "station",
+       "ipa": "tʂʰɤ⁵.tʂan⁵¹",
+       "pos": "noun",
+       "note": "车站"
+      },
+      {
+       "t": "jiē",
+       "e": "street",
+       "ipa": "tɕi̯ɛ⁵",
+       "pos": "noun",
+       "note": "街"
+      },
+      {
+       "t": "túshūguǎn",
+       "e": "library",
+       "ipa": "tʰu³⁵.ʂu⁵.ku̯an²¹⁴",
+       "pos": "noun",
+       "note": "图书馆"
+      },
+      {
+       "t": "chāoshì",
+       "e": "supermarket",
+       "ipa": "tʂʰɑu̯⁵.ʂʐ̩⁵¹",
+       "pos": "noun",
+       "note": "超市"
+      },
+      {
+       "t": "yóujú",
+       "e": "post office",
+       "ipa": "i̯ou̯³⁵.tɕy³⁵",
+       "pos": "noun",
+       "note": "邮局"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ zài túshūguǎn kàn shū",
+       "e": "I read at the library",
+       "ipa": "u̯ɔ²¹⁴ tsai̯⁵¹ tʰu³⁵.ʂu⁵.ku̯an²¹⁴ kʰan⁵¹ ʂu⁵",
+       "note": "我在图书馆看书"
+      },
+      {
+       "t": "yīyuàn zài nǎr",
+       "e": "where is the hospital",
+       "ipa": "i⁵.ɥɛn⁵¹ tsai̯⁵¹ nɑɻ²¹⁴",
+       "note": "医院在哪儿"
+      },
+      {
+       "t": "wǒmen xiàwǔ qù gōngyuán",
+       "e": "we go to the park in the afternoon",
+       "ipa": "u̯ɔ²¹⁴.mən ɕi̯a⁵¹.u²¹⁴ tɕʰy⁵¹ kʊŋ⁵.ɥɛn³⁵",
+       "note": "我们下午去公园"
+      },
+      {
+       "t": "fànguǎn de fàn hěn hǎochī",
+       "e": "the food at the restaurant is delicious",
+       "ipa": "fan⁵¹.ku̯an²¹⁴ tə fan⁵¹ xən²¹⁴ xɑu̯²¹⁴.tʂʰʐ̩⁵",
+       "note": "饭馆的饭很好吃"
+      }
+     ]
+    },
+    {
+     "name": "Directions",
+     "tips": [
+      {
+       "h": "The position follows the thing",
+       "b": "Mandarin names the object first and its position second: zhuōzi shàngmiàn is table-above. English builds the same phrase in the opposite order.",
+       "eg": [
+        [
+         "zhuōzi shàngmiàn",
+         "on the table"
+        ],
+        [
+         "yǐzi xiàmiàn",
+         "under the chair"
+        ]
+       ]
+      },
+      {
+       "h": "wǎng points the movement",
+       "b": "wǎng marks the direction a movement takes and stands in front of the verb: wǎng yòubian zhuǎn, wǎng qiánmiàn zǒu.",
+       "eg": [
+        [
+         "wǎng zuǒbian zhuǎn",
+         "turn left"
+        ],
+        [
+         "wǎng qiánmiàn zǒu",
+         "go straight on"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "zuǒbian",
+       "e": "left side",
+       "ipa": "tsu̯ɔ²¹⁴.pi̯ɛn",
+       "pos": "noun",
+       "note": "左边"
+      },
+      {
+       "t": "yòubian",
+       "e": "right side",
+       "ipa": "i̯ou̯⁵¹.pi̯ɛn",
+       "pos": "noun",
+       "note": "右边"
+      },
+      {
+       "t": "shàngmiàn",
+       "e": "above",
+       "ipa": "ʂɑŋ⁵¹.mi̯ɛn⁵¹",
+       "pos": "noun",
+       "note": "上面"
+      },
+      {
+       "t": "xiàmiàn",
+       "e": "below",
+       "ipa": "ɕi̯a⁵¹.mi̯ɛn⁵¹",
+       "pos": "noun",
+       "note": "下面"
+      },
+      {
+       "t": "lǐmiàn",
+       "e": "inside",
+       "ipa": "li²¹⁴.mi̯ɛn⁵¹",
+       "pos": "noun",
+       "note": "里面"
+      },
+      {
+       "t": "wàimiàn",
+       "e": "outside",
+       "ipa": "u̯ai̯⁵¹.mi̯ɛn⁵¹",
+       "pos": "noun",
+       "note": "外面"
+      },
+      {
+       "t": "qiánmiàn",
+       "e": "in front",
+       "ipa": "tɕʰi̯ɛn³⁵.mi̯ɛn⁵¹",
+       "pos": "noun",
+       "note": "前面"
+      },
+      {
+       "t": "hòumiàn",
+       "e": "behind",
+       "ipa": "xou̯⁵¹.mi̯ɛn⁵¹",
+       "pos": "noun",
+       "note": "后面"
+      },
+      {
+       "t": "zhèlǐ",
+       "e": "here",
+       "ipa": "tʂɤ⁵¹.li²¹⁴",
+       "pos": "pron",
+       "note": "这里"
+      },
+      {
+       "t": "nàlǐ",
+       "e": "over there",
+       "ipa": "na⁵¹.li²¹⁴",
+       "pos": "pron",
+       "note": "那里"
+      },
+      {
+       "t": "wǎng",
+       "e": "toward",
+       "ipa": "u̯ɑŋ²¹⁴",
+       "pos": "prep",
+       "note": "往"
+      },
+      {
+       "t": "zhuǎn",
+       "e": "to turn",
+       "ipa": "tʂu̯an²¹⁴",
+       "pos": "verb",
+       "note": "转"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "shū zài zhuōzi shàngmiàn",
+       "e": "the book is on the table",
+       "ipa": "ʂu⁵ tsai̯⁵¹ tʂu̯ɔ⁵.tsɹ̩ ʂɑŋ⁵¹.mi̯ɛn⁵¹",
+       "note": "书在桌子上面"
+      },
+      {
+       "t": "māo zài yǐzi xiàmiàn",
+       "e": "the cat is under the chair",
+       "ipa": "mɑu̯⁵ tsai̯⁵¹ i²¹⁴.tsɹ̩ ɕi̯a⁵¹.mi̯ɛn⁵¹",
+       "note": "猫在椅子下面"
+      },
+      {
+       "t": "wǎng yòubian zhuǎn",
+       "e": "turn to the right",
+       "ipa": "u̯ɑŋ²¹⁴ i̯ou̯⁵¹.pi̯ɛn tʂu̯an²¹⁴",
+       "note": "往右边转"
+      },
+      {
+       "t": "chēzhàn zài qiánmiàn",
+       "e": "the station is ahead",
+       "ipa": "tʂʰɤ⁵.tʂan⁵¹ tsai̯⁵¹ tɕʰi̯ɛn³⁵.mi̯ɛn⁵¹",
+       "note": "车站在前面"
+      }
+     ]
+    },
+    {
+     "name": "Transport",
+     "tips": [
+      {
+       "h": "zuò, qí and kāi",
+       "b": "zuò is used for riding inside something: a bus, a train, a plane. qí is used for what is straddled, a bicycle or a horse, and kāi is for driving.",
+       "eg": [
+        [
+         "zuò huǒchē",
+         "take the train"
+        ],
+        [
+         "qí zìxíngchē",
+         "ride a bike"
+        ],
+        [
+         "kāichē",
+         "drive"
+        ]
+       ]
+      },
+      {
+       "h": "The means comes before the going",
+       "b": "Two verbs run in sequence in the order the actions happen: wǒ zuò dìtiě qù xuéxiào is take the underground, then go to school.",
+       "eg": [
+        [
+         "wǒ zuò chē qù",
+         "I go by car"
+        ],
+        [
+         "tā zǒu lù lái",
+         "he comes on foot"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "chē",
+       "e": "car",
+       "ipa": "tʂʰɤ⁵",
+       "pos": "noun",
+       "note": "车"
+      },
+      {
+       "t": "gōnggòng qìchē",
+       "e": "bus",
+       "ipa": "kʊŋ⁵.kʊŋ⁵¹ tɕʰi⁵¹.tʂʰɤ⁵",
+       "pos": "noun",
+       "note": "公共汽车"
+      },
+      {
+       "t": "huǒchē",
+       "e": "train",
+       "ipa": "xu̯ɔ²¹⁴.tʂʰɤ⁵",
+       "pos": "noun",
+       "note": "火车"
+      },
+      {
+       "t": "fēijī",
+       "e": "aeroplane",
+       "ipa": "fei̯⁵.tɕi⁵",
+       "pos": "noun",
+       "note": "飞机"
+      },
+      {
+       "t": "dìtiě",
+       "e": "underground railway",
+       "ipa": "ti⁵¹.tʰi̯ɛ²¹⁴",
+       "pos": "noun",
+       "note": "地铁"
+      },
+      {
+       "t": "zìxíngchē",
+       "e": "bicycle",
+       "ipa": "tsɹ̩⁵¹.ɕiŋ³⁵.tʂʰɤ⁵",
+       "pos": "noun",
+       "note": "自行车"
+      },
+      {
+       "t": "chuán",
+       "e": "boat",
+       "ipa": "tʂʰu̯an³⁵",
+       "pos": "noun",
+       "note": "船"
+      },
+      {
+       "t": "chūzūchē",
+       "e": "taxi",
+       "ipa": "tʂʰu⁵.tsu⁵.tʂʰɤ⁵",
+       "pos": "noun",
+       "note": "出租车"
+      },
+      {
+       "t": "piào",
+       "e": "ticket",
+       "ipa": "pʰi̯ɑu̯⁵¹",
+       "pos": "noun",
+       "note": "票"
+      },
+      {
+       "t": "zuò",
+       "e": "to travel by",
+       "ipa": "tsu̯ɔ⁵¹",
+       "pos": "verb",
+       "note": "坐"
+      },
+      {
+       "t": "kāichē",
+       "e": "to drive",
+       "ipa": "kʰai̯⁵.tʂʰɤ⁵",
+       "pos": "verb",
+       "note": "开车"
+      },
+      {
+       "t": "zǒu",
+       "e": "to walk",
+       "ipa": "tsou̯²¹⁴",
+       "pos": "verb",
+       "note": "走"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ zuò dìtiě qù xuéxiào",
+       "e": "I take the underground to school",
+       "ipa": "u̯ɔ²¹⁴ tsu̯ɔ⁵¹ ti⁵¹.tʰi̯ɛ²¹⁴ tɕʰy⁵¹ ɕɥɛ³⁵.ɕi̯ɑu̯⁵¹",
+       "note": "我坐地铁去学校"
+      },
+      {
+       "t": "tā měitiān kāichē",
+       "e": "he drives every day",
+       "ipa": "tʰa⁵ mei̯²¹⁴.tʰi̯ɛn⁵ kʰai̯⁵.tʂʰɤ⁵",
+       "note": "他每天开车"
+      },
+      {
+       "t": "fēijī hěn kuài, chuán hěn màn",
+       "e": "planes are fast, boats are slow",
+       "ipa": "fei̯⁵.tɕi⁵ xən²¹⁴ kʰu̯ai̯⁵¹ tʂʰu̯an³⁵ xən²¹⁴ man⁵¹",
+       "note": "飞机很快船很慢"
+      },
+      {
+       "t": "nǐ zěnme qù xuéxiào",
+       "e": "how do you get to school",
+       "ipa": "ni²¹⁴ tsən²¹⁴.mə tɕʰy⁵¹ ɕɥɛ³⁵.ɕi̯ɑu̯⁵¹",
+       "note": "你怎么去学校"
+      }
+     ]
+    },
+    {
+     "name": "Travel",
+     "tips": [
+      {
+       "h": "lí measures the gap between two places",
+       "b": "A lí B plus an adjective states the distance: jīchǎng lí zhèlǐ hěn yuǎn. zài states position, lí states separation.",
+       "eg": [
+        [
+         "jīchǎng lí zhèlǐ hěn yuǎn",
+         "the airport is far from here"
+        ],
+        [
+         "yínháng lí jiā hěn jìn",
+         "the bank is near home"
+        ]
+       ]
+      },
+      {
+       "h": "tiáo counts long things",
+       "b": "A road, a river, a fish and a pair of trousers are all counted with tiáo, the measure word for anything long and thin.",
+       "eg": [
+        [
+         "yì tiáo mǎlù",
+         "one road"
+        ],
+        [
+         "yì tiáo yú",
+         "one fish"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "lǚxíng",
+       "e": "to travel",
+       "ipa": "ly²¹⁴.ɕiŋ³⁵",
+       "pos": "verb",
+       "note": "旅行"
+      },
+      {
+       "t": "jīchǎng",
+       "e": "airport",
+       "ipa": "tɕi⁵.tʂʰɑŋ²¹⁴",
+       "pos": "noun",
+       "note": "机场"
+      },
+      {
+       "t": "hùzhào",
+       "e": "passport",
+       "ipa": "xu⁵¹.tʂɑu̯⁵¹",
+       "pos": "noun",
+       "note": "护照"
+      },
+      {
+       "t": "xíngli",
+       "e": "luggage",
+       "ipa": "ɕiŋ³⁵.li",
+       "pos": "noun",
+       "note": "行李"
+      },
+      {
+       "t": "dìtú",
+       "e": "map",
+       "ipa": "ti⁵¹.tʰu³⁵",
+       "pos": "noun",
+       "note": "地图"
+      },
+      {
+       "t": "bīnguǎn",
+       "e": "hotel",
+       "ipa": "pin⁵.ku̯an²¹⁴",
+       "pos": "noun",
+       "note": "宾馆"
+      },
+      {
+       "t": "zhàoxiàngjī",
+       "e": "camera",
+       "ipa": "tʂɑu̯⁵¹.ɕi̯ɑŋ⁵¹.tɕi⁵",
+       "pos": "noun",
+       "note": "照相机"
+      },
+      {
+       "t": "mǎlù",
+       "e": "road",
+       "ipa": "ma²¹⁴.lu⁵¹",
+       "pos": "noun",
+       "note": "马路"
+      },
+      {
+       "t": "dào",
+       "e": "to arrive",
+       "ipa": "tɑu̯⁵¹",
+       "pos": "verb",
+       "note": "到"
+      },
+      {
+       "t": "chūfā",
+       "e": "to set off",
+       "ipa": "tʂʰu⁵.fa⁵",
+       "pos": "verb",
+       "note": "出发"
+      },
+      {
+       "t": "yuǎn",
+       "e": "far",
+       "ipa": "ɥɛn²¹⁴",
+       "pos": "adj",
+       "note": "远"
+      },
+      {
+       "t": "jìn",
+       "e": "near",
+       "ipa": "tɕin⁵¹",
+       "pos": "adj",
+       "note": "近"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ xǐhuan lǚxíng",
+       "e": "I like to travel",
+       "ipa": "u̯ɔ²¹⁴ ɕi²¹⁴.xu̯an ly²¹⁴.ɕiŋ³⁵",
+       "note": "我喜欢旅行"
+      },
+      {
+       "t": "wǒmen míngtiān chūfā",
+       "e": "we set off tomorrow",
+       "ipa": "u̯ɔ²¹⁴.mən miŋ³⁵.tʰi̯ɛn⁵ tʂʰu⁵.fa⁵",
+       "note": "我们明天出发"
+      },
+      {
+       "t": "wǒ de hùzhào zài bāo lǐmiàn",
+       "e": "my passport is in the bag",
+       "ipa": "u̯ɔ²¹⁴ tə xu⁵¹.tʂɑu̯⁵¹ tsai̯⁵¹ pɑu̯⁵ li²¹⁴.mi̯ɛn⁵¹",
+       "note": "我的护照在包里面"
+      },
+      {
+       "t": "zhè tiáo mǎlù hěn cháng",
+       "e": "this road is long",
+       "ipa": "tʂɤ⁵¹ tʰi̯ɑu̯³⁵ ma²¹⁴.lu⁵¹ xən²¹⁴ tʂʰɑŋ³⁵",
+       "note": "这条马路很长"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "PEOPLE",
+   "subtitle": "Feelings, the body, being ill, and describing someone",
+   "skills": [
+    {
+     "name": "Feelings",
+     "tips": [
+      {
+       "h": "A feeling behaves like any adjective",
+       "b": "hěn holds the predicate slot in front of it, and a question is made with ma or by the A-not-A pattern: nǐ lèi bu lèi.",
+       "eg": [
+        [
+         "wǒ hěn lèi",
+         "I am tired"
+        ],
+        [
+         "nǐ lèi bu lèi",
+         "are you tired"
+        ]
+       ]
+      },
+      {
+       "h": "juéde introduces an opinion",
+       "b": "juéde is followed by a whole sentence, with no word standing for the English that: wǒ juéde zhōngwén hěn yǒuyìsi.",
+       "eg": [
+        [
+         "wǒ juéde hěn hǎo",
+         "I think it is good"
+        ],
+        [
+         "tā juéde wǒ cuò le",
+         "he thinks I am wrong"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "gāoxìng",
+       "e": "happy",
+       "ipa": "kɑu̯⁵.ɕiŋ⁵¹",
+       "pos": "adj",
+       "note": "高兴"
+      },
+      {
+       "t": "nánguò",
+       "e": "sad",
+       "ipa": "nan³⁵.ku̯ɔ⁵¹",
+       "pos": "adj",
+       "note": "难过"
+      },
+      {
+       "t": "lèi",
+       "e": "tired",
+       "ipa": "lei̯⁵¹",
+       "pos": "adj",
+       "note": "累"
+      },
+      {
+       "t": "è",
+       "e": "hungry",
+       "ipa": "ɤ⁵¹",
+       "pos": "adj",
+       "note": "饿"
+      },
+      {
+       "t": "shēngqì",
+       "e": "angry",
+       "ipa": "ʂəŋ⁵.tɕʰi⁵¹",
+       "pos": "adj",
+       "note": "生气"
+      },
+      {
+       "t": "hàipà",
+       "e": "afraid",
+       "ipa": "xai̯⁵¹.pʰa⁵¹",
+       "pos": "adj",
+       "note": "害怕"
+      },
+      {
+       "t": "jǐnzhāng",
+       "e": "nervous",
+       "ipa": "tɕin²¹⁴.tʂɑŋ⁵",
+       "pos": "adj",
+       "note": "紧张"
+      },
+      {
+       "t": "wúliáo",
+       "e": "bored",
+       "ipa": "u³⁵.li̯ɑu̯³⁵",
+       "pos": "adj",
+       "note": "无聊"
+      },
+      {
+       "t": "kuàilè",
+       "e": "joyful",
+       "ipa": "kʰu̯ai̯⁵¹.lɤ⁵¹",
+       "pos": "adj",
+       "note": "快乐"
+      },
+      {
+       "t": "xīwàng",
+       "e": "to hope",
+       "ipa": "ɕi⁵.u̯ɑŋ⁵¹",
+       "pos": "verb",
+       "note": "希望"
+      },
+      {
+       "t": "juéde",
+       "e": "to think",
+       "ipa": "tɕɥɛ³⁵.tə",
+       "pos": "verb",
+       "note": "觉得"
+      },
+      {
+       "t": "ài",
+       "e": "to love",
+       "ipa": "ai̯⁵¹",
+       "pos": "verb",
+       "note": "爱"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ hěn gāoxìng",
+       "e": "I am happy",
+       "ipa": "u̯ɔ²¹⁴ xən²¹⁴ kɑu̯⁵.ɕiŋ⁵¹",
+       "note": "我很高兴"
+      },
+      {
+       "t": "tā jīntiān hěn lèi",
+       "e": "he is tired today",
+       "ipa": "tʰa⁵ tɕin⁵.tʰi̯ɛn⁵ xən²¹⁴ lei̯⁵¹",
+       "note": "他今天很累"
+      },
+      {
+       "t": "wǒ è le, wǒ yào chī fàn",
+       "e": "I am hungry, I want to eat",
+       "ipa": "u̯ɔ²¹⁴ ɤ⁵¹ lə u̯ɔ²¹⁴ i̯ɑu̯⁵¹ tʂʰʐ̩⁵ fan⁵¹",
+       "note": "我饿了我要吃饭"
+      },
+      {
+       "t": "nǐ wèishénme shēngqì",
+       "e": "why are you angry",
+       "ipa": "ni²¹⁴ u̯ei̯⁵¹.ʂən³⁵.mə ʂəŋ⁵.tɕʰi⁵¹",
+       "note": "你为什么生气"
+      }
+     ]
+    },
+    {
+     "name": "Body",
+     "tips": [
+      {
+       "h": "A body part can drop de",
+       "b": "Possession of a body part works like family: wǒ de tóu and wǒ tóu are both said, and the shorter one is the more common in speech.",
+       "eg": [
+        [
+         "wǒ de shǒu",
+         "my hand"
+        ],
+        [
+         "wǒ tóu téng",
+         "my head aches"
+        ]
+       ]
+      },
+      {
+       "h": "Parts that come in pairs",
+       "b": "A single hand or eye is counted with zhī, and the pair with shuāng: yì shuāng shǒu, yì shuāng yǎnjing.",
+       "eg": [
+        [
+         "yì zhī shǒu",
+         "one hand"
+        ],
+        [
+         "yì shuāng yǎnjing",
+         "a pair of eyes"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "shēntǐ",
+       "e": "body",
+       "ipa": "ʂən⁵.tʰi²¹⁴",
+       "pos": "noun",
+       "note": "身体"
+      },
+      {
+       "t": "tóu",
+       "e": "head",
+       "ipa": "tʰou̯³⁵",
+       "pos": "noun",
+       "note": "头"
+      },
+      {
+       "t": "tóufa",
+       "e": "hair",
+       "ipa": "tʰou̯³⁵.fa",
+       "pos": "noun",
+       "note": "头发"
+      },
+      {
+       "t": "liǎn",
+       "e": "face",
+       "ipa": "li̯ɛn²¹⁴",
+       "pos": "noun",
+       "note": "脸"
+      },
+      {
+       "t": "yǎnjing",
+       "e": "eye",
+       "ipa": "i̯ɛn²¹⁴.tɕiŋ",
+       "pos": "noun",
+       "note": "眼睛"
+      },
+      {
+       "t": "bízi",
+       "e": "nose",
+       "ipa": "pi³⁵.tsɹ̩",
+       "pos": "noun",
+       "note": "鼻子"
+      },
+      {
+       "t": "zuǐ",
+       "e": "mouth",
+       "ipa": "tsu̯ei̯²¹⁴",
+       "pos": "noun",
+       "note": "嘴"
+      },
+      {
+       "t": "ěrduo",
+       "e": "ear",
+       "ipa": "ɑɻ²¹⁴.tu̯ɔ",
+       "pos": "noun",
+       "note": "耳朵"
+      },
+      {
+       "t": "shǒu",
+       "e": "hand",
+       "ipa": "ʂou̯²¹⁴",
+       "pos": "noun",
+       "note": "手"
+      },
+      {
+       "t": "jiǎo",
+       "e": "foot",
+       "ipa": "tɕi̯ɑu̯²¹⁴",
+       "pos": "noun",
+       "note": "脚"
+      },
+      {
+       "t": "tuǐ",
+       "e": "leg",
+       "ipa": "tʰu̯ei̯²¹⁴",
+       "pos": "noun",
+       "note": "腿"
+      },
+      {
+       "t": "dùzi",
+       "e": "belly",
+       "ipa": "tu⁵¹.tsɹ̩",
+       "pos": "noun",
+       "note": "肚子"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "tā de yǎnjing hěn dà",
+       "e": "her eyes are big",
+       "ipa": "tʰa⁵ tə i̯ɛn²¹⁴.tɕiŋ xən²¹⁴ ta⁵¹",
+       "note": "她的眼睛很大"
+      },
+      {
+       "t": "wǒ de jiǎo hěn dà",
+       "e": "my feet are big",
+       "ipa": "u̯ɔ²¹⁴ tə tɕi̯ɑu̯²¹⁴ xən²¹⁴ ta⁵¹",
+       "note": "我的脚很大"
+      },
+      {
+       "t": "tā de tóufa hěn cháng",
+       "e": "her hair is long",
+       "ipa": "tʰa⁵ tə tʰou̯³⁵.fa xən²¹⁴ tʂʰɑŋ³⁵",
+       "note": "她的头发很长"
+      },
+      {
+       "t": "wǒ de shēntǐ hěn hǎo",
+       "e": "I am in good health",
+       "ipa": "u̯ɔ²¹⁴ tə ʂən⁵.tʰi²¹⁴ xən²¹⁴ xɑu̯²¹⁴",
+       "lit": "my body very good",
+       "note": "我的身体很好"
+      }
+     ]
+    },
+    {
+     "name": "Health",
+     "tips": [
+      {
+       "h": "Saying what hurts",
+       "b": "The part of the body comes first and téng follows it: wǒ tóu téng, tā dùzi téng. No verb for having appears in the sentence.",
+       "eg": [
+        [
+         "wǒ tóu téng",
+         "I have a headache"
+        ],
+        [
+         "tā tuǐ téng",
+         "his leg hurts"
+        ]
+       ]
+      },
+      {
+       "h": "le after the verb marks completion",
+       "b": "le right after the verb reports that the action was carried out: wǒ chī le yào. Its negative drops le and uses méi: wǒ méi chī yào.",
+       "eg": [
+        [
+         "wǒ chī le yào",
+         "I took the medicine"
+        ],
+        [
+         "wǒ méi chī yào",
+         "I did not take it"
+        ]
+       ]
+      },
+      {
+       "h": "bù shūfu covers feeling unwell",
+       "b": "shūfu is the state of being comfortable, and its negative is the ordinary way to report illness without naming it.",
+       "eg": [
+        [
+         "wǒ bù shūfu",
+         "I do not feel well"
+        ],
+        [
+         "tā shēngbìng le",
+         "he has fallen ill"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "shēngbìng",
+       "e": "to fall ill",
+       "ipa": "ʂəŋ⁵.piŋ⁵¹",
+       "pos": "verb",
+       "note": "生病"
+      },
+      {
+       "t": "bìng",
+       "e": "illness",
+       "ipa": "piŋ⁵¹",
+       "pos": "noun",
+       "note": "病"
+      },
+      {
+       "t": "téng",
+       "e": "to ache",
+       "ipa": "tʰəŋ³⁵",
+       "pos": "verb",
+       "note": "疼"
+      },
+      {
+       "t": "yīshēng",
+       "e": "doctor",
+       "ipa": "i⁵.ʂəŋ⁵",
+       "pos": "noun",
+       "note": "医生"
+      },
+      {
+       "t": "hùshi",
+       "e": "nurse",
+       "ipa": "xu⁵¹.ʂʐ̩",
+       "pos": "noun",
+       "note": "护士"
+      },
+      {
+       "t": "yào",
+       "e": "medicine",
+       "ipa": "i̯ɑu̯⁵¹",
+       "pos": "noun",
+       "note": "药"
+      },
+      {
+       "t": "fāshāo",
+       "e": "to run a fever",
+       "ipa": "fa⁵.ʂɑu̯⁵",
+       "pos": "verb",
+       "note": "发烧"
+      },
+      {
+       "t": "késou",
+       "e": "to cough",
+       "ipa": "kʰɤ³⁵.sou̯",
+       "pos": "verb",
+       "note": "咳嗽"
+      },
+      {
+       "t": "shūfu",
+       "e": "comfortable",
+       "ipa": "ʂu⁵.fu",
+       "pos": "adj",
+       "note": "舒服"
+      },
+      {
+       "t": "jiànkāng",
+       "e": "healthy",
+       "ipa": "tɕi̯ɛn⁵¹.kʰɑŋ⁵",
+       "pos": "adj",
+       "note": "健康"
+      },
+      {
+       "t": "xiūxi",
+       "e": "to rest",
+       "ipa": "ɕi̯ou̯⁵.ɕi",
+       "pos": "verb",
+       "note": "休息"
+      },
+      {
+       "t": "shuìjiào",
+       "e": "to sleep",
+       "ipa": "ʂu̯ei̯⁵¹.tɕi̯ɑu̯⁵¹",
+       "pos": "verb",
+       "note": "睡觉"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ tóu hěn téng",
+       "e": "my head aches",
+       "ipa": "u̯ɔ²¹⁴ tʰou̯³⁵ xən²¹⁴ tʰəŋ³⁵",
+       "note": "我头很疼"
+      },
+      {
+       "t": "tā shēngbìng le",
+       "e": "he has fallen ill",
+       "ipa": "tʰa⁵ ʂəŋ⁵.piŋ⁵¹ lə",
+       "note": "他生病了"
+      },
+      {
+       "t": "nǐ yào duō xiūxi",
+       "e": "you need more rest",
+       "ipa": "ni²¹⁴ i̯ɑu̯⁵¹ tu̯ɔ⁵ ɕi̯ou̯⁵.ɕi",
+       "note": "你要多休息"
+      },
+      {
+       "t": "wǒ jīntiān bù shūfu",
+       "e": "I do not feel well today",
+       "ipa": "u̯ɔ²¹⁴ tɕin⁵.tʰi̯ɛn⁵ pu⁵¹ ʂu⁵.fu",
+       "note": "我今天不舒服"
+      }
+     ]
+    },
+    {
+     "name": "Describing",
+     "tips": [
+      {
+       "h": "bǐ builds a comparison",
+       "b": "A bǐ B plus an adjective states which is more: tā bǐ wǒ gāo. hěn never appears in a bǐ sentence, and the adjective takes no other change.",
+       "eg": [
+        [
+         "tā bǐ wǒ gāo",
+         "he is taller than me"
+        ],
+        [
+         "chá bǐ kāfēi piányi",
+         "tea is cheaper than coffee"
+        ]
+       ]
+      },
+      {
+       "h": "Saying two things are alike",
+       "b": "gēn plus yíyàng states equality, and an adjective may follow it: wǒ gēn tā yíyàng gāo. The negative is bù yíyàng.",
+       "eg": [
+        [
+         "wǒ gēn tā yíyàng gāo",
+         "I am as tall as him"
+        ],
+        [
+         "bù yíyàng",
+         "not the same"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "hǎo",
+       "e": "good",
+       "ipa": "xɑu̯²¹⁴",
+       "pos": "adj",
+       "note": "好"
+      },
+      {
+       "t": "huài",
+       "e": "bad",
+       "ipa": "xu̯ai̯⁵¹",
+       "pos": "adj",
+       "note": "坏"
+      },
+      {
+       "t": "piàoliang",
+       "e": "pretty",
+       "ipa": "pʰi̯ɑu̯⁵¹.li̯ɑŋ",
+       "pos": "adj",
+       "note": "漂亮"
+      },
+      {
+       "t": "shuài",
+       "e": "handsome",
+       "ipa": "ʂu̯ai̯⁵¹",
+       "pos": "adj",
+       "note": "帅"
+      },
+      {
+       "t": "cōngming",
+       "e": "clever",
+       "ipa": "tsʰʊŋ⁵.miŋ",
+       "pos": "adj",
+       "note": "聪明"
+      },
+      {
+       "t": "yǒuyìsi",
+       "e": "interesting",
+       "ipa": "i̯ou̯²¹⁴.i⁵¹.sɹ̩",
+       "pos": "adj",
+       "note": "有意思"
+      },
+      {
+       "t": "nán",
+       "e": "difficult",
+       "ipa": "nan³⁵",
+       "pos": "adj",
+       "note": "难"
+      },
+      {
+       "t": "róngyì",
+       "e": "easy",
+       "ipa": "ʐʊŋ³⁵.i⁵¹",
+       "pos": "adj",
+       "note": "容易"
+      },
+      {
+       "t": "máng",
+       "e": "busy",
+       "ipa": "mɑŋ³⁵",
+       "pos": "adj",
+       "note": "忙"
+      },
+      {
+       "t": "ānjìng",
+       "e": "quiet",
+       "ipa": "an⁵.tɕiŋ⁵¹",
+       "pos": "adj",
+       "note": "安静"
+      },
+      {
+       "t": "yǒumíng",
+       "e": "famous",
+       "ipa": "i̯ou̯²¹⁴.miŋ³⁵",
+       "pos": "adj",
+       "note": "有名"
+      },
+      {
+       "t": "bǐ",
+       "e": "compared to",
+       "ipa": "pi²¹⁴",
+       "pos": "prep",
+       "note": "比"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "tā bǐ wǒ gāo",
+       "e": "he is taller than me",
+       "ipa": "tʰa⁵ pi²¹⁴ u̯ɔ²¹⁴ kɑu̯⁵",
+       "note": "他比我高"
+      },
+      {
+       "t": "zhè běn shū hěn yǒuyìsi",
+       "e": "this book is interesting",
+       "ipa": "tʂɤ⁵¹ pən²¹⁴ ʂu⁵ xən²¹⁴ i̯ou̯²¹⁴.i⁵¹.sɹ̩",
+       "note": "这本书很有意思"
+      },
+      {
+       "t": "wǒ jīntiān hěn máng",
+       "e": "I am busy today",
+       "ipa": "u̯ɔ²¹⁴ tɕin⁵.tʰi̯ɛn⁵ xən²¹⁴ mɑŋ³⁵",
+       "note": "我今天很忙"
+      },
+      {
+       "t": "tā de mèimei hěn piàoliang",
+       "e": "his younger sister is pretty",
+       "ipa": "tʰa⁵ tə mei̯⁵¹.mei̯ xən²¹⁴ pʰi̯ɑu̯⁵¹.li̯ɑŋ",
+       "note": "他的妹妹很漂亮"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "WORK AND SCHOOL",
+   "subtitle": "The classroom, the workplace, larger numbers and money",
+   "skills": [
+    {
+     "name": "School",
+     "tips": [
+      {
+       "h": "shàng and xià open and close a class",
+       "b": "shàngkè is to have a class and xiàkè is to finish one. The same pair works for a shift: shàngbān and xiàbān.",
+       "eg": [
+        [
+         "shàngkè",
+         "class begins"
+        ],
+        [
+         "xiàkè",
+         "class is over"
+        ]
+       ]
+      },
+      {
+       "h": "xué and xuéxí",
+       "b": "xué takes what is learned straight after it: xué zhōngwén. xuéxí names the activity and can stand alone as the whole verb.",
+       "eg": [
+        [
+         "wǒ xué zhōngwén",
+         "I learn Chinese"
+        ],
+        [
+         "wǒ zài xuéxí",
+         "I am studying"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "xuésheng",
+       "e": "student",
+       "ipa": "ɕɥɛ³⁵.ʂəŋ",
+       "pos": "noun",
+       "note": "学生"
+      },
+      {
+       "t": "jiàoshì",
+       "e": "classroom",
+       "ipa": "tɕi̯ɑu̯⁵¹.ʂʐ̩⁵¹",
+       "pos": "noun",
+       "note": "教室"
+      },
+      {
+       "t": "kè",
+       "e": "lesson",
+       "ipa": "kʰɤ⁵¹",
+       "pos": "noun",
+       "note": "课"
+      },
+      {
+       "t": "zuòyè",
+       "e": "homework",
+       "ipa": "tsu̯ɔ⁵¹.i̯ɛ⁵¹",
+       "pos": "noun",
+       "note": "作业"
+      },
+      {
+       "t": "kǎoshì",
+       "e": "exam",
+       "ipa": "kʰɑu̯²¹⁴.ʂʐ̩⁵¹",
+       "pos": "noun",
+       "note": "考试"
+      },
+      {
+       "t": "dàxué",
+       "e": "university",
+       "ipa": "ta⁵¹.ɕɥɛ³⁵",
+       "pos": "noun",
+       "note": "大学"
+      },
+      {
+       "t": "wèntí",
+       "e": "question",
+       "ipa": "u̯ən⁵¹.tʰi³⁵",
+       "pos": "noun",
+       "note": "问题"
+      },
+      {
+       "t": "dá'àn",
+       "e": "answer",
+       "ipa": "ta³⁵.an⁵¹",
+       "pos": "noun",
+       "note": "答案"
+      },
+      {
+       "t": "xuéxí",
+       "e": "to study",
+       "ipa": "ɕɥɛ³⁵.ɕi³⁵",
+       "pos": "verb",
+       "note": "学习"
+      },
+      {
+       "t": "shàngkè",
+       "e": "to attend class",
+       "ipa": "ʂɑŋ⁵¹.kʰɤ⁵¹",
+       "pos": "verb",
+       "note": "上课"
+      },
+      {
+       "t": "dú",
+       "e": "to read aloud",
+       "ipa": "tu³⁵",
+       "pos": "verb",
+       "note": "读"
+      },
+      {
+       "t": "xiě",
+       "e": "to write",
+       "ipa": "ɕi̯ɛ²¹⁴",
+       "pos": "verb",
+       "note": "写"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ shì dàxué de xuésheng",
+       "e": "I am a university student",
+       "ipa": "u̯ɔ²¹⁴ ʂʐ̩⁵¹ ta⁵¹.ɕɥɛ³⁵ tə ɕɥɛ³⁵.ʂəŋ",
+       "note": "我是大学的学生"
+      },
+      {
+       "t": "wǒ jīntiān yǒu kǎoshì",
+       "e": "I have an exam today",
+       "ipa": "u̯ɔ²¹⁴ tɕin⁵.tʰi̯ɛn⁵ i̯ou̯²¹⁴ kʰɑu̯²¹⁴.ʂʐ̩⁵¹",
+       "note": "我今天有考试"
+      },
+      {
+       "t": "lǎoshī zài jiàoshì lǐmiàn",
+       "e": "the teacher is in the classroom",
+       "ipa": "lɑu̯²¹⁴.ʂʐ̩⁵ tsai̯⁵¹ tɕi̯ɑu̯⁵¹.ʂʐ̩⁵¹ li²¹⁴.mi̯ɛn⁵¹",
+       "note": "老师在教室里面"
+      },
+      {
+       "t": "zuòyè hěn duō, yě hěn nán",
+       "e": "there is a lot of homework and it is hard",
+       "ipa": "tsu̯ɔ⁵¹.i̯ɛ⁵¹ xən²¹⁴ tu̯ɔ⁵ i̯ɛ²¹⁴ xən²¹⁴ nan³⁵",
+       "note": "作业很多也很难"
+      }
+     ]
+    },
+    {
+     "name": "Work",
+     "tips": [
+      {
+       "h": "huì, néng and kěyǐ",
+       "b": "huì is a skill that was learned, néng is being physically able or free to act, and kěyǐ is having permission. All three stand in front of the main verb.",
+       "eg": [
+        [
+         "wǒ huì shuō zhōngwén",
+         "I can speak Chinese"
+        ],
+        [
+         "wǒ néng bāng nǐ",
+         "I am able to help"
+        ],
+        [
+         "kěyǐ jìnlái ma",
+         "may I come in"
+        ]
+       ]
+      },
+      {
+       "h": "A job is stated with shì",
+       "b": "shì joins the person to the job and nothing stands where English puts a or an: tā shì jīnglǐ.",
+       "eg": [
+        [
+         "tā shì yīshēng",
+         "she is a doctor"
+        ],
+        [
+         "wǒ shì lǎoshī",
+         "I am a teacher"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "gōngzuò",
+       "e": "job",
+       "ipa": "kʊŋ⁵.tsu̯ɔ⁵¹",
+       "pos": "noun",
+       "note": "工作"
+      },
+      {
+       "t": "gōngsī",
+       "e": "company",
+       "ipa": "kʊŋ⁵.sɹ̩⁵",
+       "pos": "noun",
+       "note": "公司"
+      },
+      {
+       "t": "bàngōngshì",
+       "e": "office",
+       "ipa": "pan⁵¹.kʊŋ⁵.ʂʐ̩⁵¹",
+       "pos": "noun",
+       "note": "办公室"
+      },
+      {
+       "t": "jīnglǐ",
+       "e": "manager",
+       "ipa": "tɕiŋ⁵.li²¹⁴",
+       "pos": "noun",
+       "note": "经理"
+      },
+      {
+       "t": "tóngshì",
+       "e": "colleague",
+       "ipa": "tʰʊŋ³⁵.ʂʐ̩⁵¹",
+       "pos": "noun",
+       "note": "同事"
+      },
+      {
+       "t": "huìyì",
+       "e": "meeting",
+       "ipa": "xu̯ei̯⁵¹.i⁵¹",
+       "pos": "noun",
+       "note": "会议"
+      },
+      {
+       "t": "shàngbān",
+       "e": "to start work",
+       "ipa": "ʂɑŋ⁵¹.pan⁵",
+       "pos": "verb",
+       "note": "上班"
+      },
+      {
+       "t": "xiàbān",
+       "e": "to finish work",
+       "ipa": "ɕi̯a⁵¹.pan⁵",
+       "pos": "verb",
+       "note": "下班"
+      },
+      {
+       "t": "huì",
+       "e": "to know how to",
+       "ipa": "xu̯ei̯⁵¹",
+       "pos": "verb",
+       "note": "会"
+      },
+      {
+       "t": "néng",
+       "e": "to be able to",
+       "ipa": "nəŋ³⁵",
+       "pos": "verb",
+       "note": "能"
+      },
+      {
+       "t": "kěyǐ",
+       "e": "to be allowed to",
+       "ipa": "kʰɤ²¹⁴.i²¹⁴",
+       "pos": "verb",
+       "note": "可以"
+      },
+      {
+       "t": "bāng",
+       "e": "to help",
+       "ipa": "pɑŋ⁵",
+       "pos": "verb",
+       "note": "帮"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ zài gōngsī gōngzuò",
+       "e": "I work at a company",
+       "ipa": "u̯ɔ²¹⁴ tsai̯⁵¹ kʊŋ⁵.sɹ̩⁵ kʊŋ⁵.tsu̯ɔ⁵¹",
+       "note": "我在公司工作"
+      },
+      {
+       "t": "wǒ huì shuō zhōngwén",
+       "e": "I can speak Chinese",
+       "ipa": "u̯ɔ²¹⁴ xu̯ei̯⁵¹ ʂu̯ɔ⁵ tʂʊŋ⁵.u̯ən³⁵",
+       "note": "我会说中文"
+      },
+      {
+       "t": "nǐ néng bāng wǒ ma",
+       "e": "are you able to help me",
+       "ipa": "ni²¹⁴ nəŋ³⁵ pɑŋ⁵ u̯ɔ²¹⁴ ma",
+       "note": "你能帮我吗"
+      },
+      {
+       "t": "wǒ liù diǎn xiàbān",
+       "e": "I finish work at six",
+       "ipa": "u̯ɔ²¹⁴ li̯ou̯⁵¹ ti̯ɛn²¹⁴ ɕi̯a⁵¹.pan⁵",
+       "note": "我六点下班"
+      }
+     ]
+    },
+    {
+     "name": "Big Numbers",
+     "tips": [
+      {
+       "h": "liǎng or èr",
+       "b": "èr is the number two in counting and in larger numbers. In front of a measure word the form is liǎng: liǎng gè rén, liǎng bēi chá.",
+       "eg": [
+        [
+         "èrshí",
+         "twenty"
+        ],
+        [
+         "liǎng gè rén",
+         "two people"
+        ]
+       ]
+      },
+      {
+       "h": "Hundreds, thousands and wàn",
+       "b": "bǎi, qiān and wàn follow the digit that counts them: sān bǎi, wǔ qiān. Mandarin groups large numbers in ten thousands, so wàn is one unit where English needs two words.",
+       "eg": [
+        [
+         "sān bǎi",
+         "three hundred"
+        ],
+        [
+         "yí wàn",
+         "ten thousand"
+        ]
+       ]
+      },
+      {
+       "h": "dì makes an ordinal",
+       "b": "dì in front of a number gives the position in a series, and a measure word still follows: dì-yī gè, dì-sān běn.",
+       "eg": [
+        [
+         "dì-yī",
+         "first"
+        ],
+        [
+         "dì-èr gè",
+         "the second one"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "shíyī",
+       "e": "eleven",
+       "ipa": "ʂʐ̩³⁵.i⁵",
+       "pos": "num",
+       "note": "十一"
+      },
+      {
+       "t": "shíwǔ",
+       "e": "fifteen",
+       "ipa": "ʂʐ̩³⁵.u²¹⁴",
+       "pos": "num",
+       "note": "十五"
+      },
+      {
+       "t": "èrshí",
+       "e": "twenty",
+       "ipa": "ɑɻ⁵¹.ʂʐ̩³⁵",
+       "pos": "num",
+       "note": "二十"
+      },
+      {
+       "t": "èrshíwǔ",
+       "e": "twenty-five",
+       "ipa": "ɑɻ⁵¹.ʂʐ̩³⁵.u²¹⁴",
+       "pos": "num",
+       "note": "二十五"
+      },
+      {
+       "t": "sānshí",
+       "e": "thirty",
+       "ipa": "san⁵.ʂʐ̩³⁵",
+       "pos": "num",
+       "note": "三十"
+      },
+      {
+       "t": "wǔshí",
+       "e": "fifty",
+       "ipa": "u²¹⁴.ʂʐ̩³⁵",
+       "pos": "num",
+       "note": "五十"
+      },
+      {
+       "t": "jiǔshí",
+       "e": "ninety",
+       "ipa": "tɕi̯ou̯²¹⁴.ʂʐ̩³⁵",
+       "pos": "num",
+       "note": "九十"
+      },
+      {
+       "t": "yìbǎi",
+       "e": "one hundred",
+       "ipa": "i⁵¹.pai̯²¹⁴",
+       "pos": "num",
+       "note": "一百"
+      },
+      {
+       "t": "yìqiān",
+       "e": "one thousand",
+       "ipa": "i⁵¹.tɕʰi̯ɛn⁵",
+       "pos": "num",
+       "note": "一千"
+      },
+      {
+       "t": "yíwàn",
+       "e": "ten thousand",
+       "ipa": "i³⁵.u̯an⁵¹",
+       "pos": "num",
+       "note": "一万"
+      },
+      {
+       "t": "liǎng",
+       "e": "two of",
+       "ipa": "li̯ɑŋ²¹⁴",
+       "pos": "num",
+       "note": "两"
+      },
+      {
+       "t": "dì-yī",
+       "e": "first",
+       "ipa": "ti⁵¹.i⁵",
+       "pos": "num",
+       "note": "第一"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ yǒu liǎng gè jiějie",
+       "e": "I have two older sisters",
+       "ipa": "u̯ɔ²¹⁴ i̯ou̯²¹⁴ li̯ɑŋ²¹⁴ kɤ⁵¹ tɕi̯ɛ²¹⁴.tɕi̯ɛ",
+       "note": "我有两个姐姐"
+      },
+      {
+       "t": "yī nián yǒu sānbǎi liùshíwǔ tiān",
+       "e": "a year has three hundred and sixty-five days",
+       "ipa": "i⁵ ni̯ɛn³⁵ i̯ou̯²¹⁴ san⁵.pai̯²¹⁴ li̯ou̯⁵¹.ʂʐ̩³⁵.u²¹⁴ tʰi̯ɛn⁵",
+       "note": "一年有三百六十五天"
+      },
+      {
+       "t": "zhè gè xuéxiào yǒu wǔbǎi gè xuésheng",
+       "e": "this school has five hundred students",
+       "ipa": "tʂɤ⁵¹ kɤ⁵¹ ɕɥɛ³⁵.ɕi̯ɑu̯⁵¹ i̯ou̯²¹⁴ u²¹⁴.pai̯²¹⁴ kɤ⁵¹ ɕɥɛ³⁵.ʂəŋ",
+       "note": "这个学校有五百个学生"
+      },
+      {
+       "t": "tā shì wǒ de dì-yī gè lǎoshī",
+       "e": "he is my first teacher",
+       "ipa": "tʰa⁵ ʂʐ̩⁵¹ u̯ɔ²¹⁴ tə ti⁵¹.i⁵ kɤ⁵¹ lɑu̯²¹⁴.ʂʐ̩⁵",
+       "note": "他是我的第一个老师"
+      }
+     ]
+    },
+    {
+     "name": "Money",
+     "tips": [
+      {
+       "h": "kuài is the spoken yuan",
+       "b": "The currency is written yuán and said kuài: sān kuài qián. qián may be left off once the amount is clear.",
+       "eg": [
+        [
+         "sān kuài",
+         "three yuan"
+        ],
+        [
+         "wǔshí kuài qián",
+         "fifty yuan"
+        ]
+       ]
+      },
+      {
+       "h": "Asking a price",
+       "b": "duōshao qián follows the thing being priced, in the slot where the amount belongs: zhè gè duōshao qián.",
+       "eg": [
+        [
+         "zhè gè duōshao qián",
+         "how much is this"
+        ],
+        [
+         "piào duōshao qián",
+         "how much is a ticket"
+        ]
+       ]
+      },
+      {
+       "h": "tài with le",
+       "b": "tài in front of an adjective and le at the end says the quality has gone past what is wanted: tài guì le.",
+       "eg": [
+        [
+         "tài guì le",
+         "too expensive"
+        ],
+        [
+         "tài duō le",
+         "too much"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "qián",
+       "e": "money",
+       "ipa": "tɕʰi̯ɛn³⁵",
+       "pos": "noun",
+       "note": "钱"
+      },
+      {
+       "t": "kuài",
+       "e": "yuan",
+       "ipa": "kʰu̯ai̯⁵¹",
+       "pos": "noun",
+       "note": "块"
+      },
+      {
+       "t": "xiànjīn",
+       "e": "cash",
+       "ipa": "ɕi̯ɛn⁵¹.tɕin⁵",
+       "pos": "noun",
+       "note": "现金"
+      },
+      {
+       "t": "yínhángkǎ",
+       "e": "bank card",
+       "ipa": "in³⁵.xɑŋ³⁵.kʰa²¹⁴",
+       "pos": "noun",
+       "note": "银行卡"
+      },
+      {
+       "t": "jiàqian",
+       "e": "price",
+       "ipa": "tɕi̯a⁵¹.tɕʰi̯ɛn",
+       "pos": "noun",
+       "note": "价钱"
+      },
+      {
+       "t": "fù",
+       "e": "to pay",
+       "ipa": "fu⁵¹",
+       "pos": "verb",
+       "note": "付"
+      },
+      {
+       "t": "gěi",
+       "e": "to give",
+       "ipa": "kei̯²¹⁴",
+       "pos": "verb",
+       "note": "给"
+      },
+      {
+       "t": "huā",
+       "e": "to spend",
+       "ipa": "xu̯a⁵",
+       "pos": "verb",
+       "note": "花"
+      },
+      {
+       "t": "guì",
+       "e": "expensive",
+       "ipa": "ku̯ei̯⁵¹",
+       "pos": "adj",
+       "note": "贵"
+      },
+      {
+       "t": "piányi",
+       "e": "cheap",
+       "ipa": "pʰi̯ɛn³⁵.i",
+       "pos": "adj",
+       "note": "便宜"
+      },
+      {
+       "t": "yǒu qián",
+       "e": "rich",
+       "ipa": "i̯ou̯²¹⁴ tɕʰi̯ɛn³⁵",
+       "pos": "adj",
+       "note": "有钱"
+      },
+      {
+       "t": "miǎnfèi",
+       "e": "free of charge",
+       "ipa": "mi̯ɛn²¹⁴.fei̯⁵¹",
+       "pos": "adj",
+       "note": "免费"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "zhè gè duōshao qián",
+       "e": "how much is this",
+       "ipa": "tʂɤ⁵¹ kɤ⁵¹ tu̯ɔ⁵.ʂɑu̯ tɕʰi̯ɛn³⁵",
+       "note": "这个多少钱"
+      },
+      {
+       "t": "tài guì le",
+       "e": "that is too expensive",
+       "ipa": "tʰai̯⁵¹ ku̯ei̯⁵¹ lə",
+       "note": "太贵了"
+      },
+      {
+       "t": "wǒ méiyǒu xiànjīn",
+       "e": "I have no cash",
+       "ipa": "u̯ɔ²¹⁴ mei̯³⁵.i̯ou̯²¹⁴ ɕi̯ɛn⁵¹.tɕin⁵",
+       "note": "我没有现金"
+      },
+      {
+       "t": "zhè jiàn yīfu hěn piányi",
+       "e": "this piece of clothing is cheap",
+       "ipa": "tʂɤ⁵¹ tɕi̯ɛn⁵¹ i⁵.fu xən²¹⁴ pʰi̯ɛn³⁵.i",
+       "note": "这件衣服很便宜"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "OUT AND ABOUT",
+   "subtitle": "Ordering a meal, buying things, and what people do for fun",
+   "skills": [
+    {
+     "name": "Restaurant",
+     "tips": [
+      {
+       "h": "Ordering with yào",
+       "b": "yào plus an amount plus the dish is the ordinary order: wǒ yào yì pán jiǎozi. The measure word matches the serving, so a plate takes pán and a bowl takes wǎn.",
+       "eg": [
+        [
+         "wǒ yào yì bēi chá",
+         "a cup of tea for me"
+        ],
+        [
+         "wǒ yào yì pán cài",
+         "a plate of food for me"
+        ]
+       ]
+      },
+      {
+       "h": "qǐng in front of a verb",
+       "b": "qǐng before the verb turns an instruction into a request. gěi then takes two objects in a row, the person and the thing: qǐng gěi wǒ càidān.",
+       "eg": [
+        [
+         "qǐng gěi wǒ càidān",
+         "the menu, please"
+        ],
+        [
+         "qǐng děng yíxià",
+         "one moment, please"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "càidān",
+       "e": "menu",
+       "ipa": "tsʰai̯⁵¹.tan⁵",
+       "pos": "noun",
+       "note": "菜单"
+      },
+      {
+       "t": "cài",
+       "e": "dish",
+       "ipa": "tsʰai̯⁵¹",
+       "pos": "noun",
+       "note": "菜"
+      },
+      {
+       "t": "fúwùyuán",
+       "e": "waiter",
+       "ipa": "fu³⁵.u⁵¹.ɥɛn³⁵",
+       "pos": "noun",
+       "note": "服务员"
+      },
+      {
+       "t": "kuàizi",
+       "e": "chopsticks",
+       "ipa": "kʰu̯ai̯⁵¹.tsɹ̩",
+       "pos": "noun",
+       "note": "筷子"
+      },
+      {
+       "t": "pánzi",
+       "e": "plate",
+       "ipa": "pʰan³⁵.tsɹ̩",
+       "pos": "noun",
+       "note": "盘子"
+      },
+      {
+       "t": "yǐnliào",
+       "e": "beverage",
+       "ipa": "in²¹⁴.li̯ɑu̯⁵¹",
+       "pos": "noun",
+       "note": "饮料"
+      },
+      {
+       "t": "wèidao",
+       "e": "flavour",
+       "ipa": "u̯ei̯⁵¹.tɑu̯",
+       "pos": "noun",
+       "note": "味道"
+      },
+      {
+       "t": "zhàngdān",
+       "e": "the bill",
+       "ipa": "tʂɑŋ⁵¹.tan⁵",
+       "pos": "noun",
+       "note": "账单"
+      },
+      {
+       "t": "diǎncài",
+       "e": "to order food",
+       "ipa": "ti̯ɛn²¹⁴.tsʰai̯⁵¹",
+       "pos": "verb",
+       "note": "点菜"
+      },
+      {
+       "t": "là",
+       "e": "spicy",
+       "ipa": "la⁵¹",
+       "pos": "adj",
+       "note": "辣"
+      },
+      {
+       "t": "tián",
+       "e": "sweet",
+       "ipa": "tʰi̯ɛn³⁵",
+       "pos": "adj",
+       "note": "甜"
+      },
+      {
+       "t": "xián",
+       "e": "salty",
+       "ipa": "ɕi̯ɛn³⁵",
+       "pos": "adj",
+       "note": "咸"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒmen yào diǎncài",
+       "e": "we would like to order",
+       "ipa": "u̯ɔ²¹⁴.mən i̯ɑu̯⁵¹ ti̯ɛn²¹⁴.tsʰai̯⁵¹",
+       "note": "我们要点菜"
+      },
+      {
+       "t": "qǐng gěi wǒ càidān",
+       "e": "the menu, please",
+       "ipa": "tɕʰiŋ²¹⁴ kei̯²¹⁴ u̯ɔ²¹⁴ tsʰai̯⁵¹.tan⁵",
+       "lit": "please give me menu",
+       "note": "请给我菜单"
+      },
+      {
+       "t": "zhè gè cài tài là le",
+       "e": "this dish is too spicy",
+       "ipa": "tʂɤ⁵¹ kɤ⁵¹ tsʰai̯⁵¹ tʰai̯⁵¹ la⁵¹ lə",
+       "note": "这个菜太辣了"
+      },
+      {
+       "t": "wǒ yào yì pán jiǎozi",
+       "e": "I would like a plate of dumplings",
+       "ipa": "u̯ɔ²¹⁴ i̯ɑu̯⁵¹ i⁵¹ pʰan³⁵ tɕi̯ɑu̯²¹⁴.tsɹ̩",
+       "note": "我要一盘饺子"
+      }
+     ]
+    },
+    {
+     "name": "Shopping",
+     "tips": [
+      {
+       "h": "zài before a verb marks it in progress",
+       "b": "The same zài that gives a place, placed in front of a verb, says the action is going on now: wǒ zài zhǎo yí gè bāo.",
+       "eg": [
+        [
+         "wǒ zài zhǎo",
+         "I am looking"
+        ],
+        [
+         "tā zài chī fàn",
+         "he is eating"
+        ]
+       ]
+      },
+      {
+       "h": "The measure word can stand alone",
+       "b": "Once the thing is known the noun drops out and the measure word carries it: zhè jiàn, nà tiáo, liǎng gè.",
+       "eg": [
+        [
+         "wǒ yào zhè jiàn",
+         "I want this one"
+        ],
+        [
+         "nà tiáo tài cháng",
+         "that one is too long"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "mǎi",
+       "e": "to buy",
+       "ipa": "mai̯²¹⁴",
+       "pos": "verb",
+       "note": "买"
+      },
+      {
+       "t": "shāngchǎng",
+       "e": "shopping centre",
+       "ipa": "ʂɑŋ⁵.tʂʰɑŋ²¹⁴",
+       "pos": "noun",
+       "note": "商场"
+      },
+      {
+       "t": "gùkè",
+       "e": "customer",
+       "ipa": "ku⁵¹.kʰɤ⁵¹",
+       "pos": "noun",
+       "note": "顾客"
+      },
+      {
+       "t": "dàizi",
+       "e": "carrier bag",
+       "ipa": "tai̯⁵¹.tsɹ̩",
+       "pos": "noun",
+       "note": "袋子"
+      },
+      {
+       "t": "dàxiǎo",
+       "e": "size",
+       "ipa": "ta⁵¹.ɕi̯ɑu̯²¹⁴",
+       "pos": "noun",
+       "note": "大小"
+      },
+      {
+       "t": "zhékòu",
+       "e": "discount",
+       "ipa": "tʂɤ³⁵.kʰou̯⁵¹",
+       "pos": "noun",
+       "note": "折扣"
+      },
+      {
+       "t": "shōujù",
+       "e": "receipt",
+       "ipa": "ʂou̯⁵.tɕy⁵¹",
+       "pos": "noun",
+       "note": "收据"
+      },
+      {
+       "t": "xuǎn",
+       "e": "to choose",
+       "ipa": "ɕɥɛn²¹⁴",
+       "pos": "verb",
+       "note": "选"
+      },
+      {
+       "t": "zhǎo",
+       "e": "to look for",
+       "ipa": "tʂɑu̯²¹⁴",
+       "pos": "verb",
+       "note": "找"
+      },
+      {
+       "t": "xūyào",
+       "e": "to need",
+       "ipa": "ɕy⁵.i̯ɑu̯⁵¹",
+       "pos": "verb",
+       "note": "需要"
+      },
+      {
+       "t": "shìhé",
+       "e": "to suit",
+       "ipa": "ʂʐ̩⁵¹.xɤ³⁵",
+       "pos": "verb",
+       "note": "适合"
+      },
+      {
+       "t": "tiáo",
+       "e": "long thing of",
+       "ipa": "tʰi̯ɑu̯³⁵",
+       "pos": "det",
+       "note": "条"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ yào mǎi yì tiáo kùzi",
+       "e": "I want to buy trousers",
+       "ipa": "u̯ɔ²¹⁴ i̯ɑu̯⁵¹ mai̯²¹⁴ i⁵¹ tʰi̯ɑu̯³⁵ kʰu⁵¹.tsɹ̩",
+       "note": "我要买一条裤子"
+      },
+      {
+       "t": "zhè jiàn yǒu zhékòu ma",
+       "e": "is there a discount on this one",
+       "ipa": "tʂɤ⁵¹ tɕi̯ɛn⁵¹ i̯ou̯²¹⁴ tʂɤ³⁵.kʰou̯⁵¹ ma",
+       "note": "这件有折扣吗"
+      },
+      {
+       "t": "wǒ zài zhǎo yí gè bāo",
+       "e": "I am looking for a bag",
+       "ipa": "u̯ɔ²¹⁴ tsai̯⁵¹ tʂɑu̯²¹⁴ i³⁵ kɤ⁵¹ pɑu̯⁵",
+       "note": "我在找一个包"
+      },
+      {
+       "t": "zhè gè dàxiǎo bù shìhé",
+       "e": "this size does not fit",
+       "ipa": "tʂɤ⁵¹ kɤ⁵¹ ta⁵¹.ɕi̯ɑu̯²¹⁴ pu⁵¹ ʂʐ̩⁵¹.xɤ³⁵",
+       "note": "这个大小不适合"
+      }
+     ]
+    },
+    {
+     "name": "Hobbies",
+     "tips": [
+      {
+       "h": "A verb that carries its own object",
+       "b": "chànggē is sing-song and tiàowǔ is dance-dance: the object is already inside the word. To add a count the pair splits, as in chàng yì shǒu gē.",
+       "eg": [
+        [
+         "tā chànggē",
+         "she sings"
+        ],
+        [
+         "chàng yì shǒu gē",
+         "sing a song"
+        ]
+       ]
+      },
+      {
+       "h": "xǐhuan takes a noun or a verb",
+       "b": "What is liked may be a thing or an action, and the two forms are built the same way: wǒ xǐhuan yīnyuè, wǒ xǐhuan tīng yīnyuè.",
+       "eg": [
+        [
+         "wǒ xǐhuan yīnyuè",
+         "I like music"
+        ],
+        [
+         "wǒ xǐhuan tīng yīnyuè",
+         "I like listening to music"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "àihào",
+       "e": "hobby",
+       "ipa": "ai̯⁵¹.xɑu̯⁵¹",
+       "pos": "noun",
+       "note": "爱好"
+      },
+      {
+       "t": "yīnyuè",
+       "e": "music",
+       "ipa": "in⁵.ɥɛ⁵¹",
+       "pos": "noun",
+       "note": "音乐"
+      },
+      {
+       "t": "diànyǐng",
+       "e": "film",
+       "ipa": "ti̯ɛn⁵¹.iŋ²¹⁴",
+       "pos": "noun",
+       "note": "电影"
+      },
+      {
+       "t": "yóuxì",
+       "e": "game",
+       "ipa": "i̯ou̯³⁵.ɕi⁵¹",
+       "pos": "noun",
+       "note": "游戏"
+      },
+      {
+       "t": "xiǎoshuō",
+       "e": "novel",
+       "ipa": "ɕi̯ɑu̯²¹⁴.ʂu̯ɔ⁵",
+       "pos": "noun",
+       "note": "小说"
+      },
+      {
+       "t": "chànggē",
+       "e": "to sing",
+       "ipa": "tʂʰɑŋ⁵¹.kɤ⁵",
+       "pos": "verb",
+       "note": "唱歌"
+      },
+      {
+       "t": "tiàowǔ",
+       "e": "to dance",
+       "ipa": "tʰi̯ɑu̯⁵¹.u²¹⁴",
+       "pos": "verb",
+       "note": "跳舞"
+      },
+      {
+       "t": "huàhuàr",
+       "e": "to paint",
+       "ipa": "xu̯a⁵¹.xu̯ɑɻ⁵¹",
+       "pos": "verb",
+       "note": "画画儿"
+      },
+      {
+       "t": "pāizhào",
+       "e": "to take photos",
+       "ipa": "pʰai̯⁵.tʂɑu̯⁵¹",
+       "pos": "verb",
+       "note": "拍照"
+      },
+      {
+       "t": "zuòfàn",
+       "e": "to cook",
+       "ipa": "tsu̯ɔ⁵¹.fan⁵¹",
+       "pos": "verb",
+       "note": "做饭"
+      },
+      {
+       "t": "wánr",
+       "e": "to play",
+       "ipa": "u̯ɑɻ³⁵",
+       "pos": "verb",
+       "note": "玩儿"
+      },
+      {
+       "t": "yǒuqù",
+       "e": "amusing",
+       "ipa": "i̯ou̯²¹⁴.tɕʰy⁵¹",
+       "pos": "adj",
+       "note": "有趣"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ xǐhuan tīng yīnyuè",
+       "e": "I like listening to music",
+       "ipa": "u̯ɔ²¹⁴ ɕi²¹⁴.xu̯an tʰiŋ⁵ in⁵.ɥɛ⁵¹",
+       "note": "我喜欢听音乐"
+      },
+      {
+       "t": "wǒmen zhōumò kàn diànyǐng",
+       "e": "we watch films at the weekend",
+       "ipa": "u̯ɔ²¹⁴.mən tʂou̯⁵.mu̯ɔ⁵¹ kʰan⁵¹ ti̯ɛn⁵¹.iŋ²¹⁴",
+       "note": "我们周末看电影"
+      },
+      {
+       "t": "tā huì chànggē hé tiàowǔ",
+       "e": "she can sing and dance",
+       "ipa": "tʰa⁵ xu̯ei̯⁵¹ tʂʰɑŋ⁵¹.kɤ⁵ xɤ³⁵ tʰi̯ɑu̯⁵¹.u²¹⁴",
+       "note": "她会唱歌和跳舞"
+      },
+      {
+       "t": "wǒ zài jiā wánr yóuxì",
+       "e": "I play games at home",
+       "ipa": "u̯ɔ²¹⁴ tsai̯⁵¹ tɕi̯a⁵ u̯ɑɻ³⁵ i̯ou̯³⁵.ɕi⁵¹",
+       "note": "我在家玩儿游戏"
+      }
+     ]
+    },
+    {
+     "name": "Sports",
+     "tips": [
+      {
+       "h": "dǎ and tī pick the body part",
+       "b": "A ball played with the hands takes dǎ, and one played with the feet takes tī: dǎ lánqiú, tī zúqiú. Swimming and running are single verbs and take neither.",
+       "eg": [
+        [
+         "dǎ lánqiú",
+         "play basketball"
+        ],
+        [
+         "tī zúqiú",
+         "play football"
+        ]
+       ]
+      },
+      {
+       "h": "Asking about a skill",
+       "b": "huì asks whether the skill has been learned and xǐhuan asks about taste, so the two questions get different answers.",
+       "eg": [
+        [
+         "nǐ huì yóuyǒng ma",
+         "can you swim"
+        ],
+        [
+         "nǐ xǐhuan yùndòng ma",
+         "do you like sport"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "yùndòng",
+       "e": "sport",
+       "ipa": "yn⁵¹.tʊŋ⁵¹",
+       "pos": "noun",
+       "note": "运动"
+      },
+      {
+       "t": "qiú",
+       "e": "ball",
+       "ipa": "tɕʰi̯ou̯³⁵",
+       "pos": "noun",
+       "note": "球"
+      },
+      {
+       "t": "zúqiú",
+       "e": "football",
+       "ipa": "tsu³⁵.tɕʰi̯ou̯³⁵",
+       "pos": "noun",
+       "note": "足球"
+      },
+      {
+       "t": "lánqiú",
+       "e": "basketball",
+       "ipa": "lan³⁵.tɕʰi̯ou̯³⁵",
+       "pos": "noun",
+       "note": "篮球"
+      },
+      {
+       "t": "bǐsài",
+       "e": "match",
+       "ipa": "pi²¹⁴.sai̯⁵¹",
+       "pos": "noun",
+       "note": "比赛"
+      },
+      {
+       "t": "qiúduì",
+       "e": "team",
+       "ipa": "tɕʰi̯ou̯³⁵.tu̯ei̯⁵¹",
+       "pos": "noun",
+       "note": "球队"
+      },
+      {
+       "t": "pǎobù",
+       "e": "to run",
+       "ipa": "pʰɑu̯²¹⁴.pu⁵¹",
+       "pos": "verb",
+       "note": "跑步"
+      },
+      {
+       "t": "yóuyǒng",
+       "e": "to swim",
+       "ipa": "i̯ou̯³⁵.i̯ʊŋ²¹⁴",
+       "pos": "verb",
+       "note": "游泳"
+      },
+      {
+       "t": "duànliàn",
+       "e": "to exercise",
+       "ipa": "tu̯an⁵¹.li̯ɛn⁵¹",
+       "pos": "verb",
+       "note": "锻炼"
+      },
+      {
+       "t": "dǎ",
+       "e": "to play with the hands",
+       "ipa": "ta²¹⁴",
+       "pos": "verb",
+       "note": "打"
+      },
+      {
+       "t": "tī",
+       "e": "to kick",
+       "ipa": "tʰi⁵",
+       "pos": "verb",
+       "note": "踢"
+      },
+      {
+       "t": "yíng",
+       "e": "to win",
+       "ipa": "iŋ³⁵",
+       "pos": "verb",
+       "note": "赢"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ xǐhuan dǎ lánqiú",
+       "e": "I like playing basketball",
+       "ipa": "u̯ɔ²¹⁴ ɕi²¹⁴.xu̯an ta²¹⁴ lan³⁵.tɕʰi̯ou̯³⁵",
+       "note": "我喜欢打篮球"
+      },
+      {
+       "t": "tāmen zài tī zúqiú",
+       "e": "they are playing football",
+       "ipa": "tʰa⁵.mən tsai̯⁵¹ tʰi⁵ tsu³⁵.tɕʰi̯ou̯³⁵",
+       "note": "他们在踢足球"
+      },
+      {
+       "t": "wǒ měitiān pǎobù",
+       "e": "I run every day",
+       "ipa": "u̯ɔ²¹⁴ mei̯²¹⁴.tʰi̯ɛn⁵ pʰɑu̯²¹⁴.pu⁵¹",
+       "note": "我每天跑步"
+      },
+      {
+       "t": "jīntiān wǎnshang yǒu bǐsài",
+       "e": "there is a match this evening",
+       "ipa": "tɕin⁵.tʰi̯ɛn⁵ u̯an²¹⁴.ʂɑŋ i̯ou̯²¹⁴ pi²¹⁴.sai̯⁵¹",
+       "note": "今天晚上有比赛"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "title": "THE WORLD",
+   "subtitle": "Landscape, the city, countries and languages, and more verbs",
+   "skills": [
+    {
+     "name": "Nature",
+     "tips": [
+      {
+       "h": "yǒu states what is there",
+       "b": "The place comes first, then yǒu, then what stands in it: shān shàngmiàn yǒu shù. English begins with there is, which reverses the order.",
+       "eg": [
+        [
+         "shān shàngmiàn yǒu shù",
+         "there are trees on the mountain"
+        ],
+        [
+         "jiā lǐ yǒu māo",
+         "there is a cat at home"
+        ]
+       ]
+      },
+      {
+       "h": "hěn duō for a large amount",
+       "b": "duō in front of a noun does not stand alone; hěn duō is the ordinary way to say many or much: hěn duō huā.",
+       "eg": [
+        [
+         "hěn duō rén",
+         "many people"
+        ],
+        [
+         "hěn duō shuǐ",
+         "a lot of water"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "shān",
+       "e": "mountain",
+       "ipa": "ʂan⁵",
+       "pos": "noun",
+       "note": "山"
+      },
+      {
+       "t": "hǎi",
+       "e": "sea",
+       "ipa": "xai̯²¹⁴",
+       "pos": "noun",
+       "note": "海"
+      },
+      {
+       "t": "jiāng",
+       "e": "river",
+       "ipa": "tɕi̯ɑŋ⁵",
+       "pos": "noun",
+       "note": "江"
+      },
+      {
+       "t": "shù",
+       "e": "tree",
+       "ipa": "ʂu⁵¹",
+       "pos": "noun",
+       "note": "树"
+      },
+      {
+       "t": "huā",
+       "e": "flower",
+       "ipa": "xu̯a⁵",
+       "pos": "noun",
+       "note": "花"
+      },
+      {
+       "t": "cǎo",
+       "e": "grass",
+       "ipa": "tsʰɑu̯²¹⁴",
+       "pos": "noun",
+       "note": "草"
+      },
+      {
+       "t": "sēnlín",
+       "e": "forest",
+       "ipa": "sən⁵.lin³⁵",
+       "pos": "noun",
+       "note": "森林"
+      },
+      {
+       "t": "tàiyáng",
+       "e": "sun",
+       "ipa": "tʰai̯⁵¹.i̯ɑŋ³⁵",
+       "pos": "noun",
+       "note": "太阳"
+      },
+      {
+       "t": "yuèliang",
+       "e": "moon",
+       "ipa": "ɥɛ⁵¹.li̯ɑŋ",
+       "pos": "noun",
+       "note": "月亮"
+      },
+      {
+       "t": "xīngxing",
+       "e": "star",
+       "ipa": "ɕiŋ⁵.ɕiŋ",
+       "pos": "noun",
+       "note": "星星"
+      },
+      {
+       "t": "tiānkōng",
+       "e": "sky",
+       "ipa": "tʰi̯ɛn⁵.kʰʊŋ⁵",
+       "pos": "noun",
+       "note": "天空"
+      },
+      {
+       "t": "dì",
+       "e": "ground",
+       "ipa": "ti⁵¹",
+       "pos": "noun",
+       "note": "地"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "shān shàngmiàn yǒu shù",
+       "e": "there are trees on the mountain",
+       "ipa": "ʂan⁵ ʂɑŋ⁵¹.mi̯ɛn⁵¹ i̯ou̯²¹⁴ ʂu⁵¹",
+       "note": "山上面有树"
+      },
+      {
+       "t": "jīntiān tiānkōng hěn lán",
+       "e": "the sky is blue today",
+       "ipa": "tɕin⁵.tʰi̯ɛn⁵ tʰi̯ɛn⁵.kʰʊŋ⁵ xən²¹⁴ lan³⁵",
+       "note": "今天天空很蓝"
+      },
+      {
+       "t": "gōngyuán lǐmiàn yǒu hěn duō huā",
+       "e": "there are many flowers in the park",
+       "ipa": "kʊŋ⁵.ɥɛn³⁵ li²¹⁴.mi̯ɛn⁵¹ i̯ou̯²¹⁴ xən²¹⁴ tu̯ɔ⁵ xu̯a⁵",
+       "note": "公园里面有很多花"
+      },
+      {
+       "t": "wǎnshang kěyǐ kàn xīngxing",
+       "e": "the stars can be seen at night",
+       "ipa": "u̯an²¹⁴.ʂɑŋ kʰɤ²¹⁴.i²¹⁴ kʰan⁵¹ ɕiŋ⁵.ɕiŋ",
+       "note": "晚上可以看星星"
+      }
+     ]
+    },
+    {
+     "name": "City",
+     "tips": [
+      {
+       "h": "cóng marks a starting point",
+       "b": "cóng gives where a movement begins and dào where it ends, and both stand before the verb: cóng jiā dào gōngsī.",
+       "eg": [
+        [
+         "wǒ cóng nóngcūn lái",
+         "I come from the countryside"
+        ],
+        [
+         "cóng jiā dào gōngsī",
+         "from home to the office"
+        ]
+       ]
+      },
+      {
+       "h": "lǐ and shàng in speech",
+       "b": "After a place the position word often keeps only its first syllable: chéngshì lǐ, zhuōzi shàng. The longer lǐmiàn and shàngmiàn are equally correct.",
+       "eg": [
+        [
+         "chéngshì lǐ",
+         "in the city"
+        ],
+        [
+         "zhuōzi shàng",
+         "on the table"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "chéngshì",
+       "e": "city",
+       "ipa": "tʂʰəŋ³⁵.ʂʐ̩⁵¹",
+       "pos": "noun",
+       "note": "城市"
+      },
+      {
+       "t": "nóngcūn",
+       "e": "countryside",
+       "ipa": "nʊŋ³⁵.tsʰu̯ən⁵",
+       "pos": "noun",
+       "note": "农村"
+      },
+      {
+       "t": "lóu",
+       "e": "building",
+       "ipa": "lou̯³⁵",
+       "pos": "noun",
+       "note": "楼"
+      },
+      {
+       "t": "qiáo",
+       "e": "bridge",
+       "ipa": "tɕʰi̯ɑu̯³⁵",
+       "pos": "noun",
+       "note": "桥"
+      },
+      {
+       "t": "guǎngchǎng",
+       "e": "square",
+       "ipa": "ku̯ɑŋ²¹⁴.tʂʰɑŋ²¹⁴",
+       "pos": "noun",
+       "note": "广场"
+      },
+      {
+       "t": "bówùguǎn",
+       "e": "museum",
+       "ipa": "pu̯ɔ³⁵.u⁵¹.ku̯an²¹⁴",
+       "pos": "noun",
+       "note": "博物馆"
+      },
+      {
+       "t": "jǐngchá",
+       "e": "police officer",
+       "ipa": "tɕiŋ²¹⁴.tʂʰa³⁵",
+       "pos": "noun",
+       "note": "警察"
+      },
+      {
+       "t": "rénkǒu",
+       "e": "population",
+       "ipa": "ʐən³⁵.kʰou̯²¹⁴",
+       "pos": "noun",
+       "note": "人口"
+      },
+      {
+       "t": "jiāotōng",
+       "e": "traffic",
+       "ipa": "tɕi̯ɑu̯⁵.tʰʊŋ⁵",
+       "pos": "noun",
+       "note": "交通"
+      },
+      {
+       "t": "rènao",
+       "e": "lively",
+       "ipa": "ʐɤ⁵¹.nɑu̯",
+       "pos": "adj",
+       "note": "热闹"
+      },
+      {
+       "t": "gānjìng",
+       "e": "clean",
+       "ipa": "kan⁵.tɕiŋ⁵¹",
+       "pos": "adj",
+       "note": "干净"
+      },
+      {
+       "t": "cóng",
+       "e": "from",
+       "ipa": "tsʰʊŋ³⁵",
+       "pos": "prep",
+       "note": "从"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ cóng nóngcūn lái",
+       "e": "I come from the countryside",
+       "ipa": "u̯ɔ²¹⁴ tsʰʊŋ³⁵ nʊŋ³⁵.tsʰu̯ən⁵ lai̯³⁵",
+       "note": "我从农村来"
+      },
+      {
+       "t": "zhè gè chéngshì hěn rènao",
+       "e": "this city is lively",
+       "ipa": "tʂɤ⁵¹ kɤ⁵¹ tʂʰəŋ³⁵.ʂʐ̩⁵¹ xən²¹⁴ ʐɤ⁵¹.nɑu̯",
+       "note": "这个城市很热闹"
+      },
+      {
+       "t": "bówùguǎn zài guǎngchǎng hòumiàn",
+       "e": "the museum is behind the square",
+       "ipa": "pu̯ɔ³⁵.u⁵¹.ku̯an²¹⁴ tsai̯⁵¹ ku̯ɑŋ²¹⁴.tʂʰɑŋ²¹⁴ xou̯⁵¹.mi̯ɛn⁵¹",
+       "note": "博物馆在广场后面"
+      },
+      {
+       "t": "chéngshì lǐmiàn yǒu hěn duō lóu",
+       "e": "there are many buildings in the city",
+       "ipa": "tʂʰəŋ³⁵.ʂʐ̩⁵¹ li²¹⁴.mi̯ɛn⁵¹ i̯ou̯²¹⁴ xən²¹⁴ tu̯ɔ⁵ lou̯³⁵",
+       "note": "城市里面有很多楼"
+      }
+     ]
+    },
+    {
+     "name": "Countries",
+     "tips": [
+      {
+       "h": "A nationality is country plus rén",
+       "b": "No separate adjective exists: Zhōngguó rén, Měiguó rén. The question uses nǎ in the same slot: nǐ shì nǎ guó rén.",
+       "eg": [
+        [
+         "Zhōngguó rén",
+         "a Chinese person"
+        ],
+        [
+         "nǐ shì nǎ guó rén",
+         "where are you from"
+        ]
+       ]
+      },
+      {
+       "h": "guó, wén and yǔ",
+       "b": "guó names the country, and wén or yǔ names its language: Zhōngguó and zhōngwén, Yīngguó and yīngwén. Both language endings are used, wén more often in writing.",
+       "eg": [
+        [
+         "Fǎguó",
+         "France"
+        ],
+        [
+         "Zhōngguó rén shuō zhōngwén",
+         "Chinese people speak Chinese"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "guójiā",
+       "e": "country",
+       "ipa": "ku̯ɔ³⁵.tɕi̯a⁵",
+       "pos": "noun",
+       "note": "国家"
+      },
+      {
+       "t": "Zhōngguó",
+       "e": "China",
+       "ipa": "tʂʊŋ⁵.ku̯ɔ³⁵",
+       "pos": "noun",
+       "note": "中国"
+      },
+      {
+       "t": "Měiguó",
+       "e": "America",
+       "ipa": "mei̯²¹⁴.ku̯ɔ³⁵",
+       "pos": "noun",
+       "note": "美国"
+      },
+      {
+       "t": "Yīngguó",
+       "e": "Britain",
+       "ipa": "iŋ⁵.ku̯ɔ³⁵",
+       "pos": "noun",
+       "note": "英国"
+      },
+      {
+       "t": "Fǎguó",
+       "e": "France",
+       "ipa": "fa²¹⁴.ku̯ɔ³⁵",
+       "pos": "noun",
+       "note": "法国"
+      },
+      {
+       "t": "Déguó",
+       "e": "Germany",
+       "ipa": "tɤ³⁵.ku̯ɔ³⁵",
+       "pos": "noun",
+       "note": "德国"
+      },
+      {
+       "t": "Rìběn",
+       "e": "Japan",
+       "ipa": "ʐʐ̩⁵¹.pən²¹⁴",
+       "pos": "noun",
+       "note": "日本"
+      },
+      {
+       "t": "Hánguó",
+       "e": "Korea",
+       "ipa": "xan³⁵.ku̯ɔ³⁵",
+       "pos": "noun",
+       "note": "韩国"
+      },
+      {
+       "t": "zhōngwén",
+       "e": "the Chinese language",
+       "ipa": "tʂʊŋ⁵.u̯ən³⁵",
+       "pos": "noun",
+       "note": "中文"
+      },
+      {
+       "t": "yīngwén",
+       "e": "the English language",
+       "ipa": "iŋ⁵.u̯ən³⁵",
+       "pos": "noun",
+       "note": "英文"
+      },
+      {
+       "t": "wàiguó",
+       "e": "foreign country",
+       "ipa": "u̯ai̯⁵¹.ku̯ɔ³⁵",
+       "pos": "noun",
+       "note": "外国"
+      },
+      {
+       "t": "shìjiè",
+       "e": "world",
+       "ipa": "ʂʐ̩⁵¹.tɕi̯ɛ⁵¹",
+       "pos": "noun",
+       "note": "世界"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ shì Měiguó rén",
+       "e": "I am American",
+       "ipa": "u̯ɔ²¹⁴ ʂʐ̩⁵¹ mei̯²¹⁴.ku̯ɔ³⁵ ʐən³⁵",
+       "note": "我是美国人"
+      },
+      {
+       "t": "tā zài Zhōngguó gōngzuò",
+       "e": "he works in China",
+       "ipa": "tʰa⁵ tsai̯⁵¹ tʂʊŋ⁵.ku̯ɔ³⁵ kʊŋ⁵.tsu̯ɔ⁵¹",
+       "note": "他在中国工作"
+      },
+      {
+       "t": "wǒ huì shuō yìdiǎn yīngwén",
+       "e": "I can speak a little English",
+       "ipa": "u̯ɔ²¹⁴ xu̯ei̯⁵¹ ʂu̯ɔ⁵ i⁵¹.ti̯ɛn²¹⁴ iŋ⁵.u̯ən³⁵",
+       "note": "我会说一点英文"
+      },
+      {
+       "t": "nǐ shì nǎ guó rén",
+       "e": "which country are you from",
+       "ipa": "ni²¹⁴ ʂʐ̩⁵¹ na²¹⁴ ku̯ɔ³⁵ ʐən³⁵",
+       "lit": "you are which country person",
+       "note": "你是哪国人"
+      }
+     ]
+    },
+    {
+     "name": "More Verbs",
+     "tips": [
+      {
+       "h": "A doubled verb softens the action",
+       "b": "Saying the verb twice makes it short and casual: kànkan, děngdeng, shuōshuo. The meaning is the same action, done briefly.",
+       "eg": [
+        [
+         "wǒ kànkan",
+         "let me have a look"
+        ],
+        [
+         "nǐ shuōshuo",
+         "say a bit about it"
+        ]
+       ]
+      },
+      {
+       "h": "yíxià after the verb",
+       "b": "yíxià follows the verb for the same effect and is more common in speech: děng yíxià, kàn yíxià.",
+       "eg": [
+        [
+         "děng yíxià",
+         "wait a moment"
+        ],
+        [
+         "wèn yíxià",
+         "ask briefly"
+        ]
+       ]
+      },
+      {
+       "h": "Where the object of a request goes",
+       "b": "gěi, sòng and jièshào take the person first and the thing second, in that fixed order: gěi wǒ shū, sòng tā huā.",
+       "eg": [
+        [
+         "gěi wǒ shū",
+         "give me the book"
+        ],
+        [
+         "sòng tā huā",
+         "give her flowers"
+        ]
+       ]
+      }
+     ],
+     "words": [
+      {
+       "t": "zhù",
+       "e": "to live",
+       "ipa": "tʂu⁵¹",
+       "pos": "verb",
+       "note": "住"
+      },
+      {
+       "t": "sòng",
+       "e": "to give as a gift",
+       "ipa": "sʊŋ⁵¹",
+       "pos": "verb",
+       "note": "送"
+      },
+      {
+       "t": "wàngjì",
+       "e": "to forget",
+       "ipa": "u̯ɑŋ⁵¹.tɕi⁵¹",
+       "pos": "verb",
+       "note": "忘记"
+      },
+      {
+       "t": "jìde",
+       "e": "to remember",
+       "ipa": "tɕi⁵¹.tə",
+       "pos": "verb",
+       "note": "记得"
+      },
+      {
+       "t": "kāishǐ",
+       "e": "to begin",
+       "ipa": "kʰai̯⁵.ʂʐ̩²¹⁴",
+       "pos": "verb",
+       "note": "开始"
+      },
+      {
+       "t": "jiéshù",
+       "e": "to end",
+       "ipa": "tɕi̯ɛ³⁵.ʂu⁵¹",
+       "pos": "verb",
+       "note": "结束"
+      },
+      {
+       "t": "děng",
+       "e": "to wait",
+       "ipa": "təŋ²¹⁴",
+       "pos": "verb",
+       "note": "等"
+      },
+      {
+       "t": "yòng",
+       "e": "to use",
+       "ipa": "i̯ʊŋ⁵¹",
+       "pos": "verb",
+       "note": "用"
+      },
+      {
+       "t": "dǎkāi",
+       "e": "to open",
+       "ipa": "ta²¹⁴.kʰai̯⁵",
+       "pos": "verb",
+       "note": "打开"
+      },
+      {
+       "t": "guān",
+       "e": "to shut",
+       "ipa": "ku̯an⁵",
+       "pos": "verb",
+       "note": "关"
+      },
+      {
+       "t": "jièshào",
+       "e": "to introduce",
+       "ipa": "tɕi̯ɛ⁵¹.ʂɑu̯⁵¹",
+       "pos": "verb",
+       "note": "介绍"
+      },
+      {
+       "t": "juédìng",
+       "e": "to decide",
+       "ipa": "tɕɥɛ³⁵.tiŋ⁵¹",
+       "pos": "verb",
+       "note": "决定"
+      }
+     ],
+     "phrases": [
+      {
+       "t": "wǒ zhù zài chéngshì lǐmiàn",
+       "e": "I live in the city",
+       "ipa": "u̯ɔ²¹⁴ tʂu⁵¹ tsai̯⁵¹ tʂʰəŋ³⁵.ʂʐ̩⁵¹ li²¹⁴.mi̯ɛn⁵¹",
+       "note": "我住在城市里面"
+      },
+      {
+       "t": "qǐng děng yíxià",
+       "e": "please wait a moment",
+       "ipa": "tɕʰiŋ²¹⁴ təŋ²¹⁴ i³⁵.ɕi̯a⁵¹",
+       "note": "请等一下"
+      },
+      {
+       "t": "diànyǐng kāishǐ le",
+       "e": "the film has started",
+       "ipa": "ti̯ɛn⁵¹.iŋ²¹⁴ kʰai̯⁵.ʂʐ̩²¹⁴ lə",
+       "note": "电影开始了"
+      },
+      {
+       "t": "nǐ kěyǐ yòng wǒ de diànnǎo",
+       "e": "you may use my computer",
+       "ipa": "ni²¹⁴ kʰɤ²¹⁴.i²¹⁴ i̯ʊŋ⁵¹ u̯ɔ²¹⁴ tə ti̯ɛn⁵¹.nɑu̯²¹⁴",
+       "note": "你可以用我的电脑"
+      }
+     ]
+    }
+   ]
+  }
+ ]
 }

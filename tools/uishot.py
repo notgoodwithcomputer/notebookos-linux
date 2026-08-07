@@ -50,6 +50,50 @@ _THEME_PRIORITY = 500
 _theme_loaded = False
 
 
+def _save_offscreen(off, path):
+    """Write an OffscreenWindow's contents to `path` at FULL DEVICE RESOLUTION.
+
+    WHY NOT get_pixbuf(). Under GDK_SCALE=2 GTK really does render the widget
+    tree at twice the pixels -- measured, the offscreen surface for a 200x100
+    logical window is 400x200 with device_scale (2.0, 2.0). But
+    Gtk.OffscreenWindow.get_pixbuf() hands back a LOGICAL-size pixbuf, so every
+    2x screenshot this harness produced was the 2x render thrown away and
+    resampled back down to 1x.
+
+    That is the worst possible failure for a fidelity tool: the HiDPI work was
+    verified structurally (surface sizes and device scales measured directly),
+    but any attempt to verify it BY LOOKING was quietly comparing two 1x images
+    and would have shown no difference no matter how broken the real 2x path
+    was. Taking the surface directly keeps the pixels GTK actually drew.
+
+    Returns (width, height) of what was written, in real pixels."""
+    surf = None
+    try:
+        surf = off.get_surface()
+    except Exception:                                             # noqa: BLE001
+        surf = None
+    if surf is not None:
+        try:
+            sx, _sy = surf.get_device_scale()
+        except Exception:                                         # noqa: BLE001
+            sx = 1
+        # Only take the surface path when there is something extra to keep; at
+        # 1x the pixbuf route is equivalent and better tested.
+        if sx and sx > 1:
+            surf.flush()
+            surf.write_to_png(path)
+            return surf.get_width(), surf.get_height()
+    # 1x fallback. NOTE: this block is the ORIGINAL capture code, and a bulk
+    # replace of it across this file rewrote it here too -- turning this
+    # function's own fallback into a call to itself. Infinite recursion, caught
+    # only because the edit was read back. Leave it written out.
+    pb = off.get_pixbuf()
+    if pb is None:
+        raise RuntimeError("get_pixbuf() returned None for " + path)
+    pb.savev(path, "png", [], [])
+    return pb.get_width(), pb.get_height()
+
+
 def load_theme(path=THEME_CSS):
     """Load Papertone so it decisively wins over the host's GTK theme.
 
@@ -88,11 +132,7 @@ def shot(build, w, h, path, app_css=None, settle=60):
         while Gtk.events_pending():
             Gtk.main_iteration_do(False)
         ctx.iteration(False)
-    pb = off.get_pixbuf()
-    if pb is None:
-        raise RuntimeError("get_pixbuf() returned None for " + path)
-    pb.savev(path, "png", [], [])
-    return pb.get_width(), pb.get_height()
+    return _save_offscreen(off, path)
 
 
 def shot_window(win, w, h, path, settle=80, after_show=None):
@@ -149,11 +189,7 @@ def shot_window(win, w, h, path, settle=80, after_show=None):
         while Gtk.events_pending():
             Gtk.main_iteration_do(False)
         ctx.iteration(False)
-    pb = off.get_pixbuf()
-    if pb is None:
-        raise RuntimeError("get_pixbuf() returned None for " + path)
-    pb.savev(path, "png", [], [])
-    return pb.get_width(), pb.get_height()
+    return _save_offscreen(off, path)
 
 
 def _demo():

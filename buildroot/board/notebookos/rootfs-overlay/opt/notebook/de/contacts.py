@@ -27,6 +27,7 @@ from datetime import date, timedelta
 import cairo
 
 import nbapp
+import nbcommands
 import nbicons
 import nbprint
 from nbi18n import _t  # noqa: E402
@@ -47,11 +48,15 @@ INK = "#1A1916"
 PAPER = "#FCFBF8"
 PANEL = "#F1EEE6"
 HAIR = "#D7D2C5"
-MUTED = "#A39D8F"
+MUTED = "#9A9484"
 MUTED2 = "#8A857A"
 SEL = "#EAE3D2"
 ACCENT = "#C8341E"
 
+# Deliberately off-palette: these are IDENTITY tints, one per card, so two
+# neighbouring rows in the book can be told apart at a glance. The papertone
+# neutrals cannot supply six values a person can distinguish, and each one has
+# to stay dark enough to carry the white initials drawn on it.
 AVATAR_COLORS = ["#8A857A", "#6E7B57", "#9A6B4F", "#5B6B7B", "#7B5B6E", "#6B7B6E"]
 
 # Standard address-book fields (label, storage key). Every field is free-text
@@ -92,6 +97,18 @@ DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
 _BDAY_NUM_RE = re.compile(r"^(\d{1,4})\D+(\d{1,2})(?:\D+(\d{1,4}))?\D*$")
 _WORD_RE = re.compile(r"[A-Za-z]+")
 _DIGITS_RE = re.compile(r"\d+")
+
+
+def _is_css_color(text):
+    """True when GTK can read `text` as a colour (any spelling it accepts:
+    '#8A857A', 'red', 'rgb(1,2,3)'). Used to keep an unreadable colour out of
+    the avatar stylesheet, where it would raise rather than just look wrong."""
+    if not text:
+        return False
+    try:
+        return bool(Gdk.RGBA().parse(text))
+    except Exception:
+        return False
 
 
 def _month_index(text):
@@ -200,6 +217,11 @@ class Contacts(nbapp.AppWindow):
         super().__init__()
         self._install_css()
 
+        # Set before anything can arm a timer or touch a widget: every deferred
+        # callback (search debounce, status clear) reads this to decide whether
+        # the window it belongs to is still there.
+        self._closed = False
+
         # Load the saved address book (empty on a fresh device — nothing is
         # seeded). Normalization guarantees every render / edit / delete /
         # search path sees the same full-key shape _new_contact() produces.
@@ -272,7 +294,15 @@ class Contacts(nbapp.AppWindow):
         key is present (as a string) and a palette colour is guaranteed."""
         person = {k: str(p.get(k, "") or "") for k in FIELD_KEYS}
         color = p.get("color")
-        if not isinstance(color, str) or not color:
+        # The colour is pasted straight into the avatar's CSS, and GTK RAISES on
+        # a value it cannot parse — so a record whose colour is not a colour
+        # ("8A857A" without the hash, a truncated "#GG", anything hand-edited)
+        # threw out of _avatar -> _contact_row -> _rebuild_list inside
+        # __init__: Contacts then failed to open at all, every launch, saying
+        # nothing, with the whole book unreachable behind one bad field. A
+        # colour is decoration; it can never be the reason the address book
+        # will not open. Anything GTK cannot read falls back to the palette.
+        if not isinstance(color, str) or not _is_css_color(color):
             color = AVATAR_COLORS[i % len(AVATAR_COLORS)]
         person["color"] = color
         return person
@@ -298,6 +328,30 @@ class Contacts(nbapp.AppWindow):
                     pass
 
     def _on_destroy(self, *_):
+        # Idempotent, and it runs first: "destroy" can reach this handler more
+        # than once (File ▸ Close on an already-closing window, a second
+        # teardown pass at Shut Down), and the final commit/save below must
+        # happen exactly once — twice would re-run _commit_edits against dead
+        # entries and write again for nothing.
+        if self._closed:
+            return
+        self._closed = True
+
+        # Cancel both deferred sources BEFORE anything else. The 130ms search
+        # debounce and the 3s status clear both outlive the window otherwise:
+        # GLib keeps the callback (and through it this Contacts and its whole
+        # widget tree) alive to the deadline, then _search_timeout tears down
+        # and re-realizes a list inside a destroyed window. Clear the id first
+        # so a failed removal still leaves nothing to fire against.
+        for attr in ("_search_timer", "_status_timer"):
+            sid = getattr(self, attr, 0)
+            setattr(self, attr, 0)
+            if sid:
+                try:
+                    GLib.source_remove(sid)
+                except Exception:
+                    pass
+
         # Capture any in-progress edit before the final write. The inline field
         # entries only push into self.people via _commit_edits (Done / switch /
         # New / Enter); a value typed but not yet committed lives solely in the
@@ -327,7 +381,7 @@ class Contacts(nbapp.AppWindow):
         sbwrap.get_style_context().add_class("searchheader")
         searchbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
         searchbox.get_style_context().add_class("searchbox")
-        icon = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("search", 16, MUTED2))
+        icon = nbicons.image("search", 16, MUTED2)
         icon.set_valign(Gtk.Align.CENTER)
         icon.set_margin_start(10)
         searchbox.pack_start(icon, False, False, 0)
@@ -346,7 +400,7 @@ class Contacts(nbapp.AppWindow):
         newbtn.get_style_context().add_class("newbtn")
         newbtn.set_tooltip_text(_t("New contact"))
         newbtn.set_valign(Gtk.Align.CENTER)
-        newbtn.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 18, MUTED2)))
+        newbtn.add(nbicons.image("plus", 18, MUTED2))
         newbtn.connect("clicked", self._new_contact)
         sbwrap.pack_start(newbtn, False, False, 0)
         pane.pack_start(sbwrap, False, False, 0)
@@ -770,6 +824,8 @@ class Contacts(nbapp.AppWindow):
         # the query eagerly (so activate/step read the latest filter), but defer
         # the actual list rebuild until typing settles, cancelling any pending
         # rebuild first so only the final query is rendered.
+        if self._closed:
+            return   # the window is gone; nothing to filter and nothing to arm
         self.search_text = entry.get_text()
         if self._search_timer:
             GLib.source_remove(self._search_timer)
@@ -777,8 +833,42 @@ class Contacts(nbapp.AppWindow):
 
     def _search_timeout(self):
         self._search_timer = 0
+        if self._closed:
+            return False   # window torn down inside the debounce — rebuild nothing
         self._rebuild_list()
         return False   # one-shot
+
+    def _focus_search(self):
+        """Ctrl+F / View ▸ Find — put the caret in the search field, wherever
+        focus happens to be. The same command Journal and Academics bind."""
+        try:
+            self.search.grab_focus()
+        except Exception:
+            pass
+
+    def _clear_search(self):
+        """Drop the filter and show the whole book again; True when there was
+        one to drop.
+
+        Applied IMMEDIATELY rather than through the 130ms typing debounce:
+        clearing is a single deliberate act, not a burst, and a filtered list
+        that stays filtered for another eighth of a second after the key reads
+        as a dropped keypress."""
+        if not self.search_text and not self.search.get_text():
+            return False
+        if self._search_timer:
+            GLib.source_remove(self._search_timer)
+            self._search_timer = 0
+        self.search_text = ""
+        # set_text re-enters _on_search, which re-arms the debounce; clear it
+        # again afterwards and rebuild once, here and now.
+        self.search.set_text("")
+        if self._search_timer:
+            GLib.source_remove(self._search_timer)
+            self._search_timer = 0
+        self.search_text = ""
+        self._rebuild_list()
+        return True
 
     def _on_search_activate(self, *_):
         """Enter in the search box jumps to the first matching card, using the
@@ -1102,7 +1192,7 @@ class Contacts(nbapp.AppWindow):
 
         def rule():
             if pt.y + 1 <= PH - MB:
-                ink("#ECE7DA")
+                ink("#EFEBE0")
                 cr.set_line_width(1.0)
                 cr.move_to(ML, pt.y)
                 cr.line_to(PW - MR, pt.y)
@@ -1124,19 +1214,19 @@ class Contacts(nbapp.AppWindow):
                  serif=True, gap_before=6, gap_after=2)
             role = p.get("role", "")
             if role:
-                emit(role, 11, False, "#79736A", gap_after=6)
+                emit(role, 11, False, "#6E695E", gap_after=6)
             else:
                 pt.y += 4
             for label, key in FIELDS:
                 val = p.get(key, "")
                 if val:
                     emit("%s   %s" % (label.upper(), val), 10.5, False,
-                         "#26241F", gap_after=2)
+                         "#2A2620", gap_after=2)
             notes = p.get("notes", "")
             if notes:
-                emit("NOTES", 9, False, "#9A958A", gap_before=6, gap_after=2)
+                emit("NOTES", 9, False, "#9A9484", gap_before=6, gap_after=2)
                 for raw in notes.split("\n"):
-                    emit(raw, 11, False, "#26241F", serif=True)
+                    emit(raw, 11, False, "#2A2620", serif=True)
 
         surf.finish()
 
@@ -1144,6 +1234,12 @@ class Contacts(nbapp.AppWindow):
         """Surface a transient status/result in the list pane's status line,
         then clear it after a moment. Crash-safe: a UI failure never propagates
         out of the action that called it."""
+        if self._closed:
+            # Nothing to show it on and no one to read it: a status line on a
+            # closed window would only re-arm a timer against dead widgets. The
+            # one caller that can land here is a save that failed during
+            # teardown, which has no visible window left to warn in anyway.
+            return
         try:
             self.status_lbl.set_text(text)
             self.status_lbl.show()
@@ -1155,6 +1251,8 @@ class Contacts(nbapp.AppWindow):
 
     def _clear_status(self):
         self._status_timer = 0
+        if self._closed:
+            return False   # the status label went with the window
         try:
             self.status_lbl.set_text("")
             self.status_lbl.hide()
@@ -1181,6 +1279,22 @@ class Contacts(nbapp.AppWindow):
                 and self._menu_open is None
                 and getattr(self, "_about_layer", None) is None):
             self._toggle_edit()
+            return True
+        # ...and then the search, so a filtered book is one key from whole
+        # again instead of looking permanently half-empty. Esc LEAVES the
+        # transient layer it is in — the filter — before it leaves the window
+        # (Constitution Article II; Accounting, Journal and Academics all read
+        # Esc the same way).
+        if (ev.keyval == Gdk.KEY_Escape
+                and self._menu_open is None
+                and getattr(self, "_about_layer", None) is None
+                and self._clear_search()):
+            return True
+        # Ctrl+F puts the caret in the search field wherever focus happens to
+        # be — the one Find shortcut the whole OS binds (nbcommands edit.find).
+        if (ev.state & Gdk.ModifierType.CONTROL_MASK
+                and ev.keyval in (Gdk.KEY_f, Gdk.KEY_F)):
+            self._focus_search()
             return True
         return super()._on_key(w, ev)
 
@@ -1215,9 +1329,12 @@ class Contacts(nbapp.AppWindow):
         if name == "View":
             has_text = bool(self.search.get_text())
             return [
-                ("Find", lambda: self.search.grab_focus()),
+                # The label AND the accelerator come from the registry, so
+                # Find is spelled and bound identically in every app that has
+                # one (nbcommands edit.find — "Find    Ctrl+F").
+                nbcommands.item("edit.find", self._focus_search),
                 ("Clear Search",
-                 (lambda: self.search.set_text("")) if has_text else None),
+                 (lambda: self._clear_search()) if has_text else None),
                 nbapp.SEP,
                 ("Next Contact", lambda: self._step(1)),
                 ("Previous Contact", lambda: self._step(-1)),
@@ -1231,16 +1348,16 @@ class Contacts(nbapp.AppWindow):
                      font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .listpane { background: %(panel)s; border-right: 1px solid %(hair)s; }
         .searchheader { padding: 18px 18px 14px; }
-        .searchbox { background: %(paper)s; border: 1px solid #C4BFB1;
-                     border-radius: 2px; min-height: 38px; }
+        .searchbox { background: %(paper)s; border: 1px solid #C9C4B6;
+                     border-radius: 8px; min-height: 38px; }
         .searchentry { background: transparent; border: none; box-shadow: none;
                        font-size: 14px; color: #2A2620; }
         .searchentry image { color: %(muted2)s; }
-        .listempty, .detailempty { color: %(muted)s; font-size: 13.5px; }
+        .listempty, .detailempty { color: %(muted)s; font-size: 13px; }
         .detailempty { font-size: 14px; }
-        .contactrow { padding: 10px 12px; border-radius: 2px; margin-bottom: 2px;
+        .contactrow { padding: 10px 12px; border-radius: 6px; margin-bottom: 2px;
                       background: transparent; border: none; box-shadow: none; }
-        .contactrow:hover { background: #E6DFCE; }
+        .contactrow:hover { background: %(sel)s; }
         .contactrow.selected { background: %(sel)s;
                                box-shadow: inset 3px 0 0 %(accent)s; }
         .rowname { font-size: 15px; color: %(ink)s; font-weight: 500; }
@@ -1251,14 +1368,14 @@ class Contacts(nbapp.AppWindow):
         /* The one thing the book volunteers. Signage-red hairline on the
            leading edge, the same marker the selected row uses, because this
            IS the alert case the accent is reserved for. */
-        .bdayrow { padding: 12px 18px; background: #F6F2E8; border: none;
+        .bdayrow { padding: 12px 18px; background: #F4F2EC; border: none;
                    border-top: 1px solid #C9C4B6;
                    border-bottom: 1px solid #C9C4B6; border-radius: 0;
                    box-shadow: inset 3px 0 0 %(accent)s; }
-        .bdayrow:hover { background: #EFE9DA; }
+        .bdayrow:hover { background: #EFEBE0; }
         .bdayname { font-size: 14px; color: %(ink)s; font-weight: 600; }
         .bdaynote { font-size: 12px; color: %(muted2)s; }
-        .fieldnote { font-size: 12.5px; color: %(muted2)s; }
+        .fieldnote { font-size: 12px; color: %(muted2)s; }
         .statusline { padding: 12px 16px; font-size: 12px; color: %(muted2)s;
                       border-top: 1px solid #C9C4B6; }
         .detailwrap { background: %(paper)s; }
@@ -1266,11 +1383,11 @@ class Contacts(nbapp.AppWindow):
         .bigname { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 40px; font-weight: 500; color: %(ink)s;
                    letter-spacing: -0.01em; }
-        .bigrole { font-size: 17px; color: #79736A; }
-        .editbtn { min-height: 40px; padding: 0 16px; border-radius: 2px;
-                   background: %(paper)s; border: 1px solid #C4BFB1;
+        .bigrole { font-size: 17px; color: #6E695E; }
+        .editbtn { min-height: 40px; padding: 0 16px; border-radius: 8px;
+                   background: %(paper)s; border: 1px solid #C9C4B6;
                    box-shadow: none; color: #3A362E; font-size: 14px; }
-        .editbtn:hover { background: #ECE8DD; }
+        .editbtn:hover { background: #F1EEE6; }
         .editbtn.editon { background: %(ink)s; color: %(paper)s;
                           border: 1px solid %(ink)s; font-weight: 600; }
         /* The theme's `* { color: ink }` matches a button's label node itself,
@@ -1279,48 +1396,48 @@ class Contacts(nbapp.AppWindow):
         .editbtn label { color: #3A362E; }
         .editbtn.editon label { color: %(paper)s; font-weight: 600; }
         .fieldgrid { border-top: 1px solid #C9C4B6; }
-        .fieldrow { padding: 18px 0; border-bottom: 1px solid #ECE7DA; }
+        .fieldrow { padding: 18px 0; border-bottom: 1px solid #EFEBE0; }
         .fieldlabel { font-size: 12px; letter-spacing: 0.1em; color: %(muted)s;
                       font-weight: 600; }
         .fieldval { font-size: 17px; color: %(ink)s; }
         .fieldempty { color: %(muted)s; }
         .notestext { font-family: "Newsreader","Liberation Serif",serif;
-                     font-size: 19px; color: #26241F; }
+                     font-size: 20px; color: #2A2620; }
         /* .notestext is declared after .fieldempty and would otherwise win,
            printing the "no notes" dash in ink while every other empty field
            shows a muted one. */
         .notestext.fieldempty { color: %(muted)s; }
         .newbtn { min-width: 30px; min-height: 30px; padding: 0 6px;
-                  border-radius: 2px; background: transparent;
+                  border-radius: 8px; background: transparent;
                   border: none; box-shadow: none; }
         .newbtn:hover { background: %(sel)s; }
         .fieldentry, .nameentry, .roleentry, .notesframe {
-                  background: %(paper)s; border: 1px solid #C4BFB1;
-                  border-radius: 2px; box-shadow: none; padding: 4px 8px;
+                  background: %(paper)s; border: 1px solid #C9C4B6;
+                  border-radius: 8px; box-shadow: none; padding: 4px 8px;
                   color: %(ink)s; }
         .fieldentry { font-size: 17px; }
         .nameentry { font-family: "Newsreader","Liberation Serif",serif;
                      font-size: 30px; font-weight: 500; color: %(ink)s; }
-        .roleentry { font-size: 16px; color: #79736A; }
+        .roleentry { font-size: 16px; color: #6E695E; }
         .notesedit { font-family: "Newsreader","Liberation Serif",serif;
-                     font-size: 18px; color: #26241F; background: %(paper)s; }
-        .notesedit text { background: %(paper)s; color: #26241F; }
+                     font-size: 17px; color: #2A2620; background: %(paper)s; }
+        .notesedit text { background: %(paper)s; color: #2A2620; }
         /* confirm dialog for destructive actions — papertone card, darker-beige
            border; signage-red ONLY on the destructive primary button */
-        .cdlg { background: %(paper)s; border: 1px solid #C4BFB1; }
+        .cdlg { background: %(paper)s; border: 1px solid #C9C4B6; }
         .cdlgbox { padding: 24px 28px 20px; }
         .cdlgbox * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .cdlgtitle { font-family: "Newsreader","Liberation Serif",serif;
                      font-size: 20px; color: %(ink)s; }
-        .cdlgmsg { font-size: 13px; color: #57534B; }
+        .cdlgmsg { font-size: 13px; color: #6E695E; }
         .cdlgcancel { font-size: 13px; color: #2A2620; padding: 6px 16px;
-                      background: %(paper)s; border: 1px solid #C4BFB1;
-                      border-radius: 2px; box-shadow: none; }
-        .cdlgcancel:hover { background: #ECE8DD; }
+                      background: %(paper)s; border: 1px solid #C9C4B6;
+                      border-radius: 8px; box-shadow: none; }
+        .cdlgcancel:hover { background: #F1EEE6; }
         .cdlgok { font-size: 13px; color: %(paper)s; padding: 6px 16px;
                   background: %(accent)s; border: 1px solid %(accent)s;
-                  border-radius: 2px; box-shadow: none; }
-        .cdlgok:hover { background: #A82C19; border-color: #A82C19; }
+                  border-radius: 8px; box-shadow: none; }
+        .cdlgok:hover { background: #B12D19; border-color: #B12D19; }
         .cdlgok label { color: %(paper)s; }
         .cdlgcancel label { color: #2A2620; }
         """ % dict(panel=PANEL, hair=HAIR, paper=PAPER, muted=MUTED,

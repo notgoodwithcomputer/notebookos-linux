@@ -19,6 +19,8 @@ Catalogs live at /opt/notebook/de/lang_<code>.json, mapping English -> target.
 """
 import os
 import json
+import tempfile
+import time
 
 CATALOG_DIR = os.path.dirname(os.path.abspath(__file__))
 SUPPORTED = ("en", "de", "el", "eo", "es", "fr", "hi", "it", "ja", "ko", "nl",
@@ -51,7 +53,11 @@ KEYBOARDS = (("us", "US (QWERTY)"), ("de", "Deutsch"), ("epo", "Esperanto"),
              # (no kanji), so forcing it on everyone would be wrong. A user who
              # wants to write Japanese can choose it; one who just wants the
              # interface in Japanese is unaffected.
-             ("jp(kana)", "日本語 (かな)"), ("kr", "한국어"),
+             # ...and it carries "us" as its second half for the same reason
+             # Russian and Greek do: kana maps the LETTER keys to kana, so a
+             # kana-only keyboard cannot type a password, a file name or a
+             # search term. It was the one code here that broke that rule.
+             ("jp(kana),us", "日本語 (かな)"), ("kr", "한국어"),
              ("nl", "Nederlands"), ("pl", "Polski"), ("pt", "Português"),
              ("ru,us", "Русский / English"), ("hr", "Srpskohrvatski"),
              ("tr", "Türkçe"), ("gr,us", "Ελληνικά / English"),
@@ -93,10 +99,108 @@ def current_lang():
         return "en"
 
 
-def _update_locale(**kv):
-    p = _config_path()
+def _fsync_dir(d):
+    """Durably record a rename: fsync on the file persists its contents, the
+    directory entry the rename created needs its own fsync. Same rule as
+    nbapp._fsync_dir, restated here because this module may not import nbapp."""
     try:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
+        fd = os.open(d, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def _lock_locale(p):
+    """Serialise one read-modify-write of locale.json against the others.
+
+    There is no settings service and no session bus on this machine, so this
+    file IS the synchronisation point between the processes that write it:
+    Settings (language, layout), login.py (the layout a sign-in succeeded on),
+    First Run and the installer. Without a lock, two overlapping updates each
+    read, then each write, and the later rename silently drops the earlier
+    key — Settings persisting a language could undo the layout the sign-in
+    screen had just recorded.
+
+    Best effort by design: a lock we cannot take must never stop somebody
+    changing their keyboard, so every failure falls through to the unlocked
+    write, which is still atomic. Returns an fd to close (closing releases the
+    flock), or None."""
+    try:
+        import fcntl                                           # noqa: PLC0415
+        fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    except (ImportError, OSError):
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return None
+    return fd
+
+
+def _preserve_damaged(p):
+    """Move a locale.json that will not parse aside, before it is replaced.
+
+    Those bytes are the only record of somebody's keyboard: a truncated or
+    hand-edited file parses as nothing, this function's caller then starts from
+    an empty dict, and the write that follows replaces "ru,us" with a one-key
+    file. Nothing on this machine ever re-asks — the interface simply comes back
+    in English on a layout the owner did not choose. Every other store gets this
+    protection from nbapp.preserve_damaged inside atomic_write_json; locale.json
+    cannot, because nbi18n has to keep working on a machine whose de/ tree is
+    damaged (login.py imports it before anything else) and so must not import
+    nbapp/Gtk. Same quarantine name, so one recovery convention holds OS-wide.
+
+    A healthy file needs no .bak twin here: an update MERGES into what it read,
+    so a key nothing touched is carried through rather than replaced."""
+    try:
+        if not os.path.isfile(p) or os.path.getsize(p) == 0:
+            return None
+        with open(p, "r", encoding="utf-8") as fh:
+            json.loads(fh.read())
+        return None                                   # parses: a normal save
+    except (OSError, ValueError, UnicodeDecodeError):
+        pass
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = "%s.damaged-%s" % (p, stamp)
+    n = 2
+    while os.path.exists(dest):
+        dest = "%s.damaged-%s-%d" % (p, stamp, n)
+        n += 1
+    try:
+        os.replace(p, dest)
+        return dest
+    except OSError:
+        return None
+
+
+def _update_locale(**kv):
+    """Merge `kv` into locale.json, crash-safely. True when it reached disk.
+
+    THE BUG THIS SHAPE EXISTS FOR: the temp file used to be the fixed name
+    "locale.json.tmp", shared by every writer. Two overlapping updates opened
+    the SAME temp file; the second truncated what the first had buffered, and
+    once the second renamed it into place the first's still-open descriptor was
+    pointing at the live locale.json and flushed its shorter payload straight
+    into it. The healthy config became a half-line of JSON — after which the
+    language, the keyboard and the sign-in layout all silently read as their
+    defaults. A unique temp per writer (plus the lock above) is what stops that;
+    fsync before the rename is what makes a power cut leave the old complete
+    file or the new one, matching nbapp.atomic_write_json. The .nbw- prefix is
+    deliberate: nbapp._reap_stale_tmp already tidies orphans of that name."""
+    p = _config_path()
+    d = os.path.dirname(p)
+    lock, tmp = None, None
+    try:
+        os.makedirs(d, exist_ok=True)
+        lock = _lock_locale(p)
+        _preserve_damaged(p)
         try:
             with open(p) as fh:
                 data = json.load(fh)
@@ -105,13 +209,28 @@ def _update_locale(**kv):
         except (OSError, ValueError):
             data = {}
         data.update(kv)
-        tmp = p + ".tmp"
-        with open(tmp, "w") as fh:
+        fd, tmp = tempfile.mkstemp(prefix=".nbw-", suffix=".tmp", dir=d)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, p)
+        tmp = None
+        _fsync_dir(d)
         return True
     except OSError:
         return False
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)          # a write that failed leaves no litter
+            except OSError:
+                pass
+        if lock is not None:
+            try:
+                os.close(lock)          # releases the flock
+            except OSError:
+                pass
 
 
 def set_lang(code):
@@ -121,13 +240,21 @@ def set_lang(code):
     return _update_locale(lang=code)
 
 
+# Codes this file used to offer, mapped to what they are called now. A layout
+# already written into somebody's locale.json goes on being read for the life
+# of that machine, so a code cannot simply be changed here: "jp(kana)" alone
+# leaves a machine unable to type ASCII, which is the thing the replacement
+# exists to fix, and the owner would never see it because nothing re-asks.
+_KB_ALIASES = {"jp(kana)": "jp(kana),us"}
+
+
 def keyboard():
     """Persisted X keyboard layout code, else the current language's default."""
     try:
         with open(_config_path()) as fh:
             kb = json.load(fh).get("keyboard")
         if kb:
-            return kb
+            return _KB_ALIASES.get(kb, kb)
     except (OSError, ValueError):
         pass
     return DEFAULT_KB.get(current_lang(), "us")
@@ -138,17 +265,51 @@ def set_keyboard(code):
     return _update_locale(keyboard=code)
 
 
+def login_keyboard():
+    """Which HALF of a dual layout the sign-in screen should start on.
+
+    A layout code ("us", "ru"), or "" for "whichever the saved layout puts
+    first". It exists because the password and the interface do not have to be
+    in the same alphabet: somebody who set this machine up in English and
+    switched it to Russian afterwards has a Latin password and a Cyrillic
+    group 1, and would otherwise have to press Alt+Shift before typing on
+    every single boot, with nothing to remind them. login.py writes it after a
+    sign-in actually succeeds, so it records what worked rather than a guess.
+    Only ever the SCRIPT — no part of the password is stored anywhere."""
+    try:
+        with open(_config_path()) as fh:
+            return json.load(fh).get("login_keyboard") or ""
+    except (OSError, ValueError):
+        return ""
+
+
+def set_login_keyboard(code):
+    """Remember the layout a sign-in succeeded on ("" to forget it)."""
+    return _update_locale(login_keyboard=code or "")
+
+
 def xkb_args(layout):
     """setxkbmap arguments for a layout string, as a list.
 
     A two-layout string ("ru,us") needs an explicit switch key or the second
     layout is unreachable — and for Russian or Hindi that second layout is the
     only way to type a file name or a password. Alt+Shift is the switch every
-    other desktop uses, so it is the one a user will already try."""
-    if "," in layout:
-        return ["setxkbmap", "-layout", layout,
-                "-option", "grp:alt_shift_toggle"]
-    return ["setxkbmap", layout]
+    other desktop uses, so it is the one a user will already try.
+
+    Delegated to nbkeyboard, which owns what one of these codes means: this
+    version handled a comma but not a parenthesised variant next to one, so
+    "jp(kana),us" — a code this file now ships — produced argv the server
+    could not load. The fallback below is the old body, kept because this
+    module has to keep working on a machine whose de/ tree is damaged (the
+    sign-in screen imports it before anything else)."""
+    try:
+        import nbkeyboard                                      # noqa: PLC0415
+        return nbkeyboard.xkb_args(layout)
+    except Exception:                                          # noqa: BLE001
+        if "," in layout:
+            return ["setxkbmap", "-layout", layout,
+                    "-option", "grp:alt_shift_toggle"]
+        return ["setxkbmap", layout]
 
 
 # Monotonic Greek DROPS the tonos when a word is set in capitals — ΥΛΙΚΆ is an
@@ -708,14 +869,37 @@ def _install_auto_translate():
                 o_label_set_label(w, new)
         _stamp(w, new if new else s)
 
+    def _stamp_button_child(w):
+        """Carry a button's stamp onto the Label INSIDE it.
+
+        A Gtk.Button is a Gtk.Container, and the walk below descends into the
+        label it holds. So stamping the button protected nothing: the walk
+        skipped the button and then translated its own child on the very next
+        step. set_verbatim(button, text) — the call that exists to keep the
+        catalog off text that must not change — did not work on a button at
+        all. It was measured on the sign-in screen's keyboard switch, where
+        the button naming the layout that types Latin letters came out reading
+        "Английский (США)" while the sentence pointing at that button, which
+        substitutes the name AFTER translation, went on saying "English (US)":
+        a message naming a button that was not on screen, on the one screen
+        that can strand somebody."""
+        try:
+            ch = w.get_child()
+            if isinstance(ch, Gtk.Label):
+                _stamp(ch, ch.get_label())
+        except Exception:
+            pass
+
     def fix_button(w):
         s = w.get_label()
         if not s or _stamped(w, s):
+            _stamp_button_child(w)
             return
         new = _lookup(s)
         if new is not None:
             o_button_set_label(w, new)
         _stamp(w, new if new else s)
+        _stamp_button_child(w)
 
     def walk(w, depth=0):
         if depth > 60:

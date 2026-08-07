@@ -388,9 +388,12 @@ class Calculator(nbapp.AppWindow):
         # card's own paper so nothing shows through on the no-compositor stack.
         self._histbox = Gtk.EventBox()
         self._histbox.get_style_context().add_class("hist-box")
+        self._histbox.set_can_focus(True)
+        self._histbox.set_tooltip_text(_t("Recall last calculation"))
         self._histbox.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self._histbox.connect("button-press-event",
                               lambda *_: (self.recall(-1), True)[1])
+        self._histbox.connect("key-press-event", self._on_history_key)
         self._histbox.add(self.hist_lbl)
         box.pack_start(self._histbox, False, False, 0)
 
@@ -401,6 +404,12 @@ class Calculator(nbapp.AppWindow):
         self.disp_lbl.get_style_context().add_class("disp-main")
         box.pack_start(self.disp_lbl, False, False, 0)
         return box
+
+    def _on_history_key(self, _box, event):
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            self.recall(-1)
+            return True
+        return False
 
     # ---- keypad ----
     def _keypad(self):
@@ -423,8 +432,7 @@ class Calculator(nbapp.AppWindow):
             if action == "back":
                 # ⌫ has no glyph in Nimbus Sans/Liberation — draw the pictographic
                 # backspace icon natively (MTA monoline) instead of a label.
-                child = Gtk.Image.new_from_pixbuf(
-                    nbicons.pixbuf("backspace", 22, "#1A1916"))
+                child = nbicons.image("backspace", 22, "#1A1916")
             else:
                 child = Gtk.Label()
                 markup = SUP_MARKUP.get(value)
@@ -894,8 +902,17 @@ class Calculator(nbapp.AppWindow):
         table = {
             "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
             "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
-            "period": ".", "KP_Decimal": ".", "parenleft": "(",
-            "parenright": ")",
+            "period": ".", "KP_Decimal": ".",
+            # A comma is a decimal point on most of the keyboards this OS
+            # ships a layout for — French, German, Spanish, Italian, Russian,
+            # Polish, Portuguese, Turkish. Without these two the decimal key
+            # on the main row was DEAD, and on a laptop with no numpad that is
+            # the only decimal key there is: typing "3,5" produced 35.
+            # It inserts "." because that is what the display shows and what
+            # the parser reads; the point is that the key does something and
+            # what it does is visible, not that the separator is localised.
+            "comma": ".", "KP_Separator": ".",
+            "parenleft": "(", "parenright": ")",
             "plus": "+", "KP_Add": "+",
             "minus": "−", "KP_Subtract": "−",
             "asterisk": "×", "KP_Multiply": "×",
@@ -948,13 +965,14 @@ class Calculator(nbapp.AppWindow):
 
         .display { padding: 30px 28px 26px; border-bottom: 1px solid #1A1916; }
         .disp-kicker { font-size: 11px; letter-spacing: 0.16em;
-                       color: #A39D8F; font-weight: 600; }
+                       color: #9A9484; font-weight: 600; }
         .disp-mode { font-size: 12px; letter-spacing: 0.08em; color: #8A857A;
                      font-weight: 600; }
         /* the history line's click target paints the card's own paper: never
            leave a bare EventBox transparent on the no-compositor stack */
         .hist-box { background: #F8F7F2; }
-        .disp-hist { font-size: 15px; color: #9A958A; margin-top: 14px;
+        .hist-box:focus { outline: 2px solid #1A1916; outline-offset: -2px; }
+        .disp-hist { font-size: 15px; color: #9A9484; margin-top: 14px;
                      min-height: 20px; }
         /* min-height holds the display box at its full-size height, so the
            shorter error sentence does not shrink the card and shift the
@@ -966,31 +984,31 @@ class Calculator(nbapp.AppWindow):
            not the word "Error", so it is set at a size that fits the display
            instead of ellipsizing to "...o that" at 52px. The card is centred in
            the window, so the shorter line just re-centres. */
-        .disp-main.err { color: #C8341E; font-size: 21px; font-weight: 600; }
+        .disp-main.err { color: #C8341E; font-size: 20px; font-weight: 600; }
 
         .keypad { background: #D7D2C5; }
         .key { border: none; border-radius: 0; box-shadow: none;
                min-height: 66px; padding: 0; }
         .key label { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .k-num        { background: #F8F7F2; color: #1A1916; }
-        .k-num label  { font-size: 23px; font-weight: 500; }
+        .k-num label  { font-size: 24px; font-weight: 500; }
         .k-num:hover  { background: #EFEBE0; }
-        .k-op         { background: #E6DFCE; color: #1A1916; }
+        .k-op         { background: #EAE3D2; color: #1A1916; }
         .k-op label   { font-size: 24px; }
         /* #D7D2C5 is the shared light-hairline tone (OS-wide): the canonical
            darken of the operator key on hover, replacing a one-off swatch. */
         .k-op:hover   { background: #D7D2C5; }
         .k-eq         { background: #C8341E; color: #FCFBF8; }
-        .k-eq label   { font-size: 25px; font-weight: 600; }
+        .k-eq label   { font-size: 24px; font-weight: 600; }
         /* #B12D19 is the canonical hover darkening of the brand red #C8341E,
            shared OS-wide so every red button darkens to the same shade. */
         .k-eq:hover   { background: #B12D19; }
-        .k-clear      { background: #ECE8DD; color: #1A1916; }
+        .k-clear      { background: #EFEBE0; color: #1A1916; }
         .k-clear label{ font-size: 17px; font-weight: 600; }
-        .k-clear:hover{ background: #E3DCCB; }
+        .k-clear:hover{ background: #DED4C2; }
         .k-fn         { background: #EFEBE0; color: #3A362E; }
         .k-fn label   { font-size: 16px; }
-        .k-fn:hover   { background: #E3DCCB; }
+        .k-fn:hover   { background: #DED4C2; }
         /* signage-red marks the active/selected state (2nd toggled on). */
         .key.active         { background: #C8341E; color: #FCFBF8; }
         .key.active:hover   { background: #B12D19; }

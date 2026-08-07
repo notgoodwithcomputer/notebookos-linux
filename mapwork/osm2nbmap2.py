@@ -23,6 +23,7 @@ are never decoded, so total size is decoupled from memory/render cost.
                    where coords are cell-relative quantized ints, delta-coded.
 """
 import sys
+import os
 import struct
 import math
 
@@ -38,6 +39,10 @@ MAJOR = {"motorway", "trunk", "primary", "secondary", "motorway_link",
          "tertiary_link"}
 MINOR = {"residential", "unclassified", "living_street", "service", "road"}
 PATHS = {"footway", "path", "pedestrian", "steps", "cycleway", "track"}
+# NB_SKIP_PATHS=1 drops the whole path category at classify time — both the
+# node-marking pass and the geometry pass inherit it, so the store shrinks too.
+# The continent cut ships without footpaths so pack+ISO fit a 4 GB stick.
+SKIP_PATHS = bool(os.environ.get("NB_SKIP_PATHS"))
 GREEN = {"grass", "forest", "meadow", "recreation_ground", "village_green",
          "cemetery", "orchard", "farmland", "farmyard", "park", "garden",
          "nature_reserve", "wood", "scrub", "heath"}
@@ -55,7 +60,7 @@ def classify(t):
         if hw in MINOR:
             return "road_minor", False
         if hw in PATHS:
-            return "path", False
+            return None if SKIP_PATHS else ("path", False)
         return "road_minor", False
     nat = t.get(b"natural", b"").decode()
     if nat == "water":

@@ -34,7 +34,7 @@ os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="illustrator-selftest-")
 import gi                                                     # noqa: E402
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk                                 # noqa: E402
+from gi.repository import Gdk, Gtk                                 # noqa: E402
 import cairo                                                  # noqa: E402
 import illustrator                                            # noqa: E402
 
@@ -562,6 +562,71 @@ def big_doc(layers=4):
     return a
 
 
+# ---- Canvas Size honours the size it is given -------------------------------
+# It used to clamp at 1024 while the module docstring promised 2048, so asking
+# for anything larger produced a different canvas with nothing on screen to say
+# why — indistinguishable from resizing being broken.
+_rs = illustrator.Illustrator()
+import re as _re
+_doc = _re.search(r"any size up to (\d+)", illustrator.__doc__ or "")
+check("the documented maximum is the one actually enforced",
+      _doc and int(_doc.group(1)) == illustrator.MAX_DIM,
+      "docstring says %s, MAX_DIM is %d"
+      % (_doc.group(1) if _doc else "?", illustrator.MAX_DIM))
+for _w in (16, 256, illustrator.MAX_DIM):
+    _rs._resize_canvas(_w, _w)
+    check("a canvas of %d is granted" % _w, (_rs.cw, _rs.ch) == (_w, _w),
+          "%dx%d" % (_rs.cw, _rs.ch))
+    check("...and its layers really are that size" ,
+          _rs.layers[0].surface.get_width() == _w)
+_rs._resize_canvas(64, 64)
+_rs._resize_canvas(illustrator.MAX_DIM + 500, 64)
+check("a size past the maximum is refused, not silently accepted",
+      _rs.cw <= illustrator.MAX_DIM)
+
+# ...and now through the REAL DIALOG, which is where it was actually broken.
+# Calling _resize_canvas directly passed all along while Canvas Size did
+# nothing at all: the prompt's buttons dismiss the card BEFORE running their
+# callback, destroying the entries inside it, so reading them back gave "" and
+# the size fell through to the one the document already had.
+def _dialog_resize(app, w, h):
+    app._canvas_size_prompt()
+    layer = app._saveprompt_layer
+
+    def walk(widget, out):
+        out.append(widget)
+        if isinstance(widget, Gtk.Container):
+            for c in widget.get_children():
+                walk(c, out)
+        return out
+
+    nodes = walk(layer, [])
+    entries = [n for n in nodes if isinstance(n, Gtk.Entry)]
+    for e, t in zip(entries, (str(w), str(h))):
+        e.set_text(t)
+    btn = [n for n in nodes if isinstance(n, Gtk.Button)
+           and n.get_label() and "esize" in n.get_label()]
+    btn[0].clicked()
+    while Gtk.events_pending():
+        Gtk.main_iteration()
+    return (app.cw, app.ch)
+
+_dlg = illustrator.Illustrator()
+_dlg._flash_save = lambda _t: None
+check("Canvas Size resizes through the dialog a person actually uses",
+      _dialog_resize(_dlg, 256, 256) == (256, 256),
+      "%dx%d" % (_dlg.cw, _dlg.ch))
+check("...including a non-square size", _dialog_resize(_dlg, 100, 180)
+      == (100, 180), "%dx%d" % (_dlg.cw, _dlg.ch))
+check("...and the largest allowed one",
+      _dialog_resize(_dlg, illustrator.MAX_DIM, illustrator.MAX_DIM)
+      == (illustrator.MAX_DIM, illustrator.MAX_DIM))
+_was = (_dlg.cw, _dlg.ch)
+check("...while a value out of range leaves the canvas alone",
+      _dialog_resize(_dlg, 9000, 9000) == _was)
+check("...and so does text that is not a number",
+      _dialog_resize(_dlg, "big", "big") == _was)
+
 # Vertical flips: same memory behaviour, and a whole-row copy rather than a
 # per-pixel rebuild, so a full-size canvas stays quick enough to test.
 big = big_doc()
@@ -574,8 +639,28 @@ check("the history never holds more than its byte ceiling",
       held <= illustrator.HISTORY_BYTES,
       "%.0f MB held, ceiling %.0f MB"
       % (held / 1048576.0, illustrator.HISTORY_BYTES / 1048576.0))
-check("...and it did keep several steps, not just the one",
-      len(big._undo_stack) >= 4, len(big._undo_stack))
+# How many whole-canvas frames the ceiling can hold is arithmetic, not a
+# constant: a structural frame is every layer's surface, so it scales with the
+# square of the canvas. At MAX_DIM=2048 with 4 layers one frame is 64MB and
+# only a single step fits under a 96MB ceiling; at 1024 it is 16MB and six do.
+# Assert the relationship, so raising MAX_DIM cannot silently make this pass
+# for the wrong reason — and never fewer than one, or Undo would be dead.
+_frame = big.cw * big.ch * 4 * len(big.layers)
+_fits = max(1, illustrator.HISTORY_BYTES // _frame)
+check("...and it kept as many steps as the ceiling allows",
+      len(big._undo_stack) >= min(4, _fits),
+      "kept %d, ceiling allows %d" % (len(big._undo_stack), _fits))
+check("...and at the largest canvas at least one step always survives",
+      len(big._undo_stack) >= 1, len(big._undo_stack))
+
+# The everyday case: painting stores only the rectangle a stroke touched, so a
+# big canvas keeps a deep history however large it is. This is what the ceiling
+# is actually protecting, and it must not regress when MAX_DIM moves.
+_paint = big_doc()
+for i in range(12):
+    stroke(_paint, [(5 + i, 5)])
+check("painting on a full-size canvas still keeps a deep history",
+      len(_paint._undo_stack) >= 10, len(_paint._undo_stack))
 # 20 vertical flips is even, so the mark is back at the top
 check("the mark is where the flips left it", one_px(big, 3, 3) == INK)
 big._undo()
@@ -645,8 +730,129 @@ check("an oversized PNG is clamped to the canvas maximum",
       c.cw <= illustrator.MAX_DIM and c.ch <= illustrator.MAX_DIM,
       (c.cw, c.ch))
 
-# ============================================================ 10. text rule
-print("--- 10. wording -----------------------------------------------")
+# ================================================= 10. the drawing interface
+# The controls a person actually reaches for. Everything below was reachable
+# only by hover, by menu, or not at all before the interface pass: the tools
+# were eight unlabelled 26px icons (three of which are the same diagonal
+# implement at that size), the shape fill lived in a menu item that named the
+# state it would move TO, and the brush footprint was invisible until a click
+# had already landed.
+print("--- 10. the drawing interface ---------------------------------")
+
+check("every tool is named, not only drawn",
+      all(name and name != tid for tid, name in illustrator.TOOLS),
+      illustrator.TOOLS)
+check("...and no two tools share a name",
+      len({n for _t, n in illustrator.TOOLS}) == len(illustrator.TOOLS))
+check("every tool says what a drag with it does",
+      all(tid in illustrator.TOOL_HINTS for tid, _n in illustrator.TOOLS),
+      sorted(set(dict(illustrator.TOOLS)) - set(illustrator.TOOL_HINTS)))
+check("every tool has a single-key shortcut",
+      all(tid in illustrator.TOOL_KEYS for tid, _n in illustrator.TOOLS))
+# Shift constrains lines to 45 degrees and boxes to squares/circles. Nothing
+# else in the app mentions it, so if the hints stop naming it the behaviour
+# becomes undiscoverable again.
+check("the three Shift constraints are named in the hints",
+      all("Shift" in illustrator.TOOL_HINTS[t]
+          for t in ("line", "rect", "ellipse")))
+
+# The settings that dim: each set must be exactly the tools the engine really
+# consults, or a live-looking control does nothing (or a dimmed one lies).
+check("brush size dims for exactly the tools that use a brush",
+      illustrator.SIZE_TOOLS == {"pencil", "brush", "eraser",
+                                 "line", "rect", "ellipse"})
+check("shape fill dims for exactly the shape tools",
+      illustrator.SHAPE_TOOLS == {"line", "rect", "ellipse"})
+a = app()
+for tid in dict(illustrator.TOOLS):
+    a.tool = tid
+    pts, spans = a._shape_ops("rect", (2, 2), (6, 6)) if tid in \
+        illustrator.SHAPE_TOOLS else ([], [])
+check("the fill tool really ignores the brush",
+      "fill" not in illustrator.SIZE_TOOLS
+      and "picker" not in illustrator.SIZE_TOOLS)
+
+a = app(tool="rect")
+a._set_fill_shapes(True)
+check("Filled is a visible choice, and it takes",
+      a.fill_shapes and "sel" in a.filled_btn.get_style_context().list_classes()
+      and "sel" not in a.outline_btn.get_style_context().list_classes())
+a._set_fill_shapes(False)
+check("...and Outline is the other half of the same pair",
+      not a.fill_shapes
+      and "sel" in a.outline_btn.get_style_context().list_classes())
+
+# The colour well used to arm the eyedropper, so clicking the swatch stopped
+# the pencil drawing and the next canvas click took a colour instead.
+a = app(tool="brush")
+a._on_chip_press(None, None)
+check("clicking the colour well does not change the tool",
+      a.tool == "brush", a.tool)
+check("...it opens the mixer", a._saveprompt_layer is not None)
+a._close_saveprompt()
+
+# Sampling is a detour and hands the tool back to whatever was drawing.
+a = app(w=8, h=8, tool="brush", size=9, colour="#C71818")
+a._pick_tool(None, "picker")
+a._pick_from_canvas((1, 1))
+check("the eyedropper returns to the tool it interrupted",
+      a.tool == "brush", a.tool)
+check("...and it took the colour under the pointer",
+      a.color.upper() == "#FFFFFF", a.color)
+
+# The footprint outline under the pointer. This is drawn from the SAME runs
+# the stamp writes, so it can never promise pixels the brush will not paint.
+for shape in ("square", "round"):
+    for n in (1, 2, 3, 4, 7, 12, 16, 31, 64):
+        runs = illustrator.brush_runs(n, shape)
+        poly = illustrator.Illustrator._brush_outline(runs)
+        ok = bool(poly)
+        # Every segment of a footprint boundary is axis-aligned: a diagonal
+        # means the walk crossed the shape. The first version reversed the
+        # finished point list rather than the ROWS, and one whole side came
+        # back as a zigzag through the middle of the disc.
+        for (x0, y0), (x1, y1) in zip(poly, poly[1:] + poly[:1]):
+            if x0 != x1 and y0 != y1:
+                ok = False
+                break
+        check("the %s %d px brush outline is a clean boundary" % (shape, n), ok)
+        # ...and it encloses exactly the painted pixels: leftmost/rightmost
+        # and top/bottom of the polygon match the runs' own extent.
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
+        want = (min(r[1] for r in runs), max(r[2] for r in runs) + 1,
+                min(r[0] for r in runs), max(r[0] for r in runs) + 1)
+        check("...and it bounds exactly the %s %d px footprint" % (shape, n),
+              (min(xs), max(xs), min(ys), max(ys)) == want,
+              ((min(xs), max(xs), min(ys), max(ys)), want))
+check("a footprint with a gap in it is refused rather than drawn wrong",
+      illustrator.Illustrator._brush_outline(((0, 0, 0), (2, 0, 0))) == ())
+
+# The size ramp is a shortcut to sizes the steppers can also reach.
+check("every ramp size is a legal brush size",
+      all(illustrator.SIZE_MIN <= n <= illustrator.SIZE_MAX
+          for n in illustrator.SIZE_RAMP))
+a = app()
+a._set_size(illustrator.SIZE_RAMP[-1])
+check("the ramp sets the brush size", a.size == illustrator.SIZE_RAMP[-1])
+a._set_size(illustrator.SIZE_MAX + 500)
+check("...and cannot push it past the maximum", a.size == illustrator.SIZE_MAX)
+
+# The window has to fit the smallest panel this OS supports, in every language
+# — the dock is the tallest column, and CJK line metrics made it 763px before
+# it was allowed to scroll.
+a = app()
+a.show_all()
+while Gtk.events_pending():
+    Gtk.main_iteration()
+_min_h = a.get_preferred_height_for_width(1024)[0]
+check("the window fits a 1024x740 panel", _min_h <= 740, _min_h)
+check("the dock scrolls rather than clipping",
+      a.dock_scroll.get_policy()[1] == Gtk.PolicyType.AUTOMATIC
+      and a.dock_scroll.get_policy()[0] == Gtk.PolicyType.NEVER)
+
+# ============================================================ 11. text rule
+print("--- 11. wording -----------------------------------------------")
 
 for word in ("offline", "internet", "don't worry", "beautiful", "simply",
              "just ", "enjoy", "!"):

@@ -93,6 +93,12 @@ class Journal(nbapp.AppWindow):
         self._loading = False
         # Guards the smart-quote re-insert against re-entering its own handler.
         self._smart_busy = False
+        # Set BEFORE any timer is armed or any widget is built: every deferred
+        # sink below reads it, and _on_destroy can fire the moment the window
+        # exists. A GLib timeout already dispatched when source_remove() runs
+        # still executes, so cancelling the source is not enough on its own --
+        # the sinks have to be able to see that their owner is gone.
+        self._closed = False
         self._save_timer = None
         # coalesces the live word recount off the keystroke hot path (see
         # _on_change / _recount_tick); None when no recount is pending
@@ -262,7 +268,17 @@ class Journal(nbapp.AppWindow):
             self.body.grab_focus()
 
     def _on_destroy(self, *_):
-        """Flush the in-progress buffer to disk when the window closes."""
+        """Flush the in-progress buffer to disk when the window closes.
+
+        Idempotent, and closes the gate FIRST: "destroy" can arrive more than
+        once, and a timeout that was already dispatched before its
+        source_remove() will still run its sink. Setting _closed before
+        anything else means those in-flight sinks find a closed owner and do
+        nothing, so the final flush below is the last write -- no rebuilt rows,
+        no second persist, no "Saved" chip painted after the app is gone."""
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
         self.undo.cancel()
         for attr in ("_save_timer", "_count_timer", "_filter_timer"):
             tid = getattr(self, attr, None)
@@ -300,7 +316,7 @@ class Journal(nbapp.AppWindow):
         plus.set_relief(Gtk.ReliefStyle.NONE)
         plus.get_style_context().add_class("newbtn")
         plus.set_tooltip_text(_t("New Entry"))
-        plus.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf("plus", 17, "#2A2620")))
+        plus.add(nbicons.image("plus", 17, "#2A2620"))
         plus.connect("clicked", lambda *_: self.new_entry())
         toprow.pack_end(plus, False, False, 0)
         head.pack_start(toprow, False, False, 0)
@@ -422,12 +438,16 @@ class Journal(nbapp.AppWindow):
     def _on_search(self, _entry):
         """Filter the entries list as the search text is typed. Debounced: on a
         long journal rebuilding every row per keystroke is visible work."""
+        if getattr(self, "_closed", False):
+            return
         if self._filter_timer:
             GLib.source_remove(self._filter_timer)
         self._filter_timer = GLib.timeout_add(120, self._filter_tick)
 
     def _filter_tick(self):
         self._filter_timer = None
+        if getattr(self, "_closed", False):
+            return False
         # Read the field HERE rather than in the signal handler, so the filter
         # is whatever is actually in the box at the moment it is applied.
         self._query = self.search.get_text().strip()
@@ -462,13 +482,18 @@ class Journal(nbapp.AppWindow):
         return True
 
     def _entry_row(self, i, en):
-        ev = Gtk.EventBox()
-        # The hover tint has to live on the EventBox: only the widget the
-        # pointer is actually over gets GTK's PRELIGHT flag, and GTK3 does not
-        # propagate it to children, so the .entryrow:hover rule on the inner box
-        # never fired and the entries list had no hover feedback at all. The box
-        # sits flush inside the EventBox, so the tint lands in the same place;
-        # the selected row paints its own fill on top of it.
+        # A Button, not an EventBox: an EventBox is not focusable and answers to
+        # nothing but the pointer, so the entries list — the only way to reach a
+        # past entry — could not be operated from the keyboard at all. A button
+        # is in the Tab ring, activates on Space/Enter, and reports itself to
+        # assistive tech as the control it is. It also still carries the hover
+        # tint the EventBox was introduced for: only the widget the pointer is
+        # actually over gets GTK's PRELIGHT flag, and GTK3 does not propagate it
+        # to children, so a :hover rule on the inner box never fires. The box
+        # sits flush inside the button, so the tint lands in the same place; the
+        # selected row paints its own fill on top of it.
+        ev = Gtk.Button()
+        ev.set_relief(Gtk.ReliefStyle.NONE)
         ev.get_style_context().add_class("entryrowhit")
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         ctx = row.get_style_context()
@@ -509,7 +534,10 @@ class Journal(nbapp.AppWindow):
             self._active_title_lbl = t
             self._active_preview_lbl = p
 
-        ev.connect("button-press-event", lambda *_: self.select_entry(i))
+        # "clicked" covers the pointer AND Space/Enter in one signal, so the
+        # keyboard path cannot drift away from the mouse path. `i` is bound per
+        # call, so each row opens its own entry.
+        ev.connect("clicked", lambda *_: self.select_entry(i))
         return ev
 
     # ---------------- editor ----------------
@@ -652,7 +680,7 @@ class Journal(nbapp.AppWindow):
         buf.create_tag("bold", weight=Pango.Weight.BOLD)
         buf.create_tag("italic", style=Pango.Style.ITALIC)
         buf.create_tag("quote", left_margin=24, style=Pango.Style.ITALIC,
-                       foreground="#57534B")
+                       foreground="#6E695E")
         buf.connect("changed", self._on_change)
         buf.connect("insert-text", self._on_insert_before)
         page.pack_start(self.body, True, True, 0)
@@ -686,7 +714,7 @@ class Journal(nbapp.AppWindow):
         b = Gtk.Button()
         b.set_relief(Gtk.ReliefStyle.NONE)
         b.get_style_context().add_class("fmtbtn")
-        b.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(name, 19, "#2A2620")))
+        b.add(nbicons.image(name, 19, "#2A2620"))
         b.connect("clicked", lambda *_: cb())
         return b
 
@@ -889,7 +917,7 @@ class Journal(nbapp.AppWindow):
             self._smart_busy = False
 
     def _on_change(self, buf):
-        if self._loading:
+        if self._loading or getattr(self, "_closed", False):
             return
         # Keep the word recount OFF the keystroke hot path: recomputing the
         # whole-buffer count synchronously per keypress makes each keystroke
@@ -911,11 +939,17 @@ class Journal(nbapp.AppWindow):
     def _recount_tick(self):
         """Debounce sink for the live word count; reads the current buffer."""
         self._count_timer = None
+        if getattr(self, "_closed", False):
+            return False
         self._recount()
         return False
 
     def _did_save(self):
         self._save_timer = None
+        # An autosave dispatched just before close must not write again after
+        # _on_destroy's final flush, nor repaint "Saved" over a closed window.
+        if getattr(self, "_closed", False):
+            return False
         self._save_current()
         # only report "Saved" once the bytes are actually on disk. If the entry
         # was deleted while this autosave was pending (empty state now), keep the
@@ -1063,6 +1097,23 @@ class Journal(nbapp.AppWindow):
             self._flash("No entries to export")
             return
         name = self._pdf_name()
+        # The name is journal-<today>.pdf, so a second export on the same day
+        # lands on the first one. It used to destroy it without a word. Ask, using the same three strings as
+        # Novel's Save As -- one wording for "you are about to overwrite",
+        # already carried by all seventeen catalogs.
+        if os.path.exists(os.path.join(DOCS_DIR, name)):
+            self._confirm(
+                _t("Replace file?"),
+                _t("“%s” already exists in Documents. Replace it?")
+                % name,
+                _t("Replace"), lambda: self._write_export_pdf(name))
+            return
+        self._write_export_pdf(name)
+
+    def _write_export_pdf(self, name):
+        """Render the journal to Documents/`name`. Split from _export_pdf so the
+        replace-an-existing-file question can be answered before anything is
+        written."""
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
             # _make_pdf flushes the live buffer + formatting into the active
@@ -1143,7 +1194,7 @@ class Journal(nbapp.AppWindow):
                       "#1A1916", gap_after=2)
             meta = self._meta_display(en.get("meta", ""))
             if meta:
-                page.emit(meta, 10, False, "#9A958A", gap_after=6)
+                page.emit(meta, 10, False, "#9A9484", gap_after=6)
             body = en.get("text", "")
             # first line is the entry title (see _derive); render the remainder
             # as the body so the title is not repeated. Empty body -> nothing.
@@ -1154,7 +1205,7 @@ class Journal(nbapp.AppWindow):
             lo = 0
             for raw in rest.split("\n"):
                 spans, quoted = self._line_spans(tags, base, lo, len(raw))
-                page.emit(raw, 11, False, "#26241F", italic=quoted,
+                page.emit(raw, 11, False, "#2A2620", italic=quoted,
                           indent=24.0 if quoted else 0.0, spans=spans)
                 lo += len(raw) + 1
 
@@ -1408,67 +1459,78 @@ class Journal(nbapp.AppWindow):
         .side { background: #F1EEE6; border-right: 1px solid #D7D2C5; }
         .sidehead { padding: 24px 26px 20px; border-bottom: 1px solid #D7D2C5; }
         .side * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .kicker { font-size: 11px; letter-spacing: 0.16em; color: #A39D8F;
+        .kicker { font-size: 11px; letter-spacing: 0.16em; color: #9A9484;
                   font-weight: 700; margin-bottom: 8px; }
         .yearlabel { font-family: "Newsreader","Liberation Serif",serif;
                      font-size: 24px; color: #1A1916; }
         .newbtn { min-width: 34px; min-height: 34px; padding: 0;
-                  background: #FCFBF8; border: 1px solid #C4BFB1;
-                  border-radius: 2px; box-shadow: none; }
-        .newbtn:hover { background: #ECE8DD; }
+                  background: #FCFBF8; border: 1px solid #C9C4B6;
+                  border-radius: 8px; box-shadow: none; }
+        .newbtn:hover { background: #EFEBE0; }
         /* The Viewport that GTK inserts inside a ScrolledWindow paints its own
            background OVER .side, so the entries list came out paper-white
            below the sidebar's beige header. Name the viewport node itself, as
            .canvaswrap already does for the writing canvas. */
         .sidescroll, .sidescroll viewport { background: #F1EEE6; }
         .jsearch { margin-top: 16px; font-size: 13px; color: #1A1916;
-                   background: #FCFBF8; border: 1px solid #C4BFB1;
-                   border-radius: 2px; box-shadow: none; min-height: 30px; }
+                   background: #FCFBF8; border: 1px solid #C9C4B6;
+                   border-radius: 8px; box-shadow: none; min-height: 30px; }
         .jsearch:focus { border: 1px solid #8A857A; }
-        .searchcount { font-size: 11px; letter-spacing: 0.1em; color: #A39D8F;
+        .searchcount { font-size: 11px; letter-spacing: 0.1em; color: #9A9484;
                        font-weight: 700; padding: 0 10px; margin: 4px 0 8px; }
         .listbox { padding: 16px 14px; }
-        .sideempty { padding: 30px 12px; font-size: 13px; color: #A39D8F; }
-        .sideemptyhead { font-size: 13px; color: #6B655B; font-weight: 700; }
+        .sideempty { padding: 30px 12px; font-size: 13px; color: #9A9484; }
+        .sideemptyhead { font-size: 13px; color: #6E695E; font-weight: 700; }
         /* the way out of a search that matched nothing: quiet, but a real
            control, so the pane is never a dead end */
         .sideemptybtn { min-height: 30px; padding: 0 10px; font-size: 13px;
-                        color: #6B655B; background: #EFEBE0;
-                        border: 1px solid #D7D2C5; border-radius: 2px;
+                        color: #6E695E; background: #EFEBE0;
+                        border: 1px solid #D7D2C5; border-radius: 8px;
                         box-shadow: none; }
-        .sideemptybtn:hover { background: #E6E1D3; }
-        .monthlabel { font-size: 11px; letter-spacing: 0.14em; color: #A39D8F;
+        .sideemptybtn:hover { background: #EAE3D2; }
+        .monthlabel { font-size: 11px; letter-spacing: 0.14em; color: #9A9484;
                       font-weight: 700; padding: 0 10px; margin: 14px 0 9px; }
-        .entryrow { padding: 12px 10px; border-radius: 2px; margin-bottom: 2px;
+        .entryrow { padding: 12px 10px; border-radius: 6px; margin-bottom: 2px;
                     border-left: 3px solid transparent; }
-        .entryrowhit:hover { background: #E6DFCE; border-radius: 2px; }
+        /* The row hit area is a Gtk.Button now, so it arrives wearing the
+           theme's button chrome: a paper fill, a hairline border, a 8px radius
+           and 5px 14px of padding that would inset every row and double up on
+           .entryrow's own padding. Strip it back to a bare hit area and let the
+           inner row keep owning the layout. No `outline: none` here: the focus
+           ring is what makes the keyboard path visible, and it is the whole
+           reason these are buttons. */
+        .entryrowhit { padding: 0; margin: 0; border: none;
+                       background: transparent; background-image: none;
+                       box-shadow: none; min-height: 0; min-width: 0;
+                       border-radius: 6px; }
+        .entryrowhit:hover { background: #EAE3D2; border-radius: 6px; }
         .entryrow.active { background: #EAE3D2; border-left: 3px solid #C8341E; }
         .datebox { background: transparent; margin-top: 1px; }
-        .dbday { font-size: 21px; font-weight: 400; color: #6E695E; }
+        .dbday { font-size: 20px; font-weight: 400; color: #6E695E; }
         .datebox.active .dbday { color: #C8341E; }
-        .dbwd { font-size: 9px; letter-spacing: 0.09em; color: #A39D8F;
+        .dbwd { font-size: 10px; letter-spacing: 0.09em; color: #9A9484;
                 font-weight: 700; margin-top: 1px; }
-        .datebox.active .dbwd { color: #B5AF9F; }
+        .datebox.active .dbwd { color: #B3AD9E; }
         .entrytitle { font-family: "Newsreader","Liberation Serif",serif;
                       font-size: 16px; color: #1A1916; }
-        .entrypreview { font-size: 12px; color: #9A958A; margin-top: 3px; }
+        .entrypreview { font-size: 12px; color: #9A9484; margin-top: 3px; }
 
-        .formatbar { background: #FCFBF8; border-bottom: 1px solid #E6E1D4;
+        .formatbar { background: #FCFBF8; border-bottom: 1px solid #D7D2C5;
                      padding: 10px 36px; min-height: 54px; }
         .formatbar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .fmtbtn { min-width: 34px; min-height: 34px; padding: 0;
-                  background: transparent; border: none; border-radius: 2px;
+                  background: transparent; border: none; border-radius: 8px;
                   box-shadow: none; color: #2A2620; font-size: 17px; }
         .fmtbtn:hover { background: #EFEBE0; }
         /* With no entry open these are insensitive, but B and I still looked
            live: the theme's `* { color: ink }` lands on the button's own LABEL
            node, and a direct declaration beats any colour inherited from the
            button, so the label has to be named explicitly. */
-        .fmtbtn:disabled, .fmtbtn:disabled label { color: #B9B4A8; }
+        .fmtbtn:disabled, .fmtbtn:disabled label { color: #B3AD9E; }
         .fmtbtn.bold { font-weight: 700; }
         .fmtbtn.ital { font-style: italic;
                        font-family: "Newsreader","Liberation Serif",serif; }
-        .fsep { color: #DCD7C9; min-width: 1px; }
+        .fsep { color: #D7D2C5; min-width: 1px; }
         .wordcount, .savestate { font-size: 13px; color: #8A857A; }
 
         .editorcol { background: #FCFBF8; }
@@ -1478,34 +1540,34 @@ class Journal(nbapp.AppWindow):
         .bigdate { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 44px; color: #1A1916; letter-spacing: -0.01em;
                    margin-bottom: 12px; }
-        .metaline { font-size: 13px; letter-spacing: 0.04em; color: #A39D8F;
+        .metaline { font-size: 13px; letter-spacing: 0.04em; color: #9A9484;
                     margin-bottom: 46px; }
         .emptybox { margin-top: 40px; }
         .emptyhead { font-family: "Newsreader","Liberation Serif",serif;
-                     font-size: 21px; color: #1A1916; }
-        .emptysub { font-size: 13px; color: #A39D8F; margin-bottom: 14px; }
+                     font-size: 20px; color: #1A1916; }
+        .emptysub { font-size: 13px; color: #9A9484; margin-bottom: 14px; }
         .emptybtn { min-height: 36px; padding: 0 18px; font-size: 14px;
-                    background: #FCFBF8; border: 1px solid #C4BFB1;
-                    border-radius: 2px; box-shadow: none; color: #2A2620; }
-        .emptybtn:hover { background: #ECE8DD; }
+                    background: #FCFBF8; border: 1px solid #C9C4B6;
+                    border-radius: 8px; box-shadow: none; color: #2A2620; }
+        .emptybtn:hover { background: #EFEBE0; }
         .docbody { font-family: "Newsreader","Liberation Serif",serif;
-                   font-size: 20px; color: #26241F; background: #FCFBF8;
+                   font-size: 20px; color: #2A2620; background: #FCFBF8;
                    caret-color: #C8341E; }
         .docbody text { background: #FCFBF8; }
-        .docbody text selection { background-color: #F1D9D2; color: #1A1916; }
+        .docbody text selection { background-color: #EAE3D2; color: #1A1916; }
 
         /* confirm dialog for destructive actions (paper card, darker-beige
            border; signage-red only on the destructive primary button) */
-        .jrdlg { background: #FCFBF8; border: 1px solid #C4BFB1; }
+        .jrdlg { background: #FCFBF8; border: 1px solid #C9C4B6; }
         .jrdlgbox { padding: 24px 28px 20px; }
         .jrdlgbox * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .jrdlgtitle { font-family: "Newsreader","Liberation Serif",serif;
                       font-size: 20px; color: #1A1916; }
-        .jrdlgmsg { font-size: 13px; color: #57534B; }
+        .jrdlgmsg { font-size: 13px; color: #6E695E; }
         .jrdlgcancel { font-size: 13px; color: #2A2620; padding: 6px 16px;
-                       background: #FCFBF8; border: 1px solid #C4BFB1;
-                       border-radius: 2px; box-shadow: none; }
-        .jrdlgcancel:hover { background: #ECE8DD; }
+                       background: #FCFBF8; border: 1px solid #C9C4B6;
+                       border-radius: 8px; box-shadow: none; }
+        .jrdlgcancel:hover { background: #EFEBE0; }
         /* The label needs its OWN colour rule: the theme's `* { color: ink }`
            lands directly on the button's label node, and a direct declaration
            beats a colour inherited from the button, so paper-on-red set here
@@ -1513,8 +1575,8 @@ class Journal(nbapp.AppWindow):
         .jrdlgok, .jrdlgok label { font-size: 13px; color: #FCFBF8; }
         .jrdlgok { padding: 6px 16px; background: #C8341E;
                    border: 1px solid #C8341E;
-                   border-radius: 2px; box-shadow: none; }
-        .jrdlgok:hover { background: #A82A18; border-color: #A82A18; }
+                   border-radius: 8px; box-shadow: none; }
+        .jrdlgok:hover { background: #B12D19; border-color: #B12D19; }
         """
         prov = Gtk.CssProvider()
         try:

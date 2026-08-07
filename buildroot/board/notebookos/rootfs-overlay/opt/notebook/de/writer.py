@@ -58,6 +58,16 @@ DOCS_DIR = os.path.join(HOME, "Documents")
 
 # ---- page geometry (96 px per inch on screen; 72 pt per inch for PDF) --------
 PX_PER_IN = 96.0
+# On-screen magnification. The paper's PIXEL size scales by this, and so does
+# the Pango resolution the TextView lays text out at — which is what makes a
+# heading tagged "22 points" grow with everything else. Scaling only the widget
+# would have left every point-sized tag at its original size.
+ZOOM_STEPS = (0.75, 1.0, 1.25, 1.5, 2.0)
+# Lines that must stay together at a page break: at least this many left at the
+# foot of a sheet (orphan) and this many carried to the next (widow).
+ORPHAN_MIN = 2
+WIDOW_MIN = 2
+DEFAULT_ZOOM = 1.0
 PT_PER_IN = 72.0
 PAGE_SIZES = {           # inches, portrait
     "Letter": (8.5, 11.0),
@@ -258,7 +268,14 @@ LINK_INK = "#33567F"
 IMG_MAX_W = 560
 OBJ = "￼"   # object-replacement char GtkTextBuffer uses per pixbuf/anchor
 
-DESK = "#A8A294"        # the gray "desk" the sheet floats on
+DESK = "#B3AD9E"        # the gray "desk" the sheet floats on
+SHEET_SHADOW = 9        # px of falloff painted around the paper (see _draw_desk)
+# Superscript/subscript are drawn at this fraction of the run's own size, and
+# raised/lowered by SCRIPT_RISE_PT of it, so they track the paragraph style
+# instead of pinning a size of their own.
+SCRIPT_SCALE = 0.66
+SCRIPT_RISE_PT = 0.34   # of the run's point size, up for super, down for sub
+SHEET_SHADOW_DROP = 3   # how far the shadow sits below the sheet
 SHEET = "#FCFBF8"       # warm paper
 
 # ---- typographic defaults ----------------------------------------------------
@@ -288,6 +305,17 @@ def smart_replacement(prev_char, text):
 
 def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
+
+
+def _rgb(hexcol):
+    """(r, g, b) floats from '#RRGGBB', for cairo. Black on anything it cannot
+    read — a colour is never worth failing a repaint for."""
+    try:
+        h = str(hexcol).lstrip("#")
+        return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0,
+                int(h[4:6], 16) / 255.0)
+    except (ValueError, IndexError, TypeError):
+        return (0.0, 0.0, 0.0)
 
 
 # ---- embedded pictures -------------------------------------------------------
@@ -522,6 +550,7 @@ class Writer(nbapp.AppWindow):
 
     # ---------------------------------------------------------------- init ----
     def __init__(self):
+        self._zoom = DEFAULT_ZOOM
         super().__init__()
         self._install_css()
 
@@ -602,10 +631,61 @@ class Writer(nbapp.AppWindow):
             b.get_style_context().add_class(style_extra)
         b.set_tooltip_text(tip)
         try:
-            b.add(Gtk.Image.new_from_pixbuf(nbicons.pixbuf(icon, 15, "#2A2620")))
+            b.add(nbicons.image(icon, 15, "#2A2620"))
         except Exception:
             b.set_label(cmd[:1].upper())
         return b
+
+    def _colour_btn(self, which, tip):
+        """A toolbar button that draws its own mark over a bar of the colour it
+        will apply: a letter A for text colour, a highlighter nib for
+        highlight. Drawn rather than iconed because the bar has to restate the
+        current colour every time it changes."""
+        b = Gtk.Button()
+        b.get_style_context().add_class("tbbtn")
+        b.set_tooltip_text(_t(tip))
+        area = Gtk.DrawingArea()
+        area.set_size_request(17, 18)
+        area.connect("draw", self._draw_colour_btn, which)
+        b.add(area)
+        b.connect("clicked", lambda *_: self._pick_colour(which))
+        b.nb_area = area
+        return b
+
+    def _draw_colour_btn(self, area, cr, which):
+        w = area.get_allocated_width()
+        h = area.get_allocated_height()
+        ink = "#2A2620"
+        cr.select_font_face("Nimbus Sans", 0, 1 if which == "fg" else 0)
+        if which == "fg":
+            cr.set_source_rgb(*_rgb(ink))
+            cr.set_font_size(12)
+            ext = cr.text_extents("A")
+            cr.move_to((w - ext.width) / 2 - ext.x_bearing, h - 7)
+            cr.show_text("A")
+            colour = self._last_fg
+        else:
+            # a nib: a slanted marker body with a chisel tip
+            cr.set_source_rgb(*_rgb(ink))
+            cr.set_line_width(1.3)
+            cr.move_to(w * 0.28, h - 8)
+            cr.line_to(w * 0.60, 2.5)
+            cr.line_to(w * 0.86, 5.0)
+            cr.line_to(w * 0.54, h - 8)
+            cr.close_path()
+            cr.stroke()
+            colour = self._last_hl
+        if colour and colour != "none":
+            cr.set_source_rgb(*_rgb(colour))
+            cr.rectangle(1.5, h - 4.5, w - 3, 3.5)
+            cr.fill()
+        else:
+            # "none" is a real choice for a highlight; show it as an empty slot
+            cr.set_source_rgb(*_rgb("#B3AD9E"))
+            cr.set_line_width(1)
+            cr.rectangle(2, h - 4.5, w - 4, 3)
+            cr.stroke()
+        return False
 
     def _build_toolbar(self):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -651,26 +731,43 @@ class Writer(nbapp.AppWindow):
         row.add_item(self._tb_sep(), 4)
 
         # B / I / U / S
+        #
+        # The letters are marked up, not styled by CSS class. GTK3's
+        # text-decoration-line is not an inherited property, so setting it on
+        # the BUTTON node never reached the label inside it: the U and the S
+        # rendered as a plain U and a plain S, which is the whole of what those
+        # two buttons had to say for themselves. (font-weight and font-style
+        # ARE inherited, which is why B and I looked right and hid the fault.)
         self._fmt_btns = {}
-        for label, cmd, tip, cls in (("B", "bold", "Bold (Ctrl+B)", "b-bold"),
-                                     ("I", "italic", "Italic (Ctrl+I)", "b-ital"),
-                                     ("U", "underline", "Underline (Ctrl+U)", "b-under"),
-                                     ("S", "strike", "Strikethrough", "b-strike")):
-            b = Gtk.Button(label=label)
+        for markup, cmd, tip in (
+                ("<b>B</b>", "bold", "Bold (Ctrl+B)"),
+                ("<i>I</i>", "italic", "Italic (Ctrl+I)"),
+                ("<u>U</u>", "underline", "Underline (Ctrl+U)"),
+                ("<s>S</s>", "strike", "Strikethrough"),
+                ("x<sup>2</sup>", "super", "Superscript"),
+                ("x<sub>2</sub>", "sub", "Subscript")):
+            b = Gtk.Button()
+            lab = Gtk.Label()
+            lab.set_markup(markup)
+            b.add(lab)
             b.get_style_context().add_class("tbbtn")
-            b.get_style_context().add_class(cls)
             b.set_tooltip_text(tip)
             b.connect("clicked", lambda _b, c=cmd: self._toggle_char(c))
             self._fmt_btns[cmd] = b
             row.add_item(b)
 
         # colours
-        tc = self._iconbtn("pencil", "textcolor", "Text colour")
-        tc.connect("clicked", lambda *_: self._pick_colour("fg"))
-        row.add_item(tc)
-        hc = self._iconbtn("highlight", "highlight", "Highlight")
-        hc.connect("clicked", lambda *_: self._pick_colour("hl"))
-        row.add_item(hc)
+        #
+        # These were two of the same pencil glyph side by side — nothing
+        # distinguished text colour from highlight, and neither showed what
+        # colour it would apply. Both now draw their own mark over a bar of the
+        # colour last chosen, the way every word processor shows them.
+        self._last_fg = TEXT_SWATCHES[0]
+        self._last_hl = HL_SWATCHES[1]
+        self._fg_btn = self._colour_btn("fg", "Text colour")
+        row.add_item(self._fg_btn)
+        self._hl_btn = self._colour_btn("hl", "Highlight")
+        row.add_item(self._hl_btn)
 
         row.add_item(self._tb_sep(), 4)
 
@@ -733,7 +830,87 @@ class Writer(nbapp.AppWindow):
         self.ruler.set_size_request(-1, 22)
         self.ruler.get_style_context().add_class("ruler")
         self.ruler.connect("draw", self._draw_ruler)
+        # A ruler you cannot set a tab on is a picture of a ruler. Click the
+        # strip to put a stop where the pointer is; click an existing stop to
+        # take it away.
+        self.ruler.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.ruler.connect("button-press-event", self._on_ruler_press)
+        self.ruler.set_tooltip_text(
+            _t("Click to set a tab stop; click a stop to remove it"))
         return self.ruler
+
+    # ---- tab stops -----------------------------------------------------------
+    # Stored in inches from the text column's left edge, on the document (they
+    # belong to the page, like its margins), so one set applies throughout and
+    # both the screen and the PDF read the same list.
+    TAB_HIT_IN = 0.06        # how close a click has to be to remove a stop
+
+    def _tabs(self):
+        t = self._page.get("tabs")
+        if not isinstance(t, list):
+            return []
+        # de-duplicated as well as sorted: two stops at the same place are one
+        # stop, and a document loaded from disk has not been through the
+        # ruler's own set().
+        out = set()
+        for x in t:
+            try:
+                out.add(round(float(x), 4))
+            except (TypeError, ValueError):
+                pass
+        return sorted(out)
+
+    def _on_ruler_press(self, _w, ev):
+        try:
+            if ev.button != 1:
+                return False
+        except AttributeError:
+            return False
+        ppi = self._px_per_in()
+        pw_in, _ph = self._page_dims_in()
+        x0 = self._sheet_x(self.ruler.get_allocated_width(), pw_in * ppi)
+        _mt, mr, _mb, ml = self._page["margins"]
+        inches = (ev.x - x0) / ppi - ml
+        col_in = pw_in - ml - mr
+        if not (0.0 < inches < col_in):
+            return True         # outside the text column: not a tab position
+        stops = self._tabs()
+        hit = [t for t in stops if abs(t - inches) <= self.TAB_HIT_IN]
+        if hit:
+            stops = [t for t in stops if t not in hit]
+        else:
+            stops.append(round(inches * 8) / 8.0)     # snap to 1/8 inch
+        self._page["tabs"] = sorted(set(stops))
+        self._apply_tabs()
+        self._mark_dirty()
+        self.ruler.queue_draw()
+        return True
+
+    def _clear_tabs(self):
+        self._page["tabs"] = []
+        self._apply_tabs()
+        self._mark_dirty()
+        self.ruler.queue_draw()
+
+    def _apply_tabs(self):
+        """Push the document's stops into the TextView. With none set the view
+        keeps its own default interval, which is what a fresh document wants."""
+        stops = self._tabs()
+        ppi = self._px_per_in()
+        if not stops:
+            # PyGObject will not accept None here, so "no stops of our own"
+            # is expressed as an even half-inch interval — which is what the
+            # view's own default is anyway.
+            ta = Pango.TabArray.new(12, True)
+            for i in range(12):
+                ta.set_tab(i, Pango.TabAlign.LEFT,
+                           int(round((i + 1) * 0.5 * ppi)))
+            self.body.set_tabs(ta)
+            return
+        ta = Pango.TabArray.new(len(stops), True)   # True = positions in pixels
+        for i, inches in enumerate(stops):
+            ta.set_tab(i, Pango.TabAlign.LEFT, int(round(inches * ppi)))
+        self.body.set_tabs(ta)
 
     def _sheet_x(self, ruler_w, sheet_px):
         """The paper's left edge, in ruler coordinates.
@@ -753,6 +930,7 @@ class Writer(nbapp.AppWindow):
     def _draw_ruler(self, area, cr):
         w = area.get_allocated_width()
         h = area.get_allocated_height()
+        PX_PER_IN = self._px_per_in()      # zoom-scaled, shadows the module
         cr.set_source_rgb(0x9C / 255, 0x96 / 255, 0x8B / 255)
         cr.paint()
         pw_in, _ph_in = self._page_dims_in()
@@ -784,6 +962,24 @@ class Writer(nbapp.AppWindow):
                 cr.move_to(x + 2, 9)
                 cr.show_text(str(int(i)))
             i += 1
+        # half-inch ticks, so the ruler can be read between the numbers
+        i = 0.5
+        while i < pw_in:
+            x = x0 + i * PX_PER_IN
+            cr.move_to(x, h - 4)
+            cr.line_to(x, h)
+            cr.stroke()
+            i += 1.0
+        # the tab stops themselves: a small filled marker at each, drawn in the
+        # ink colour so they read as something set rather than as furniture
+        cr.set_source_rgb(0x1A / 255, 0x19 / 255, 0x16 / 255)
+        for t in self._tabs():
+            x = x0 + (ml + t) * PX_PER_IN
+            cr.move_to(x - 4, h - 1)
+            cr.line_to(x + 4, h - 1)
+            cr.line_to(x, h - 7)
+            cr.close_path()
+            cr.fill()
         return False
 
     # ------------------------------------------------------------ sheet -------
@@ -872,9 +1068,37 @@ class Writer(nbapp.AppWindow):
     def _draw_desk(self, widget, cr):
         # paint the whole desk-column allocation; the sheet draws over it
         alloc = widget.get_allocation()
-        cr.set_source_rgb(0xA8 / 255.0, 0xA2 / 255.0, 0x94 / 255.0)
+        cr.set_source_rgb(0xB3 / 255.0, 0xAD / 255.0, 0x9E / 255.0)
         cr.rectangle(0, 0, alloc.width, alloc.height)
         cr.fill()
+
+        # The paper's drop shadow. .sheet asks for one in CSS and never got it:
+        # GTK clips a widget's drawing to its own allocation, and an outer
+        # box-shadow falls entirely outside that, so the page met the desk on a
+        # hard 1px line and read as a white rectangle rather than as paper.
+        # Drawn here instead, under where the sheet is about to draw itself.
+        sheet = getattr(self, "sheet", None)
+        if sheet is None or not sheet.get_mapped():
+            return False
+        # Both boxes are windowless children of the same bin-window, so their
+        # allocations share a coordinate space.
+        sa = sheet.get_allocation()
+        x, y = sa.x - alloc.x, sa.y - alloc.y
+        w, h = sa.width, sa.height
+        cr.save()
+        # Clip the paper itself out, so the falloff is drawn on the desk only
+        # and the sheet's area is not overdrawn N times on a machine with no
+        # graphics acceleration.
+        cr.rectangle(0, 0, alloc.width, alloc.height)
+        cr.rectangle(x, y, w, h)
+        cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+        cr.clip()
+        for i in range(SHEET_SHADOW, 0, -1):
+            cr.set_source_rgba(0.10, 0.09, 0.08, 0.045)
+            cr.rectangle(x - i, y - i + SHEET_SHADOW_DROP,
+                         w + 2 * i, h + 2 * i)
+            cr.fill()
+        cr.restore()
         return False
 
     # ----------------------------------------------------------- find bar -----
@@ -921,8 +1145,7 @@ class Writer(nbapp.AppWindow):
         close.set_tooltip_text(_t("Close Find"))
         # a drawn close glyph, not a font "✕" (U+2715 is absent from the shipped
         # Nimbus Sans and would render as a tofu box)
-        close.set_image(Gtk.Image.new_from_pixbuf(
-            nbicons.pixbuf("wclose", 12, "#6E695E")))
+        close.set_image(nbicons.image("wclose", 12, "#6E695E"))
         close.connect("clicked", lambda *_: self._toggle_find(False))
         bar.pack_end(close, False, False, 0)
         # Mark every control visible ONCE, then take the BAR itself out of
@@ -962,6 +1185,15 @@ class Writer(nbapp.AppWindow):
         self.buf.create_tag("italic", style=Pango.Style.ITALIC)
         self.buf.create_tag("underline", underline=Pango.Underline.SINGLE)
         self.buf.create_tag("strike", strikethrough=True)
+        # Footnote markers, ordinals, formulae and citations all need these,
+        # and a word processor without them makes the writer paste a "²" and
+        # hope the font has one. `rise` is in Pango units and `scale` shrinks
+        # the run relative to whatever size is in effect, so both follow the
+        # paragraph style rather than pinning a point size of their own.
+        self.buf.create_tag("super", rise=6 * Pango.SCALE,
+                            scale=SCRIPT_SCALE)
+        self.buf.create_tag("sub", rise=-4 * Pango.SCALE,
+                            scale=SCRIPT_SCALE)
         for j, gj in (("left", Gtk.Justification.LEFT),
                       ("center", Gtk.Justification.CENTER),
                       ("right", Gtk.Justification.RIGHT),
@@ -976,7 +1208,7 @@ class Writer(nbapp.AppWindow):
                 kw["style"] = Pango.Style.ITALIC
             if quote:
                 kw["left_margin"] = 34
-                kw["paragraph_background"] = "#F3EFE4"
+                kw["paragraph_background"] = "#F1EEE6"
                 kw["style"] = Pango.Style.ITALIC
             self.buf.create_tag("style:" + name, **kw)
         # NB: a TextTag's left-margin REPLACES the view's left margin (it does not
@@ -988,6 +1220,11 @@ class Writer(nbapp.AppWindow):
                                     ("double", 8, 22)):
             self.buf.create_tag("spacing:" + name,
                                 pixels_below_lines=below, pixels_inside_wrap=inside)
+        # A paragraph the writer has asked to begin a new sheet. It carries no
+        # visual property of its own: the screen draws it in the overlay and
+        # the PDF acts on it in _render_pdf, because "start a new page" is not
+        # something a TextTag can express.
+        self.buf.create_tag("pagebreak")
         self.buf.create_tag("list:bullet", left_margin=136)
         self.buf.create_tag("list:number", left_margin=142)
 
@@ -1031,12 +1268,21 @@ class Writer(nbapp.AppWindow):
         return s, e
 
     # ---- character formatting -------------------------------------------
+    # A run cannot be raised and lowered at once, so these two clear each other
+    # the way the alignment buttons do. Without it the tags simply stacked and
+    # the rises cancelled to roughly nothing, which reads as the buttons being
+    # broken rather than as a conflict.
+    SCRIPT_PAIR = {"super": "sub", "sub": "super"}
+
     def _toggle_char(self, cmd):
+        other = self.SCRIPT_PAIR.get(cmd)
         if not self.buf.get_has_selection():
             # queue for the next typed run (standard word-processor behaviour)
             if cmd in self._pending:
                 self._pending.discard(cmd)
             else:
+                if other:
+                    self._pending.discard(other)
                 self._pending.add(cmd)
             self._sync_toolbar()
             return
@@ -1046,6 +1292,8 @@ class Writer(nbapp.AppWindow):
         if on:
             self.buf.remove_tag_by_name(cmd, s, e)
         else:
+            if other:
+                self.buf.remove_tag_by_name(other, s, e)
             self.buf.apply_tag_by_name(cmd, s, e)
         self._mark_dirty()
         self._sync_toolbar()
@@ -1098,6 +1346,23 @@ class Writer(nbapp.AppWindow):
         s, e = self._para_bounds()
         self._checkpoint()
         self._clear_group(s, e, "style:")
+        # Direct size overrides have to go, or the style does not take.
+        #
+        # GtkTextBuffer resolves two tags that set the same property by
+        # PRIORITY, and priority is creation order. The "size:N" tags are made
+        # lazily the first time the size dropdown is used, so they are created
+        # after every "style:" tag and outrank all of them for ever after. The
+        # visible result was that picking Heading 1 on text whose size had ever
+        # been set turned it bold and left it at 12pt — the style appeared to do
+        # nothing, and because the size tag is serialised, the document stayed
+        # broken across save and reopen.
+        #
+        # Clearing them is also just what a word processor does: a paragraph
+        # style is an instruction, not a suggestion, and choosing one is the
+        # normal way to get a stray size off a line. Deliberate sizing after the
+        # fact still wins, because the size tag is applied later and outranks
+        # the style — which is the right way round.
+        self._clear_group(s, e, "size:")
         self.buf.apply_tag_by_name("style:" + name, s, e)
         self._mark_dirty()
         self._sync_toolbar()
@@ -1217,7 +1482,8 @@ class Writer(nbapp.AppWindow):
                 tag = self.buf.get_tag_table().lookup(name)
                 return bool(tag and probe.has_tag(tag)) or name in self._pending
 
-            for cmd in ("bold", "italic", "underline", "strike"):
+            for cmd in ("bold", "italic", "underline", "strike",
+                        "super", "sub"):
                 self._flag(self._fmt_btns[cmd], active(cmd))
             for j in ("left", "center", "right", "fill"):
                 self._flag(self._fmt_btns["align:" + j], active("align:" + j))
@@ -1298,7 +1564,8 @@ class Writer(nbapp.AppWindow):
         start = it.copy()
         start.backward_chars(len(text))
         for key in list(self._pending):
-            if key in ("bold", "italic", "underline", "strike"):
+            if key in ("bold", "italic", "underline", "strike",
+                       "super", "sub"):
                 buf.apply_tag_by_name(key, start, it)
             else:
                 buf.apply_tag(self._tag(key), start, it)
@@ -1364,6 +1631,35 @@ class Writer(nbapp.AppWindow):
     # =====================================================================
     #  Overlay draw: page breaks + list markers
     # =====================================================================
+    def _draw_hard_breaks(self, view, cr):
+        """A rule above every paragraph carrying a page break, labelled so it
+        cannot be mistaken for the automatic page guides."""
+        tag = self.buf.get_tag_table().lookup("pagebreak")
+        if tag is None:
+            return
+        rect = view.get_visible_rect()
+        it = view.get_iter_at_location(0, rect.y)[1]
+        it.set_line_offset(0)
+        w = view.get_allocated_width()
+        while True:
+            if it.has_tag(tag):
+                y = view.get_line_yrange(it)[0]
+                wy = view.buffer_to_window_coords(
+                    Gtk.TextWindowType.TEXT, 0, y)[1]
+                cr.save()
+                cr.set_source_rgb(0xC8 / 255.0, 0x34 / 255.0, 0x1E / 255.0)
+                cr.set_line_width(1.0)
+                cr.move_to(0, wy - 5.5)
+                cr.line_to(w, wy - 5.5)
+                cr.stroke()
+                self._page_label(cr, view.get_left_margin(), wy - 9,
+                                 _t("Page break"))
+                cr.restore()
+            if not it.forward_line():
+                break
+            if view.get_line_yrange(it)[0] > rect.y + rect.height:
+                break
+
     def _draw_overlay(self, view, cr):
         # Empty document: a ghost line where the first word will go. A blank
         # sheet is the hardest screen in a word processor to start on, and this
@@ -1385,6 +1681,12 @@ class Writer(nbapp.AppWindow):
             cr.move_to(view.get_left_margin(), wy)
             PangoCairo.show_layout(cr, lay)
             cr.restore()
+
+        # Breaks the writer asked for, drawn where they are. Distinct from the
+        # automatic guides below: those are where the paper happens to run out,
+        # this is a decision, so it is a solid rule with a label rather than a
+        # dotted hint.
+        self._draw_hard_breaks(view, cr)
 
         # page-break guide lines
         pw_in, ph_in = self._page_dims_in()
@@ -1520,10 +1822,15 @@ class Writer(nbapp.AppWindow):
         if resp >= 1000:
             col = swatches[resp - 1000]
             if which == "fg":
+                self._last_fg = col
                 self._apply_value_tag("fg:", "fg:" + col)
             else:
+                self._last_hl = col
                 self._apply_value_tag("hl:", "hl:none" if col == "none"
                                       else "hl:" + col)
+            # the button's bar states the colour it would apply next
+            btn = self._fg_btn if which == "fg" else self._hl_btn
+            btn.nb_area.queue_draw()
             self.body.grab_focus()
 
     def _insert_link(self):
@@ -1799,6 +2106,15 @@ class Writer(nbapp.AppWindow):
         self._update_wordcount()
         self._sync_toolbar()
         self.body.queue_draw()
+        # An undo changes the document exactly as much as typing does, so it has
+        # to leave the same trail. The rebuild above goes through _deserialize,
+        # which suppresses the buffer's "changed" handler on purpose, so this was
+        # the one edit in Writer that never reached _mark_dirty: no autosave was
+        # armed, the chip still read "● Saved 14:32" over a page that no longer
+        # matched the file, and _confirm_discard — which asks _file_dirty and
+        # nothing else — let File > New and File > Open throw the undone work
+        # away without a word.
+        self._mark_dirty()
 
     # =====================================================================
     #  Serialize / deserialize
@@ -1806,12 +2122,12 @@ class Writer(nbapp.AppWindow):
     SERIAL_TAGS = None   # computed lazily
 
     def _serial_tag_names(self):
-        names = ["bold", "italic", "underline", "strike"]
+        names = ["bold", "italic", "underline", "strike", "super", "sub"]
         names += ["align:" + j for j in ("left", "center", "right", "fill")]
         names += ["style:" + s for s in STYLES]
         names += ["indent:%d" % lv for lv in range(1, 9)]
         names += ["spacing:" + s for s in ("single", "onehalf", "double")]
-        names += ["list:bullet", "list:number"]
+        names += ["list:bullet", "list:number", "pagebreak"]
         # value tags + links currently in the table
         extra = []
         self.buf.get_tag_table().foreach(
@@ -2007,6 +2323,34 @@ class Writer(nbapp.AppWindow):
     # =====================================================================
     #  Page geometry + header/footer
     # =====================================================================
+    def _px_per_in(self):
+        """Screen pixels per inch at the current magnification."""
+        return PX_PER_IN * getattr(self, "_zoom", DEFAULT_ZOOM)
+
+    def _set_zoom(self, z):
+        """Magnify the page. Pango's resolution carries the text (so point-sized
+        tags scale too) and _apply_page_geometry carries the paper."""
+        z = min(ZOOM_STEPS[-1], max(ZOOM_STEPS[0], float(z)))
+        self._zoom = z
+        try:
+            gi.require_version("PangoCairo", "1.0")
+            from gi.repository import PangoCairo
+            PangoCairo.context_set_resolution(self.body.get_pango_context(),
+                                              PX_PER_IN * z)
+        except Exception:                       # noqa: BLE001
+            pass        # magnification is not worth failing the app for
+        self._apply_page_geometry()
+        self.body.queue_resize()
+        self._update_status()
+
+    def _zoom_step(self, delta):
+        cur = getattr(self, "_zoom", DEFAULT_ZOOM)
+        # nearest step, then move
+        idx = min(range(len(ZOOM_STEPS)),
+                  key=lambda i: abs(ZOOM_STEPS[i] - cur))
+        self._set_zoom(ZOOM_STEPS[max(0, min(len(ZOOM_STEPS) - 1,
+                                             idx + delta))])
+
     def _page_dims_in(self):
         w, h = PAGE_SIZES.get(self._page.get("size", "Letter"),
                               PAGE_SIZES["Letter"])
@@ -2017,6 +2361,7 @@ class Writer(nbapp.AppWindow):
     def _apply_page_geometry(self):
         pw_in, ph_in = self._page_dims_in()
         mt, mr, mb, ml = self._page["margins"]
+        PX_PER_IN = self._px_per_in()          # zoom-scaled, shadows the module
         sheet_px = int(pw_in * PX_PER_IN)
         self.sheet.set_size_request(sheet_px, int(ph_in * PX_PER_IN))
         pl = int(ml * PX_PER_IN)
@@ -2058,6 +2403,7 @@ class Writer(nbapp.AppWindow):
         self.header_lbl.set_margin_end(int(mr * PX_PER_IN))
         self.footer_lbl.set_margin_start(pl)
         self.footer_lbl.set_margin_end(int(mr * PX_PER_IN))
+        self._apply_tabs()          # stops are in pixels, so they follow zoom
         self.ruler.queue_draw()
         self.body.queue_draw()
 
@@ -2510,7 +2856,9 @@ class Writer(nbapp.AppWindow):
     # =====================================================================
     def _para_iter(self):
         """Yield (text, attrlist, justification, indent_px, style, list_kind,
-        list_index, obj) per paragraph, plus image/table objects inline."""
+        list_index, obj, hard_break) per paragraph, plus image/table objects
+        inline. hard_break is True when the writer asked this paragraph to
+        start a new sheet."""
         start = self.buf.get_start_iter()
         end = self.buf.get_end_iter()
         line = start.copy()
@@ -2545,9 +2893,35 @@ class Writer(nbapp.AppWindow):
             else:
                 prev_num = False
             attrs = self._line_attrs(line, le) if obj is None else None
-            yield (text, attrs, just, indent, style, lk, list_counter, obj)
+            yield (text, attrs, just, indent, style, lk, list_counter, obj,
+                   self._line_break(line))
             if not line.forward_line():
                 break
+
+    def _line_break(self, it):
+        """True when this paragraph was asked to begin a new sheet."""
+        tag = self.buf.get_tag_table().lookup("pagebreak")
+        if tag is None:
+            return False
+        s = it.copy()
+        s.set_line_offset(0)
+        return s.has_tag(tag)
+
+    def _toggle_page_break(self):
+        """Put a page break before the paragraph the caret is in, or take one
+        away. A toggle rather than an insert: a break is a property of a
+        paragraph here, not a character, so there is nothing to select and
+        delete afterwards and no invisible mark to hunt for."""
+        s, e = self._para_bounds()
+        self._checkpoint()
+        if self._line_break(s):
+            self.buf.remove_tag_by_name("pagebreak", s, e)
+            self._flash(_t("Page break removed"))
+        else:
+            self.buf.apply_tag_by_name("pagebreak", s, e)
+            self._flash(_t("Page break added"))
+        self._mark_dirty()
+        self.body.queue_draw()
 
     def _line_style(self, it):
         for name in STYLES:
@@ -2607,6 +2981,7 @@ class Writer(nbapp.AppWindow):
             i_on = ital
             u_on = False
             st_on = False
+            script = 0            # +1 raised, -1 lowered
             for nm in names:
                 if nm == "bold":
                     b_on = True
@@ -2616,6 +2991,10 @@ class Writer(nbapp.AppWindow):
                     u_on = True
                 elif nm == "strike":
                     st_on = True
+                elif nm == "super":
+                    script = 1
+                elif nm == "sub":
+                    script = -1
                 elif nm.startswith("size:"):
                     size_pt = float(nm[5:])
                 elif nm.startswith("font:"):
@@ -2631,6 +3010,13 @@ class Writer(nbapp.AppWindow):
                 attr.start_index = ba
                 attr.end_index = bb
                 al.insert(attr)
+            # The printed page has to raise and shrink these exactly as the
+            # screen does, or a footnote marker that looked right on screen
+            # comes out full size and on the baseline in the PDF.
+            if script:
+                add(Pango.attr_rise_new(
+                    int(script * SCRIPT_RISE_PT * size_pt * Pango.SCALE)))
+                size_pt *= SCRIPT_SCALE
             add(Pango.attr_size_new(int(size_pt * Pango.SCALE)))
             if fam:
                 add(Pango.attr_family_new(fam))
@@ -2687,7 +3073,14 @@ class Writer(nbapp.AppWindow):
                                 mb * PT_PER_IN)
 
         self._pdf_furniture(cr, 1, PW, PH, left, top, content_w, mb * PT_PER_IN)
-        for (text, attrs, just, indent, style, lk, li, obj) in self._para_iter():
+        first_para = True
+        for (text, attrs, just, indent, style, lk, li, obj, brk) \
+                in self._para_iter():
+            # A hard break before the very first paragraph would emit a blank
+            # opening sheet, which is never what was meant.
+            if brk and not first_para:
+                new_page()
+            first_para = False
             x = left + (indent * PT_PER_IN / PX_PER_IN)
             avail_w = content_w - (indent * PT_PER_IN / PX_PER_IN)
             if obj is not None:
@@ -2713,6 +3106,16 @@ class Writer(nbapp.AppWindow):
             layout = PangoCairo.create_layout(cr)
             layout.set_width(int(avail_w * Pango.SCALE))
             layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+            # The same tab stops the ruler shows, in POINTS here rather than
+            # screen pixels — a tab that lands somewhere else on paper than it
+            # did on screen is the whole reason to have stops at all.
+            stops = self._tabs()
+            if stops:
+                ta = Pango.TabArray.new(len(stops), False)
+                for ti, inches in enumerate(stops):
+                    ta.set_tab(ti, Pango.TabAlign.LEFT,
+                               int(inches * PT_PER_IN * Pango.SCALE))
+                layout.set_tabs(ta)
             layout.set_alignment({"left": Pango.Alignment.LEFT,
                                   "center": Pango.Alignment.CENTER,
                                   "right": Pango.Alignment.RIGHT,
@@ -2731,20 +3134,73 @@ class Writer(nbapp.AppWindow):
                 if prefix:
                     attrs = self._shift_attrs(attrs, len(prefix.encode("utf-8")))
                 layout.set_attributes(attrs)
-            _w, lh = layout.get_pixel_size()
             sz, _bold, _ital, above, below, _q = STYLES[style]
             state["y"] += above
-            if state["y"] + lh > top + content_h and state["y"] > top:
-                new_page()
-            cr.save()
-            cr.set_source_rgb(0x1A / 255, 0x19 / 255, 0x16 / 255)
-            cr.move_to(x, state["y"])
-            PangoCairo.show_layout(cr, layout)
-            cr.restore()
-            state["y"] += lh + below
-            if state["y"] > top + content_h:
+            bottom = top + content_h
+
+            # Break the paragraph BY LINE. It used to be drawn as one block and
+            # moved whole to the next sheet if it did not fit — so a paragraph
+            # taller than a page had no page to fit on and simply ran off the
+            # bottom of the paper, losing every line past the edge.
+            rows = []
+            li_ = layout.get_iter()
+            while True:
+                y0, y1 = li_.get_line_yrange()
+                rows.append((y0 / Pango.SCALE, y1 / Pango.SCALE))
+                if not li_.next_line():
+                    break
+            nrows = len(rows)
+
+            start = 0
+            while start < nrows:
+                avail = bottom - state["y"]
+                base = rows[start][0]
+                last = start
+                while last + 1 < nrows and (rows[last + 1][1] - base) <= avail:
+                    last += 1
+
+                if last < nrows - 1:
+                    # A break is going to happen here, so mind the widow and
+                    # the orphan: a single line stranded at the foot of one
+                    # sheet, or carried alone to the top of the next, is the
+                    # thing typesetters have always moved a line to avoid.
+                    kept = last - start + 1
+                    carried = nrows - (last + 1)
+                    if kept < ORPHAN_MIN and state["y"] > top:
+                        new_page()          # take the whole paragraph over
+                        continue
+                    if carried < WIDOW_MIN:
+                        last = max(start, nrows - 1 - WIDOW_MIN)
+
+                frag_h = rows[last][1] - base
+                if frag_h > avail and state["y"] > top:
+                    new_page()
+                    continue                # retry on a fresh sheet
+
+                cr.save()
+                cr.set_source_rgb(0x1A / 255, 0x19 / 255, 0x16 / 255)
+                # Clip to this run and shift the layout so the run lands here.
+                # Measuring and drawing share this one context, so the window
+                # cannot drift off a line boundary.
+                cr.rectangle(x, state["y"], avail_w, frag_h)
+                cr.clip()
+                cr.move_to(x, state["y"] - base)
+                PangoCairo.show_layout(cr, layout)
+                cr.restore()
+
+                state["y"] += frag_h
+                start = last + 1
+                if start < nrows:
+                    new_page()
+
+            state["y"] += below
+            if state["y"] > bottom:
                 new_page()
         surf.finish()
+        # How many sheets came out. Cairo writes PDF object streams compressed,
+        # so this is the only honest way to know from outside — counting
+        # "/Type /Page" in the bytes finds nothing.
+        return state["page"]
 
     def _shift_attrs(self, attrs, delta):
         out = Pango.AttrList()
@@ -2941,6 +3397,9 @@ class Writer(nbapp.AppWindow):
                 ("Underline    Ctrl+U", lambda: self._toggle_char("underline")),
                 ("Strikethrough", lambda: self._toggle_char("strike")),
                 nbapp.SEP,
+                ("Superscript", lambda: self._toggle_char("super")),
+                ("Subscript", lambda: self._toggle_char("sub")),
+                nbapp.SEP,
                 ("Text Colour…", lambda: self._pick_colour("fg")),
                 ("Highlight…", lambda: self._pick_colour("hl")),
                 nbapp.SEP,
@@ -2954,6 +3413,8 @@ class Writer(nbapp.AppWindow):
                 ("Link…    Ctrl+K", self._insert_link),
                 ("Image…", self._insert_image),
                 ("Table", lambda: self._insert_table()),
+                nbapp.SEP,
+                ("Page Break    Ctrl+Return", self._toggle_page_break),
                 nbapp.SEP,
                 ("Bulleted List", lambda: self._toggle_list("bullet")),
                 ("Numbered List", lambda: self._toggle_list("number")),
@@ -2971,8 +3432,19 @@ class Writer(nbapp.AppWindow):
             # Same shape as Novel's and Screenplay's View menus: find first,
             # then a rule, then Focus Editor. No ellipsis — the find bar slides
             # in under the toolbar, it is not a window.
+            z = getattr(self, "_zoom", DEFAULT_ZOOM)
             return [
                 ("Find & Replace    Ctrl+F", lambda: self._toggle_find(True)),
+                nbapp.SEP,
+                ("Zoom In    Ctrl+Plus",
+                 (lambda: self._zoom_step(1)) if z < ZOOM_STEPS[-1] else None),
+                ("Zoom Out    Ctrl+Minus",
+                 (lambda: self._zoom_step(-1)) if z > ZOOM_STEPS[0] else None),
+                ("Actual Size    Ctrl+0",
+                 (lambda: self._set_zoom(1.0)) if z != 1.0 else None),
+                nbapp.SEP,
+                ("Clear Tab Stops",
+                 self._clear_tabs if self._tabs() else None),
                 nbapp.SEP,
                 ("Focus Editor", lambda: self.body.grab_focus()),
             ]
@@ -3006,6 +3478,14 @@ class Writer(nbapp.AppWindow):
                 self._file_new(); return True
             if kv in (Gdk.KEY_p, Gdk.KEY_P):
                 self._print_document(); return True
+            if kv in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+                self._toggle_page_break(); return True
+            if kv in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
+                self._zoom_step(1); return True
+            if kv in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
+                self._zoom_step(-1); return True
+            if kv in (Gdk.KEY_0, Gdk.KEY_KP_0):
+                self._set_zoom(1.0); return True
             if kv in (Gdk.KEY_f, Gdk.KEY_F):
                 self._toggle_find(True); return True
             if kv in (Gdk.KEY_z, Gdk.KEY_Z):
@@ -3041,15 +3521,15 @@ class Writer(nbapp.AppWindow):
     # =====================================================================
     def _install_css(self):
         css = ("""
-        .toolbar { background: #F4F2EC; border-bottom: 1px solid #D8D2C4;
+        .toolbar { background: #F4F2EC; border-bottom: 1px solid #D7D2C5;
                    padding: 6px 12px; }
         .tbrow * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .tbbtn { min-width: 28px; min-height: 26px; padding: 0 7px;
-                 background: #FCFBF8; border: 1px solid #D8D2C4;
-                 border-radius: 2px; box-shadow: none; color: #2A2620;
+                 background: #FCFBF8; border: 1px solid #D7D2C5;
+                 border-radius: 8px; box-shadow: none; color: #2A2620;
                  font-size: 14px; }
         .tbbtn:hover { background: #EFEBE0; }
-        .tbbtn.on { background: #E7DEC9; border-color: #B3AD9E; }
+        .tbbtn.on { background: #EAE3D2; border-color: #B3AD9E; }
         .tbbtn.b-bold { font-weight: 700; }
         .tbbtn.b-ital { font-style: italic; }
         .tbbtn.b-under { text-decoration-line: underline; }
@@ -3057,38 +3537,38 @@ class Writer(nbapp.AppWindow):
         .tbcombo { min-height: 26px; }
         .tbcombo, .tbcombo * { font-size: 13px; color: #1A1916; }
         .tbcombo button, .tbcombo entry { background: #FCFBF8;
-                 border: 1px solid #D8D2C4; border-radius: 2px; box-shadow: none; }
-        .tbsep { color: #D8D2C4; min-width: 1px; margin: 3px 0; }
-        .ruler { background: #9C968B; }
+                 border: 1px solid #D7D2C5; border-radius: 8px; box-shadow: none; }
+        .tbsep { color: #D7D2C5; min-width: 1px; margin: 3px 0; }
+        .ruler { background: #9A9484; }
         .desk, scrolledwindow.desk, viewport.desk,
         scrolledwindow.desk viewport, .desk viewport {
             background-color: %(desk)s; background-image: none; }
         .sheet { background: %(sheet)s;
-                 border: 1px solid #8F897C;
+                 border: 1px solid #8A857A;
                  box-shadow: 0 2px 10px rgba(26,25,22,0.35); }
-        .hfband { color: #A39D8F; font-size: 12px;
+        .hfband { color: #9A9484; font-size: 12px;
                   font-family: "Liberation Sans",sans-serif; }
-        .docbody { background: %(sheet)s; color: #26241F;
+        .docbody { background: %(sheet)s; color: #2A2620;
                    font-family: "Liberation Serif","DejaVu Serif",serif;
                    font-size: 12pt; caret-color: #C8341E; }
-        .docbody text { background: %(sheet)s; color: #26241F; }
-        .docbody text selection { background-color: #F1D9D2; color: #1A1916; }
+        .docbody text { background: %(sheet)s; color: #2A2620; }
+        .docbody text selection { background-color: #EAE3D2; color: #1A1916; }
         .wtable { background: %(sheet)s; margin: 6px 0; }
-        .wtablegrid { background: #8F897C; }
-        .wtcell { background: %(sheet)s; border: 1px solid #B8B2A6; }
-        .wtcelltv, .wtcelltv text { background: %(sheet)s; color: #26241F;
+        .wtablegrid { background: #8A857A; }
+        .wtcell { background: %(sheet)s; border: 1px solid #B3AD9E; }
+        .wtcelltv, .wtcelltv text { background: %(sheet)s; color: #2A2620;
                    font-size: 11pt; }
-        .findbar { background: #EFEBE0; border-bottom: 1px solid #D8D2C4;
+        .findbar { background: #EFEBE0; border-bottom: 1px solid #D7D2C5;
                    padding: 6px 12px; }
         .findbar entry, .findinput { background: #FCFBF8; border: 1px solid #C9C4B6;
-                   border-radius: 2px; box-shadow: none; color: #1A1916; }
+                   border-radius: 8px; box-shadow: none; color: #1A1916; }
         .findcount { color: #6E695E; font-size: 12px; }
         /* .statusbar is Papertone's - see the theme. This app had its own
            background, hairline and text size; there is nothing about a word
            count that justifies a different strip from every other app. */
         .statuslabel { color: #6E695E; font-size: 12px;
                        font-family: "Nimbus Sans",sans-serif; }
-        .savechip { color: #6E695E; font-size: 12.5px; }
+        .savechip { color: #6E695E; font-size: 12px; }
         .savechip.dirty { color: #C8341E; }
         .swatchbox { background: #F8F7F2; padding: 16px 18px; }
         .swatchbox label { color: #2A2620; }
@@ -3099,18 +3579,18 @@ class Writer(nbapp.AppWindow):
         .swatchtitle { font-size: 17px; font-weight: 700; color: #1A1916;
                        margin-bottom: 8px; }
         .fieldcaption { color: #6E695E; font-size: 12px; }
-        .swatch { border: 1px solid #C9C4B6; border-radius: 2px; margin: 3px;
+        .swatch { border: 1px solid #C9C4B6; border-radius: 4px; margin: 3px;
                   box-shadow: none; min-width: 34px; min-height: 26px; }
-        .dlgmsg { color: #57534B; font-size: 13px; margin: 4px 0 6px; }
+        .dlgmsg { color: #6E695E; font-size: 13px; margin: 4px 0 6px; }
         /* Destructive primary: signage red, and the LABEL node needs its own
            colour or the theme's `* { color: ink }` beats the inherited paper
            and paints near-black text on the red button. */
         .dangerbtn, .dangerbtn label { color: #FCFBF8; font-size: 13px; }
         .dangerbtn { min-height: 26px; padding: 0 14px; background: #C8341E;
-                     border: 1px solid #C8341E; border-radius: 2px;
+                     border: 1px solid #C8341E; border-radius: 8px;
                      box-shadow: none; font-weight: 600; }
-        .dangerbtn:hover { background: #A82A18; border-color: #A82A18; }
-        .ghosthint { color: #A39D8F; }
+        .dangerbtn:hover { background: #B12D19; border-color: #B12D19; }
+        .ghosthint { color: #9A9484; }
         """ % {"desk": DESK, "sheet": SHEET}).encode()
         try:
             prov = Gtk.CssProvider()

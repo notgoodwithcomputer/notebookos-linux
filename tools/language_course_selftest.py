@@ -53,7 +53,31 @@ os.makedirs(nbapp._APP_DIR, exist_ok=True)
 
 import language                                              # noqa: E402
 
-ADVANCE_MS = 40          # polls to wait out the 750ms correct-answer timer
+ADVANCE_MS = 40          # polls to wait out the correct-answer timer
+
+# COMPRESS THE LESSON TIMERS. Every delay in a lesson goes through one helper,
+# _lesson_later(ms, fn), and the biggest is the 750ms pause after a correct
+# answer before the next question. Multiplied by 3400 exercises that pause IS
+# this suite: it ran for 29m44s of which only 1m10s was CPU — 96% of the time
+# was spent asleep waiting for timers to expire.
+#
+# The duration is compressed, and nothing else. It is still a real
+# GLib.timeout_add, still registered in _lesson_sources, still cancelled by the
+# generation guard — so ordering, cancellation and the "a timer must not fire
+# across a lesson boundary" contract are all exercised exactly as they ship.
+# What is no longer exercised is the WALL-CLOCK length of the pause, which this
+# suite never checked anyway and which language's own lifecycle tests own.
+#
+# A thirty-minute gate is a gate people skip, and a skipped gate protects
+# nothing.
+_real_lesson_later = language.Language._lesson_later
+
+
+def _fast_lesson_later(self, ms, fn):
+    return _real_lesson_later(self, 1 if ms > 1 else ms, fn)
+
+
+language.Language._lesson_later = _fast_lesson_later
 
 
 def pump(rounds=8, secs=0.0):
@@ -145,11 +169,54 @@ def answer_exercise(w, ex, fails, where):
         b.clicked()
         return True
 
+    if kind == "listen":
+        # The offline stand-in for "tap what you hear": the IPA is on screen and
+        # the options are spellings. Same widgets as `choose`, different prompt.
+        hit = [b for b in classed(h, "choicebtn") if b.get_label() == ex["answer"]]
+        if not hit:
+            fails.append(where + ("the transcribed word %r is missing from %r"
+                                  % (ex["answer"], ex["options"]),))
+            return False
+        hit[0].clicked()
+        pump()
+        b = button(h, "Check")
+        if b is None or not b.get_sensitive():
+            fails.append(where + ("Check is dead with a spelling picked",))
+            return False
+        b.clicked()
+        return True
+
     if kind == "bank":
-        for tok in ex["answer"].split():
-            tile = [b for b in classed(h, "banktile") if b.get_label() == tok]
+        # Only ever click tiles that are still IN THE BANK. Both the bank and
+        # the answer line are FlowBoxes of .banktile buttons, and clicking one
+        # that has already been placed sends it BACK -- which is right, it is
+        # how a learner undoes a word. Searching the whole page for a label
+        # therefore breaks on any sentence that uses the same word twice: the
+        # Esperanto "Mi vidas la sunon kaj la lunon" placed its first `la`, then
+        # found that very tile again for the second `la` and took it away, and a
+        # perfect run scored one wrong on a question that is perfectly
+        # answerable. Same lesson as the matching round below: identify a tile
+        # by its CONTAINER, never by its text.
+        answer_box = [f for f in find(h, Gtk.FlowBox)
+                      if "bankanswer" in f.get_style_context().list_classes()]
+
+        def in_bank(b):
+            w = b
+            while w is not None:
+                if answer_box and w is answer_box[0]:
+                    return False
+                w = w.get_parent()
+            return True
+
+        # ex["tokens"] is the answer as TILED (edge punctuation stripped, so a
+        # sentence never hands its first word away by being the only tile with
+        # a comma on it). Re-splitting ex["answer"] hunts for tiles that do not
+        # exist.
+        for tok in ex.get("tokens") or ex["answer"].split():
+            tile = [b for b in classed(h, "banktile")
+                    if b.get_label() == tok and in_bank(b)]
             if not tile:
-                fails.append(where + ("word bank has no tile %r (bank=%r)"
+                fails.append(where + ("word bank has no tile %r left (bank=%r)"
                                       % (tok, ex["bank"]),))
                 return False
             tile[0].clicked()
@@ -206,6 +273,11 @@ def play(w, ui, si, skill, code, unit, fails, expect_crown):
     while w.stack.get_visible_child_name() == "lesson" and guard < 400:
         guard += 1
         L = w._lesson
+        # _lesson_complete clears the lesson and leaves the end screen on the
+        # lesson page, so "still on the lesson page" no longer implies "still
+        # has a lesson".
+        if L is None:
+            break
         if L["i"] >= len(L["ex"]):
             pump()
             break
@@ -216,12 +288,14 @@ def play(w, ui, si, skill, code, unit, fails, expect_crown):
             return kinds
         for _ in range(ADVANCE_MS):
             pump(2)
+            if w._lesson is None:      # the lesson ended on that answer
+                break
             if (w._lesson["i"] != before
                     or w.stack.get_visible_child_name() != "lesson"):
                 break
             GLib.main_context_default().iteration(False)
             time.sleep(0.03)
-        if (w._lesson["i"] == before
+        if (w._lesson is not None and w._lesson["i"] == before
                 and w.stack.get_visible_child_name() == "lesson"):
             fails.append(where + (
                 "stuck on a %s exercise (graded=%s wrong=%d)"
@@ -272,10 +346,14 @@ def check_ambiguous(w, c, fails):
             it = {"t": term, "e": want, "ipa": "", "phrase": False}
             ex = w._make_exercise("translate_to_en", it, [], pool)
             for other in meanings:
-                w._lesson = {"ui": 0, "si": 0, "ex": [ex], "i": 0, "wrong": 0,
-                             "new_keys": []}
+                # Build the state through the app's own constructor. A
+                # hand-rolled dict silently loses whatever key the engine grew
+                # last (combo, missed, answered) and the failure surfaces as a
+                # KeyError from inside _grade rather than as a content defect.
+                w._lesson = language.Language._lesson_state([ex])
                 w._graded = False
                 w._check_btn = None
+                w._choice_btns = None
                 w._result_lbl = Gtk.Label()
                 w._check_type(_Typed(other), ex)
                 if w._lesson["wrong"]:
@@ -284,9 +362,9 @@ def check_ambiguous(w, c, fails):
                         % (other, term, want),))
             # A nonsense answer must still be wrong, or "accepts everything"
             # would pass this check.
-            w._lesson = {"ui": 0, "si": 0, "ex": [ex], "i": 0, "wrong": 0,
-                         "new_keys": []}
+            w._lesson = language.Language._lesson_state([ex])
             w._graded = False
+            w._choice_btns = None
             w._result_lbl = Gtk.Label()
             w._check_type(_Typed("qqzzxx"), ex)
             if not w._lesson["wrong"]:
@@ -305,6 +383,121 @@ def check_ambiguous(w, c, fails):
     return len(ambiguous)
 
 
+def check_generator(w, c, fails):
+    """Build EVERY exercise type for EVERY term in a course and check the shape
+    of each one, without touching a widget.
+
+    Playing the lessons is the real test, but it is a SAMPLE: the generator
+    picks a kind at random per item, so a defect that only shows up in, say, the
+    reverse-select of one adjective is hit a few percent of the time and passes
+    the rest. This pass is exhaustive and deterministic -- around 1,800 per
+    course -- and it is what catches a question with no right answer among its
+    options, a question with two, a repeated option, or a word bank missing a
+    tile of its own sentence."""
+    w._open_course(c)
+    pump()
+    n = 0
+    for unit in c.get("units", []):
+        for skill in unit.get("skills", []):
+            words, phrases = w._skill_items(skill)
+            where = (c["code"], unit.get("title"), skill.get("name"))
+            for it in words:
+                for kind in ("choose", "select", "listen"):
+                    if kind == "listen" and not it.get("ipa"):
+                        continue
+                    ex = w._make_exercise(kind, it, words, phrases)
+                    n += 1
+                    opts = ex["options"]
+                    if ex["answer"] not in opts:
+                        fails.append(where + ("%s %r: the answer is not among "
+                                              "its own options" % (kind, it["t"]),))
+                        continue
+                    if len(opts) != len(set(opts)):
+                        fails.append(where + ("%s %r offers a repeated option: %r"
+                                              % (kind, it["t"], opts),))
+                    acc = {language._norm(ex["answer"])}
+                    acc |= {language._norm(a) for a in (ex.get("alts") or [])}
+                    rivals = [o for o in opts if language._norm(o) in acc]
+                    if len(rivals) > 1:
+                        fails.append(where + ("%s %r offers two accepted "
+                                              "answers: %r"
+                                              % (kind, it["t"], rivals),))
+            for it in phrases:
+                if len(language._toks(it["t"])) < 3:
+                    continue
+                ex = w._make_exercise("bank", it, words, phrases)
+                n += 1
+                for tok in ex["tokens"]:
+                    if tok not in ex["bank"]:
+                        fails.append(where + ("word bank has no tile %r for %r"
+                                              % (tok, it["t"]),))
+                ex = w._make_exercise("blank", it, words, phrases)
+                n += 1
+                if ex["answer"] not in ex["options"]:
+                    fails.append(where + ("blank %r: the missing word is not "
+                                          "among its options" % it["t"],))
+                if len(ex["options"]) != len(set(ex["options"])):
+                    fails.append(where + ("blank %r offers a repeated option: %r"
+                                          % (it["t"], ex["options"]),))
+    return n
+
+
+def check_hearts(w, c, fails):
+    """The hearts economy, end to end: a wrong answer costs one, running out
+    stops the lesson on a screen that offers a way back, and practice refills.
+
+    This is the one mechanic that can lock a learner OUT of the app, so "it
+    works" is not enough -- what matters is that the dead end has a door in it.
+    """
+    where = (c["code"], "hearts", "-")
+    w.progress["hearts_on"] = True
+    w._open_course(c)
+    pump()
+    w._fill_hearts()
+    if w._hearts() != language.HEARTS_MAX:
+        fails.append(where + ("a refill did not fill: %d" % w._hearts(),))
+    for i in range(language.HEARTS_MAX):
+        before = w._hearts()
+        w._lesson = language.Language._lesson_state([], kind="lesson")
+        w._graded = False
+        w._choice_btns = None
+        w._result_lbl = Gtk.Label()
+        w._grade(False, {"kind": "type", "answer": "x", "term": "x",
+                         "prompt": "x"})
+        pump()
+        if w._hearts() != before - 1:
+            fails.append(where + ("wrong answer %d took %d hearts, not 1"
+                                  % (i + 1, before - w._hearts()),))
+            break
+    if w._hearts() != 0:
+        fails.append(where + ("%d hearts left after %d wrong answers"
+                              % (w._hearts(), language.HEARTS_MAX),))
+    # out of hearts: a lesson must not start, and the screen must offer a move
+    w._lesson = None
+    w._start_lesson(0, 0)
+    pump()
+    if w._lesson is not None:
+        fails.append(where + ("a lesson started with no hearts",))
+    if button(w._card_holder, "Practice") is None:
+        fails.append(where + ("the out-of-hearts card offers no practice",))
+    # practice costs nothing and gives them back
+    w.progress.setdefault("seen", []).append(
+        "%s:%s" % (c["code"],
+                   language._norm(c["units"][0]["skills"][0]["words"][0]["t"])))
+    L = w._build_practice()
+    if not L:
+        fails.append(where + ("practice built no session",))
+    else:
+        w._lesson = L
+        w._lesson["i"] = len(L["ex"])
+        w._render_exercise()          # runs straight into _lesson_complete
+        pump()
+        if w._hearts() != language.HEARTS_MAX:
+            fails.append(where + ("practice left %d hearts, not %d"
+                                  % (w._hearts(), language.HEARTS_MAX),))
+    w.progress["hearts_on"] = False
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     full = "--full" in sys.argv
@@ -312,6 +505,14 @@ def main():
     w = language.Language()
     w.get_child().show_all()
     pump()
+    # HEARTS OFF for this suite, and not as a convenience: check_ambiguous
+    # deliberately types wrong answers to prove a wrong answer is still wrong,
+    # and every one of those costs a heart. Left on, the suite spent its five
+    # hearts inside the first course and then _start_lesson correctly refused to
+    # open ANY of the remaining 200 skills -- which reported as "tapping the
+    # skill produced NO lesson" 200 times and hid whatever the content actually
+    # does. The hearts economy is checked on its own at the end instead.
+    w.progress["hearts_on"] = False
     courses = [c for c in w.courses if not args or c.get("code") in args]
     if not courses:
         print("no courses found in %s" % DE)
@@ -320,8 +521,12 @@ def main():
     kinds = {}
     skills = 0
     ambig = 0
+    built = 0
     for c in courses:
         ambig += check_ambiguous(w, c, fails)
+        built += check_generator(w, c, fails)
+    print("%d exercises built and shape-checked across %d course(s)"
+          % (built, len(courses)))
     for c in courses:
         w._open_course(c)
         pump()
@@ -346,6 +551,8 @@ def main():
                                      min(5, rnd)).items():
                         kinds[k] = kinds.get(k, 0) + v
         print("%-4s replayed to %d crowns" % (c["code"], language.CROWN_MAX))
+
+    check_hearts(w, courses[0], fails)
 
     # The progress those lessons earned has to be on disk after the close.
     w.destroy()

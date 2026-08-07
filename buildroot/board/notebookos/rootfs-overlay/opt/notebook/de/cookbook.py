@@ -28,6 +28,7 @@ import cairo
 import nbapp
 import nbicons
 import nbprint
+import nbtransitions
 from nbi18n import _t  # noqa: E402
 
 # The whole library (categories, recipes, the active category filter and the
@@ -41,26 +42,40 @@ COOKBOOK_FILE = os.path.join(CFG_DIR, "cookbook.json")
 DOCUMENTS = os.path.join(HOME, "Documents")
 
 
-def _holds_records(data):
+def _is_record(v):
+    """True when this object is plainly one recipe: a mapping carrying a
+    non-empty title, ingredient list or method."""
+    return isinstance(v, dict) and any(
+        isinstance(v.get(k), str) and v.get(k)
+        for k in ("title", "ing", "steps"))
+
+
+def _holds_records(data, _depth=0):
     """True when a parsed store plainly contains recipe-shaped records, whether
     or not this app's loader managed to read them.
 
     The one thing a cookbook can never do is reopen empty and then autosave that
     emptiness over the only copy of somebody's recipes. An empty library is a
     perfectly legitimate state (a new user, or one who deleted their last
-    recipe), so the test is the SHAPE of what is in the file, never emptiness."""
-    pools = list(data.values()) if isinstance(data, dict) else [data]
-    for pool in pools:
-        if isinstance(pool, dict):
-            pool = list(pool.values())
-        if not isinstance(pool, list):
-            continue
-        for rec in pool:
-            if isinstance(rec, dict) and any(
-                    isinstance(rec.get(k), str) and rec.get(k)
-                    for k in ("title", "ing", "steps")):
-                return True
-    return False
+    recipe), so the test is the SHAPE of what is in the file, never emptiness.
+
+    The search walks the whole document (to a bounded depth), because the shapes
+    that reach this guard are exactly the ones nobody planned for. Looking only
+    for a list-of-records one level down missed a file that IS a map of recipes
+    keyed by title, and one whose recipes sit under a nested wrapper: this
+    returned False for both, the guard stayed silent, and the close-time save
+    wrote an empty library straight over the user's only copy."""
+    if _is_record(data):
+        return True
+    if _depth >= 4:                      # a store is shallow; don't recurse a
+        return False                     # pathological document forever
+    if isinstance(data, dict):
+        children = data.values()
+    elif isinstance(data, (list, tuple)):
+        children = data
+    else:
+        return False
+    return any(_holds_records(c, _depth + 1) for c in children)
 
 
 def _not_a_cookbook(data):
@@ -192,6 +207,13 @@ class Cookbook(nbapp.AppWindow):
         # On first run there is no file, so the model stays empty and the app
         # opens on its "No recipes" empty state (ships-empty rule).
         self._load_state()
+        # Undo, on the shared history every other editor uses. Cookbook was the
+        # only text-editing app in the OS without it: selecting a whole method
+        # and typing over it, or deleting a recipe, was final. Built AFTER
+        # _load_state, because the first snapshot has to be the library the user
+        # actually has rather than an empty one.
+        self.undo = nbapp.UndoHistory(self._undo_snapshot, self._undo_restore)
+        self.undo.reset()
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         row.set_hexpand(True)
@@ -352,9 +374,8 @@ class Cookbook(nbapp.AppWindow):
         outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         # small bookmark icon (red when selected, muted otherwise)
         try:
-            pb = nbicons.pixbuf(
-                "bookmark", 16, "#C8341E" if selected else "#B3AE9F")
-            icon = Gtk.Image.new_from_pixbuf(pb)
+            icon = nbicons.image(
+                "bookmark", 16, "#C8341E" if selected else "#B3AD9E")
         except Exception:
             # icon rendering must never block a row from building
             icon = Gtk.Image()
@@ -404,6 +425,7 @@ class Cookbook(nbapp.AppWindow):
     # --------------------------------------------------------------------- main
     def _build_main(self):
         self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
         self.stack.get_style_context().add_class("mainpane")
 
         # empty state
@@ -527,7 +549,21 @@ class Cookbook(nbapp.AppWindow):
         empty.show_all()
         editor.show_all()
         cook.show_all()
+        self._main_pager = nbtransitions.PageSwitcher(
+            self.stack, order=["empty", "editor", "cook"],
+            duration=nbtransitions.PAGE)
         return self.stack
+
+    def _switch_main(self, name):
+        """Navigate primary states, but never animate a same-state refresh."""
+        current = self.stack.get_visible_child_name()
+        if current == name:
+            if self._main_pager.target is None:
+                self._main_pager.switch(name, direction=nbtransitions.NONE)
+            return
+        direction = (nbtransitions.NONE
+                     if self._main_pager.target is None else None)
+        self._main_pager.switch(name, direction=direction)
 
     # ------------------------------------------------------------- cook mode
     def _build_cook(self):
@@ -673,7 +709,7 @@ class Cookbook(nbapp.AppWindow):
             self._side.hide()
         except Exception:
             pass
-        self.stack.set_visible_child_name("cook")
+        self._switch_main("cook")
 
     def _exit_cook(self, *_):
         """Back to the recipe page. Nothing was changed, so there is nothing to
@@ -683,7 +719,7 @@ class Cookbook(nbapp.AppWindow):
         except Exception:
             pass
         if self.stack.get_visible_child_name() == "cook":
-            self.stack.set_visible_child_name("editor")
+            self._switch_main("editor")
 
     def _cook_move(self, delta):
         r = self._cur()
@@ -773,6 +809,10 @@ class Cookbook(nbapp.AppWindow):
         """In cook mode the arrows (and Space) walk the steps and Esc closes it,
         so a recipe can be followed without hunting for a small button. Anything
         else, and any other page, falls through to the base handler."""
+        # Undo first, and on every page: the shortcut has to work while the
+        # caret is in an ingredient field, which is where the loss happens.
+        if nbapp.undo_keys(self.undo, ev):
+            return True
         try:
             if self.stack.get_visible_child_name() == "cook":
                 kv = ev.keyval
@@ -934,12 +974,14 @@ class Cookbook(nbapp.AppWindow):
 
     # -------------------------------------------------- structured rendering
     def _render_placeholder(self, box, text, kind):
-        # The empty read view doubles as an affordance: clicking the hint drops
+        # The empty read view doubles as an affordance: activating the hint drops
         # straight into that column's text editor, so a novice never has to hunt
         # for the small "Edit" control just to add a first line.
-        evt = Gtk.EventBox()
-        evt.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        evt.set_tooltip_text(_t("Click to add"))
+        evt = Gtk.Button()
+        evt.set_relief(Gtk.ReliefStyle.NONE)
+        evt.get_style_context().add_class("renderphbtn")
+        evt.set_tooltip_text(
+            _t("Add ingredients") if kind == "ing" else _t("Add instructions"))
         lbl = Gtk.Label(label=text, xalign=0)
         # Wrap it: on one line this hint is the widest thing in an empty
         # recipe, and it alone set the window's minimum width (1018px of the
@@ -948,8 +990,7 @@ class Cookbook(nbapp.AppWindow):
         lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
         lbl.get_style_context().add_class("renderph")
         evt.add(lbl)
-        evt.connect("button-press-event",
-                    lambda *_: self._enter_panel_edit(kind))
+        evt.connect("clicked", lambda *_: self._enter_panel_edit(kind))
         box.pack_start(evt, False, False, 0)
 
     def _enter_panel_edit(self, kind):
@@ -1080,6 +1121,7 @@ class Cookbook(nbapp.AppWindow):
 
     # ------------------------------------------------------------------ actions
     def new_recipe(self):
+        self.undo.checkpoint("New Recipe")
         cat = self.cats[self.active_cat - 1] if self.active_cat > 0 else None
         # Build through the canonical dict shape so every render/edit/persist
         # path finds the full key set (including "photo").
@@ -1088,6 +1130,7 @@ class Cookbook(nbapp.AppWindow):
         self.rebuild_list()
         self._refresh_editor()
         self._touch()
+        self.undo.commit()
 
     def _make_recipe(self, **fields):
         """Build a recipe dict with the full default key set (the same shape
@@ -1137,7 +1180,7 @@ class Cookbook(nbapp.AppWindow):
             else:
                 self.empty_title.set_text(_t("No recipe selected"))
                 self.empty_hint.set_text(_t("Select a recipe from the list"))
-            self.stack.set_visible_child_name("empty")
+            self._switch_main("empty")
             return
         self._loading = True
         # Runtime set_text bypasses the construction-time translation walk,
@@ -1158,7 +1201,7 @@ class Cookbook(nbapp.AppWindow):
         self.steps_edit_btn.set_label(_t("Edit"))
         self.savestate.set_markup('<span foreground="#7FA98C">● </span>Saved %s'
                                   % time.strftime("%H:%M"))
-        self.stack.set_visible_child_name("editor")
+        self._switch_main("editor")
         self._loading = False
 
     def _on_title_changed(self, entry):
@@ -1236,7 +1279,33 @@ class Cookbook(nbapp.AppWindow):
                 return row
         return None
 
+    def _undo_snapshot(self):
+        """The whole library as a state. _serialize already produces exactly
+        this — categories, recipes, the active filter and the selection — and
+        reusing it means undo can never capture a different subset of the model
+        than the autosave writes."""
+        return self._serialize()
+
+    def _undo_restore(self, state):
+        """Put a snapshot back on screen. Rebuilds the chips as well as the
+        list: undoing a New Category has to take the chip away too, and undoing
+        a Delete Category has to bring it back."""
+        self.cats = list(state.get("cats", []))
+        self.recipes = [self._make_recipe(**r) for r in state.get("recipes", [])]
+        self.active_cat = state.get("active_cat", 0)
+        if not (isinstance(self.active_cat, int)
+                and 0 <= self.active_cat <= len(self.cats)):
+            self.active_cat = 0
+        sel = state.get("sel", -1)
+        self.sel = sel if (isinstance(sel, int) and 0 <= sel < len(self.recipes)) \
+            else (0 if self.recipes else -1)
+        self.rebuild_chips()
+        self.rebuild_list()
+        self._refresh_editor()
+        self._touch()
+
     def _touch(self):
+        self.undo.touch()
         self.savestate.set_markup('<span foreground="#C8341E">● </span>Editing…')
         if self._save_timer:
             GLib.source_remove(self._save_timer)
@@ -1457,6 +1526,23 @@ class Cookbook(nbapp.AppWindow):
             self._flash_status("No recipe to export")
             return
         name = self._pdf_name(r)
+        # The name comes from the recipe title, so re-exporting after an edit —
+        # the usual reason to export twice — lands on the earlier PDF. Ask, using the same three strings as
+        # Novel's Save As -- one wording for "you are about to overwrite",
+        # already carried by all seventeen catalogs.
+        if os.path.exists(os.path.join(DOCUMENTS, name)):
+            self._confirm(
+                _t("Replace file?"),
+                _t("“%s” already exists in Documents. Replace it?")
+                % name,
+                _t("Replace"), lambda: self._write_export_pdf(name, r))
+            return
+        self._write_export_pdf(name, r)
+
+    def _write_export_pdf(self, name, r):
+        """Render recipe `r` to Documents/`name`. Split from _export_pdf so the
+        replace-an-existing-file question can be answered before anything is
+        written."""
         try:
             os.makedirs(DOCUMENTS, exist_ok=True)
             self._render_pdf(os.path.join(DOCUMENTS, name), r)
@@ -1527,9 +1613,9 @@ class Cookbook(nbapp.AppWindow):
             if v:
                 meta_bits.append("%s: %s" % (cap, v))
         if meta_bits:
-            emit("      ".join(meta_bits), 10, False, "#9A958A", gap_after=6)
+            emit("      ".join(meta_bits), 10, False, "#9A9484", gap_after=6)
         if pt.y + 1 <= PH - MB:
-            ink("#ECE7DA")
+            ink("#D7D2C5")
             cr.set_line_width(1.0)
             cr.move_to(ML, pt.y)
             cr.line_to(PW - MR, pt.y)
@@ -1545,9 +1631,9 @@ class Cookbook(nbapp.AppWindow):
             for ln in ing:
                 nm, amount = self._split_ing(ln)
                 line = "%s — %s" % (nm, amount) if amount else nm
-                emit(line, 11, False, "#26241F", gap_after=2)
+                emit(line, 11, False, "#2A2620", gap_after=2)
         else:
-            emit("No ingredients", 11, False, "#A39D8F", italic=True)
+            emit("No ingredients", 11, False, "#9A9484", italic=True)
 
         # Method: each non-empty line becomes a numbered step.
         emit("METHOD", 11, True, "#6E695E", gap_before=16, gap_after=6)
@@ -1555,10 +1641,10 @@ class Cookbook(nbapp.AppWindow):
                  if ln.strip()]
         if steps:
             for i, ln in enumerate(steps):
-                emit("%d.  %s" % (i + 1, ln), 11, False, "#26241F",
+                emit("%d.  %s" % (i + 1, ln), 11, False, "#2A2620",
                      gap_after=4)
         else:
-            emit("No method", 11, False, "#A39D8F", italic=True)
+            emit("No method", 11, False, "#9A9484", italic=True)
 
         surf.finish()
 
@@ -1707,6 +1793,11 @@ class Cookbook(nbapp.AppWindow):
         cancel.grab_focus()
 
     def menu_items(self, name):
+        if name == "Edit":
+            # Visible, not just bound to a key nobody can discover —
+            # the same two lines Journal, Novel and Screenplay show.
+            return nbapp.undo_menu_items(self.undo) + [nbapp.SEP] \
+                + super().menu_items("Edit")
         if name == "File":
             # cookbook.json is the sole source of truth (autosaved on every
             # edit). File offers only the in-memory New Recipe action plus a
@@ -1786,20 +1877,24 @@ class Cookbook(nbapp.AppWindow):
         self._touch()
 
     def _confirm_delete_current(self):
-        """Ask before removing the current recipe (destructive, no undo). Only
-        reachable when a recipe is selected (the menu item disables otherwise)."""
-        r = self._cur()
-        if r is None:
+        """Delete the current recipe. No confirm: it is undoable now.
+
+        This used to open a dialog whose own sentence read "This cannot be
+        undone", which is exactly what changed. Friction belongs to
+        commitment, never to mechanism -- so the delete happens at once and
+        Ctrl+Z brings it back, which is both faster for the common case and
+        safer for the mistaken one. The name is kept so the menu and every
+        other call site are unchanged."""
+        if self._cur() is None:
             return
-        title = r.get("title") or _t("Untitled recipe")
-        self._confirm(
-            "Delete Recipe",
-            "Delete “%s”? This cannot be undone." % title,
-            "Delete", self._delete_current)
+        title = self._cur().get("title") or _t("Untitled recipe")
+        self._delete_current()
+        self._flash_status(_t("Deleted “%s” — Ctrl+Z to undo") % title)
 
     def _delete_current(self):
         if not (0 <= self.sel < len(self.recipes)):
             return
+        self.undo.checkpoint("Delete Recipe")
         # Remember the deleted recipe's position within the *filtered* view so
         # its neighbour is picked from the same category, not by global index.
         vis_before = self._visible_indices()
@@ -1824,6 +1919,7 @@ class Cookbook(nbapp.AppWindow):
         self.rebuild_list()
         self._refresh_editor()
         self._touch()
+        self.undo.commit()
 
     # ---------------------------------------------------------------------- css
     def _install_css(self):
@@ -1831,17 +1927,17 @@ class Cookbook(nbapp.AppWindow):
         .sidebar { background: #F1EEE6; border-right: 1px solid #D7D2C5; }
         .chipwrap { padding: 20px 20px 16px; border-bottom: 1px solid #D7D2C5; }
         .chipflow { background: transparent; }
-        .chip { min-height: 28px; padding: 0 13px; border-radius: 2px;
-                font-size: 13px; font-weight: 500; border: 1px solid #DCD7C9;
+        .chip { min-height: 28px; padding: 0 13px; border-radius: 8px;
+                font-size: 13px; font-weight: 500; border: 1px solid #D7D2C5;
                 background: #FCFBF8; color: #3A362E; box-shadow: none; }
-        .chip:hover { background: #EFEAE0; }
+        .chip:hover { background: #EFEBE0; }
         .chip.active { background: #EAE3D2; color: #C8341E; font-weight: 600;
-                       border: 1px solid #CFC4AC; }
+                       border: 1px solid #C9C4B6; }
         .chip.active:hover { background: #EAE3D2; }
-        .chipadd { min-height: 28px; padding: 0 12px; border-radius: 2px;
+        .chipadd { min-height: 28px; padding: 0 12px; border-radius: 8px;
                    font-size: 13px; color: #8A857A; background: transparent;
-                   border: 1px dashed #B5B0A3; box-shadow: none; }
-        .chipadd:hover { background: #E3DCCB; }
+                   border: 1px dashed #B3AD9E; box-shadow: none; }
+        .chipadd:hover { background: #EAE3D2; }
         /* The theme's `* { color: ink }` lands straight on a button's label
            node, so a colour set on the button alone never reaches its text:
            every button whose label is not ink has to name the label as well. */
@@ -1851,37 +1947,37 @@ class Cookbook(nbapp.AppWindow):
 
         .recipelist { background: #F1EEE6; padding: 12px; }
         .recipelist row { padding: 0; }
-        .reciperow { padding: 12px 12px; border-radius: 2px; margin-bottom: 2px;
+        .reciperow { padding: 12px 12px; border-radius: 6px; margin-bottom: 2px;
                      border-left: 3px solid transparent; }
-        .reciperow:hover { background: #E6DFCE; }
+        .reciperow:hover { background: #F0EADC; }
         .reciperow.selected { background: #EAE3D2; border-left: 3px solid #C8341E; }
         .ricon { margin-top: 2px; }
         .rtitle { font-family: "Newsreader","Liberation Serif",serif;
                   font-size: 16px; color: #1A1916; }
-        .rmeta { font-size: 11px; letter-spacing: 0.3px; color: #9A958A; }
+        .rmeta { font-size: 11px; letter-spacing: 0.3px; color: #9A9484; }
         .emptylistbox { padding: 34px 12px; }
-        .emptylist { font-size: 11px; color: #A39D8F; font-weight: 600; }
+        .emptylist { font-size: 11px; color: #9A9484; font-weight: 600; }
         /* No tracking here. 11px + ~0.18em is this OS's UPPERCASE eyebrow
            style ("CLASSES", "TRANSITIONS"); applied to the sentence-case
            "No recipes" it rendered as "N o   r e c i p e s" -- spaced-out text
            reads as a rendering fault, and the untracked hint line directly
            under it made the mismatch obvious. Music's "No playlists" sidebar
            note, the same pattern one app over, is untracked. */
-        .emptylisthint { font-size: 12px; color: #A39D8F; }
+        .emptylisthint { font-size: 12px; color: #9A9484; }
 
         .sidefoot { border-top: 1px solid #D7D2C5; padding: 14px 18px; }
-        .newrecipe { min-height: 40px; border: 1px solid #C4BFB1; border-radius: 2px;
+        .newrecipe { min-height: 40px; border: 1px solid #C9C4B6; border-radius: 8px;
                      background: #FCFBF8; font-size: 14px; font-weight: 600;
                      color: #1A1916; box-shadow: none; }
-        .newrecipe:hover { background: #EFEAE0; }
+        .newrecipe:hover { background: #EFEBE0; }
 
         .mainpane { background: #FCFBF8; }
         .emptytitle { font-size: 15px; color: #6E695E; }
-        .emptyhint { font-size: 13px; color: #A39D8F; }
+        .emptyhint { font-size: 13px; color: #9A9484; }
 
         .edhead { padding: 20px 72px 6px; }
         .edkicker { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                    font-size: 11px; letter-spacing: 2px; color: #A39D8F;
+                    font-size: 11px; letter-spacing: 2px; color: #9A9484;
                     font-weight: 600; }
         .savestate { font-family: "Nimbus Sans","Helvetica",sans-serif;
                      font-size: 12px; color: #8A857A; }
@@ -1893,12 +1989,12 @@ class Cookbook(nbapp.AppWindow):
                   background: transparent; border: none; padding: 0;
                   margin-top: 6px; }
 
-        .metabar { margin-top: 20px; border: 1px solid #D7D2C5; border-radius: 2px;
+        .metabar { margin-top: 20px; border: 1px solid #D7D2C5; border-radius: 8px;
                    background: #FCFBF8; }
         .metacell { padding: 9px 20px 10px; }
         .metadiv { border-left: 1px solid #D7D2C5; }
         .metacap { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                   font-size: 10px; letter-spacing: 1.5px; color: #A39D8F;
+                   font-size: 10px; letter-spacing: 1.5px; color: #9A9484;
                    font-weight: 600; }
         .metaval { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 16px; color: #1A1916; background: transparent;
@@ -1913,32 +2009,34 @@ class Cookbook(nbapp.AppWindow):
         .paneledit { min-height: 0; padding: 0 2px; background: transparent;
                      border: none; box-shadow: none;
                      font-family: "Nimbus Sans","Helvetica",sans-serif;
-                     font-size: 11px; letter-spacing: 1px; color: #A79F8E; }
-        .paneledit label { color: #A79F8E; letter-spacing: 1px; }
+                     font-size: 11px; letter-spacing: 1px; color: #9A9484; }
+        .paneledit label { color: #9A9484; letter-spacing: 1px; }
         .paneledit:hover, .paneledit:hover label { color: #1A1916; }
         .edbox { font-family: "Newsreader","Liberation Serif",serif;
                  font-size: 16px; color: #1A1916; background: transparent;
                  padding: 16px 0 0; caret-color: #C8341E; }
         .edbox text { background: transparent; }
-        .edbox text selection { background-color: #F1D9D2; color: #1A1916; }
-        .edbox.placeholder text { color: #A39D8F; }
+        .edbox text selection { background-color: #EAE3D2; color: #1A1916; }
+        .edbox.placeholder text { color: #9A9484; }
 
         .renderlist { padding: 16px 0 0; background: transparent; }
         .renderph { font-family: "Newsreader","Liberation Serif",serif;
-                    font-size: 16px; color: #A39D8F; }
+                    font-size: 16px; color: #9A9484; }
+        .renderphbtn { padding: 0; border: none; background: transparent;
+                       background-image: none; box-shadow: none; }
         .ingrow { padding: 6px 0; }
         .ingname { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 16px; color: #1A1916; }
         .ingamt { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                  font-size: 12px; letter-spacing: 0.5px; color: #A79F8E; }
+                  font-size: 12px; letter-spacing: 0.5px; color: #9A9484; }
         .steprow { padding: 3px 0 15px; }
         .stepnum { min-width: 26px; min-height: 26px;
-                   border: 1px solid #C7C1B2; border-radius: 13px;
+                   border: 1px solid #C9C4B6; border-radius: 100px;
                    color: #8A857A;
                    font-family: "Nimbus Sans","Helvetica",sans-serif;
                    font-size: 12px; }
         .steptext { font-family: "Newsreader","Liberation Serif",serif;
-                    font-size: 16px; color: #33302A; }
+                    font-size: 16px; color: #2A2620; }
 
         /* Cook mode: one step at a time, in the largest type in the OS, with
            targets you can hit without looking. Same papertone surfaces, no new
@@ -1947,84 +2045,84 @@ class Cookbook(nbapp.AppWindow):
         .cookhead { padding: 20px 36px 18px; border-bottom: 1px solid #D7D2C5;
                     background: #FCFBF8; }
         .cooktitle { font-family: "Newsreader","Liberation Serif",serif;
-                     font-size: 28px; color: #1A1916; }
-        .scaler { border: 1px solid #C4BFB1; border-radius: 2px;
+                     font-size: 30px; color: #1A1916; }
+        .scaler { border: 1px solid #C9C4B6; border-radius: 8px;
                   background: #FCFBF8; }
         .scalebtn { min-width: 38px; min-height: 38px; padding: 0;
                     background: transparent; border: none; box-shadow: none;
-                    font-size: 19px; color: #3A362E; }
+                    font-size: 20px; color: #3A362E; }
         .scalebtn label { color: #3A362E; }
-        .scalebtn:hover { background: #EFEAE0; }
+        .scalebtn:hover { background: #EFEBE0; }
         .scaleval { font-family: "Nimbus Sans","Helvetica",sans-serif;
                     font-size: 14px; font-weight: 600; color: #1A1916;
                     padding: 0 14px; }
-        .cookdone { min-height: 40px; padding: 0 20px; border-radius: 2px;
-                    border: 1px solid #C4BFB1; background: #FCFBF8;
+        .cookdone { min-height: 40px; padding: 0 20px; border-radius: 8px;
+                    border: 1px solid #C9C4B6; background: #FCFBF8;
                     box-shadow: none; font-size: 14px; color: #3A362E; }
         .cookdone label { color: #3A362E; }
-        .cookdone:hover { background: #ECE8DD; }
+        .cookdone:hover { background: #EFEBE0; }
         .cookings { background: #F8F7F2; border-right: 1px solid #D7D2C5;
                     padding: 24px 26px 24px 36px; }
         .cookinghd { font-family: "Nimbus Sans","Helvetica",sans-serif;
                      font-size: 11px; letter-spacing: 2px; color: #6E695E;
                      font-weight: 600; padding-bottom: 12px;
                      border-bottom: 1px solid #C9C4B6; }
-        .cookingrow { padding: 9px 0; border-bottom: 1px solid #ECE7DA; }
+        .cookingrow { padding: 9px 0; border-bottom: 1px solid #D7D2C5; }
         .cookingname { font-family: "Newsreader","Liberation Serif",serif;
                        font-size: 17px; color: #1A1916; }
         .cookingamt { font-family: "Nimbus Sans","Helvetica",sans-serif;
                       font-size: 14px; font-weight: 600; color: #3A362E; }
         .cookingempty { font-family: "Newsreader","Liberation Serif",serif;
-                        font-size: 16px; color: #A39D8F; padding-top: 14px; }
+                        font-size: 16px; color: #9A9484; padding-top: 14px; }
         .cooksteps { padding: 24px 36px 26px; }
         .cookpos { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                   font-size: 11px; letter-spacing: 2px; color: #A39D8F;
+                   font-size: 11px; letter-spacing: 2px; color: #9A9484;
                    font-weight: 600; padding-bottom: 18px; }
         .cooksteptext { font-family: "Newsreader","Liberation Serif",serif;
-                        font-size: 26px; color: #1A1916; }
+                        font-size: 24px; color: #1A1916; }
         .cookpeek { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                    font-size: 13px; color: #A39D8F; padding-top: 26px; }
-        .cooknav { min-height: 48px; padding: 0 26px; border-radius: 2px;
-                   border: 1px solid #C4BFB1; background: #FCFBF8;
+                    font-size: 13px; color: #9A9484; padding-top: 26px; }
+        .cooknav { min-height: 48px; padding: 0 26px; border-radius: 8px;
+                   border: 1px solid #C9C4B6; background: #FCFBF8;
                    box-shadow: none; font-size: 15px; color: #1A1916;
                    margin-top: 18px; }
         .cooknav label { color: #1A1916; }
-        .cooknav:hover { background: #ECE8DD; }
-        .cooknav:disabled, .cooknav:disabled label { color: #B3AE9F; }
+        .cooknav:hover { background: #EFEBE0; }
+        .cooknav:disabled, .cooknav:disabled label { color: #B3AD9E; }
         .cooknext { background: #1A1916; border: 1px solid #1A1916; }
         .cooknext, .cooknext label { color: #FCFBF8; }
-        .cooknext:hover { background: #2A2823; }
-        .cooknext:disabled { background: #E6E1D4; border-color: #D7D2C5; }
-        .cooknext:disabled, .cooknext:disabled label { color: #B3AE9F; }
-        .startcook { min-height: 40px; padding: 0 20px; border-radius: 2px;
-                     border: 1px solid #C4BFB1; background: #FCFBF8;
+        .cooknext:hover { background: #2A2620; }
+        .cooknext:disabled { background: #EAE3D2; border-color: #D7D2C5; }
+        .cooknext:disabled, .cooknext:disabled label { color: #B3AD9E; }
+        .startcook { min-height: 40px; padding: 0 20px; border-radius: 8px;
+                     border: 1px solid #C9C4B6; background: #FCFBF8;
                      box-shadow: none; font-size: 14px; font-weight: 600;
                      color: #1A1916; margin-top: 20px; }
         .startcook label { color: #1A1916; font-weight: 600; }
-        .startcook:hover { background: #EFEAE0; }
+        .startcook:hover { background: #EFEBE0; }
 
         .catdlg, .catdlgbox { background: #F8F7F2; }
-        .catdlgbox { padding: 26px 28px; border: 1px solid #C4BFB1; }
+        .catdlgbox { padding: 26px 28px; border: 1px solid #C9C4B6; }
         .catdlgtitle { font-size: 16px; font-weight: 700; color: #1A1916; }
         .catdlgmsg { font-size: 14px; color: #3A362E; }
-        .catdlgentry { min-height: 40px; border: 1px solid #C4BFB1; border-radius: 2px;
+        .catdlgentry { min-height: 40px; border: 1px solid #C9C4B6; border-radius: 8px;
                        background: #FCFBF8; font-size: 15px; color: #1A1916; }
-        .dlgcancel { min-height: 38px; padding: 0 18px; border: 1px solid #C4BFB1;
-                     color: #3A362E; border-radius: 2px; font-size: 14px;
+        .dlgcancel { min-height: 38px; padding: 0 18px; border: 1px solid #C9C4B6;
+                     color: #3A362E; border-radius: 8px; font-size: 14px;
                      background: #FCFBF8; box-shadow: none; }
-        .dlgcancel:hover { background: #ECE8DD; }
+        .dlgcancel:hover { background: #EFEBE0; }
         .dlgok { min-height: 38px; padding: 0 18px; background: #C8341E;
-                 color: #FCFBF8; border-radius: 2px; font-size: 14px;
+                 color: #FCFBF8; border-radius: 8px; font-size: 14px;
                  font-weight: 600; box-shadow: none; border: 1px solid #C8341E; }
         .dlgok:hover { background: #B12D19; border-color: #B12D19; }
         .dlgok label { color: #FCFBF8; font-weight: 600; }
         /* non-destructive primary (Add / Save): dark ink, never signage-red;
            red is reserved for active/alert (the destructive .dlgok). */
         .dlgprimary { min-height: 38px; padding: 0 18px; background: #1A1916;
-                      color: #FCFBF8; border-radius: 2px; font-size: 14px;
+                      color: #FCFBF8; border-radius: 8px; font-size: 14px;
                       font-weight: 600; box-shadow: none;
                       border: 1px solid #1A1916; }
-        .dlgprimary:hover { background: #2A2823; border-color: #2A2823; }
+        .dlgprimary:hover { background: #2A2620; border-color: #2A2620; }
         .dlgprimary label { color: #FCFBF8; font-weight: 600; }
         """
         prov = Gtk.CssProvider()

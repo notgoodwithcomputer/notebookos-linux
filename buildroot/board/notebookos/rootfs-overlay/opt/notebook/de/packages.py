@@ -30,6 +30,7 @@ import time
 
 import nbapp
 import nbicons
+import nbtransitions
 from nbi18n import _t  # noqa: E402
 
 INK = "#1A1916"
@@ -103,7 +104,7 @@ _DESCRIPTIONS = {
     "language": "A course for learning a new language.",
     "maps": "Maps of streets and places.",
     "packages": "Lists everything installed on this computer.",
-    "sequencer": "The Notebook OS multi-track music maker.",
+    "sequencer": "Records and arranges music on eight tracks.",
     "video": "Makes movies from clips, photos and music.",
     "nbdiacritics": "Hold a letter key to type an accented version of it.",
     "nbi18n": "The interface translations.",
@@ -260,6 +261,13 @@ class Packages(nbapp.AppWindow):
         self.sel = 0
         self.query = ""
         self._flash_src = None
+        self._flash_timer = None
+        # The inspector's result line is cleared by a timer, and a timer left
+        # running past the window is a callback into a dead inspector.
+        try:
+            self.connect("destroy", lambda *_: self._cancel_flash_timer())
+        except Exception:
+            pass
         self.sort_field = None
         self.sort_desc = False
         # index -> row widget, and the visible packages in display order, kept
@@ -282,10 +290,31 @@ class Packages(nbapp.AppWindow):
         self.stack.get_style_context().add_class("pk-stack")
         self.stack.set_hexpand(True)
         self.stack.set_vexpand(True)
+        # Instant until the pager says otherwise: the pages below are added
+        # while the window is still being built, and a stack that already had a
+        # transition type would try to animate that construction.
+        self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
         self.stack.add_named(self._installed_page(), "installed")
         self.stack.add_named(self._updates_page(), "updates")
         self.stack.add_named(self._sources_page(), "sources")
         body.pack_start(self.stack, True, True, 0)
+        # The shared page-switch primitive owns the transition from here on. It
+        # sets the type and duration on EVERY switch, so the direction follows
+        # the sidebar order below: going down the list (Installed -> Updates ->
+        # Sources) slides forward and coming back up slides back, instead of
+        # every switch looking identical. Under Reduced Motion, and on the
+        # no-compositor swrast fallback, nbmotion's policy resolves to instant —
+        # exactly the NONE set above — so those machines keep the switch they
+        # had and only accelerated sessions animate. See de/nbtransitions.py.
+        self._pager = nbtransitions.PageSwitcher(
+            self.stack, order=["installed", "updates", "sources"],
+            duration=nbtransitions.PAGE)
+        # The opening view is shown, not navigated to: there is nothing to have
+        # come from, so it is stated as NONE rather than left to the default
+        # crossfade. Routed through the pager anyway so it records where the app
+        # starts — otherwise the first real click has no origin to measure a
+        # direction against and Installed -> Updates would fade, not slide.
+        self._pager.switch("installed", direction=nbtransitions.NONE)
 
         self._rebuild_list()
         self._rebuild_detail()
@@ -351,7 +380,7 @@ class Packages(nbapp.AppWindow):
             row.set_relief(Gtk.ReliefStyle.NONE)
             row.get_style_context().add_class("navrow")
             hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-            img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf(glyph, 18, MUTED))
+            img = nbicons.image(glyph, 18, MUTED)
             hb.pack_start(img, False, False, 0)
             lab = Gtk.Label(label=label, xalign=0)
             lab.get_style_context().add_class("navlabel")
@@ -389,7 +418,10 @@ class Packages(nbapp.AppWindow):
         # snapshot). The scan is a tiny /proc/mounts read — never blocking.
         if vid == "sources":
             self._refresh_sources()
-        self.stack.set_visible_child_name(vid)
+        # Through the pager, so the slide direction agrees with the sidebar the
+        # click came from; the page is refreshed BEFORE the switch either way,
+        # so what slides in is already current.
+        self._pager.switch(vid)
 
     # ---------------------------------------------------------------- installed
     def _installed_page(self):
@@ -412,7 +444,7 @@ class Packages(nbapp.AppWindow):
         search.set_valign(Gtk.Align.CENTER)
         search.set_size_request(240, 34)
         search.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf("search", 15, FAINT)),
+            nbicons.image("search", 15, FAINT),
             False, False, 0)
         self.entry = Gtk.Entry()
         self.entry.set_has_frame(False)
@@ -500,7 +532,7 @@ class Packages(nbapp.AppWindow):
         namecell.set_hexpand(True)
         if glyph is not None:
             namecell.pack_start(
-                Gtk.Image.new_from_pixbuf(nbicons.pixbuf(glyph, 20, INK)),
+                nbicons.image(glyph, 20, INK),
                 False, False, 0)
         nl = Gtk.Label(label=name, xalign=0)
         nl.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
@@ -602,17 +634,17 @@ class Packages(nbapp.AppWindow):
             pass
 
     def _update_sort_labels(self):
-        up = nbicons.pixbuf("up", 11, MUTED)
         # Vertical flip of the "up" glyph gives a down arrow without needing a
-        # separate icon; flip() returns a fresh pixbuf so the cache is untouched.
-        try:
-            down = up.flip(False)
-        except Exception:
-            down = up
+        # separate icon. Done by nbicons on the SURFACE (flip_v) rather than by
+        # GdkPixbuf.flip() on a pixbuf: the pixbuf route carries no device scale,
+        # so this one arrow would have stayed soft on a HiDPI panel while every
+        # other icon around it went sharp.
+        up = nbicons.surface("up", 11, MUTED)
+        down = nbicons.surface("up", 11, MUTED, flip_v=True)
         for f, arrow in getattr(self, "_sort_labels", {}).items():
             try:
                 if f == self.sort_field:
-                    arrow.set_from_pixbuf(down if self.sort_desc else up)
+                    arrow.set_from_surface(down if self.sort_desc else up)
                     arrow.show()
                 else:
                     arrow.hide()
@@ -649,15 +681,27 @@ class Packages(nbapp.AppWindow):
                 or q in p[KIND].lower()
                 or q in os.path.basename(p[PATH]).lower())
 
+    def _visible(self):
+        """The packages the list shows, in the order it shows them.
+
+        One place, because two callers have to agree on it. The search's
+        selection fallback used to build its own list straight off
+        enumerate(PACKAGES) — unsorted — so with the table ordered by name
+        descending, a search that hid the selection put it on "Academics"
+        while the top row on screen was "Translations": a highlighted row in
+        the middle of the list, and an inspector showing a package the reader
+        did not choose."""
+        q = self.query.strip().lower()
+        return self._sorted([(i, p) for i, p in enumerate(PACKAGES)
+                             if self._matches(p, q)])
+
     def _rebuild_list(self):
         for c in self.listbox.get_children():
             self.listbox.remove(c)
         self._rows = {}
         self._visible_order = []
         q = self.query.strip().lower()
-        matched = [(i, p) for i, p in enumerate(PACKAGES)
-                   if self._matches(p, q)]
-        matched = self._sorted(matched)
+        matched = self._visible()
         if not matched:
             # Honest empty state: tell the truth about which kind of empty it is.
             msg = (_t("No packages match the search.") if q
@@ -684,8 +728,7 @@ class Packages(nbapp.AppWindow):
         # package is no longer visible, fall back to the first visible row (or
         # clear the selection when nothing matches) so the detail inspector
         # never shows a package that isn't in the list.
-        q = self.query.strip().lower()
-        visible = [i for i, p in enumerate(PACKAGES) if self._matches(p, q)]
+        visible = [i for i, _p in self._visible()]
         if self.sel not in visible:
             self.sel = visible[0] if visible else None
             self._flash_src = None
@@ -781,7 +824,7 @@ class Packages(nbapp.AppWindow):
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         head.get_style_context().add_class("insp-head")
         head.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf(p[KEY], 36, INK)),
+            nbicons.image(p[KEY], 36, INK),
             False, False, 0)
         nm = Gtk.Label(label=p[NAME], xalign=0)
         # A long package name folds onto a second line inside the panel; it
@@ -907,12 +950,8 @@ class Packages(nbapp.AppWindow):
             ok = True
         except OSError:
             ok = False
-        self._flash_src = self.sel
-        self._flash_err = not ok
-        self._flash_text = (_t("Opening %s") % p[NAME] if ok
-                            else _t("Could not open %s") % p[NAME])
-        self._rebuild_detail()
-        GLib.timeout_add_seconds(4, self._clear_flash, self.sel)
+        self._flash(_t("Opening %s") % p[NAME] if ok
+                    else _t("Could not open %s") % p[NAME], not ok)
 
     def _on_verify(self, _b=None):
         try:
@@ -920,16 +959,12 @@ class Packages(nbapp.AppWindow):
         except (IndexError, TypeError):
             return
         ok = self._verify_module(p[PATH])
-        self._flash_src = self.sel
-        self._flash_err = not ok
         # Say what was found, not what the machine did. "Verify failed" reads as
         # though the person's own action went wrong, when what actually
         # happened is that the package could not be read.
-        self._flash_text = (_t("Checked: this package is complete") if ok
-                            else _t("This package could not be read, so it "
-                                    "could not be checked"))
-        self._rebuild_detail()
-        GLib.timeout_add_seconds(4, self._clear_flash, self.sel)
+        self._flash(_t("Checked: this package is complete") if ok
+                    else _t("This package could not be read, so it "
+                            "could not be checked"), not ok)
 
     def _verify_module(self, path):
         # A real integrity check: the module file must be present, readable, and
@@ -943,7 +978,40 @@ class Packages(nbapp.AppWindow):
         except (OSError, SyntaxError, ValueError):
             return False
 
+    def _flash(self, text, err):
+        """Show a one-line result in the inspector, and start the timer that
+        takes it away again — replacing any timer still pending from an
+        earlier result.
+
+        The source id has to be kept. Without it, pressing Verify twice (or
+        Open and then Verify) left the FIRST result's timer running, and it
+        fired on its own schedule: _clear_flash only checks WHICH PACKAGE a
+        result belongs to, not which result, so the second message was wiped
+        the moment the first one's four seconds were up — a fraction of a
+        second after it appeared, if the two presses were close together. The
+        same untracked timer also outlived the window, waking up afterwards to
+        rebuild an inspector that no longer exists."""
+        self._cancel_flash_timer()
+        self._flash_src = self.sel
+        self._flash_err = err
+        self._flash_text = text
+        self._rebuild_detail()
+        self._flash_timer = GLib.timeout_add_seconds(
+            4, self._clear_flash, self.sel)
+
+    def _cancel_flash_timer(self):
+        # Crash-safe: a source that has already fired is gone, and dropping a
+        # result line must never be able to take the app down.
+        tid = self._flash_timer
+        self._flash_timer = None
+        if tid is not None:
+            try:
+                GLib.source_remove(tid)
+            except Exception:
+                pass
+
     def _clear_flash(self, which):
+        self._flash_timer = None      # this source is finishing; nothing to cancel
         if self._flash_src == which:
             self._flash_src = None
             self._rebuild_detail()
@@ -951,6 +1019,7 @@ class Packages(nbapp.AppWindow):
 
     _flash_text = ""
     _flash_err = False
+    _flash_timer = None
 
     # ------------------------------------------------------------------ updates
     def _updates_page(self):
@@ -959,7 +1028,7 @@ class Packages(nbapp.AppWindow):
         page.set_halign(Gtk.Align.CENTER)
 
         page.pack_start(
-            Gtk.Image.new_from_pixbuf(nbicons.pixbuf("update", 44, FAINT)),
+            nbicons.image("update", 44, FAINT),
             False, False, 0)
         h = Gtk.Label(label=_t("No updates"))
         h.get_style_context().add_class("empty-h")
@@ -1090,7 +1159,7 @@ class Packages(nbapp.AppWindow):
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
             row.get_style_context().add_class("source-row")
             row.pack_start(
-                Gtk.Image.new_from_pixbuf(nbicons.pixbuf(glyph, 24, INK)),
+                nbicons.image(glyph, 24, INK),
                 False, False, 0)
             txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             txt.set_hexpand(True)
@@ -1133,10 +1202,10 @@ class Packages(nbapp.AppWindow):
         /* --- sidebar: deeper papertone panel, strong hairline divider --- */
         .sidebar { background: #F1EEE6; border-right: 1px solid #C9C4B6;
                    padding: 24px 16px; }
-        .navrow { padding: 10px 12px; border-radius: 2px; margin-bottom: 2px;
+        .navrow { padding: 10px 12px; border-radius: 6px; margin-bottom: 2px;
                   background: transparent; border: none; box-shadow: none; }
-        .navrow:hover { background: #EAE5D9; }
-        .navrow.active { background: #E6E0D2;
+        .navrow:hover { background: #EFEBE0; }
+        .navrow.active { background: #EAE3D2;
                          box-shadow: inset 3px 0 0 #C8341E; }
         .navlabel { font-size: 15px; color: #1A1916; font-weight: 500; }
         .navcount { font-size: 12px; color: #9A9484; }
@@ -1144,9 +1213,9 @@ class Packages(nbapp.AppWindow):
 
         /* --- list header + search --- */
         .pk-head { padding: 32px 28px 20px 28px; }
-        .pk-title { font-size: 26px; font-weight: 700; color: #1A1916; }
+        .pk-title { font-size: 24px; font-weight: 700; color: #1A1916; }
         .searchbox { background: #F4F2EC; border: 1px solid #D7D2C5;
-                     border-radius: 2px; padding: 0 11px; }
+                     border-radius: 8px; padding: 0 11px; }
         .searchentry { background: transparent; border: none; box-shadow: none;
                        font-size: 13px; color: #1A1916; padding: 0; margin: 0;
                        min-height: 0; }
@@ -1159,13 +1228,13 @@ class Packages(nbapp.AppWindow):
                     font-weight: 600; }
         .sorthdr { background: transparent; border: none; box-shadow: none;
                    padding: 0; margin: 0; min-height: 0; }
-        .sorthdr:hover { background: #EAE5D9; }
+        .sorthdr:hover { background: #EFEBE0; }
         .pk-list { background: #FCFBF8; }
         .datarow { padding: 0 28px; min-height: 46px;
                    border-bottom: 1px solid #D7D2C5;
                    background: transparent; border-radius: 0; }
         .datarow:hover { background: #F4F2EC; }
-        .datarow.selected { background: #EDE8DC;
+        .datarow.selected { background: #EAE3D2;
                             box-shadow: inset 3px 0 0 #C8341E; }
         .cell-name { font-size: 14px; color: #1A1916; font-weight: 500; }
         .cell-kind { font-size: 13px; color: #6E695E; }
@@ -1178,7 +1247,7 @@ class Packages(nbapp.AppWindow):
                      padding: 32px 28px; }
         .insp-none { font-size: 13px; color: #9A9484; }
         .insp-head { margin-bottom: 10px; }
-        .insp-name { font-size: 21px; font-weight: 700; color: #1A1916; }
+        .insp-name { font-size: 20px; font-weight: 700; color: #1A1916; }
         .insp-desc { font-size: 14px; color: #6E695E; margin-bottom: 24px; }
         .insp-table { border-top: 1px solid #C9C4B6; }
         .insp-row { padding: 12px 0; border-bottom: 1px solid #D7D2C5; }
@@ -1190,17 +1259,17 @@ class Packages(nbapp.AppWindow):
         /* Verify is a benign action, so the button is a warm-paper card with a
            darker-beige border. Signage red stays reserved for alerts and the
            active/selected chrome, never a decorative fill. */
-        .btn-primary { background: #FCFBF8; color: #1A1916; border-radius: 2px;
+        .btn-primary { background: #FCFBF8; color: #1A1916; border-radius: 8px;
                        font-size: 14px; font-weight: 600; min-height: 42px;
-                       border: 1px solid #C4BFB1; box-shadow: none; }
-        .btn-primary:hover { background: #ECE8DD; }
+                       border: 1px solid #C9C4B6; box-shadow: none; }
+        .btn-primary:hover { background: #EFEBE0; }
         /* Open is the one thing anyone actually wants from this window, so it
            reads as the primary: ink on a warmer card, above the paper-toned
            Verify. Still not signage red, which stays for alerts. */
-        .btn-open { background: #EAE3D2; color: #1A1916; border-radius: 2px;
+        .btn-open { background: #EAE3D2; color: #1A1916; border-radius: 8px;
                     font-size: 14px; font-weight: 600; min-height: 42px;
-                    border: 1px solid #C4BFB1; box-shadow: none; }
-        .btn-open:hover { background: #E2D9C3; }
+                    border: 1px solid #C9C4B6; box-shadow: none; }
+        .btn-open:hover { background: #DED4C2; }
         .insp-note { font-size: 12px; color: #9A9484; margin-top: 14px; }
         .flashdot { min-width: 8px; min-height: 8px; background: #6E695E;
                     border-radius: 50%; }
@@ -1209,7 +1278,7 @@ class Packages(nbapp.AppWindow):
         .flashtext { font-size: 13px; color: #6E695E; }
 
         /* --- empty / centred states --- */
-        .empty-h { font-size: 18px; font-weight: 600; color: #1A1916; }
+        .empty-h { font-size: 17px; font-weight: 600; color: #1A1916; }
         .empty-s { font-size: 13px; color: #9A9484; }
         .empty-meta { font-size: 12px; color: #9A9484; }
 
@@ -1220,9 +1289,9 @@ class Packages(nbapp.AppWindow):
         .source-detail { font-size: 13px; color: #6E695E; }
         .source-note { font-size: 12px; color: #9A9484; }
         .chip-on { font-size: 10px; letter-spacing: 0.1em; padding: 4px 10px;
-                   border-radius: 2px; background: #1A1916; color: #FCFBF8; }
+                   border-radius: 4px; background: #1A1916; color: #FCFBF8; }
         .chip-off { font-size: 10px; letter-spacing: 0.1em; padding: 4px 10px;
-                    border-radius: 2px; background: transparent;
+                    border-radius: 4px; background: transparent;
                     border: 1px solid #D7D2C5; color: #9A9484; }
         """
         prov = Gtk.CssProvider()

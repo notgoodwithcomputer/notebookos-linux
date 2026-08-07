@@ -113,12 +113,39 @@ def _daymap(v, depth=0):
     return out
 
 
-def _week_start(when=None):
-    """The Monday of the week `when` falls in, as a time-tuple epoch."""
-    t = time.time() if when is None else when
-    lt = time.localtime(t)
-    # tm_wday: Monday is 0
-    return t - lt.tm_wday * 86400
+def _day_from_ordinal(o):
+    """The "YYYY-MM-DD" key for a day number — the inverse of _ordinal.
+
+    The standard civil-from-days algorithm, for the reason nbapp.day_ordinal
+    gives: a day is a CALENDAR step, not 86400 seconds. See _week_days.
+    """
+    z = int(o) + 719468
+    era = (z if z >= 0 else z - 146096) // 146097
+    doe = z - era * 146097
+    yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    y = yoe + era * 400
+    doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    mp = (5 * doy + 2) // 153
+    d = doy - (153 * mp + 2) // 5 + 1
+    m = mp + (3 if mp < 10 else -9)
+    return "%04d-%02d-%02d" % (y + (m <= 2), m, d)
+
+
+def _week_days(when=None):
+    """The seven day keys of the week `when` falls in, Monday first.
+
+    Counted in whole calendar days from today's day number, NOT by stepping a
+    timestamp 86400 seconds at a time. Under a daylight-saving change that
+    arithmetic slides an hour and the whole strip shifts: on the evening of a
+    fall-back Sunday it read Tue..Sun+Sun, so Monday's sets disappeared from
+    the week, every row wore the wrong weekday name, and Sunday was counted
+    twice in SETS THIS WEEK. The same trap nbapp.day_ordinal was written for.
+    """
+    today = today_key(when)
+    o = _ordinal(today)
+    # 1970-01-01 was a Thursday, so (o + 3) % 7 is the weekday with Monday 0.
+    monday = o - (o + 3) % 7
+    return [_day_from_ordinal(monday + i) for i in range(7)]
 
 
 class Pips(Gtk.DrawingArea):
@@ -403,13 +430,13 @@ class Workout(nbapp.AppWindow):
            (2) OS-wide, a 3px accent edge means SELECTED (Tasks, Academics,
            Journal, Cookbook, Contacts, Packages, Music's sidebar). Today is
            not a selection, so it must not wear the selection's clothes. */
-        .wo-day.today { background: #ECE7DB;
+        .wo-day.today { background: #EFEBE0;
                         box-shadow: inset 3px 0 0 #1A1916; }
         .wo-dayname { font-size: 14px; color: #1A1916; }
         .wo-day.today .wo-dayname { font-weight: 700; }
         .wo-daymeta { font-size: 12px; color: #9A9484; }
-        .wo-sidefoot { border-top: 1px solid #DDD7C8; padding: 14px 16px; }
-        .wo-footnum { font-size: 22px; color: #1A1916; }
+        .wo-sidefoot { border-top: 1px solid #D7D2C5; padding: 14px 16px; }
+        .wo-footnum { font-size: 20px; color: #1A1916; }
         .wo-footlabel { font-size: 11px; letter-spacing: 0.12em;
                         font-weight: 700; color: #9A9484; }
         /* A live streak carries the accent for the same reason a met goal
@@ -425,14 +452,27 @@ class Workout(nbapp.AppWindow):
         .wo-score { font-size: 30px; font-weight: 700; color: #1A1916; }
         .wo-scorelabel { font-size: 11px; letter-spacing: 0.12em;
                          font-weight: 700; color: #9A9484; }
-        .wo-rule { background: #E4DFD2; }
+        .wo-rule { background: #D7D2C5; }
 
-        .wo-card { background: #F8F7F2; border: 1px solid #E2DCCE;
-                   border-radius: 3px; padding: 16px 18px; }
+        .wo-card { background: #F8F7F2; border: 1px solid #D7D2C5;
+                   border-radius: 12px; padding: 16px 18px; }
         /* Selected = the card Edit/Delete act on. Deliberately quiet: the
            accent on this screen means GOAL MET, and a red selection edge next
            to a red "GOAL MET" made one colour say two things. */
         .wo-card.sel { border-color: #B3AD9E; background: #F1EEE6; }
+        /* Keyboard focus, drawn in INK for the same reason the selection is
+           quiet: the accent on this screen means GOAL MET, and a red edge
+           around the card the keyboard happens to be on would make one colour
+           say a third thing. Ink is also what marks TODAY in the sidebar, so
+           the screen keeps one "you are here" colour.
+           An inset shadow, not a border: a wrapper EventBox draws no focus
+           ring of its own (GTK only renders one for widgets that ask), and
+           thickening the card's real border would reflow every card below it
+           on each Tab. Nothing moves; only the edge changes. The .sel
+           background is left alone, so a card that is both focused and
+           selected still reads as selected. */
+        .wo-cardhit:focus .wo-card { border-color: #1A1916;
+                                     box-shadow: inset 0 0 0 2px #1A1916; }
         .wo-name { font-size: 17px; font-weight: 700; color: #1A1916; }
         .wo-goal { font-size: 13px; color: #6E695E; }
         .wo-count { font-size: 15px; color: #1A1916; }
@@ -440,23 +480,23 @@ class Workout(nbapp.AppWindow):
         .wo-hit { font-size: 12px; letter-spacing: 0.08em; font-weight: 700;
                   color: #C8341E; }
 
-        .wo-add { background: #F8F7F2; border: 1px solid #C4BFB1;
-                  border-radius: 2px; padding: 7px 16px; font-size: 14px;
+        .wo-add { background: #F8F7F2; border: 1px solid #C9C4B6;
+                  border-radius: 8px; padding: 7px 16px; font-size: 14px;
                   color: #1A1916; box-shadow: none; }
-        .wo-add:hover { background: #ECE8DD; }
+        .wo-add:hover { background: #EFEBE0; }
         .wo-undo { background: transparent; border: 1px solid transparent;
-                   border-radius: 2px; padding: 7px 10px; font-size: 14px;
+                   border-radius: 8px; padding: 7px 10px; font-size: 14px;
                    color: #6E695E; box-shadow: none; }
-        .wo-undo:hover { background: #ECE8DD; border-color: #DDD7C8; }
+        .wo-undo:hover { background: #EFEBE0; border-color: #D7D2C5; }
 
         .wo-empty-title { font-size: 17px; color: #1A1916; }
         .wo-empty-body { font-size: 14px; color: #6E695E; }
-        .wo-cta { background: #F8F7F2; border: 1px solid #C4BFB1;
-                  border-radius: 2px; padding: 9px 18px; font-size: 14px;
+        .wo-cta { background: #F8F7F2; border: 1px solid #C9C4B6;
+                  border-radius: 8px; padding: 9px 18px; font-size: 14px;
                   color: #1A1916; box-shadow: none; }
-        .wo-cta:hover { background: #ECE8DD; }
+        .wo-cta:hover { background: #EFEBE0; }
         .wo-status { padding: 7px 16px; font-size: 12px; color: #6E695E;
-                     border-top: 1px solid #E4DFD2; background: #F8F7F2; }
+                     border-top: 1px solid #D7D2C5; background: #F8F7F2; }
         """
         try:
             prov = Gtk.CssProvider()
@@ -583,11 +623,11 @@ class Workout(nbapp.AppWindow):
     def _refresh_week(self):
         for ch in self.week_box.get_children():
             self.week_box.remove(ch)
-        start = _week_start()
+        days = _week_days()
         now = today_key()
         total = 0
         for i in range(7):
-            day = today_key(start + i * 86400)
+            day = days[i]
             done, goal = self._day_totals(day)
             total += done
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -644,7 +684,7 @@ class Workout(nbapp.AppWindow):
         wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         wrap.set_halign(Gtk.Align.CENTER)
         wrap.set_margin_top(40)
-        img = Gtk.Image.new_from_pixbuf(nbicons.pixbuf("workout", 34, FAINT))
+        img = nbicons.image("workout", 34, FAINT)
         wrap.pack_start(img, False, False, 0)
         title = Gtk.Label(label=_t("No exercises"))
         title.get_style_context().add_class("wo-empty-title")
@@ -711,11 +751,26 @@ class Workout(nbapp.AppWindow):
 
         # Clicking anywhere on the card selects it, so the Workout menu's
         # Edit/Delete act on the one you are looking at.
+        #
+        # WHY AN EVENTBOX AND NOT A Gtk.Button, which is how every other
+        # keyboard-operable card in the OS is built (Meal Planner's week
+        # slots): this card already CONTAINS two buttons, Log a set and Undo,
+        # and GTK will not put a button inside a button -- the nested pair
+        # would stop taking clicks. So the three things a button would have
+        # given for free are put on by hand: focus (set_can_focus), a name to
+        # read out (the tooltip, which nbapp turns into the accessible name),
+        # and Enter/Space activation (_on_card_key). Without them the card was
+        # pointer-only: selecting an exercise, and therefore Edit and Delete,
+        # could not be reached from the keyboard at all.
         hit = Gtk.EventBox()
         hit.set_visible_window(False)
         hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        hit.set_can_focus(True)
+        hit.get_style_context().add_class("wo-cardhit")
+        hit.set_tooltip_text(_t("Select %s") % ex["name"])
         hit.add(card)
         hit.connect("button-press-event", self._on_select, idx)
+        hit.connect("key-press-event", self._on_card_key, idx)
         return hit
 
     def _refresh_status(self):
@@ -753,6 +808,21 @@ class Workout(nbapp.AppWindow):
     def _on_select(self, _w, _ev, idx):
         self.sel = idx
         self._refresh_today()
+        return False
+
+    def _on_card_key(self, widget, ev, idx):
+        """Enter or Space on a focused card chooses it, exactly as a click does.
+
+        `idx` arrives as this connection's own user data, so each card carries
+        the row it was built for rather than reading a loop variable that has
+        moved on. Handled keys are swallowed (True) so Space cannot also scroll
+        the list out from under the card that just took the selection; every
+        other key falls through, which is what leaves Tab free to move on and
+        the nested Log a set / Undo buttons free to be reached.
+        """
+        if ev.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
+            self._on_select(widget, ev, idx)
+            return True
         return False
 
     def _on_log(self, _b, idx):

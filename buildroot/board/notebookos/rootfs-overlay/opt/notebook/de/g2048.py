@@ -69,6 +69,12 @@ class Game2048(nbapp.AppWindow):
         self.best = self._load_best()
         self._save_timer = None
         self.status = "play"
+        # What each tile label is currently showing, as (text, style class).
+        # _refresh compares against this and touches only the cells that
+        # actually changed; see the note there.
+        self._cell_state = [[None] * 4 for _ in range(4)]
+        self._score_shown = None
+        self._best_shown = None
         # win overlay must fire only ONCE; "Continue Past 2048" clears the
         # overlay and this flag keeps later moves from re-raising it.
         self._won_shown = False
@@ -509,21 +515,41 @@ class Game2048(nbapp.AppWindow):
             self._refresh()
 
     def _refresh(self):
+        # Repaint only the cells that changed. _refresh runs on every keypress,
+        # and setting a label's text or swapping its style class invalidates
+        # that widget's style and queues a resize of the whole board — so the
+        # old unconditional pass paid 16 tile restyles per move even though a
+        # move changes at most a handful of cells. Held arrow keys repeat at
+        # the keyboard's rate, and on this software-rendered, compositor-less
+        # stack that wasted relayout is what makes the board feel like it lags
+        # behind the key. _cell_state mirrors what each label is showing, and
+        # nothing outside this method touches a tile's text or "t-" classes.
         for r in range(4):
             for c in range(4):
                 v = self.board[r][c]
+                cls = None
+                if v:
+                    cls = "t-%d" % v if v in TILE_COLORS else "t-super"
+                want = (str(v) if v else "", cls)
+                if self._cell_state[r][c] == want:
+                    continue
+                self._cell_state[r][c] = want
                 lbl = self.tiles[r][c]
                 ctx = lbl.get_style_context()
-                for cls in list(ctx.list_classes()):
-                    if cls.startswith("t-"):
-                        ctx.remove_class(cls)
-                if v:
-                    lbl.set_text(str(v))
-                    ctx.add_class("t-%d" % v if v in TILE_COLORS else "t-super")
-                else:
-                    lbl.set_text("")
-        self.score_lbl.set_text("{:,}".format(self.score))
-        self.best_lbl.set_text("{:,}".format(self.best))
+                for old in list(ctx.list_classes()):
+                    if old.startswith("t-"):
+                        ctx.remove_class(old)
+                lbl.set_text(want[0])
+                if cls:
+                    ctx.add_class(cls)
+        score = "{:,}".format(self.score)
+        if score != self._score_shown:
+            self._score_shown = score
+            self.score_lbl.set_text(score)
+        best = "{:,}".format(self.best)
+        if best != self._best_shown:
+            self._best_shown = best
+            self.best_lbl.set_text(best)
         if self.status == "play":
             self.ov_box.hide()
         elif self.status == "win":
@@ -575,14 +601,14 @@ class Game2048(nbapp.AppWindow):
                    letter-spacing: -2px; }
         .g-sub { font-size: 14px; color: #6E695E; }
         .g-hint { font-size: 13px; color: #6E695E; }
-        .scorebox { background: #BCAE93; border-radius: 3px;
+        .scorebox { background: #BCAE93; border-radius: 4px;
                     padding: 9px 18px; min-width: 88px; }
-        .score-cap { font-size: 11px; letter-spacing: 1px; color: #F1EADB;
+        .score-cap { font-size: 11px; letter-spacing: 1px; color: #EFEBE0;
                      font-weight: 700; }
         .score-val { font-size: 24px; font-weight: 700; color: #FCFBF8; }
         .boardbg { background: #BCAE93; border-radius: 4px; padding: 14px; }
-        .cell { background: #CCBF9F; border-radius: 3px; }
-        .tile { border-radius: 3px; font-weight: 700;
+        .cell { background: #CCBF9F; border-radius: 4px; }
+        .tile { border-radius: 4px; font-weight: 700;
                 background: transparent; }
         .tile.t-super { background: #1A1916; color: #FCFBF8; font-size: 32px; }
         /* The `label` selector is NOT redundant: a colour set on the button
@@ -592,10 +618,10 @@ class Game2048(nbapp.AppWindow):
            button rendered as a black slab with ink text -- an unreadable,
            unlabelled rectangle, including the two on the win banner. */
         .dark-btn { background: #1A1916; border: none;
-                    box-shadow: none; border-radius: 2px; font-size: 14px;
+                    box-shadow: none; border-radius: 8px; font-size: 14px;
                     font-weight: 600; padding: 11px 22px; }
         .dark-btn, .dark-btn label { color: #FCFBF8; }
-        .dark-btn:hover { background: #33302A; }
+        .dark-btn:hover { background: #3A362E; }
         .gameover { background: rgba(222,212,194,0.85); border-radius: 4px; }
         .ov-text { font-size: 44px; font-weight: 700; color: #1A1916;
                    letter-spacing: -1px; }
@@ -608,11 +634,11 @@ class Game2048(nbapp.AppWindow):
         .g2dlgmsg { font-size: 13px; color: #6E695E; }
         .g2dlgcancel { font-size: 13px; color: #1A1916; padding: 6px 16px;
                        background: #FCFBF8; border: 1px solid #C9C4B6;
-                       border-radius: 2px; box-shadow: none; }
+                       border-radius: 8px; box-shadow: none; }
         .g2dlgcancel:hover { background: #F1EEE6; }
         .g2dlgok { font-size: 13px; padding: 6px 16px;
                    background: #C8341E; border: 1px solid #C8341E;
-                   border-radius: 2px; box-shadow: none; }
+                   border-radius: 8px; box-shadow: none; }
         .g2dlgok, .g2dlgok label { color: #FCFBF8; }   /* see .dark-btn */
         .g2dlgok:hover { background: #B12D19; border-color: #B12D19; }
         """ + tile_css).encode("utf-8")

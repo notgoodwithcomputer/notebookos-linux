@@ -12,6 +12,18 @@ import sys
 from PIL import Image, ImageFont, ImageDraw
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+# PROVEN VIABLE, NOT YET SWITCHED: DejaVuSansCondensed passes the audit with one
+# extra override (a hand-drawn `j`, which the rasteriser otherwise draws as a
+# bare stem identical to both `i` and `|`), and makes a typical line 34%
+# narrower -- a 26-cell dialogue box would hold about 40 characters.
+#
+# It is not switched on because the runtime still draws text one glyph per 8x8
+# CELL. Proportional glyphs in fixed cells look worse than monospaced ones: an
+# `i` three pixels wide leaves five pixels of gap. The swap belongs with the
+# variable-width renderer, not before it.
+#
+#   FONT_PROPORTIONAL = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf"
+#   plus OVERRIDES["j"] = ("..#", "...", "..#", "..#", "..#", "..#", "..#", "##.")
 FIRST, LAST = 32, 126
 
 # Rasterising into an 8x8 cell is destructive, and two characters that come out
@@ -19,6 +31,22 @@ FIRST, LAST = 32, 126
 # dialogue. The baseline sits one row higher than the obvious choice so that p,
 # y, g, q, j and the comma have a row left for their descender — without it
 # `o` and `p`, `v` and `y`, `,` and `.`, and `:` and `;` were byte-identical.
+# The proportional face, used only by the variable-width renderer. Condensed
+# rather than plain DejaVu Sans: the plain face collides on seven character
+# pairs at 8x8, the condensed one on three, and all three are `j` -- which the
+# rasteriser draws as a bare stem indistinguishable from `i` and `|`.
+FONT_PROP = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf"
+PROP_OVERRIDES = {
+    "j": ("..#",            # a hook below the baseline, and a stem one column
+          "...",            # right of i's, so neither i nor | can be confused
+          "..#",            # with it
+          "..#",
+          "..#",
+          "..#",
+          "..#",
+          "##."),
+}
+
 BASELINE_DY = -2
 THRESHOLD = 90
 
@@ -95,6 +123,27 @@ def glyph_rows(font, ch):
             for y in range(8)]
 
 
+def glyph_width(rows):
+    """How many columns a glyph actually occupies, plus one of spacing.
+
+    Measured from the INK, not from the font's own advance: these are
+    hand-rasterised into an 8x8 cell and several are overridden by hand, so the
+    source font's metrics describe a different picture than the one that ends
+    up on the cartridge.
+
+    A blank glyph -- the space, and nothing else, because audit() rejects any
+    other character that renders as nothing -- is given a fixed width rather
+    than zero, which would run every word together."""
+    used = 0
+    for r in rows:
+        for x in range(8):
+            if r & (1 << x):
+                used = max(used, x + 1)
+    if used == 0:
+        return 3                      # the space
+    return min(8, used + 1)           # one column of side bearing
+
+
 def audit(rows_by_ch):
     """Every pair of visible characters that renders within one pixel of
     another, plus anything that renders as nothing. Both are bugs, so the
@@ -112,21 +161,35 @@ def audit(rows_by_ch):
     return problems
 
 
+def rasterise(path, extra_overrides=None):
+    """(tile stream, rows by char) for one source face, audited."""
+    global OVERRIDES
+    saved = OVERRIDES
+    if extra_overrides:
+        OVERRIDES = dict(OVERRIDES)
+        OVERRIDES.update(extra_overrides)
+    try:
+        font = ImageFont.truetype(path, 9)
+        tiles = []
+        rows_by_ch = {}
+        for code in range(FIRST, LAST + 1):
+            rows = glyph_rows(font, chr(code))
+            rows_by_ch[code] = rows
+            for y in range(8):
+                for half in range(2):
+                    v = 0
+                    for k in range(4):
+                        if rows[y] & (1 << (half * 4 + k)):
+                            v |= 1 << (k * 4)      # pixel index 1 = ink
+                    tiles.append(v)
+        problems = audit(rows_by_ch)
+    finally:
+        OVERRIDES = saved
+    return tiles, rows_by_ch, problems
+
+
 def main():
-    font = ImageFont.truetype(FONT, 9)
-    tiles = []                     # u16 stream, 16 per glyph
-    rows_by_ch = {}
-    for code in range(FIRST, LAST + 1):
-        rows = glyph_rows(font, chr(code))
-        rows_by_ch[code] = rows
-        for y in range(8):
-            for half in range(2):
-                v = 0
-                for k in range(4):
-                    if rows[y] & (1 << (half * 4 + k)):
-                        v |= 1 << (k * 4)      # pixel index 1 = ink
-                tiles.append(v)
-    problems = audit(rows_by_ch)
+    tiles, rows_by_ch, problems = rasterise(FONT)
     if problems:
         sys.stderr.write("this font is not legible; fix OVERRIDES:\n  %s\n"
                          % "\n  ".join(problems))
@@ -138,6 +201,30 @@ def main():
     print("#define NB_FONT_COUNT %d" % (LAST - FIRST + 1))
     body = ", ".join("0x%04X" % v for v in tiles)
     print("static const u16 nb_font[] = { %s };" % body)
+    # Per-glyph widths, for measuring text and for proportional drawing. The
+    # tile data stays 8x8 -- this says how much of each tile is used, which is
+    # what a variable-width renderer advances by.
+    widths = [glyph_width(rows_by_ch[c]) for c in range(FIRST, LAST + 1)]
+    print("static const u8 nb_font_w[] = { %s };"
+          % ", ".join(str(w) for w in widths))
+
+    # A SECOND, PROPORTIONAL FACE: MEASURED AND REJECTED.
+    #
+    # DejaVuSansCondensed passes the audit with one extra override, and the
+    # obvious assumption is that it makes text much narrower. Measured against
+    # the monospaced face RENDERED PROPORTIONALLY -- which is what the runtime
+    # now does -- it does not:
+    #
+    #   fixed cells        -> proportional rendering:  33% narrower
+    #   monospaced face    -> condensed face:           6% narrower
+    #
+    # and on all-capitals text the condensed face is WIDER. Nearly all of the
+    # gain belongs to the renderer, not the face. A second face costs 3,040
+    # bytes of every cartridge, and 6% of a dialogue box is not worth that.
+    #
+    # rasterise() still takes a path and extra overrides, so this is one call
+    # away if a future face is a bigger jump. It is left unmade rather than
+    # made and half-justified.
 
     # preview
     out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/font_preview.png"

@@ -286,7 +286,27 @@ SBCFG
     mkdir -p "$SBW/graft/EFI/debian"
     cp "$SBW/grub.cfg" "$SBW/graft/EFI/debian/grub.cfg"
 
+    # -isohybrid-mbr is what makes the ISO WRITABLE TO A USB STICK. Without it
+    # the image is pure ISO9660: no MBR boot code, no signature at offset 510,
+    # so firmware copying it byte-for-byte onto a stick sees nothing bootable
+    # and silently skips the device. grub-mkrescue puts that MBR in for us
+    # above — and this re-master, which exists only to swap in the signed EFI
+    # payload, was throwing it away again. (-isohybrid-gpt-basdat alone only
+    # declares the EFI image as a GPT partition; it writes no MBR.)
+    #
+    # Measured on the shipped ISO before this line existed: bytes 510-511 were
+    # not 55 AA and there was no partition table, while a Debian ISO of the
+    # same era has both. Optical media and the .img were unaffected — this only
+    # ever broke the USB path, which is the one everybody actually uses.
+    HYBRID_MBR=
+    for c in /usr/lib/grub/i386-pc/boot_hybrid.img \
+             /usr/share/grub/i386-pc/boot_hybrid.img; do
+        [ -f "$c" ] && { HYBRID_MBR="$c"; break; }
+    done
+    [ -n "$HYBRID_MBR" ] || say "     WARNING: no boot_hybrid.img; the ISO will not boot from a USB stick"
+
     xorriso -as mkisofs -o "$SBW/sb.iso" -V "$LABEL" -J -r \
+        ${HYBRID_MBR:+-isohybrid-mbr "$HYBRID_MBR"} \
         -b boot/grub/i386-pc/eltorito.img -no-emul-boot \
         -boot-load-size 4 -boot-info-table --grub2-boot-info \
         -eltorito-alt-boot -e efi.img -no-emul-boot -isohybrid-gpt-basdat \

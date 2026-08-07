@@ -1,0 +1,119 @@
+# User-visible strings with no catalog entry: they render in
+# English in all sixteen non-English languages. --fail passes
+# on these and fails on anything NEW. Shrink this file.
+ebook.py	EPUB
+installer.py	Details: a %d MiB FAT32 EFI system partition, %san ext4 root filesystem labelled "%s" with PARTUUID %s, and the GRUB loader written to /EFI/BOOT/BOOTX64.EFI.
+media.py	Rotate right (not saved to the file)
+novel.py	Close Without Saving
+novel.py	Closing now loses the writing since the last save. Make room and close again to try once more.
+novel.py	Your last changes are not saved
+sequencer.py	%d track set to Mic
+sequencer.py	%d tracks set to Mic
+sequencer.py	%s from bar %d
+sequencer.py	Arm a track to record
+sequencer.py	Arm a track, press Record, and the take lands here.\nA drum machine track is programmed here instead.
+sequencer.py	Armed — press Record
+sequencer.py	Clear Pattern
+sequencer.py	Click a clip to select it  ·  double-click to open it  ·  drag it to move it  ·  right-click to remove it
+sequencer.py	Click a square to place a hit  ·  drag to lay down a run  ·  right-click to clear one
+sequencer.py	Click to move the playhead  ·  drag to choose the bars to loop
+sequencer.py	Clips on the timeline
+sequencer.py	Couldn't export the audio
+sequencer.py	Count-in off
+sequencer.py	Count-in on
+sequencer.py	Drag across the ruler to choose the bars to loop
+sequencer.py	Drag across this lane to make a pattern, then double-click it to program the drums
+sequencer.py	Drag either end of the highlighted part to trim the take  ·  click inside it to move the playhead
+sequencer.py	Draw a clip on a lane, then open it here
+sequencer.py	Drum machine — 808
+sequencer.py	Drum machine — 909
+sequencer.py	ECHO
+sequencer.py	EFFECTS
+sequencer.py	EVEN
+sequencer.py	Effects off while playing — this computer can't render them in time
+sequencer.py	Evens out the loud and quiet parts
+sequencer.py	Exported to %s
+sequencer.py	Exporting %d%%
+sequencer.py	HARD
+sequencer.py	HI CUT
+sequencer.py	How far behind the beat every second sixteenth falls
+sequencer.py	How fine the grid is
+sequencer.py	How hard a new hit lands
+sequencer.py	How many times the echo repeats
+sequencer.py	How much of this track goes to the echo
+sequencer.py	How much of this track goes to the room
+sequencer.py	How much room is heard
+sequencer.py	Input for %s
+sequencer.py	LO CUT
+sequencer.py	LOOP
+sequencer.py	Left / right placement
+sequencer.py	Length of the fade at the end
+sequencer.py	Length of the fade at the start
+sequencer.py	Level
+sequencer.py	Level of the whole mix
+sequencer.py	Level of this take on its own
+sequencer.py	Levels, pan, sends and the master effects
+sequencer.py	Loop This
+sequencer.py	Looping bars %d to %d
+sequencer.py	MASTER
+sequencer.py	MEDIUM
+sequencer.py	Microphone or interface
+sequencer.py	Move the playhead over a clip to loop it
+sequencer.py	Move the playhead over a clip to split it
+sequencer.py	Move this take so it starts on the nearest bar line
+sequencer.py	Name of this track
+sequencer.py	No armed track is set to Mic, so no audio is being recorded
+sequencer.py	No clips
+sequencer.py	Notes in the selected clip
+sequencer.py	Nothing selected
+sequencer.py	Play the looped bars over and over — drag across the ruler to choose them
+sequencer.py	Play these bars over and over
+sequencer.py	Press REC on this lane, then Record, to capture what you play
+sequencer.py	REPEAT
+sequencer.py	Remove All
+sequencer.py	Remove Clips
+sequencer.py	Remove every clip?
+sequencer.py	Remove every hit in this clip
+sequencer.py	Remove this track's clips
+sequencer.py	Remove this track's clips?
+sequencer.py	Removes all %d clip%s from %s, and the notes in them. Undo (Ctrl+Z) puts them back.
+sequencer.py	Removes all %d clip%s from every track, and the notes in them. Undo (Ctrl+Z) puts them back.
+sequencer.py	Repeated %d time
+sequencer.py	Repeated %d times
+sequencer.py	Room, echo and tape for the whole mix
+sequencer.py	SOFT
+sequencer.py	Select a clip first
+sequencer.py	Size of the room
+sequencer.py	Snap to Bars
+sequencer.py	Sound breaking up
+sequencer.py	Sound this track plays
+sequencer.py	Split %d clip
+sequencer.py	Split %d clips
+sequencer.py	TAPE
+sequencer.py	Takes the rumble out of this track
+sequencer.py	Takes the top off this track
+sequencer.py	Tape wobble and saturation over the whole mix
+sequencer.py	The input recorded silence — check the microphone level
+sequencer.py	There is no room left in the pattern to repeat it
+sequencer.py	There is nothing in the arrangement to export
+sequencer.py	This block has no recording in it yet.\nArm the track and record over it.
+sequencer.py	Time between echoes
+sequencer.py	Trims or removes %d clip%s past the new end. Undo (Ctrl+Z) puts them back.
+sequencer.py	Width of a beat on the grid
+sequencer.py	bar %d, %d bars long
+sequencer.py	straight
+settings.py	A copy is already running. Wait for it to finish.
+settings.py	Connect a printer by USB and switch it on, then press Find printers.
+settings.py	Copy failed.
+settings.py	Copy stopped. Files already copied remain on the stick. This backup is incomplete.
+settings.py	Each copy is written to its own dated folder on the stick. To put files back, open the stick in Finder and drag them across.
+settings.py	Every account listed here can sign in. The administrator account can change anything on this computer.
+settings.py	Follow the screen sends sound to a television while one is plugged into HDMI, and back to the built-in speakers when it is unplugged.
+settings.py	Plug in speakers or headphones, or switch on the sound device, then open Sound again.
+settings.py	Printing is not installed, so a printer cannot be set up here. A document can still be saved as a PDF from its File menu.
+settings.py	Set the date and time here, then press Set Clock. Current time confirms the change.
+settings.py	Sound is going out over HDMI, so the television sets how loud it is — use its own volume control or its remote.
+settings.py	Stopping…
+settings.py	The copy stopped unexpectedly. Files already copied remain on the stick, but this backup is incomplete.
+settings.py	These settings apply to every app. An app that is already open keeps the look it started with until it is closed and opened again.
+settings.py	This sound device has no volume control of its own. Use the volume control on the speakers.

@@ -21,6 +21,7 @@ hits them:
 """
 import json
 import os
+import re
 import sys
 
 DE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -135,6 +136,8 @@ def main():
             print("   %-3s %5d / %5d  %5.1f%%  %s" % (code, n, len(every), pct, bar))
 
     bad += check_chrome(cats)
+    bad += check_menu_paths(cats)
+    bad += check_de_register(cats)
 
     counts = "  ".join("%s=%d" % (c, len(cats[c])) for c in CODES if c in cats)
     print("%s: %s" % ("clean" if not bad else "%d PROBLEM(S)" % bad, counts))
@@ -206,9 +209,9 @@ def check_chrome(cats):
     Monitor's "Sort by ID", sitting beside three translated siblings) hid the
     same way.
 
-    Only chrome is checked. App BODY text is a much larger surface that is
-    knowingly still English in most languages, and failing on it would drown
-    the signal — the same reasoning as the coverage note above.
+    Only chrome is checked HERE. App body text is covered by its own tool,
+    tools/i18n_coverage_check.py, which reads the code and requires a catalog
+    entry for every user-visible string — run it with --fail to gate.
     """
     import glob
     english = set()
@@ -226,6 +229,95 @@ def check_chrome(cats):
                   % (os.path.basename(path), ", ".join(repr(m)
                                                        for m in missing)))
             problems += len(missing)
+    return problems
+
+
+# Menu paths quoted inside a message: "Build ▸ Build Details says why."
+MENU_PATH = re.compile("\\b(File|Edit|View|Resource|Build|Help|Format|Insert)"
+                       "\\s*\u25b8\\s*([^\u25b8]{1,40}?)"
+                       "(?:\\s|[.,:;\u2019\u201d)]|$)")
+
+
+def check_menu_paths(cats):
+    """Does a message that names a menu name the menu the reader can SEE?
+
+    "This game did not compile. Build ▸ Build Details says why." is the message
+    shown at the moment someone most needs to find that menu. In all seventeen
+    languages the word before the arrow was left as the English "Build", while
+    the menu bar showed Erstellen, Compilar, Собрать, ビルド, 构建. The message
+    named a menu that is not on screen.
+
+    The menu name is a catalog key in its own right, so the two can simply be
+    compared. A path is only wrong when the quoted word differs from that
+    menu's translation — Italian keeps "File" as "File", which is correct and
+    must not be flagged.
+    """
+    problems = 0
+    for lang, cat in sorted(cats.items()):
+        for key, val in cat.items():
+            if "\u25b8" not in val:
+                continue
+            for m in MENU_PATH.finditer(val):
+                word = m.group(1)
+                shown = cat.get(word)
+                if shown and shown != word:
+                    print("MENU PATH  %s  message says %r, the menu bar says "
+                          "%r" % (lang, word, shown))
+                    problems += 1
+    return problems
+
+
+# German settled on one register: impersonal. These patterns are narrow on
+# purpose -- each was checked against the whole catalog and the false positives
+# below are the reason they look the way they do.
+DE_DU = re.compile(r"\b(du|dein|deine|deinen|deinem|deiner|dich|dir)\b")
+DE_DU_IMP = re.compile(
+    r"(?:^|[.!?\u2014;]\s+|\bund\s+)"
+    r"(?:W\u00e4hle|Klicke|Ziehe|Tippe|Dr\u00fccke|Gib|Nimm|Setze|\u00d6ffne|"
+    r"Speichere|Mach|Schreibe|F\u00fcge|Halte|Lass|Zieh|Lege|Starte|Male|Fang|"
+    r"Schlie\u00dfe|Schlie\u00df)\b")
+DE_SIE = re.compile(
+    r"\b(?:W\u00e4hlen|Klicken|Versuchen|Lassen|Schaffen|Ziehen|Stecken|"
+    r"Nehmen|Kreuzen|Trennen|Speichern|Exportieren|Schalten|Verwenden|Leeren|"
+    r"\u00d6ffnen|Dr\u00fccken|Geben)\s+Sie\b")
+
+
+def check_de_register(cats):
+    """German addresses the reader in exactly one way, or in none.
+
+    Measured 2026-08-04 over the 412 German sentences: 367 impersonal, 27
+    formal ("Waehlen Sie ein Paket aus der Liste"), 18 informal ("Waehle etwas
+    zum Kopieren"), scattered across apps rather than confined to one. All are
+    impersonal now and this keeps them that way.
+
+    The patterns are narrow because the obvious ones are wrong:
+
+    * A bare `\bSie\b` matches "Sie gehen verloren" -- "THEY are lost", about
+      the unsaved changes. `Ihre %d Aufgabe` is "ITS tasks", about the list.
+      Only an imperative verb followed by "Sie" is reliably address.
+    * `Suche leeren` is the NOUN "search", not the imperative "search!", so a
+      verb list alone over-reports.
+    * A du-imperative need not contain "du": "Nimm den Datentraeger heraus und
+      starte neu" is invisible to a pronoun scan, which is why the imperative
+      pattern exists alongside it.
+
+    Other languages are NOT checked here. Each has its own convention -- es, it,
+    pt, pl and nl are consistently familiar, fr, ru, sr, tr and el consistently
+    polite -- and all ten are already internally consistent. A generic register
+    check across languages produced far more false positives than findings
+    (Greek alone: 6 hits, 1 real), so it is deliberately not attempted.
+    """
+    cat = cats.get("de")
+    if not cat:
+        return 0
+    problems = 0
+    for key, val in cat.items():
+        why = ("informal pronoun" if DE_DU.search(val) else
+               "informal imperative" if DE_DU_IMP.search(val) else
+               "formal address" if DE_SIE.search(val) else None)
+        if why:
+            print("DE REGISTER  %s: %s" % (why, val[:66]))
+            problems += 1
     return problems
 
 

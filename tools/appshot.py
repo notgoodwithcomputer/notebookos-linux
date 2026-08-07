@@ -76,6 +76,29 @@ def render(modname, cls, w, h, path, setup=None, after_show=None):
     return got
 
 
+def _device_scale():
+    """The scale the renders are being captured at (1 or 2).
+
+    Asked of GDK rather than of GDK_SCALE alone so it stays right if the scale
+    ever comes from a monitor instead of the environment."""
+    scale = 1
+    try:
+        from gi.repository import Gdk
+        disp = Gdk.Display.get_default()
+        mon = disp.get_primary_monitor() or disp.get_monitor(0) if disp else None
+        if mon is not None:
+            scale = max(scale, int(mon.get_scale_factor() or 1))
+    except Exception:                                             # noqa: BLE001
+        pass
+    try:
+        env = (os.environ.get("GDK_SCALE") or "").strip()
+        if env.isdigit():
+            scale = max(scale, int(env))
+    except Exception:                                             # noqa: BLE001
+        pass
+    return max(1, scale)
+
+
 def main():
     if len(sys.argv) < 4:
         print(__doc__)
@@ -92,13 +115,25 @@ def main():
             path = os.path.join(outdir, "%s_%dx%d.png" % (mod, w, h))
             try:
                 gw, gh = render(mod, cls, w, h, path)
-                flag = "" if (gw <= w and gh <= h) else \
-                    "   <<< OVERFLOWS by %dx%d" % (max(0, gw - w), max(0, gh - h))
+                # THE OVERFLOW TEST IS IN LOGICAL UNITS, THE PNG IS IN REAL
+                # PIXELS. Under GDK_SCALE=2 the capture is legitimately twice
+                # the requested size (uishot now saves the full device-resolution
+                # surface rather than a downsampled pixbuf), so comparing raw
+                # PNG dimensions against the layout budget flagged EVERY app as
+                # overflowing by exactly one screen -- turning this tool's one
+                # important signal into noise that would have been learned to be
+                # ignored, which is how a real overflow gets shipped.
+                scale = _device_scale()
+                lw, lh = gw / scale, gh / scale
+                flag = "" if (lw <= w and lh <= h) else \
+                    "   <<< OVERFLOWS by %dx%d" % (max(0, int(lw - w)),
+                                                   max(0, int(lh - h)))
             except Exception as e:
                 print("ERR  %-12s %dx%d  %s" % (mod, w, h, str(e)[:80]))
                 continue
-            print("ok   %-12s asked %dx%d  got %dx%d  %s%s"
-                  % (mod, w, h, gw, gh, path, flag))
+            extra = "" if scale == 1 else "  (%dx%d logical @%dx)" % (lw, lh, scale)
+            print("ok   %-12s asked %dx%d  got %dx%d%s  %s%s"
+                  % (mod, w, h, gw, gh, extra, path, flag))
     return 0
 
 
