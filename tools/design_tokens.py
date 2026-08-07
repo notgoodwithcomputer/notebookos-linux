@@ -202,6 +202,46 @@ RADIUS_SCALE = [0, 4, 6, 8, 12, 100]
 # (7px, 13px, 26px) can be seen.
 SPACING_STEP = 4
 
+# ----------------------------------------------------------------------- grid
+# docs/PAPER-PHYSICS.md §E3 — the layout grid, normative. The unit is
+# SPACING_STEP. Two things here are deliberately NOT multiples of it:
+# HAIRLINE, because a rule is drawn ON a boundary rather than occupying the
+# field, and the RENDERED heights of bordered controls, because the grid
+# governs the INTERIOR box — a 1px border pair is drawn outside it, so a
+# 28px interior renders 30. That is why the most-used heights in the OS are
+# all ≡ 2 (mod 4): they were on-grid all along.
+# de/nbapp.py re-exports the runtime subset (tools/ does not ship on the
+# image); tools/grid_check.py holds the copies in lockstep.
+GRID_UNIT = SPACING_STEP
+LADDER_INTERIOR = [20, 24, 28, 32, 36]   # bordered controls: interior heights
+LADDER_RENDERED = [22, 26, 30, 34, 38]   # = interior + the 1px border pair
+LADDER_OPEN = [24, 28, 32, 36, 40]       # unbordered controls sit ON the grid
+# Above the control band the general rule applies instead of named steps:
+# interior on the 4u grid — so a compound row is ≡0 (open) or ≡2 (bordered)
+# mod 4. A 76px sequencer lane (19u) and a 66px calculator key (interior 16u)
+# both conform; a 45px anything does not.
+LINE = 20              # body-text line at 13px; groups: 12 within, 24 between
+MARGIN = 24            # window edge -> content
+RAIL = 240             # THE sidebar width, OS-wide (was 210/212/240/252)
+GUTTER = 24            # rail <-> field
+HAIRLINE = 1           # drawn on the boundary it separates
+MEASURE_READ = 640     # maximum prose measure
+MEASURE_FORM = 1040    # maximum form measure (adopted from settings.MAX_W)
+PANEL_H = 46           # the strut shell.py reserves; NOT 28, whatever old
+                       # notes said — grid_check asserts every copy agrees
+THIRD_PANE_MIN_W = 1366  # below this the middle pane collapses into the rail
+# Deliberate rail exceptions — each must still fit a 1024 window minimum.
+# module name -> width, with the reason on the same line.
+RAIL_EXCEPTIONS = {
+    "illustrator": 252,  # tool dock: set the window minimum once, clipped in
+                         # CJK at 240-equivalent; widening history says keep 252
+}
+
+
+def canvas_h(screen_h):
+    """The real vertical layout budget: what the strut leaves. 722 at 768."""
+    return screen_h - PANEL_H
+
 
 def _rgb(h):
     h = h.lstrip("#")

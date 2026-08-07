@@ -60,6 +60,22 @@ NOT_A_GATE = re.compile(r"(shots?|shot)\.py$|^(appshot|controlshot|dialogshot|"
 SLOW_OR_HARDWARE = {
     "boot_test", "drive_proof", "bt_guest_check",
 }
+# Gates that are not *_selftest.py. EXPLICITLY NAMED, not globbed: several
+# *_check / *_sweep tools in this directory want arguments or produce reports
+# for a human rather than verdicts, so a checker joins the run by being named
+# here — and a new gate should be named here the day it is born, because a
+# gate outside the one command protects nothing (the release condition is
+# "one command, exit 0, covering every gate in tools/"). A named gate whose
+# file has gone missing is deliberately left in the run so it shows up as a
+# crash instead of silently narrowing coverage.
+CHECK_GATES = [
+    "anchored_term_check", "ascii_css_check", "button_contrast_check",
+    "catalog_dialect_check", "catalog_script_check", "css_parse_check",
+    "data_stress_sweep", "dead_setting_check", "ellipsis_sweep",
+    "grid_check", "image_capability_check", "jargon_sweep",
+    "language_content_check", "minsize_sweep", "picom_conf_check",
+    "self_attr_audit", "term_consistency_check", "voice_check",
+]
 PER_TEST_TIMEOUT = 300
 # Suites that legitimately need longer. A timeout reported as a failure is a
 # lie about the code, so a slow suite gets the time it needs or it does not
@@ -73,7 +89,11 @@ PER_TEST_TIMEOUT = 300
 # in 2m15 with byte-identical output. The ceiling is kept close to the real
 # cost on purpose: a generous timeout does not make a suite pass, it only
 # delays the moment a genuine hang is noticed.
-TIMEOUTS = {"language_course_selftest": 600}
+TIMEOUTS = {"language_course_selftest": 600,
+            # spawns every app at two sizes, re-measuring near-budget apps in
+            # the width-heavy languages; the honest cost of the sweep
+            "minsize_sweep": 900,
+            "data_stress_sweep": 600}
 
 # A suite's own failure vocabulary — NOT "Traceback" or "ERROR". Several suites
 # here provoke exceptions on purpose (jobs_selftest raises inside a callback to
@@ -116,6 +136,12 @@ def discover(only=None):
         if only and only not in name:
             continue
         out.append((name, path))
+    for name in CHECK_GATES:
+        if only and only not in name:
+            continue
+        # no existence check on purpose — a missing named gate must crash
+        # the run, not shrink it
+        out.append((name, os.path.join(HERE, name + ".py")))
     return out
 
 

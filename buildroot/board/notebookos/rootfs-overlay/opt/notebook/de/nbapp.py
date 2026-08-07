@@ -31,6 +31,26 @@ import nbcommands  # noqa: E402  (canonical command labels/shortcuts/grouping)
 # builder / installer. /etc/os-release (when present) is authoritative; this
 # constant is the fallback for hosts / dev checkouts without that file.
 NB_VERSION = "1.0"
+
+# The layout grid, runtime copy (docs/PAPER-PHYSICS.md §E3). The build-side
+# canonical values live in tools/design_tokens.py, which does not ship on the
+# image, so apps read them here; tools/grid_check.py fails the build when the
+# two copies (or shell.py's strut) disagree. Values are px.
+GRID_UNIT = 4
+MARGIN = 24            # window edge -> content
+RAIL = 240             # the one sidebar width (exceptions: grid_check.py)
+GUTTER = 24            # rail <-> field
+HAIRLINE = 1
+MEASURE_READ = 640     # maximum prose measure
+MEASURE_FORM = 1040    # maximum form measure
+PANEL_H = 46           # must equal shell.py's strut reservation
+THIRD_PANE_MIN_W = 1366  # below this a third pane collapses into the rail
+
+
+def canvas_h(screen_h):
+    """Vertical layout budget: screen minus the panel strut — 722 on a
+    768 panel, not the 740 an older note here claimed."""
+    return screen_h - PANEL_H
 _CSS_DONE = False
 # Decoded-once cache for the brand snail. logo.png is a 796x364 RGBA PNG;
 # new_from_file_at_scale decodes the FULL source before downscaling to the

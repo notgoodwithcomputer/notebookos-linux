@@ -374,8 +374,17 @@ at top and bottom and every value lands exactly:
 
 **The rule: the grid governs the interior box; a border is drawn outside it.** A
 bordered control is `interior + 2`; an unbordered one is the interior height
-directly (24, 28, 36, 40 — the second ladder already in the tree, and now
-explained rather than contradicted).
+directly (24, 28, 32, 36, 40 — the second ladder already in the tree, and now
+explained rather than contradicted; 32 was missing from this list until
+`grid_check`'s first sweep found it shipping five times as a legal 8u step).
+
+Above the control band (> 40) named steps stop and the same rule continues
+generally: a compound row — a calculator key, a track lane, an album row — is
+conforming when its interior sits on the grid, i.e. rendered height ≡ 0 (open)
+or ≡ 2 (bordered) mod 4. A 76 px sequencer lane is 19u; a 66 px calculator key
+is interior 16u; a 45 px anything is a defect. Below the control band (< 22)
+live spacers, progress tracks and drag handles, which are field elements, not
+boxes — the ladder does not govern them.
 
 Text rhythm: **`LINE = 20` (5u)** for the 13 px body, a 1.54 ratio.
 Grouping: **12 (3u)** within a group, **24 (6u)** between groups.
