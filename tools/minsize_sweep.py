@@ -124,6 +124,35 @@ def measure_one(name, W, H):
     return out
 
 
+def elastic_floor(name, W, H, lang, mw):
+    """The true width floor of an app whose alloc handler grows a column.
+
+    Academics and Journal size a content column FROM the allocation
+    (`_on_canvas_alloc` / `set_size_request(w, -1)` at journal.py:705), so
+    the minimum this sweep reads after the layout pumps TRACKS the probe
+    width — academics read as "0px to spare in Russian" when its real floor
+    was ~230px lower (HANDOFF 2026-08-07, both app sessions independently).
+    A grown request is not a need: the app would lay out happily narrower.
+
+    The floor is found without any app-side declaration by shrinking the
+    probe: at each step the reported minimum either FOLLOWS the window down
+    (still elastic, keep going) or STICKS (the grow hit its clamp — that is
+    the real minimum). A rigid app answers the first narrower probe with the
+    same number and exits immediately, so nothing changes for the other 28.
+    Returns (floor_w, was_elastic)."""
+    floor_w = mw
+    for probe in (W - 160, W - 320, W - 480, 560):
+        if probe < 560 or probe >= floor_w:
+            break
+        got, _err = measure(name, probe, H, lang)
+        if got is None:
+            break
+        if got[0] >= floor_w - 24:      # stopped tracking: found the clamp
+            return got[0], got[0] < mw - 24
+        floor_w = got[0]
+    return floor_w, floor_w < mw - 24
+
+
 def measure(name, W, H, lang=None):
     """Run one app in its own process. Returns (w, h) or (None, reason)."""
     env = dict(os.environ)
@@ -190,6 +219,14 @@ def main():
                 name_shown = "%s[%s]" % (name, worst_lang)
             else:
                 name_shown = name
+            # A near-budget number can still be a lie in the WIDE direction:
+            # an elastic column reports its grown request, not its need.
+            # Only near-budget apps pay for the extra probes, and height
+            # keeps the full-width measurement (narrow probes wrap taller).
+            if W - mw <= RETEST_PX:
+                mw, elastic = elastic_floor(name, W, H, worst_lang, mw)
+                if elastic:
+                    name_shown += "[elastic]"
             over = mw > W or mh > H
             near = (not over) and (W - mw <= TIGHT_PX or H - mh <= TIGHT_PX)
             if over:
