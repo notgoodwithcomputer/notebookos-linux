@@ -1,17 +1,19 @@
 #!/bin/bash
-# Boot the (no-internet) kernel under QEMU with a probe initramfs and
-# verify which socket families exist. No root required.
+# Boot the shipped desktop kernel under QEMU with a probe initramfs and
+# verify which socket families exist — the product's no-networking claim,
+# executed rather than assumed. No root required.
 #
 # usage: boot-test.sh [path-to-bzImage]
-#   PASS = kernel boots, AF_BLUETOOTH works, no other family does
-#   (on an unpurged kernel this prints the probe table and FAILs, which
-#    is useful as a baseline)
+#   PASS = kernel boots; AF_UNIX/AF_NETLINK/AF_ALG work; NOTHING else does,
+#   Bluetooth included (removed 2026-08 — the old expectation that
+#   AF_BLUETOOTH must work was this script's own stale assertion).
+#   On an unpurged kernel this prints the probe table and FAILs.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(dirname "$HERE")
 LINUX=$ROOT/linux
-BUILD=$ROOT/kbuild
+BUILD=$ROOT/kbuild-desktop
 BZIMAGE=${1:-$BUILD/arch/x86/boot/bzImage}
 WORK=$ROOT/boot-work
 LOG=$WORK/serial.log

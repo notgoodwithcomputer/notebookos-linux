@@ -4,20 +4,19 @@
  * family, prints a machine-greppable report on the serial console, and
  * powers off. Statically linked; the initramfs contains only this file.
  *
- * Expected result on the no-internet fork:
- *   the local-only families AF_UNIX (1), AF_NETLINK (16), AF_BLUETOOTH (31)
- *   and AF_ALG (38) are SUPPORTED; every other (internet) family reports
- *   EAFNOSUPPORT -- notably AF_INET (2), AF_INET6 (10) and AF_PACKET (17).
+ * Expected result on the shipped desktop kernel (post Bluetooth removal,
+ * 2026-08 — CONFIG_BT is unset; BlueZ and its last consumer are gone):
+ *   the local-only families AF_UNIX (1), AF_NETLINK (16) and AF_ALG (38)
+ *   are SUPPORTED; every other family reports EAFNOSUPPORT — notably
+ *   AF_INET (2), AF_INET6 (10), AF_PACKET (17) and now AF_BLUETOOTH (31),
+ *   which this probe REQUIRED to work until the removal made that
+ *   expectation a lie about the product.
  *
- * On AF_ALG: it is a socket family but NOT a network protocol. It is the
- * userspace interface to the kernel's own crypto engine -- there is no
- * addressing, no peer, and nothing reachable off the machine, exactly like
- * AF_UNIX. It is enabled because BlueZ builds its LE crypto on it:
- * src/shared/crypto.c requests ecb(aes) via "skcipher" and cmac(aes) via
- * "hash", and without it generate_and_write_irk() in bluetoothd's adapter
- * setup returns -1, so no LE adapter ever comes up. Kernel-side Bluetooth
- * SMP does not need it (that uses CRYPTO_LIB_AES/CRYPTO_ECDH directly) --
- * this is purely BlueZ userspace.
+ * On AF_ALG: local-only userspace crypto, no addressing, no peer, nothing
+ * reachable off the machine. It was enabled FOR BlueZ's LE crypto; BlueZ is
+ * gone, so it is now consumerless dead weight that violates no product
+ * claim. CRYPTO_USER_API is queued to be unset in the kernel-config pass
+ * after task 032 lands — flip its entry to must-fail in that same change.
  */
 #include <stdio.h>
 #include <string.h>
@@ -93,12 +92,14 @@ int main(void)
 
     int bad = 0;
     for (size_t i = 0; i < sizeof(fams) / sizeof(fams[0]); i++) {
-        /* The local-only families that MUST be supported in this fork:
-         * AF_UNIX (1), AF_NETLINK (16), AF_BLUETOOTH (31) and AF_ALG (38).
-         * None of them can carry traffic off the machine. Every other
-         * (internet) family MUST report EAFNOSUPPORT. */
+        /* The local-only families that MUST be supported in this kernel:
+         * AF_UNIX (1), AF_NETLINK (16 — udev's uevent socket) and, until
+         * the post-032 config pass unsets CRYPTO_USER_API, AF_ALG (38).
+         * None can carry traffic off the machine. Everything else MUST
+         * report EAFNOSUPPORT — including AF_BLUETOOTH (31) since the
+         * 2026-08 removal. */
         int must_work = (fams[i].af == 1 || fams[i].af == 16 ||
-                         fams[i].af == 31 || fams[i].af == 38);
+                         fams[i].af == 38);
         int s = socket(fams[i].af, fams[i].type, fams[i].proto);
         if (s >= 0) {
             printf("FAM %s -> SUPPORTED\n", fams[i].name);
