@@ -1626,6 +1626,7 @@ class VideoEditor(nbapp.AppWindow):
             clamped = True
         self._save_project()
         self._invalidate_clip_frame(c)
+        self._relaunch_live_clip(c)
         if clamped:
             # show the shortened slot in the duration field + storyboard/timeline
             self._suspend_prop = True
@@ -1683,6 +1684,7 @@ class VideoEditor(nbapp.AppWindow):
             except Exception:
                 pass
             self._suspend_prop = False
+        self._relaunch_live_clip(c)
         self._save_project()
         self._render_story()
         self._render_timeline()
@@ -2534,6 +2536,21 @@ class VideoEditor(nbapp.AppWindow):
         self._show_video_surface(True)
         self._live_clip = idx
         return True
+
+    def _relaunch_live_clip(self, clip):
+        """A trim or speed edit landed on the clip that is STREAMING: drop
+        the stream so the next transport tick (<=100ms away) reopens it under
+        the new source mapping. _playback_step early-returns while _live_clip
+        is pinned, so without this the stage keeps playing the OLD film — at
+        the old rate, or showing footage the trim just cut — while the model,
+        the timeline and the export all carry the edit. A duration edit does
+        not come here: it moves the clock's exit point, not the mapping."""
+        if not getattr(self, "_playing", False):
+            return
+        idx = getattr(self, "_live_clip", None)
+        if idx is not None and 0 <= idx < len(self.clips) \
+                and self.clips[idx] is clip:
+            self._live_clip = None
 
     def _playback_step(self, idx, clip_off):
         """Keep the picture moving inside clip `idx`.

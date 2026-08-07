@@ -143,6 +143,72 @@ def main():
     check("Stop drops the stream", app._live_clip is None)
     check("Stop rewinds the clock", app._play_pos == 0.0)
 
+    # ---- A mid-play edit reaches the stream --------------------------
+    # _playback_step early-returns while _live_clip is pinned, so a speed
+    # or trim edit on the STREAMING clip used to change the model, the
+    # timeline and the export while the stage kept playing the old film —
+    # the picture contradicting the edit the panel just confirmed. The
+    # editor must drop and reopen the stream under the new mapping within
+    # a transport tick.
+    SPEED_NAME = "a mid-play speed change reopens the stream at the new rate"
+    TRIM_NAME = "a mid-play trim change reopens inside the new cut"
+    if not have_player:
+        not_reached("no GStreamer player on this host", SPEED_NAME, TRIM_NAME)
+    else:
+        opens = []
+        real_open = app._player.open
+
+        def spy_open(path, at=0.0, rate=1.0, **kw):
+            opens.append((round(float(at), 2), float(rate)))
+            return real_open(path, at=at, rate=rate, **kw)
+
+        app._player.open = spy_open
+        try:
+            app._on_play()
+            pump(1.0)
+            if app._live_clip != 0:
+                not_reached("the clip never went to the player",
+                            SPEED_NAME, TRIM_NAME)
+            else:
+                base = len(opens)
+                app._on_speed(2.0)      # the real handler the button calls
+                pump(0.5)
+                check(SPEED_NAME,
+                      len(opens) > base and opens[-1][1] == 2.0,
+                      "opens=%r" % (opens,))
+                app._stop_playback(reset=True)
+                pump(0.2)
+
+                # reset the arrangement, then cut deep into the source while
+                # it streams: the reopen must land INSIDE the new cut (the
+                # old mapping cannot reach 4.0s this early in the clock).
+                app.clips[0]["speed"] = 1.0
+                app.clips[0]["start"] = 2.0
+                app.clips[0]["duration"] = 4
+                app._render_timeline()
+                pump(0.2)
+                app._on_play()
+                pump(0.6)
+                if app._live_clip != 0:
+                    not_reached("the clip did not stream again", TRIM_NAME)
+                else:
+                    base = len(opens)
+                    app._prop_trim.set_value(4.0)   # fires _on_trim_changed
+                    pump(0.5)
+                    reopened = len(opens) > base
+                    check(TRIM_NAME,
+                          reopened and opens[-1][0] >= 4.0,
+                          "opens=%r" % (opens,))
+                app._stop_playback(reset=True)
+                pump(0.2)
+        finally:
+            app._player.open = real_open
+            app.clips[0]["speed"] = 1.0
+            app.clips[0]["start"] = 2.0
+            app.clips[0]["duration"] = 4
+            app._render_timeline()
+            pump(0.2)
+
     # ---- the fallback still works when there is no player ------------
     # A machine whose GStreamer cannot open the file must still get the old
     # frame-by-frame picture rather than a blank screen.
