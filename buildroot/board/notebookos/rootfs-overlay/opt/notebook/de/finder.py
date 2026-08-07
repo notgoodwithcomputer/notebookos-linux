@@ -4119,20 +4119,60 @@ class Finder(Gtk.Window):
                 # hiding behind an app that never launched, and say so.
                 self._flash_status(_t("Could not open that app"))
                 return
-            # step out of the way while the app owns the screen: hidden,
-            # we can't shadow the fullscreen app or steal its focus
-            # (matchbox pins dialogs above main clients). Return when the
-            # app exits. The flag file tells the widget column to hide too.
-            try:
-                open(nbapp.APP_FLAG, "w").close()
-            except Exception:
-                pass
-            self.hide()
+            # nbmotion-inventory: system.app-launch
+            # LAUNCH CONTINUITY (PAPER-PHYSICS G1): never a frame that shows
+            # neither the Finder nor the app. Stay visible until the app's
+            # first map — the <pid>.mapped beacon nbapp writes — and only
+            # then step out of the way. Two failures stop being dark
+            # screens: a process that dies before mapping leaves the Finder
+            # exactly where it was, with a message; one that runs but never
+            # maps falls back to the old hide after a deadline.
+            self._launch_pid = proc.pid
+            self._launch_beacon = os.path.join(
+                nbapp.APP_DIR, "%d.mapped" % proc.pid)
+            self._launch_deadline = time.monotonic() + 8.0
+            GLib.timeout_add(60, self._launch_watch)
             GLib.child_watch_add(proc.pid, self._app_exited)
         else:
             # the owning app module isn't present on this image (e.g. a document
             # whose app wasn't installed): tell the user instead of nothing.
             self._flash_status(_t("That app is not available"))
+
+    def _launch_watch(self):
+        """One 60ms poll of a spawned app's road to its first map.
+
+        Returns True to keep polling. Three exits: the beacon appears (the
+        app is on screen — NOW step out of the way), the process dies first
+        (stay put and say so — the old code hid immediately and a crashed
+        launch meant a blank desktop until the child-watch fired), or the
+        deadline passes (an app that runs but never maps: fall back to the
+        old hide, which is never worse)."""
+        pid = self._launch_pid
+        if pid is None:
+            return False
+        if os.path.exists(self._launch_beacon):
+            self._launch_pid = None
+            self._step_aside()
+            return False
+        if not os.path.isdir("/proc/%d" % pid):
+            self._launch_pid = None
+            self._flash_status(_t("Could not open that app"))
+            return False
+        if time.monotonic() > self._launch_deadline:
+            self._launch_pid = None
+            self._step_aside()
+            return False
+        return True
+
+    def _step_aside(self):
+        # Hidden, we can't shadow the fullscreen app or steal its focus
+        # (matchbox pins dialogs above main clients); the flag file tells
+        # the widget column to hide too. Return when the app exits.
+        try:
+            open(nbapp.APP_FLAG, "w").close()
+        except Exception:
+            pass
+        self.hide()
 
     def _flash_status(self, msg, restore_ms=2400):
         # Show a transient message in the status bar, then restore the live item

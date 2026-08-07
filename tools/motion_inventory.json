@@ -39,8 +39,14 @@
     "PAGE"
    ],
    "transform": true,
-   "status": "unimplemented",
-   "pacing": null
+   "status": "partial",
+   "pacing": null,
+   "binding": {
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+    "symbol_or_marker": "system.app-launch"
+   },
+   "note": "Continuity half landed 2026-08-08: the Finder holds until the app's first map (nbapp <pid>.mapped beacon), a crashed launch never blanks the desktop, and an unmapped-but-running app falls back at a deadline. The icon-grows-into-window transform is the remaining half."
   },
   {
    "id": "system.app-close",

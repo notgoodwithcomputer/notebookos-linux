@@ -254,6 +254,11 @@ def launch_failures(home):
         def _app_exited(self, *_args):
             pass
 
+        def _launch_watch(self):
+            # launch continuity is finder_launch_selftest's subject; this
+            # suite tests ROUTING, so the watcher is an inert stub here
+            return False
+
     try:
         finder.DE_DIR = os.path.join(home, "no-such-de")
         p = Recorder(home)

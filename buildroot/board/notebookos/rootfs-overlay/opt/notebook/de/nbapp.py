@@ -842,6 +842,15 @@ def _refresh_app_flag():
     try:
         alive = False
         for name in os.listdir(_APP_DIR):
+            if name.endswith(".mapped"):
+                # the launch-continuity beacon (see AppWindow._map_beacon):
+                # reaped here with its process, exactly like the pid marker
+                if not os.path.isdir("/proc/" + name[:-len(".mapped")]):
+                    try:
+                        os.remove(os.path.join(_APP_DIR, name))
+                    except OSError:
+                        pass
+                continue
             if not name.isdigit():
                 continue
             if os.path.isdir("/proc/" + name):
@@ -1747,6 +1756,19 @@ class AppWindow(Gtk.Window):
 
     def _assert_fullscreen(self, *_):
         self.fullscreen()
+        # The launch-continuity beacon (G1): the Finder holds the screen
+        # until this app's first map, watching for <pid>.mapped in the shared
+        # app directory. Written once; reaped with the pid marker by
+        # _refresh_app_flag when the process is gone.
+        if not getattr(self, "_map_beacon_done", False):
+            self._map_beacon_done = True
+            try:
+                os.makedirs(_APP_DIR, exist_ok=True)
+                with open(os.path.join(_APP_DIR,
+                                       "%d.mapped" % os.getpid()), "w"):
+                    pass
+            except Exception:                                     # noqa: BLE001
+                pass
         return False
 
     # -- chrome --
