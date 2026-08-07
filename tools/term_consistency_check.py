@@ -41,6 +41,40 @@ DE = os.path.join(HERE, "..", "buildroot", "board", "notebookos",
 # The FIRST root listed is the agreed term; the rest are the words that have
 # turned up as alternatives and must not come back.
 CONCEPTS = {
+    # The first OS-WIDE concept (task 026): curated from a measured survey
+    # (--survey '\bfolders?\b', 2026-08-07) that showed every language
+    # already on ONE root across seven clean keys — this entry LOCKS that
+    # state. sr regressed here once (a folder was 'mapa' while the OS ships
+    # a Maps app); maps.py is deliberately OUT of scope because the Maps
+    # app's own Serbian name legitimately contains the stray root — the
+    # `ficha` lesson: scope decides what a word may mean.
+    "folder": {
+        "pattern": r"\bfolders?\b",
+        "apps": {"finder.py", "nbpicker.py", "gbasdk.py", "music.py",
+                 "media.py", "video.py", "sequencer.py"},
+        "also": ("A folder for the backup could not be",
+                 "Scanning your Home folder",
+                 "This folder has nothing this app can open"),
+        "roots": {
+            "de": [r"ordner", r"verzeichnis"],
+            "el": [r"φάκελ"],
+            "eo": [r"dosieruj"],
+            "es": [r"carpet", r"directori"],
+            "fr": [r"dossier", r"répertoire"],
+            "hi": [r"फ़ोल्डर|फोल्डर"],
+            "it": [r"cartell", r"\bdirectory"],
+            "ja": [r"フォルダ"],
+            "ko": [r"폴더"],
+            "nl": [r"\bmap\b|mappen"],  # 'map' IS Dutch for folder — correct
+            "pl": [r"folder"],
+            "pt": [r"\bpasta", r"diretóri"],
+            "ru": [r"папк|папок"],
+            "sr": [r"fascikl", r"\bmap[aeiu]\b"],  # mapa must not come back
+            "tr": [r"klasör"],
+            "yi": [r"פּאַפּקע"],
+            "zh": [r"文件夹"],
+        },
+    },
     "tile": {
         "pattern": r"\btiles?\b",
         "apps": {"gbasdk.py", "gbahelp.py", "gbabuild.py"},
@@ -150,6 +184,51 @@ def owned_by(key, src, apps):
     return bool(found) and found <= apps
 
 
+def survey(english, src, pattern, apps):
+    """Show every language's ACTUAL word choices for a concept, so a new
+    CONCEPTS entry is curated from measured data instead of invented roots.
+
+    This is how the check goes OS-wide without repeating the `ficha` mistake
+    (unifying words that correctly differ because the concepts differ): the
+    survey scopes keys by OWNING APP, a human reads the real values, and only
+    a demonstrated multi-root split becomes a CONCEPTS entry.
+
+        python3 term_consistency_check.py --survey '\\bfolders?\\b' finder.py
+    """
+    pat = re.compile(pattern, re.I)
+    keys = [k for k in english if pat.search(k)]
+    if apps:
+        keys = [k for k in keys if owned_by(k, src, apps)]
+    if not keys:
+        print("no keys match%s" % (" in those apps" if apps else ""))
+        return 1
+    owners = {}
+    for k in keys:
+        held = {a for a, t in src.items()
+                if json.dumps(k, ensure_ascii=False) in t
+                or "'" + k.replace("'", "\\'") + "'" in t}
+        owners[k] = sorted(held) or ["(not found as a literal)"]
+    print("%d keys match %r%s" % (len(keys), pattern,
+                                  " owned by %s" % ", ".join(sorted(apps))
+                                  if apps else ""))
+    for k in sorted(keys):
+        print("  %-52s %s" % (k[:52], ",".join(owners[k])[:40]))
+    langs = sorted(n[5:-5] for n in os.listdir(DE)
+                   if n.startswith("lang_") and n.endswith(".json"))
+    for lang in langs:
+        try:
+            with io.open(os.path.join(DE, "lang_%s.json" % lang),
+                         encoding="utf-8") as fh:
+                cat = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        vals = sorted({cat.get(k, "«missing»")[:56] for k in keys})
+        print("%s:" % lang)
+        for v in vals:
+            print("    %s" % v)
+    return 0
+
+
 def main():
     try:
         with io.open(os.path.join(DE, "lang_es.json"), encoding="utf-8") as fh:
@@ -163,6 +242,12 @@ def main():
             with io.open(os.path.join(DE, name), encoding="utf-8",
                          errors="replace") as fh:
                 src[name] = fh.read()
+
+    if "--survey" in sys.argv:
+        i = sys.argv.index("--survey")
+        pattern = sys.argv[i + 1]
+        apps = set(sys.argv[i + 2:])
+        return survey(english, src, pattern, apps)
 
     problems = 0
     for concept, spec in sorted(CONCEPTS.items()):
