@@ -17,10 +17,8 @@ This module carries three things:
   * a small themed Print dialog .. print_document() / print_booklet()
   * page/booklet rendering ....... simple_pdf() / booklet_pdf()
 
-Discovery is four `lpstat` calls at four seconds apiece, so the dialog runs it
-on a background job (see discover_printers_async) and opens immediately; only
-submission and the app's own PDF rendering still happen on the UI thread, and
-on_print says why.
+Discovery, document rendering, and sending all run as background jobs, so the
+dialog opens immediately and remains responsive throughout printing.
 
 booklet_pdf() is the "Zine Print" engine shared by Novel and Screenplay: it lays
 N half-letter (5.5x8.5") logical pages 2-up onto letter sheets in saddle-stitch
@@ -37,8 +35,10 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 
 import nbjobs
+import nbmotion
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -335,6 +335,18 @@ def submit_pdf(pdf_path, printer=None, copies=1, options=None,
 
 
 # ---- page rendering --------------------------------------------------------
+_RENDER_CONTEXT = threading.local()
+
+
+def _render_step(done, total):
+    """Checkpoint and report a page boundary when printing in a worker."""
+    job = getattr(_RENDER_CONTEXT, "job", None)
+    if job is None:
+        return
+    job.checkpoint()
+    job.progress(0.05 + 0.75 * (done / float(max(1, total))), "rendering")
+
+
 def simple_pdf(out_path, page_count, draw_page, w_pt=HALF_W_PT, h_pt=HALF_H_PT):
     """Render page_count logical pages sequentially into a PDF (one logical page
     per sheet). draw_page(cr, page_no, w, h) draws 1-indexed page page_no with
@@ -342,11 +354,14 @@ def simple_pdf(out_path, page_count, draw_page, w_pt=HALF_W_PT, h_pt=HALF_H_PT):
     import cairo
     surf = cairo.PDFSurface(out_path, w_pt, h_pt)
     cr = cairo.Context(surf)
-    for n in range(1, max(1, page_count) + 1):
+    total = max(1, page_count)
+    for n in range(1, total + 1):
+        _render_step(n - 1, total)
         cr.save()
         draw_page(cr, n, w_pt, h_pt)
         cr.restore()
         cr.show_page()
+        _render_step(n, total)
     surf.finish()
     return out_path
 
@@ -388,7 +403,9 @@ def booklet_pdf(out_path, page_count, draw_page, fold_line=False):
     surf = cairo.PDFSurface(out_path, SHEET_W_PT, SHEET_H_PT)
     cr = cairo.Context(surf)
     sides = 0
+    total_sides = max(1, total4 // 2)
     for fl, fr, bl, br in _booklet_order(total4):
+        _render_step(sides, total_sides)
         place(cr, fl, 0)              # front side: [left | right]
         place(cr, fr, HALF_W_PT)
         # The fold, on the OUTSIDE of the finished booklet only. Sheet 1's
@@ -406,10 +423,12 @@ def booklet_pdf(out_path, page_count, draw_page, fold_line=False):
             cr.restore()
         cr.show_page()
         sides += 1
+        _render_step(sides, total_sides)
         place(cr, bl, 0)             # back side: [left | right]
         place(cr, br, HALF_W_PT)
         cr.show_page()
         sides += 1
+        _render_step(sides, total_sides)
     surf.finish()
     return sides
 
@@ -610,6 +629,9 @@ _CSS = b"""
              box-shadow: none; font-size: 14px; font-weight: 600; }
 .nbprint-primary:hover { background: #B12D19; border-color: #B12D19; }
 .nbprint-primary:disabled { background: #C9C4B6; border-color: #C9C4B6; color: #FCFBF8; }
+.nbprint-progress trough { min-height: 8px; background: #DED4C2; border: none; }
+.nbprint-progress progress { min-height: 8px; background: #C8341E;
+                             background-image: none; border: none; }
 """
 _css_done = False
 
@@ -690,7 +712,41 @@ NO_PRINTER_NOTE = "File ▸ Export to PDF saves this document as a file instead.
 LOOKING_TEXT = "Looking for printers…"
 
 
-def _print_body(win, box, printers, default, job_name, make_pdf, booklet,
+PRINT_KEY = "print"
+
+
+def _print_worker(job, make_pdf, printer, copies, options, job_name):
+    """Render and hand off one complete file, entirely off the UI thread."""
+    job.progress(0.0, "preparing")
+    _RENDER_CONTEXT.job = job
+    path = None
+    try:
+        job.checkpoint()
+        path = make_print_file(make_pdf)
+        job.checkpoint()
+        job.progress(0.82, "sending")
+        ok, message = submit_pdf(path, printer=printer, copies=copies,
+                                 options=options, job_name=job_name)
+        job.checkpoint()
+        if not ok:
+            raise RuntimeError(message)
+        job.progress(1.0, "sent")
+        return True
+    finally:
+        _RENDER_CONTEXT.job = None
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def _print_failure(_error):
+    return ("Printing stopped before the document was sent. Your document is "
+            "safe. Check the printer, then try again.")
+
+
+def _print_body(win, box, owner, printers, default, job_name, make_pdf, booklet,
                 booklet_note, media):
     """The contents of the Print dialog once the printer list is known."""
     h = Gtk.Label(label="Print", xalign=0)
@@ -737,7 +793,6 @@ def _print_body(win, box, printers, default, job_name, make_pdf, booklet,
     row.set_margin_top(10)
     cancel = Gtk.Button(label="Cancel")
     cancel.get_style_context().add_class("nbprint-btn")
-    cancel.connect("clicked", lambda *_: win.destroy())
     go = Gtk.Button(label="Print")
     go.get_style_context().add_class("nbprint-primary")
     row.pack_end(go, False, False, 0)
@@ -749,31 +804,53 @@ def _print_body(win, box, printers, default, job_name, make_pdf, booklet,
     status.get_style_context().add_class("nbprint-note")
     box.pack_start(status, False, False, 0)
 
+    progress = Gtk.ProgressBar()
+    progress.set_fraction(0.0)
+    progress.get_style_context().add_class("nbprint-progress")
+    box.pack_start(progress, False, False, 0)
+    progress.hide()
+
+    scalar = nbmotion.Scalar(
+        progress, 0.0, on_frame=progress.set_fraction,
+        duration=nbmotion.SURFACE_IN, easing=nbmotion.LINEAR)
+
+    def cancel_print(*_args):
+        if owner.cancel(PRINT_KEY):
+            status.set_text("Stopping printing…")
+            cancel.set_sensitive(False)
+        else:
+            win.destroy()
+        return True
+
+    win._nbprint_cancel = cancel_print
+    cancel.connect("clicked", cancel_print)
+
+    def on_progress(fraction, phase):
+        fraction = max(scalar.target, min(1.0, float(fraction or 0.0)))
+        scalar.animate_to(fraction, easing=nbmotion.LINEAR)
+        status.set_text("Sending to the printer…" if phase == "sending"
+                        else "Preparing pages…")
+
+    def on_done(_value):
+        scalar.animate_to(1.0, easing=nbmotion.LINEAR,
+                          on_done=lambda _finished: win.destroy())
+
+    def on_error(error):
+        status.set_text(_print_failure(error))
+        progress.hide()
+        go.set_sensitive(True)
+        cancel.set_sensitive(True)
+
+    def on_cancel():
+        win.destroy()
+
     def on_print(_b):
-        # This handler stays on the UI thread ON PURPOSE, and is the one part of
-        # the dialog that was NOT moved onto nbjobs. make_pdf is the app's own
-        # renderer: Writer walks a live Gtk.TextBuffer, Novel and Screenplay
-        # measure with PangoCairo layouts created from widget state, Academics
-        # reads its stores as the window holds them. None of that is safe to
-        # touch from a worker thread — GTK is not thread-safe and Pango/cairo
-        # contexts made on the UI thread are not either — and a renderer that
-        # races the widget it is reading produces a document that is WRONG
-        # rather than one that is late. Freezing for the length of a render is
-        # the correct trade here; silently printing torn state is not.
-        #
-        # Rendering + spooling blocks this handler for a beat; without this the
-        # button stays live and an impatient second click prints twice.
         go.set_sensitive(False)
-        status.set_text("Preparing…")
-        while Gtk.events_pending():
-            Gtk.main_iteration()
+        cancel.set_sensitive(True)
+        progress.show()
+        status.set_text("Preparing pages…")
         pname = printers[combo.get_active() if combo.get_active() >= 0 else 0]["name"]
-        try:
-            path = make_print_file(make_pdf)
-        except Exception as e:
-            status.set_text(_prepare_problem(e))
-            go.set_sensitive(True)
-            return
+        copy_count = int(copies.get_value())
         # The page size the DOCUMENT was rendered at, not a hard-coded Letter.
         # Spooling an A4 PDF as Letter makes CUPS scale the whole page down to
         # fit, so every margin the writer set in Page Setup came out wrong.
@@ -796,18 +873,12 @@ def _print_body(win, box, printers, default, job_name, make_pdf, booklet,
                 # other way, the give-away is the back sides reading in the
                 # wrong order — everything else about the job is unaffected.
                 opts["sides"] = "two-sided-short-edge"
-        ok, msg = submit_pdf(path, printer=pname,
-                             copies=int(copies.get_value()),
-                             options=opts, job_name=job_name)
-        try:
-            os.unlink(path)
-        except Exception:
-            pass
-        if ok:
-            win.destroy()
-        else:
-            status.set_text(msg)
-            go.set_sensitive(True)
+        owner.start(
+            PRINT_KEY,
+            lambda job: _print_worker(job, make_pdf, pname,
+                                      copy_count, opts, job_name),
+            on_done=on_done, on_error=on_error, on_cancel=on_cancel,
+            on_progress=on_progress, policy=nbjobs.REJECT)
 
     go.connect("clicked", on_print)
 
@@ -831,7 +902,7 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
     dialog opened again afterwards is a different owner that the old answer has
     no way to reach.
 
-    Printing itself stays on the UI thread deliberately; see on_print.
+    Rendering and sending run under the same window-owned background job.
     """
     win, box = _dialog(parent, "Print")
     owner = nbjobs.JobOwner(name="nbprint")
@@ -842,6 +913,18 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
         _OPEN_OWNERS.discard(owner)
 
     win.connect("destroy", _shut)
+
+    def _escape(_window, event):
+        if getattr(event, "keyval", None) == gi.repository.Gdk.KEY_Escape:
+            action = getattr(win, "_nbprint_cancel", None)
+            if action is not None:
+                action()
+            else:
+                win.destroy()
+            return True
+        return False
+
+    win.connect("key-press-event", _escape)
 
     # -- what the window says while it looks --------------------------------
     h = Gtk.Label(label="Print", xalign=0)
@@ -855,7 +938,11 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
     wait_row.set_margin_top(10)
     wait_cancel = Gtk.Button(label="Cancel")
     wait_cancel.get_style_context().add_class("nbprint-btn")
-    wait_cancel.connect("clicked", lambda *_: win.destroy())
+    def _wait_cancel(*_args):
+        win.destroy()
+        return True
+    win._nbprint_cancel = _wait_cancel
+    wait_cancel.connect("clicked", _wait_cancel)
     wait_row.pack_end(wait_cancel, False, False, 0)
     box.pack_start(wait_row, False, False, 0)
 
@@ -864,7 +951,7 @@ def _print_dialog(parent, job_name, make_pdf, booklet, booklet_note,
             box.remove(child)
             child.destroy()
         if printers:
-            _print_body(win, box, printers, default, job_name, make_pdf,
+            _print_body(win, box, owner, printers, default, job_name, make_pdf,
                         booklet, booklet_note, media)
         else:
             _no_printer_body(win, box, NO_PRINTER_NOTE)
