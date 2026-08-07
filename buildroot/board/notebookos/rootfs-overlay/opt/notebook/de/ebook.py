@@ -26,7 +26,8 @@ this way).
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo  # noqa: E402
 try:
     gi.require_version("GdkPixbuf", "2.0")
     from gi.repository import GdkPixbuf                        # noqa: E402
@@ -199,11 +200,98 @@ class _EpubBlocks(HTMLParser):
         self._skip = 0
         self._kind = "p"
         self._open = []          # pango tags currently open, outermost first
+        self._table = None
+
+    @staticmethod
+    def _attr_int(attrs, name):
+        for key, value in attrs or ():
+            if (key or "").lower() == name:
+                try:
+                    return max(1, int(value))
+                except (TypeError, ValueError):
+                    return 1
+        return 1
+
+    def _table_start(self):
+        self._flush()
+        if self._table is None:
+            self._table = {"rows": [], "row": [], "cell": None,
+                           "nested": 0}
+        else:
+            # A browser can recursively lay out a table in a cell.  This small
+            # reader deliberately cannot: keep its text in the containing cell
+            # as stacked runs, in source order, rather than dropping it.
+            self._table["nested"] += 1
+
+    def _table_cell_start(self, attrs):
+        if self._table["nested"]:
+            if self._table["cell"] is not None and self._table["cell"]["buf"]:
+                self._table["cell"]["buf"].append(" ")
+            return
+        self._table_cell_end()
+        self._table["cell"] = {
+            "buf": [], "colspan": self._attr_int(attrs, "colspan"),
+            "rowspan": self._attr_int(attrs, "rowspan")}
+
+    def _table_cell_end(self):
+        if not self._table or self._table["nested"] or self._table["cell"] is None:
+            return
+        cell = self._table["cell"]
+        text = " ".join("".join(cell["buf"]).split())
+        cell["text"] = text
+        del cell["buf"]
+        self._table["row"].append(cell)
+        self._table["cell"] = None
+
+    def _table_row_end(self):
+        if not self._table or self._table["nested"]:
+            return
+        self._table_cell_end()
+        if self._table["row"]:
+            self._table["rows"].append(self._table["row"])
+        self._table["row"] = []
+
+    def _table_end(self):
+        if self._table["nested"]:
+            self._table["nested"] -= 1
+            if self._table["cell"] is not None:
+                self._table["cell"]["buf"].append(" ")
+            return
+        self._table_row_end()
+        rows = self._table["rows"]
+        self._table = None
+        if rows:
+            # Spans degrade predictably: the spanning cell becomes a separate
+            # full-measure row.  Other cells from its source row retain their
+            # order in a following ordinary row.  No cell content disappears.
+            out = []
+            for row in rows:
+                ordinary = []
+                for cell in row:
+                    if cell["colspan"] > 1 or cell["rowspan"] > 1:
+                        if ordinary:
+                            out.append(ordinary); ordinary = []
+                        out.append([{"text": cell["text"], "full": True}])
+                    else:
+                        ordinary.append({"text": cell["text"], "full": False})
+                if ordinary:
+                    out.append(ordinary)
+            self.blocks.append(("table", out))
 
     def handle_starttag(self, tag, attrs):
         t = tag.lower()
         if t in self.SKIP:
             self._skip += 1
+            return
+        if t == "table":
+            self._table_start(); return
+        if self._table is not None:
+            if t == "tr" and not self._table["nested"]:
+                self._table_row_end()
+            elif t in ("td", "th"):
+                self._table_cell_start(attrs)
+            elif t == "br" and self._table["cell"] is not None:
+                self._table["cell"]["buf"].append(" ")
             return
         if t == "br":
             self._flush()
@@ -253,6 +341,14 @@ class _EpubBlocks(HTMLParser):
             if self._skip > 0:
                 self._skip -= 1
             return
+        if self._table is not None:
+            if t == "table":
+                self._table_end()
+            elif t in ("td", "th"):
+                self._table_cell_end()
+            elif t == "tr":
+                self._table_row_end()
+            return
         if t in self.BLOCK:
             self._flush()
             return
@@ -271,6 +367,10 @@ class _EpubBlocks(HTMLParser):
     def handle_data(self, data):
         if self._skip:
             return
+        if self._table is not None:
+            if self._table["cell"] is not None:
+                self._table["cell"]["buf"].append(escape_markup(data))
+            return
         self._buf.append(escape_markup(data))
 
     def _flush(self):
@@ -288,6 +388,8 @@ class _EpubBlocks(HTMLParser):
             self.blocks.append((kind, text))
 
     def close(self):
+        while self._table is not None:
+            self._table_end()
         super().close()
         self._flush()
         return self.blocks
@@ -1136,7 +1238,19 @@ class EbookReader(nbapp.AppWindow):
         """Cut the chapters into bounded reading pages — see EPUB_PAGE_BLOCKS.
         Returns a list of (chapter index, first block, last block + 1)."""
         pages = []
-        for ci, blocks in enumerate(chapters):
+        for ci, source in enumerate(chapters):
+            # Rows are pagination atoms.  A long table is divided into table
+            # fragments here, never in the renderer, so a row's wrapped text
+            # can never be split between reading pages.
+            blocks = []
+            for kind, payload in source:
+                if kind == "table":
+                    for row in payload:
+                        blocks.append(("tablerow", {"cells": row,
+                                                    "table": payload}))
+                else:
+                    blocks.append((kind, payload))
+            chapters[ci] = blocks
             n = len(blocks)
             if n == 0:
                 pages.append((ci, 0, 0))
@@ -1149,6 +1263,109 @@ class EbookReader(nbapp.AppWindow):
                 pages.append((ci, start, end))
                 start = end
         return pages or [(0, 0, 0)]
+
+    @staticmethod
+    def _epub_table_widths(rows, measure=560, pad=16, font_pt=17):
+        """Two-pass column sizing in pixels: natural text maxima, then clamp
+        the total to the reading measure while preserving a usable minimum."""
+        cols = max((len(r) for r in rows if not (len(r) == 1 and
+                   r[0].get("full"))), default=1)
+        natural = [40] * cols
+        cr = None
+        if _CAIRO_OK:
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
+            cr = cairo.Context(surface)
+        for row in rows:
+            if len(row) == 1 and row[0].get("full"):
+                continue
+            for ci, cell in enumerate(row[:cols]):
+                markup = cell.get("text", "")
+                if cr is not None:
+                    layout = PangoCairo.create_layout(cr)
+                    fd = Pango.FontDescription()
+                    fd.set_family("Newsreader")
+                    fd.set_size(int(font_pt * Pango.SCALE))
+                    layout.set_font_description(fd)
+                    layout.set_markup(markup, -1)
+                    text_w = layout.get_pixel_size()[0]
+                else:
+                    text_w = 9 * len(_MARKUP_TEXT_RE.sub("", markup))
+                natural[ci] = max(natural[ci], min(360, text_w + pad))
+        usable = max(cols * 40, measure)
+        total = sum(natural)
+        if total <= usable:
+            spare = usable - total
+            return [w + spare / cols for w in natural]
+        floor = 40.0
+        extra = max(0.0, usable - floor * cols)
+        weights = [max(1.0, w - floor) for w in natural]
+        weight_total = sum(weights)
+        return [floor + extra * w / weight_total for w in weights]
+
+    @classmethod
+    def _epub_table_geometry(cls, rows, measure=560, font_pt=17,
+                             sizing_rows=None):
+        """Return the actual Pango-wrapped cell rectangles used by the table.
+
+        Kept independent of a GDK display so formatting gates can inspect real
+        text geometry on build hosts as well as in the guest.
+        """
+        if not _CAIRO_OK:
+            return []
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
+        cr = cairo.Context(surface)
+        widths = cls._epub_table_widths(sizing_rows or rows, measure,
+                                        font_pt=font_pt)
+        geometry, y = [], 0
+        for ri, row in enumerate(rows):
+            full = len(row) == 1 and row[0].get("full")
+            heights, x = [], 0
+            for ci, cell in enumerate(row):
+                width = sum(widths) if full else widths[min(ci, len(widths)-1)]
+                layout = PangoCairo.create_layout(cr)
+                fd = Pango.FontDescription()
+                fd.set_family("Newsreader,Liberation Serif,Georgia,serif")
+                fd.set_size(int(font_pt * Pango.SCALE))
+                layout.set_font_description(fd)
+                layout.set_width(max(1, int((width - 16) * Pango.SCALE)))
+                layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+                layout.set_markup(cell.get("text", ""), -1)
+                heights.append(layout.get_pixel_size()[1] + 12)
+                geometry.append({"row": ri, "col": ci, "x": x, "y": y,
+                                 "width": width, "height": 0,
+                                 "text": cell.get("text", "")})
+                x += width
+            row_h = max(heights or [12])
+            for rect in geometry:
+                if rect["row"] == ri:
+                    rect["height"] = row_h
+            y += row_h
+        return geometry
+
+    def _epub_table(self, rows, cap):
+        table = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        table.get_style_context().add_class("readtable")
+        sizing_rows = rows[0]["table"] if rows else []
+        widths = self._epub_table_widths(sizing_rows, min(560, cap * 9),
+                                         font_pt=self._read_pt)
+        for descriptor in rows:
+            row_data = descriptor["cells"]
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            row.get_style_context().add_class("readtablerow")
+            full = len(row_data) == 1 and row_data[0].get("full")
+            for ci, cell in enumerate(row_data):
+                lbl = Gtk.Label(xalign=0)
+                set_reading_text(lbl, cell.get("text", ""))
+                lbl.set_line_wrap(True)
+                lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                lbl.set_yalign(0)
+                lbl.get_style_context().add_class("readbody")
+                lbl.get_style_context().add_class("readtablecell")
+                width = sum(widths) if full else widths[min(ci, len(widths)-1)]
+                lbl.set_size_request(max(1, int(width)), -1)
+                row.pack_start(lbl, full, full, 0)
+            table.pack_start(row, False, False, 0)
+        return table
 
     def _build_epub_view(self):
         scroll = Gtk.ScrolledWindow()
@@ -1275,7 +1492,17 @@ class EbookReader(nbapp.AppWindow):
         # stretched the column itself from 620px to ~900px — A+ was widening the
         # page instead of reflowing the text into it.
         cap = max(24, int(64 * self.READ_PT_DEFAULT / float(self._read_pt)))
+        table_rows = []
+        def flush_table():
+            if table_rows:
+                col.pack_start(self._epub_table(list(table_rows), cap),
+                               False, False, 0)
+                del table_rows[:]
         for kind, text in blocks:
+            if kind == "tablerow":
+                table_rows.append(text)
+                continue
+            flush_table()
             if kind == "img":
                 img = self._epub_image(text, cap)
                 if img is not None:
@@ -1300,6 +1527,7 @@ class EbookReader(nbapp.AppWindow):
                 lbl.get_style_context().add_class("readpara")
                 lbl.set_margin_bottom(15)
             col.pack_start(lbl, False, False, 0)
+        flush_table()
         col.show_all()
         # A page/chapter turn starts at the top; a re-flow after a reading-size
         # change must NOT throw the reader back to the top of the chapter.
@@ -1995,6 +2223,12 @@ class EbookReader(nbapp.AppWindow):
                     color: #1A1916; }
         .readchhead { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                       font-size: 24px; font-weight: 600; color: #1A1916; }
+        .readtable { margin: 8px 0 18px 0; border-top: 1px solid #6E695E;
+                     border-left: 1px solid #6E695E; }
+        .readtablerow { border-bottom: 1px solid #6E695E; }
+        .readtablecell { font-family: "Newsreader","Liberation Serif","Georgia",serif;
+                         color: #1A1916; padding: 6px 8px;
+                         border-right: 1px solid #6E695E; }
         /* PDF page sheet: a white leaf on the papertone mat. */
         .pdfpaper { background: #FCFBF8; border: 1px solid #D7D2C5;
                     box-shadow: 2px 3px 0 rgba(26,25,22,0.10); }
