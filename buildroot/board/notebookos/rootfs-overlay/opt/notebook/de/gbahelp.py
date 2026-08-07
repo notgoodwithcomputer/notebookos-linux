@@ -247,7 +247,8 @@ COURSE = [
            "Multiplication doubles the fractional bits: shift the result right "
            "by FIX to restore the format.",
            "Division halves them: shift the numerator left by FIX first."]),
-        C("s32 a = 3 << FIX, b = 2 << FIX;\n"
+        C("#define FIX 8\n"
+          "s32 a = 3 << FIX, b = 2 << FIX;\n"
           "s32 product  = (a * b) >> FIX;   /* 6.0 */\n"
           "s32 quotient = (a << FIX) / b;   /* 1.5 */"),
         N("A 16.16 multiply overflows s32 before the shift: 1.0 × 1.0 is "
@@ -258,7 +259,9 @@ COURSE = [
         P("rt_sin8 and rt_cos8 take an angle in 0 … 255 rather than degrees or "
           "radians, and return 8.8 fixed point. A full turn in 256 steps means "
           "the angle wraps by discarding the high bits, at no cost."),
-        C("s32 vx = (rt_cos8(angle) * speed) >> 8;\n"
+        C("s32 angle = 32;                 /* an eighth of a turn */\n"
+          "s32 speed = 2 << 8;             /* 2.0 pixels per frame, in 8.8 */\n"
+          "s32 vx = (rt_cos8(angle) * speed) >> 8;\n"
           "s32 vy = (rt_sin8(angle) * speed) >> 8;"),
     ], lesson=True),
 
@@ -278,19 +281,22 @@ COURSE = [
           "false. The compiler warns; the warning is worth reading."),
         H("else and else if"),
         C("if (self->hspeed > 0) {\n"
-          "    self->image = FACING_RIGHT;\n"
+          "    rt_set_flip(self, 0, 0);        /* face right */\n"
           "} else if (self->hspeed < 0) {\n"
-          "    self->image = FACING_LEFT;\n"
+          "    rt_set_flip(self, 1, 0);        /* mirrored: face left */\n"
           "} else {\n"
-          "    self->image = FACING_IDLE;\n"
+          "    self->image_speed = 0;          /* standing still */\n"
           "}"),
         P("The action sheet has no else. This is the first thing C offers that "
           "the sheet does not, and it is why an Execute Code action inside an "
           "otherwise drag-drop object is normal rather than a failure."),
         H("switch"),
-        C("switch (self->state) {\n"
-          "case ST_IDLE:  idle_step();  break;\n"
-          "case ST_WALK:  walk_step();  break;\n"
+        C("#define ST_IDLE 0\n"
+          "#define ST_WALK 1\n"
+          "\n"
+          "switch (self->var[0]) {\n"
+          "case ST_IDLE:  self->hspeed = 0;  break;\n"
+          "case ST_WALK:  self->hspeed = 2;  break;\n"
           "default:       break;\n"
           "}"),
         N("A case without break falls into the next one. That is occasionally "
@@ -302,9 +308,10 @@ COURSE = [
     Topic("c06", "6 · Loops and the frame budget", "Course", [
         P("Three forms, all of them the same machine:"),
         C("for (int i = 0; i < 8; i++) {\n"
-          "    rt_create(OBJ_SPARK, self->x, self->y);\n"
+          "    rt_create(NB_OBJ_SPARK, self->x, self->y);\n"
           "}\n"
           "\n"
+          "int n = 12;\n"
           "while (n > 0) {\n"
           "    n = n / 2;\n"
           "}\n"
@@ -469,13 +476,13 @@ COURSE = [
         C("/* Execute Code, in a Step event */\n"
           "if (rt_key_held(KEY_LEFT) && self->x > 8) {\n"
           "    self->hspeed = -2;\n"
-          "    self->image = ANIM_WALK;\n"
+          "    self->image_index = ANIM_WALK;\n"
           "} else if (rt_key_held(KEY_RIGHT) && self->x < 232) {\n"
           "    self->hspeed = 2;\n"
-          "    self->image = ANIM_WALK;\n"
+          "    self->image_index = ANIM_WALK;\n"
           "} else {\n"
           "    self->hspeed = 0;\n"
-          "    self->image = ANIM_IDLE;\n"
+          "    self->image_index = ANIM_IDLE;\n"
           "}"),
         H("What is available"),
         L(["self, and every field in lesson 9",
@@ -546,12 +553,17 @@ COURSE = [
         P("An interrupt suspends the program, runs a handler, and resumes. It is "
           "how work is synchronised to the display without spending the frame "
           "waiting for it."),
-        C("static void on_vblank(void)\n"
+        C("static volatile u32 vblank_seen;\n"
+          "\n"
+          "static void on_vblank(void)\n"
           "{\n"
-          "    oam_flush();          /* copy sprite data while the display is idle */\n"
+          "    vblank_seen = 1;\n"
           "}\n"
           "\n"
-          "rt_irq_set(IRQ_VBLANK, on_vblank);"),
+          "void install_vblank_handler(void)\n"
+          "{\n"
+          "    rt_irq_set(IRQ_VBLANK, on_vblank);\n"
+          "}"),
         P("Passing 0 as the handler removes it and disables that source. The "
           "sources are named in gba.h: IRQ_VBLANK, IRQ_HBLANK, IRQ_VCOUNT, "
           "IRQ_TIMER0 … 3, IRQ_DMA0 … 3, IRQ_SERIAL, IRQ_KEYPAD, IRQ_CART."),
@@ -565,8 +577,18 @@ COURSE = [
         H("Timers"),
         P("Four 16-bit counters. Each counts up to overflow, so rt_timer_start "
           "takes the period and performs the subtraction:"),
-        C("rt_timer_start(0, 273, TM_FREQ_1024 | TM_IRQ);\n"
-          "rt_irq_set(IRQ_TIMER0, on_tick);      /* ~60 Hz */"),
+        C("static volatile u32 ticks;\n"
+          "\n"
+          "static void on_tick(void)\n"
+          "{\n"
+          "    ticks++;\n"
+          "}\n"
+          "\n"
+          "void start_tick_timer(void)\n"
+          "{\n"
+          "    rt_timer_start(0, 273, TM_FREQ_1024 | TM_IRQ);\n"
+          "    rt_irq_set(IRQ_TIMER0, on_tick);      /* ~60 Hz */\n"
+          "}"),
         T(["Flag", "Tick length"],
           [["TM_FREQ_1", "1 CPU cycle — 16.78 MHz"],
            ["TM_FREQ_64", "64 cycles — 262 kHz"],

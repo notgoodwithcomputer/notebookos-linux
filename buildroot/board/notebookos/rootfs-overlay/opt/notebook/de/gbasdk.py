@@ -38,6 +38,7 @@ from gi.repository import Gtk, Gdk, Pango, PangoCairo, GLib  # noqa: E402
 import copy
 import unicodedata
 import os
+import re
 import sys
 import json
 import shutil
@@ -1199,41 +1200,53 @@ class GbaSdk(nbapp.AppWindow):
                     out.append((akind, key))
         return out
 
-    def _walk_refs(self, kind, visit):
+    def _walk_refs(self, kind, visit, with_context=False):
         """Call visit(container, key, value) at every place in the project that
         names a resource of `kind` — one walker for rename, for counting and for
         cleaning up after a delete, so the three can never disagree again."""
         pairs = dict(self._ref_params(kind))
 
-        def acts(lst, owner_obj):
-            for a in lst or []:
+        def found(container, key, value, context):
+            if with_context:
+                visit(container, key, value, context)
+            else:
+                visit(container, key, value)
+
+        def acts(lst, owner_obj, event_index, path=()):
+            for ai, a in enumerate(lst or []):
                 if not isinstance(a, dict):
                     continue
                 key = pairs.get(a.get("kind"))
                 if key is not None and key in a:
-                    visit(a, key, a.get(key))
-                acts(a.get("children"), owner_obj)
+                    found(a, key, a.get(key), {"site": "action",
+                          "owner": owner_obj, "event": event_index,
+                          "action": path + (ai,)})
+                acts(a.get("children"), owner_obj, event_index, path + (ai,))
 
         for o in self.proj.get("objects", []):
             if not isinstance(o, dict):
                 continue
             if kind == "sprite":
-                visit(o, "sprite", o.get("sprite"))
-            for ev in o.get("events", []) or []:
+                found(o, "sprite", o.get("sprite"),
+                      {"site": "object", "owner": o})
+            for ei, ev in enumerate(o.get("events", []) or []):
                 if not isinstance(ev, dict):
                     continue
                 # A Collision event's target is a reference too, and the compiler
                 # drops the WHOLE event body when it dangles.
                 if kind == "object" and ev.get("type") == "collision":
-                    visit(ev, "object", ev.get("object"))
-                acts(ev.get("actions"), o)
+                    found(ev, "object", ev.get("object"),
+                          {"site": "event", "owner": o, "event": ei})
+                acts(ev.get("actions"), o, ei)
         for rm in self.proj.get("rooms", []):
             if not isinstance(rm, dict):
                 continue
             if kind == "object":
                 for it in rm.get("instances", []) or []:
                     if isinstance(it, dict):
-                        visit(it, "object", it.get("object"))
+                        found(it, "object", it.get("object"),
+                              {"site": "placement", "owner": rm,
+                               "instance": rm.get("instances", []).index(it)})
             if kind == "room":
                 # A door names the room it leads to. Doors were added after
                 # this walker and never joined it, so renaming a room left
@@ -1243,9 +1256,140 @@ class GbaSdk(nbapp.AppWindow):
                 # describes, one resource kind later.
                 for wp in rm.get("warps", []) or []:
                     if isinstance(wp, dict):
-                        visit(wp, "room", wp.get("room"))
+                        found(wp, "room", wp.get("room"),
+                              {"site": "warp", "owner": rm})
         if kind == "room":
-            visit(self.proj, "start_room", self.proj.get("start_room"))
+            found(self.proj, "start_room", self.proj.get("start_room"),
+                  {"site": "project", "owner": self.proj})
+
+    @staticmethod
+    def _match_snippet(value, query, width=76):
+        """One compact line around a case-insensitive match."""
+        text = " ".join(str(value).split())
+        at = text.casefold().find(query.casefold())
+        if at < 0 or len(text) <= width:
+            return text
+        start = max(0, at - width // 3)
+        end = min(len(text), start + width)
+        return ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+
+    def _project_search(self, query):
+        """Return navigation-ready matches across every authored text surface."""
+        q = str(query or "").strip().casefold()
+        if not q:
+            return []
+        out = []
+        def add(kind, owner, value, **where):
+            if q in str(value or "").casefold():
+                rec = {"kind": kind, "owner": owner,
+                       "snippet": self._match_snippet(value, q)}
+                rec.update(where); out.append(rec)
+        for kind, plural in (("sprite", "sprites"), ("tileset", "tilesets"),
+                             ("sound", "sounds"), ("object", "objects"),
+                             ("room", "rooms"), ("script", "scripts"),
+                             ("table", "tables")):
+            for ri, resource in enumerate(self.proj.get(plural, []) or []):
+                if not isinstance(resource, dict):
+                    continue
+                rid = resource.get("id", "?")
+                add(kind, rid, rid, resource=ri)
+                if resource.get("name") and resource.get("name") != rid:
+                    add(kind, rid, resource["name"], resource=ri)
+                if kind == "script":
+                    add("Script body", rid, resource.get("code", ""), resource=ri)
+                if kind == "table":
+                    for rowi, row in enumerate(resource.get("rows", []) or []):
+                        for coli, cell in enumerate(row or []):
+                            add("Table cell", rid, cell, resource=ri,
+                                row=rowi, column=coli)
+                if kind == "object":
+                    for ei, ev in enumerate(resource.get("events", []) or []):
+                        def walk(actions, path=()):
+                            for ai, action in enumerate(actions or []):
+                                if not isinstance(action, dict):
+                                    continue
+                                apath = path + (ai,)
+                                for key, value in action.items():
+                                    if key not in ("kind", "children") and isinstance(value, str):
+                                        add("Action", rid, value, resource=ri,
+                                            event=ei, action=apath)
+                                walk(action.get("children"), apath)
+                        walk(ev.get("actions"))
+        return out
+
+    def _where_used(self, kind, rid):
+        """Reverse-reference records, deliberately sourced only from _walk_refs."""
+        out = []
+        def collect(_container, _key, value, context):
+            if value != rid:
+                return
+            owner = context.get("owner") or {}
+            site = context.get("site", "reference")
+            label = {"placement": "Room placement", "action": "Action reference",
+                     "event": "Collision event", "object": "Object sprite",
+                     "warp": "Room warp", "project": "Project setting"}.get(site, site)
+            rec = {"kind": label, "owner": owner.get("id", _t("Project")),
+                   "snippet": rid, "ref_kind": kind}
+            rec.update(context); out.append(rec)
+        self._walk_refs(kind, collect, with_context=True)
+        return out
+
+    def _activate_project_result(self, result):
+        """Land a search/reference record using the normal editor loaders."""
+        kind = result.get("ref_kind")
+        owner = result.get("owner")
+        if result.get("site") == "placement":
+            kind = "room"
+        if kind is None:
+            k = result.get("kind")
+            kind = {"Script body": "script", "Table cell": "table",
+                    "Action": "object"}.get(k, k)
+        plural = {"sprite": "sprites", "tileset": "tilesets", "sound": "sounds",
+                  "object": "objects", "room": "rooms", "script": "scripts",
+                  "table": "tables"}.get(kind)
+        index = result.get("resource")
+        if plural and index is None:
+            index = next((i for i, r in enumerate(self.proj.get(plural, []))
+                          if r is owner or r.get("id") == (owner.get("id") if isinstance(owner, dict) else owner)), None)
+        if index is None or plural is None:
+            return False
+        self._select_resource(kind, index)
+        if kind == "object" and "event" in result:
+            self._select_event(result["event"])
+            path = result.get("action") or ()
+            self._sel_action = path[-1] if path else None
+            self._focus_action_path(path)
+        elif kind == "table" and "row" in result:
+            self._tbl_view.set_cursor(Gtk.TreePath.new_from_indices([result["row"]]))
+        elif kind == "room" and "instance" in result:
+            instances = self._sel_res().get("instances", [])
+            if 0 <= result["instance"] < len(instances):
+                placed = instances[result["instance"]]
+                self._room_cur = [max(0, int(placed.get("x", 0)) // 8),
+                                  max(0, int(placed.get("y", 0)) // 8)]
+                self._room_canvas.grab_focus()
+            self._room_canvas.queue_draw()
+        return True
+
+    def _focus_action_path(self, path):
+        """Focus a top-level or nested action card by its authored index path."""
+        if not path:
+            return
+        event = self._cur_event() or {}
+        actions = event.get("actions") or []
+        for index in path[:-1]:
+            if not (0 <= index < len(actions)):
+                return
+            actions = actions[index].get("children") or []
+        target = path[-1]
+        def descend(widget):
+            if (getattr(widget, "act_list", None) is actions
+                    and getattr(widget, "act_index", None) == target):
+                widget.grab_focus()
+                return True
+            get_children = getattr(widget, "get_children", None)
+            return any(descend(child) for child in (get_children() if get_children else []))
+        descend(self._action_list)
 
     def _do_rename(self, newid):
         r = self._sel_res()
@@ -6326,7 +6470,11 @@ class GbaSdk(nbapp.AppWindow):
     # of the control they work on (see _acc); these are printed in the menus.
     def _on_sdk_key(self, _w, ev):
         ctrl = bool(ev.state & Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
         if nbapp.undo_keys(self.undo, ev):
+            return True
+        if ctrl and shift and ev.keyval in (Gdk.KEY_f, Gdk.KEY_F):
+            self._find_in_project()
             return True
         if ctrl and ev.keyval in (Gdk.KEY_b, Gdk.KEY_B):
             self._file_export()
@@ -6364,6 +6512,60 @@ class GbaSdk(nbapp.AppWindow):
 
     # ================= menus =================
     _WS_MENU = "View"
+
+    def _results_dialog(self, title, results, query=False):
+        """Compact searchable result list; 620x500 stays usable at 1024x740."""
+        dlg = Gtk.Dialog(title=_t(title), transient_for=self, modal=True)
+        dlg.set_default_size(620, 500)
+        area = dlg.get_content_area()
+        area.set_spacing(8); area.set_margin_top(12); area.set_margin_bottom(8)
+        area.set_margin_start(14); area.set_margin_end(14)
+        entry = None
+        if query:
+            entry = Gtk.SearchEntry()
+            entry.set_placeholder_text(_t("Search project"))
+            area.pack_start(entry, False, False, 0)
+        store = Gtk.ListStore(str, str, str, object)
+        view = Gtk.TreeView(model=store)
+        for n, head in enumerate((_t("Kind"), _t("Owner"), _t("Matched text"))):
+            cell = Gtk.CellRendererText()
+            cell.set_property("ellipsize", Pango.EllipsizeMode.END)
+            view.append_column(Gtk.TreeViewColumn(head, cell, text=n))
+        empty = Gtk.Label(label=_t("No results"))
+        empty.get_style_context().add_class("emptyrow")
+        stack = Gtk.Stack(); stack.add_named(view, "results"); stack.add_named(empty, "empty")
+        sc = Gtk.ScrolledWindow(); sc.add(stack); sc.set_vexpand(True)
+        area.pack_start(sc, True, True, 0)
+        current = [list(results)]
+        def fill(rows):
+            current[0] = rows; store.clear()
+            for rec in rows:
+                store.append([_t(str(rec["kind"])), str(rec["owner"]),
+                              rec["snippet"], rec])
+            stack.set_visible_child_name("results" if rows else "empty")
+        fill(current[0])
+        def activate(_view, path, _column):
+            rec = store[path][3]
+            dlg.response(Gtk.ResponseType.OK)
+            self._activate_project_result(rec)
+        view.connect("row-activated", activate)
+        if entry is not None:
+            entry.connect("search-changed", lambda e: fill(self._project_search(e.get_text())))
+        dlg.add_button(_t("Close"), Gtk.ResponseType.CLOSE)
+        dlg.show_all()
+        if entry is not None:
+            entry.grab_focus()
+        dlg.run(); dlg.destroy()
+
+    def _find_in_project(self):
+        self._results_dialog("Find in Project", [], query=True)
+
+    def _show_where_used(self):
+        selected = self._sel_res()
+        if not selected or not self._sel:
+            return
+        self._results_dialog("Where Is This Used",
+                             self._where_used(self._sel[0], selected.get("id")))
 
     def menu_items(self, name):
         if name == self._WS_MENU:
@@ -6414,7 +6616,8 @@ class GbaSdk(nbapp.AppWindow):
             # The app had no undo at all: a mis-aimed fill wiped a drawing and
             # the only way back was to paint it again.
             return nbapp.undo_menu_items(self.undo) + [nbapp.SEP] \
-                + super().menu_items("Edit")
+                + super().menu_items("Edit") + [nbapp.SEP,
+                   (_acc("Find in Project…", "Ctrl+Shift+F"), self._find_in_project)]
         if name == "Resource":
             # Rename and Delete both act on the selected resource and did
             # nothing at all with none selected — a live-looking item that
@@ -6430,6 +6633,9 @@ class GbaSdk(nbapp.AppWindow):
                 nbapp.SEP,
                 (_acc("Rename…", "F2"), self._rename_resource if picked else None),
                 ("Move to Folder…", self._move_to_folder if picked else None),
+                ("Where Is This Used?", self._show_where_used
+                 if picked and self._sel[0] in ("sprite", "sound", "object",
+                                                "script", "table") else None),
                 (_acc("Delete…", "Del"), self._delete_resource if picked else None),
             ]
         if name == "Help":

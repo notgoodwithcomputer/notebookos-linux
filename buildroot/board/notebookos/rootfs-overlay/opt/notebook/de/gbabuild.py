@@ -648,7 +648,7 @@ nb_atan_q nb_bg_palette nb_bg_tile_count nb_bg_tiles nb_event_fn nb_font
 nb_font_w nb_fx nb_fx_prio nb_global nb_health nb_lives nb_note_freq
 nb_obj_palette nb_obj_tile_count nb_obj_tiles nb_object_count nb_objects
 nb_room_count nb_rooms nb_score nb_sin_q nb_sound_count nb_sounds
-nb_sprite_count nb_sprites nb_sram_sig nb_start_room nb_text_bank
+nb_sprite_count nb_sprites nb_sram_sig nb_save_type nb_save_sig nb_start_room nb_text_bank
 """.split())
 
 
@@ -1003,6 +1003,7 @@ class _Gen:
         # `hspeed` misspelt as `hspee` compiles to a variable nothing looks at
         # and the object simply does not move.
         assigned, readonly, has_c = set(), set(), [False]
+        say_slots_ahead = []
 
         def scan(actions):
             for a in actions or []:
@@ -1018,6 +1019,20 @@ class _Gen:
                         # from the ENGINE, so it counts as setting it even
                         # though no script line does.
                         (readonly if k == "if_var" else assigned).add(v)
+                elif k == "say":
+                    # {v:N} in dialogue prints variable SLOT N: it is a read,
+                    # made by the engine while typing the line. Without this,
+                    # a variable whose only purpose is being shown to the
+                    # player — a gold count in a shop line — was reported as
+                    # "set but never read", and the fix the message suggests
+                    # would break the dialogue that displays it. Slots are
+                    # handed out in `names` order, so slot N is names[N].
+                    for m in re.finditer(r"\{v:(\d+)\}", str(a.get("text", ""))):
+                        slot = int(m.group(1))
+                        if slot < len(names):
+                            readonly.add(names[slot])
+                        else:
+                            say_slots_ahead.append(slot)
                 elif k == "execute_code":
                     # A C block declares its own variables in C. Scanning it for
                     # script names would allocate instance slots for locals and
@@ -1037,6 +1052,12 @@ class _Gen:
 
         for ev in obj.get("events") or []:
             scan(ev.get("actions"))
+        # A say that printed a slot before the walk had reached the action
+        # declaring its variable could not name it yet; the slot order is
+        # final now, so resolve those reads.
+        for slot in say_slots_ahead:
+            if slot < len(names):
+                readonly.add(names[slot])
         # An instance carries 12 variable slots. Past that the name has no slot,
         # and every action using it used to emit NOTHING — no code, no message,
         # a ROM that built clean and quietly did less than it was told. Say so.
@@ -1464,7 +1485,14 @@ class _Gen:
         elif k in ("add_score", "add_lives", "add_health"):
             g = {"add_score": "nb_score", "add_lives": "nb_lives",
                  "add_health": "nb_health"}[k]
-            L.append("%s%s += %s;" % (pad, g, self._val(a.get("value"), vars_map)))
+            if k == "add_health":
+                # The floor: health never goes below zero through the action.
+                # Raw C keeps raw access; the engine re-clamps at the end of
+                # every step, so even that cannot LEAVE it negative.
+                L.append("%sif ((%s += %s) < 0) %s = 0;"
+                         % (pad, g, self._val(a.get("value"), vars_map), g))
+            else:
+                L.append("%s%s += %s;" % (pad, g, self._val(a.get("value"), vars_map)))
         elif k in ("if_score", "if_lives", "if_health"):
             g = {"if_score": "nb_score", "if_lives": "nb_lives",
                  "if_health": "nb_health"}[k]
@@ -1740,6 +1768,7 @@ class _Gen:
             colls = [e for e in evs if e.get("type") == "collision"]
             alarms = [e for e in evs if e.get("type") == "alarm"]
             destroys = [e for e in evs if e.get("type") == "destroy"]
+            no_healths = [e for e in evs if e.get("type") == "no_health"]
 
             def emit_fn(name, events):
                 self.w("static void %s(Instance* self) {" % name)
@@ -1751,6 +1780,8 @@ class _Gen:
 
             if create:
                 emit_fn("%s_create" % cid, create)
+            if no_healths:
+                emit_fn("%s_no_health" % cid, no_healths)
             if destroys:
                 emit_fn("%s_destroy" % cid, destroys)
             # step fn folds in step + alarm + key(held/press/release) + collision
@@ -1802,13 +1833,15 @@ class _Gen:
             # which the SDK autosaves, so every .gbaproj on disk grew _cid,
             # _has_create, _has_step and _has_destroy the first time it was
             # exported. A generator must not write to the document it reads.
-            self._fns[id(o)] = (cid, bool(create), has_step, bool(destroys))
+            self._fns[id(o)] = (cid, bool(create), has_step, bool(destroys),
+                                bool(no_healths))
         self.w("")
         # object table: { sprite, visible, solid, create, step, draw, destroy }
         self.w("const nb_Object nb_objects[] = {")
         for o in self.objects:
-            cid, has_create, has_step, has_destroy = self._fns.get(
-                id(o), (_cid(o.get("id"), "obj"), False, False, False))
+            (cid, has_create, has_step, has_destroy,
+             has_no_health) = self._fns.get(
+                id(o), (_cid(o.get("id"), "obj"), False, False, False, False))
             spr = self.spr_ix.get(o.get("sprite"), -1)
             worn = o.get("sprite") or o.get("_was")
             if spr < 0 and worn:
@@ -1831,9 +1864,12 @@ class _Gen:
             inset = max(0, min(64, _int(o.get("bb_inset"), 0)))
             bb = [max(0, min(64, _int(o.get(k), inset)))
                   for k in ("bb_l", "bb_t", "bb_r", "bb_b")]
-            self.w("    { %d, %d, %d, %s, %s, 0, %s, %d, %d, %d, %d, %d, %d },"
+            hurt = max(0, min(255, _int(o.get("hurt_frames"), 0)))
+            nfn = "%s_no_health" % cid if has_no_health else "0"
+            self.w("    { %d, %d, %d, %s, %s, 0, %s, %d, %d, %d, %d, %d, %d, "
+                   "%d, %s },"
                    % (spr, vis, solid, cfn, sfn, dfn, depth, tilecol,
-                      bb[0], bb[1], bb[2], bb[3]))
+                      bb[0], bb[1], bb[2], bb[3], hurt, nfn))
         if not self.objects:
             self.w("    { -1, 1, 0, 0, 0, 0, 0 },")
         self.w("};")
@@ -1998,10 +2034,13 @@ class _Gen:
             decay = max(0, min(7, _int(s.get("decay"), 0)))
             prio = max(0, min(7, _int(s.get("prio"), 0)))
             pcm_ref = ("snd_pcm_%d" % i) if has_pcm.get(i) else "0"
+            # A sampled sound marked loop is a soundtrack: the runtime plays
+            # it on the second PCM voice, looping, under one-shot effects.
+            pcm_loop = 1 if (has_pcm.get(i) and loop) else 0
             self.w("    { %d, %d, %d, snd_lead_%d, snd_bass_%d, %s, %d, %d, "
-                   "%d, %d, %d, %s, %d },"
+                   "%d, %d, %d, %s, %d, %d },"
                    % (tempo, loop, n, i, i, drum_ref, kind, duty, vol, decay,
-                      prio, pcm_ref, has_pcm.get(i, 0)))
+                      prio, pcm_ref, has_pcm.get(i, 0), pcm_loop))
         if not self.sounds:
             self.w("    { 6, 0, 0, 0, 0 },")
         self.w("};")
@@ -2016,6 +2055,20 @@ class _Gen:
         # but may name any object, sprite, sound or room, so the names have to
         # be in scope from the first line of user code.
         self._emit_name_constants()
+        # The save part, chosen per project. Emulators and flash carts size
+        # the battery by SCANNING the ROM for one of these signature strings,
+        # so exactly one may exist -- which is why the runtime no longer bakes
+        # its SRAM string in and this is the only place one is written.
+        st = {"sram": 0, "flash64": 1, "flash128": 2}.get(
+            str(self.m.get("save_type") or "sram").strip().lower())
+        if st is None:
+            self._problem(_t("save_type must be sram, flash64 or flash128"))
+            st = 0
+        sig = {0: "SRAM_V113", 1: "FLASH512_V131", 2: "FLASH1M_V102"}[st]
+        self.w("const int nb_save_type = %d;" % st)
+        self.w('const char nb_save_sig[] __attribute__((used, aligned(4))) = "%s";'
+               % sig)
+        self.w("")
         self.gen_sprites()
         self.gen_bg()
         self.gen_sounds()

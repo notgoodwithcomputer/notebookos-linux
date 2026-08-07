@@ -492,17 +492,17 @@ gbaruntime/` today.
 |-------------------------|---------------------------|--------------------------------------------------|
 |BG modes 0/1/2 (tiled)   |Mode 0. Modes 1/2 reachable via `rt_video_mode`, but no affine MAP data is emitted|0, 1, 2 incl. affine|
 |BG modes 3/4/5 (bitmap)  |Absent — one unused `MODE3` constant|Full, incl. page flipping                |
-|Sprites (OAM)            |Regular + affine + double-size|Regular + affine + double-size + OBJWIN         |
-|Palettes                 |Static banks emitted by the generator|Full 256+256, per-asset assignment, cycling|
-|Windowing (WIN0/1/OBJ)   |WIN0/WIN1 via `rt_window`; OBJWIN absent|Full                                  |
+|Sprites (OAM)            |**Done** — regular + affine + double-size + OBJWIN (2026-08-07)|Regular + affine + double-size + OBJWIN|
+|Palettes                 |Static banks + **cycling** (2026-08-07, 4 slots, BG+OBJ); runtime reassignment still absent|Full 256+256, per-asset assignment, cycling|
+|Windowing (WIN0/1/OBJ)   |**Done** (2026-08-07) — and the enable bits now survive the frame loop, which they never did|Full|
 |Blending / fade / mosaic |**Done** — alpha, brightness, fade, mosaic|Full                                  |
 |Interrupts (IRQ)         |**Done** — `rt_irq_set`, all sources defined|VBlank, HBlank, VCount, Timer, DMA, SIO, Key|
 |Timers ×4                |**Done** — start/stop/read       |Full — required for DMA audio                    |
 |DMA 0–3                  |**Done** — `rt_dma`, `rt_hdma_start`|All four, incl. HDMA for raster effects       |
 |BIOS calls               |LZ77 (WRAM+VRAM), Huffman, RLE, div, sqrt. No halt/stop|+ halt/stop           |
 |Sound: PSG ×4            |**Done**                         |Yes                                              |
-|Sound: DMA PCM ×2        |One channel, no mixer            |Two, timer-driven, with mixer                    |
-|Save: SRAM               |SRAM only                        |SRAM + Flash 64K/128K + EEPROM 512B/8K           |
+|Sound: DMA PCM ×2        |**Two voices** (2026-08-07): looping soundtrack on B under one-shots on A, shared timer; no sample-summing mixer yet|Two, timer-driven, with mixer|
+|Save: SRAM               |**SRAM + Flash 64K/128K** (2026-08-07); EEPROM absent|SRAM + Flash 64K/128K + EEPROM 512B/8K|
 |RTC                      |**Done** — present/read          |Required (Pokémon)                               |
 |SIO / link               |**Done** — 11 calls, multiboot image builds|Required (Pokémon)                     |
 |Rumble / solar / gyro    |Absent                           |Supported                                        |
@@ -3346,3 +3346,277 @@ worth reading, and the three measurement traps already paid for) so the next
 session bisects instead of rediscovering. **Running the output belongs in the
 integration test**, not in a one-off investigation: the check to add is that a
 built ROM, after N frames, has at least one visible OAM entry.
+
+### The no-draw bug, root-caused and fixed — 2026-08-07
+
+**Every ROM this SDK ever built hung at its first VBlankIntrWait, and the
+cause was one attribute.** `rt_irq_entry` carried
+`__attribute__((interrupt("IRQ")))`, on reasoning the old comment stated
+confidently: an IRQ handler is what it is. But the GBA's hardware exception
+lands in the BIOS, and the BIOS calls the user vector at 0x03007FFC as a
+*plain ARM function*, performing the exception entry and exit itself. The
+attribute double-applied that frame inside the BIOS's own: `sub lr, lr, #4`
+bent the return address into the middle of the BIOS epilogue, and the
+SPSR-restoring exception return completed the damage. Every compile-side suite
+stayed green throughout, because the handler's C is correct — no host test
+executes the BIOS calling convention around it.
+
+Removed, with the war story as the comment. **Proof by execution:** the
+bullet-hell slice draws — ring of bones, soul, live profiler overlay reading
+`OBJ 128/128 LOST 0023` at 81% frame budget — the kitchen sink draws, and the
+integration suite's execution fixture shows a visible hardware OAM entry.
+Full battery green, now including a stage that actually runs a ROM.
+
+Two process notes worth the ink:
+
+* **The instrument had to be proven before the reading counted.** The
+  watchpoint that settled it (gdb from launch, arm after CPUInit `finish`,
+  watch the emulated vector word) fired once — rt_irq_init's legitimate write —
+  and then never again. Silence was the datum: the vector was never corrupted;
+  the contract around it was wrong. Three earlier readings had been discarded
+  for instrument faults, and the discipline of throwing them out is why this
+  one could be believed.
+* **Two sessions attacked the same bug from opposite ends.** While this
+  session bisected the runtime, the bugfix session claimed `gbaruntime/` on
+  the campaign board and briefed Codex on a byte-write-to-OAM hypothesis.
+  The board caught the overlap: the finding, the proof, and the not-the-cause
+  note are appended under their claim rather than fought over in the files.
+  A comment that explains why code is correct deserves suspicion in
+  proportion to its confidence — the one that owned this bug asserted the
+  attribute "emits the right frame."
+
+### Executable composition slices, and what the second one caught — 2026-08-07
+
+`tools/gba_fixtures.py`: whole projects through the real generator and ARM
+toolchain, EXECUTED on the vendored core, asserted on hardware state and
+pixels. Two slices so far — the bullet-hell (128 hardware sprites, profiler
+overlay visible in the frame) and a typewriter dialogue scene (say action,
+control codes, panel glyphs present in the lower rows by capture time). Both
+pass; the frames are kept.
+
+The dialogue slice found a generator bug before it ever ran: the variable
+audit reported "sets gold but never reads it" for a variable whose only read
+is `{v:0}` in the dialogue text. A say line printing a slot IS a read, made by
+the engine while typing; the audit only scanned code. It now resolves say
+control codes against the slot order, including a line that prints a slot
+before the walk reaches the action declaring its variable. The suggested fix
+in the old message — delete the set — would have broken the dialogue that
+displays it.
+
+Codex lanes running in parallel this iteration: the Help book
+compile-as-taught gate, and Phase 2 project search/references. Claims on the
+board; their suites gate their own lanes.
+
+### Third slice: a save that survives the power cycle — 2026-08-07
+
+`tools/gba_fixtures.py persist`: first boot finds no save, sets a score,
+saves, and records a fresh-cartridge probe; the emulator is told to flush its
+battery file (vbam only writes it on clean exit, and the harness kills the
+process — `sdlWriteBattery()` called over gdb is the flush); second boot, same
+battery file, must restore the score into the probe. It does: 1234 comes back
+through a genuine process death and restart. That exercises the SRAM magic,
+the WAITCNT save timing, vbam's save-type detection off the embedded
+SRAM_V113 signature, and the load path — the same path the data-safety work
+once found destroying damaged stores.
+
+Probe addresses are read from each build's own ELF, never remembered across
+builds — the trap that produced two contradictory readings during the no-draw
+hunt is now structurally impossible in this harness.
+
+### Fourth slice: the whole loop — and what composing it exposed — 2026-08-07
+
+`tools/gba_fixtures.py encounter`: dialogue types while the phase probe reads
+1–2, an alarm opens the waves, rings fire at a soul parked on their centre,
+collisions cost health, four seconds of waves end in `rt_game_save()`, and the
+battery file exists after the flush. All asserted in one run of one ROM:
+phase 2→3, 124 sprites in flight at capture, panel glyphs at two seconds.
+The three pillars hold together.
+
+**The composition exposed a design gap the isolated slices could not:**
+health finished at **−30**. Contact damage fires on every overlapping frame —
+a bone crossing the soul at 60 fps costs ~200 health in under four seconds of
+waves — and `nb_health` has no floor, no death hook, and no
+invincibility-frame primitive. The benchmark game cannot be built on
+per-frame contact damage: Undertale's encounters are survivable because a hit
+buys you mercy frames. An author can hand-roll them today (alarm + a variable
++ if_var guards around add_health), which is exactly the kind of boilerplate
+the runtime exists to absorb. Queued for the runtime work list behind
+flash/PCM/palettes: an engine invincibility window after a collision event
+runs (opt-in, per object), a health floor at zero, and a death event — the
+Game-Maker-shaped answer this SDK's model already implies.
+
+Runtime remains under the bugfix session's claim, so today this is recorded
+with evidence rather than patched around their in-flight work.
+
+
+### Flash save, landed the hour the runtime freed — 2026-08-07
+
+The generator now owns the save part: `save_type` (sram | flash64 | flash128)
+emits `nb_save_type` and the ONE signature string emulators and flash carts
+scan for — the runtime's baked `SRAM_V113` is gone, because two signatures in
+one ROM would leave battery sizing to scan order. The runtime dispatches on
+the type: SRAM stays plain byte writes; flash is the real command protocol —
+program 1→0 only, 4 KiB sector erase before rewrite, every operation finished
+by bounded DQ7 polling so a worn part hangs the save and never the game. The
+128K part is banked and gets pinned to bank 0 at boot. The high score shares
+sector 0 with the save block, so both writers carry the other's value across
+the erase — the kind of invariant that silently dies when two functions each
+assume the other does not exist.
+
+Proof is the same power-cycle fixture that guards SRAM, run on flash128: the
+battery file comes out exactly 131072 bytes — the signature sized the part —
+and 1234 comes back through a process kill and second boot. The ROM built for
+flash carries FLASH1M_V102 and no SRAM string; the SRAM ROM carries SRAM_V113
+and no flash string. gbaruntime, integration (which now executes a ROM every
+run), and all five composition slices pass.
+
+Cross-session note: the bugfix lane closed its runtime claim this hour,
+committing the interrupt-attribute fix verbatim after independent clean-process
+red/green verification — and its Codex disassembly track had converged on the
+same diagnosis. The runtime queue is now this lane's: PCM second channel +
+mixer, palette cycling, health floor + death event + invincibility frames.
+
+
+### The second PCM voice — 2026-08-07
+
+Direct Sound B now carries a looping sampled soundtrack underneath the
+one-shot effects on A — the arrangement a sampled-music game needs and one
+FIFO cannot provide. Both voices share timer 1 (timer 0 stays the Help
+example's), and the sharing is the design constraint that matters: starting
+the second voice must not re-arm the clock or the first voice hiccups, so the
+timer starts only when no voice was active and stops with the last one.
+`nb_Sound` gains an appended `pcm_loop` (zero = the old behaviour, per the
+compatibility rule); a sampled sound marked loop routes to B and
+`rt_stop_music()` silences it, because a looping sample is the music.
+
+Proof at the register level: the jukebox slice plays both at once and asserts
+`SOUNDCNT_H` carries both voices' volume, routing and timer bits (0x770E),
+DMA1 feeds FIFO A while DMA2 feeds FIFO B, and the shared timer is enabled.
+What remains for the matrix row is a sample-summing mixer — more than two
+simultaneous samples — which is CPU-budget work, not hardware plumbing, and
+is queued behind palette cycling and the health primitives.
+
+
+### Palette cycling — and the vacuous fixture the gate caught — 2026-08-07
+
+Four independent cycle slots rotate contiguous BG or OBJ palette ranges in
+the VBlank flush, so a step is never torn mid-frame. Rotation is lossless:
+stopping leaves the same colours one slot along. A cycle over entry 0 fights
+the room loader's backdrop write — legitimate as a sky effect, documented as
+the author's fight to pick.
+
+The proof asserts three properties over two samples of emulated palette RAM:
+the cycled ranges differ between samples, the neighbours do not, and each
+range holds the same SET of colours both times — rotation rearranges, never
+invents. **The first run of that gate failed against correct code**, and the
+failure was the fixture: a room with no tileset populates no BG palette, so
+the test was rotating five zeros — vacuous, exactly the trap class already on
+record from the sprite-bank arithmetic. The live cycle state (tick advancing)
+plus all-zero entries made the diagnosis one gdb read. The fixture now paints
+real colours into both ranges before asking whether they move.
+
+### Design: the damage-cadence primitives — 2026-08-07
+
+What the encounter slice proved missing (health 200 → −30 in four seconds of
+contact), designed before implementation:
+
+* **Floor.** `nb_health` clamps at zero in the engine's own writers (the
+  add_health action path); raw C keeps raw access, because Level 3 is allowed
+  to break rules knowingly.
+* **Mercy frames, opt-in and engine-owned.** `nb_Object` gains an appended
+  `u8 hurt_frames` (zero = today's behaviour). After a collision event runs,
+  if `nb_health` DROPPED during it and the object declares hurt_frames, the
+  instance gets that many frames of invincibility: collision events are
+  skipped entirely while it counts down, and the sprite blinks (hidden toggled
+  every other frame) so the state is visible without costing the author a
+  single action. Detection is by comparing health around the event call — the
+  engine does not care HOW the event hurt the player, only that it did.
+* **A death event.** `nb_Object` gains an appended `nb_event_fn on_no_health`
+  (null = nothing, preserving zero-fill compatibility). When the floor clamps
+  health to exactly zero from above, the event fires once; it will not refire
+  until health has risen above zero — the Game-Maker-shaped contract, where
+  death logic is authored, not imposed.
+
+Instance side: an appended `u8 inv` countdown (Instance is runtime-owned, no
+generator contract). Generator side: `hurt_frames` from the object dict, a
+`no_health` event type wired to the new slot — both zero-default, both
+covered by the struct-drift gate that checks arity from both sides.
+
+
+### The damage-cadence primitives, landed as designed — 2026-08-07
+
+Implemented exactly as the design entry above specifies, with one refinement
+worth recording: mercy-frame detection watches the health LEDGER, not the
+weapon. The engine snapshots `nb_health` around each instance's step — which
+is where the generator folds every collision event — and a drop plus a
+declared `hurt_frames` arms the invincibility. The skip lives inside
+`rt_meeting`/`rt_place_meeting`, because generated collision blocks cannot be
+wrapped but every one of them asks those functions first. The blink is a
+draw-skip on `inv & 2`, so `hidden` stays the author's. The floor is enforced
+twice — at the `add_health` action and at end of step — so raw C keeps raw
+access mid-step and no frame ever ENDS negative. `on_no_health` fires once
+and re-arms only when health rises above zero: death logic is authored, the
+latch is not.
+
+Proof by execution: the new mortal slice (three health, contact every frame,
+no mercy) holds the floor at exactly 0 and fires the death event exactly
+once; the encounter slice, its soul now declaring 30 mercy frames, bleeds 9
+health through the same waves that cost 230 without them — and still reaches
+its save. Eight slices compose; the 550-check SDK suite (grown +6 by the
+search lane), runtime, integration and help suites are green.
+
+With this, the runtime queue that opened after the matrix refresh is CLEARED:
+flash save, PCM voice B, palette cycling, health primitives — all landed with
+execution proof, all inside one campaign day. Remaining against Part III:
+the sample-summing mixer, OBJWIN, bitmap modes, EEPROM, rumble/solar/gyro,
+sleep/power, and the affine-map emission (Phase 7).
+
+### The palette gate's three failures, none of them the runtime — 2026-08-07
+
+The cycling code was correct from its first compile; proving it took four
+attempts, and each failure taught a different harness lesson worth keeping:
+
+1. **Vacuous fixture.** A room with no tileset populates no BG palette, so
+   the first gate rotated five zeros and asked whether they changed. The
+   live cycle state (tick advancing) beside all-zero entries made the
+   diagnosis one gdb read.
+2. **Aliasing under load.** Wall-clock sample gaps mean nothing when the
+   emulator runs at whatever rate the loaded host allows: a gap can land on
+   an exact multiple of the cycle's period and photograph a rotating range
+   as still. Two unequal gaps reduced the odds; load found the coincidence
+   anyway.
+3. **Sampler resonance.** The fix — pairing each palette dump with the
+   runtime's own frame counter and only judging frame-distinct pairs — then
+   failed once more, because 0.25 s of sleep plus ~0.4 s of gdb dump time
+   comes to almost exactly the BG cycle's 40-frame period: every sample
+   landed on the same phase, legitimately frame-distinct pairs never
+   existed, and the early-exit accepted three samples. A measurement cadence
+   must never be commensurate with the period it measures; the sleeps now
+   grow per sample so no period can lock on, and "no valid pair" is its own
+   named failure rather than a false "does not rotate".
+
+After the third fix: four consecutive full-set runs, eight slices each, all
+compose. The failure evidence printer stays armed — any future occurrence
+prints every sample's frame number and both arrangements instead of a
+verdict to argue with.
+
+
+### OBJWIN, and the bug class's second member — 2026-08-07
+
+`rt_set_objwin` turns any sprite into the OBJ-window stencil (OAM mode 2:
+its opaque pixels become a hole, not a drawing) and `rt_window_obj` names
+the layers visible through it. The spotlight slice proves it by pixels:
+exactly 256 lit pixels through a 16×16 stencil over a backdrop-dark room.
+
+The slice's first red was the day's second instance of the frame-loop
+ownership class: I set `WINOBJ_ON` in `REG_DISPCNT`, the register the flush
+rewrites every VBlank — the same mistake removed from the display-mode path
+this morning, made fresh by the same hand within hours. And pulling that
+thread found the latent original: `rt_window`'s rectangle windows have died
+one frame after arming since Phase 7, because no test ever RAN one. All
+window enables now live in `g_dispcnt`. A documented bug class does not
+immunise its documenter; only a gate does.
+
+One more harness lesson for the pile: 0x7FE0 reads yellow to RGB eyes and is
+GREEN in BGR555 — the lit-pixel test now counts backdrop-difference and
+decodes nothing.

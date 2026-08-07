@@ -66,6 +66,14 @@ typedef struct {
                                object, 2 = solid tiles AND solid instances */
     u8 bb_l, bb_t, bb_r, bb_b;  /* collision-box inset in px from the sprite's
                                    left/top/right/bottom (0 = whole sprite) */
+    u8 hurt_frames;         /* mercy frames granted when a step of this object
+                               costs health; while they count down the sprite
+                               blinks and its collision tests report nothing.
+                               0 = no mercy (the original behaviour) */
+    nb_event_fn on_no_health;   /* fired once when health reaches zero; fires
+                                   again only after health has risen above
+                                   zero. 0 = nothing happens (the original
+                                   behaviour) */
 } nb_Object;
 
 typedef struct {
@@ -129,6 +137,10 @@ typedef struct {
                                before this existed. */
     const signed char* pcm; /* sampled audio, signed 8-bit at 16384 Hz, or 0 */
     u32 pcm_len;
+    /* ---- appended; 0 = the original behaviour ---- */
+    u8 pcm_loop;            /* 1 = a soundtrack: plays looping on the second
+                               PCM voice, under one-shot effects, until
+                               rt_stop_music(). 0 = a one-shot sample. */
 } nb_Sound;
 
 /* Built-in sound effects, playable with no data at all: rt_sfx(NB_SFX_COIN). */
@@ -180,9 +192,14 @@ typedef struct Instance {
     /* ---- appended; 0 = the original behaviour ---- */
     s16 gx, gy;             /* glide target */
     u16 glide;              /* frames of glide left, 0 = not gliding */
+    u8  inv;                /* mercy frames left; collision tests of an object
+                               with hurt_frames report nothing while set */
+    u8  objwin;             /* 1 = this sprite is the OBJ window stencil
+                               rather than a drawn image */
 } Instance;
 
 /* ---- supplied by the generated game ---- */
+extern const int       nb_save_type;   /* 0 SRAM 32K, 1 Flash 64K, 2 Flash 128K */
 extern const nb_Sprite nb_sprites[];
 extern const int       nb_sprite_count;
 extern const u16       nb_obj_palette[256]; /* 16 banks of 16 (per-sprite) */
@@ -450,6 +467,14 @@ int  rt_link_players(void);    /* units that answered the last transfer */
 void      rt_pcm_play(const void *data, u32 nsamples); /* nsamples is a count of BYTES, one per sample */
 void      rt_pcm_stop(void);                  /* silence and release timer 1 and DMA 1 */
 int       rt_pcm_playing(void);           /* 1 while a sample is sounding */
+void      rt_pcm_play_b(const void* data, u32 nsamples, int loop); /* the soundtrack voice */
+int       rt_pal_cycle(int obj, int first, int count, int frames); /* rotate palette entries; slot or -1 */
+void      rt_window_obj(int inside);          /* layers visible inside the sprite-shaped window */
+void      rt_window_obj_off(void);
+void      rt_set_objwin(Instance* self, int on); /* this sprite becomes the stencil */
+void      rt_pal_cycle_stop(int slot);        /* one slot, or -1 for all */
+void      rt_pcm_stop_b(void);               /* silence the soundtrack voice */
+int       rt_pcm_playing_b(void);            /* 1 while the soundtrack voice plays */
 void      rt_sfx(int preset);                 /* a built-in NB_SFX_* effect */
 void      rt_stop_music(void);                /* silence the music channels; effects keep playing */
 void      rt_stop_sfx(void);                  /* silence effects; music keeps playing */

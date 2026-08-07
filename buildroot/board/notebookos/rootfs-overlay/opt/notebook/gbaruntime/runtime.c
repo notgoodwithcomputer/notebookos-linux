@@ -22,13 +22,17 @@ static s32 g_arrive_x = -1, g_arrive_y = -1;
 static u16 g_step_frames = 1;    /* VBlanks between game steps (room speed) */
 static const nb_Room* g_room = 0;
 static Instance* g_view = 0;     /* the camera follows this instance (0 = fixed) */
-static Instance* g_other = 0;    /* what the most recent collision test found */
+static Instance* g_other = 0;
+static u8 g_death_fired = 0;   /* on_no_health latch: re-arms when health rises */    /* what the most recent collision test found */
 
 /* global game state (Game Maker score/lives/health) + persistent globals */
 s32 nb_score = 0, nb_lives = 3, nb_health = 100;
 s32 nb_global[NB_MAX_GLOBALS];
-/* the save-type marker vbam / flashcarts scan for to enable 32 KiB SRAM */
-static const char nb_sram_sig[] __attribute__((used, aligned(4))) = "SRAM_V113";
+extern const int nb_save_type;   /* 0 SRAM, 1 Flash 64K, 2 Flash 128K -- the generator decides */
+/* The save-type signature lives in the GENERATED game now (nb_save_sig):
+   emulators and flash carts size the battery by scanning the ROM for it,
+   and exactly one may exist -- a runtime-baked SRAM string next to a
+   generator-chosen FLASH one would leave detection to scan order. */
 
 /* ---- fast memory copy (DMA channel 3) ---- */
 static void dma_copy32(volatile void* dst, const void* src, int words) {
@@ -47,40 +51,102 @@ static void dma_copy16(volatile void* dst, const void* src, int halfwords) {
     REG_DMA3CNT = DMA_ENABLE | (u32)halfwords;
 }
 
-/* ---- persistent save (SRAM: 32 KiB at 0x0E000000, 8-bit access only) ---- */
-#define SRAM        ((volatile u8*)0x0E000000)
+/* ---- persistent save -----------------------------------------------------
+ * One 8-bit port at 0x0E000000, three parts that can sit behind it. The
+ * GENERATOR decides which (nb_save_type): 0 = SRAM 32K, 1 = Flash 64K,
+ * 2 = Flash 128K -- and emits the matching signature string, so the emulator
+ * or flash cart provisions the same part the code drives.
+ *
+ * SRAM is plain byte writes. Flash is a command protocol at two magic
+ * addresses: bytes can only be PROGRAMMED 1->0, so rewriting anything means
+ * erasing its 4 KiB sector back to 0xFF first, and every program/erase is
+ * finished by polling until the data reads back (DQ7). The whole save block
+ * lives in sector 0, which makes "rewrite" one erase -- but it also means the
+ * high score shares the sector, so both writers preserve the other's value
+ * across the erase. On the 128K part the port is banked; the save block stays
+ * in bank 0 and save_init() pins it there at boot. */
+#define SAVE_PORT   ((volatile u8*)0x0E000000)
+#define FLASH_A     (*(volatile u8*)0x0E005555)
+#define FLASH_B     (*(volatile u8*)0x0E002AAA)
 #define SAVE_MAGIC  0x42474D31   /* '1MGB' */
 #define SAVE_HISCORE (16 + NB_MAX_GLOBALS * 4)   /* high score lives after the globals */
 
-static void sram_w32(int off, s32 v) {
-    SRAM[off] = (u8)v;
-    SRAM[off + 1] = (u8)(v >> 8);
-    SRAM[off + 2] = (u8)(v >> 16);
-    SRAM[off + 3] = (u8)(v >> 24);
+static void flash_cmd(u8 c) {
+    FLASH_A = 0xAA;
+    FLASH_B = 0x55;
+    FLASH_A = c;
 }
 
-static s32 sram_r32(int off) {
-    return (s32)((u32)SRAM[off] | ((u32)SRAM[off + 1] << 8)
-                 | ((u32)SRAM[off + 2] << 16) | ((u32)SRAM[off + 3] << 24));
+/* Poll until the byte reads back. Bounded: a worn or absent part must hang
+   the SAVE, never the GAME. */
+static int flash_wait(volatile u8* p, u8 want) {
+    for (u32 n = 0; n < 2000000u; n++)
+        if (*p == want) return 1;
+    return 0;
+}
+
+static void save_init(void) {
+    if (nb_save_type == 2) {        /* pin bank 0 on the banked 128K part */
+        flash_cmd(0xB0);
+        SAVE_PORT[0] = 0;
+    }
+}
+
+static void save_erase_sector0(void) {
+    flash_cmd(0x80);
+    FLASH_A = 0xAA;
+    FLASH_B = 0x55;
+    SAVE_PORT[0] = 0x30;            /* erase the sector holding the block */
+    flash_wait(&SAVE_PORT[0], 0xFF);
+}
+
+static void save_w8(int off, u8 v) {
+    if (nb_save_type == 0) {
+        SAVE_PORT[off] = v;
+        return;
+    }
+    flash_cmd(0xA0);                /* program one byte, then wait it true */
+    SAVE_PORT[off] = v;
+    flash_wait(&SAVE_PORT[off], v);
+}
+
+static void save_w32(int off, s32 v) {
+    save_w8(off, (u8)v);
+    save_w8(off + 1, (u8)(v >> 8));
+    save_w8(off + 2, (u8)(v >> 16));
+    save_w8(off + 3, (u8)(v >> 24));
+}
+
+/* Reads are plain bytes on every part. */
+static s32 save_r32(int off) {
+    return (s32)((u32)SAVE_PORT[off] | ((u32)SAVE_PORT[off + 1] << 8)
+                 | ((u32)SAVE_PORT[off + 2] << 16)
+                 | ((u32)SAVE_PORT[off + 3] << 24));
 }
 
 void rt_game_save(void) {
-    sram_w32(0, (s32)SAVE_MAGIC);
-    sram_w32(4, nb_score);
-    sram_w32(8, nb_lives);
-    sram_w32(12, nb_health);
+    /* The high score shares sector 0; carry it over the erase. */
+    s32 hs = (save_r32(0) == (s32)SAVE_MAGIC) ? save_r32(SAVE_HISCORE) : 0;
+    if (nb_save_type != 0)
+        save_erase_sector0();
+    save_w32(0, (s32)SAVE_MAGIC);
+    save_w32(4, nb_score);
+    save_w32(8, nb_lives);
+    save_w32(12, nb_health);
     for (int i = 0; i < NB_MAX_GLOBALS; i++)
-        sram_w32(16 + i * 4, nb_global[i]);
+        save_w32(16 + i * 4, nb_global[i]);
+    if (nb_save_type != 0)
+        save_w32(SAVE_HISCORE, hs);
 }
 
 int rt_game_load(void) {
-    if (sram_r32(0) != (s32)SAVE_MAGIC)
+    if (save_r32(0) != (s32)SAVE_MAGIC)
         return 0;
-    nb_score = sram_r32(4);
-    nb_lives = sram_r32(8);
-    nb_health = sram_r32(12);
+    nb_score = save_r32(4);
+    nb_lives = save_r32(8);
+    nb_health = save_r32(12);
     for (int i = 0; i < NB_MAX_GLOBALS; i++)
-        nb_global[i] = sram_r32(16 + i * 4);
+        nb_global[i] = save_r32(16 + i * 4);
     return 1;
 }
 
@@ -88,20 +154,45 @@ int rt_game_load(void) {
    with no save/load at all can still have a high score that survives being
    switched off — the thing that makes a home-made game worth replaying. */
 s32 rt_highscore(void) {
-    if (sram_r32(0) != (s32)SAVE_MAGIC)
+    if (save_r32(0) != (s32)SAVE_MAGIC)
         return 0;
-    return sram_r32(SAVE_HISCORE);
+    return save_r32(SAVE_HISCORE);
 }
 
 int rt_highscore_submit(void) {
     s32 best = rt_highscore();
-    if (sram_r32(0) != (s32)SAVE_MAGIC)
-        sram_w32(0, (s32)SAVE_MAGIC);
-    if (nb_score > best) {
-        sram_w32(SAVE_HISCORE, nb_score);
-        return 1;
+    if (nb_save_type == 0) {
+        if (save_r32(0) != (s32)SAVE_MAGIC)
+            save_w32(0, (s32)SAVE_MAGIC);
+        if (nb_score > best) {
+            save_w32(SAVE_HISCORE, nb_score);
+            return 1;
+        }
+        return 0;
     }
-    return 0;
+    /* Flash: the sector is rewritten whole, preserving the save block. A
+       submit with no save behaves as it always has -- the magic goes in and
+       the slot fields read back zero. */
+    if (nb_score <= best && save_r32(0) == (s32)SAVE_MAGIC)
+        return 0;
+    s32 sc = 0, lv = 0, hp = 0, g[NB_MAX_GLOBALS];
+    int had = save_r32(0) == (s32)SAVE_MAGIC;
+    for (int i = 0; i < NB_MAX_GLOBALS; i++)
+        g[i] = had ? save_r32(16 + i * 4) : 0;
+    if (had) {
+        sc = save_r32(4);
+        lv = save_r32(8);
+        hp = save_r32(12);
+    }
+    save_erase_sector0();
+    save_w32(0, (s32)SAVE_MAGIC);
+    save_w32(4, sc);
+    save_w32(8, lv);
+    save_w32(12, hp);
+    for (int i = 0; i < NB_MAX_GLOBALS; i++)
+        save_w32(16 + i * 4, g[i]);
+    save_w32(SAVE_HISCORE, nb_score > best ? nb_score : best);
+    return nb_score > best;
 }
 
 /* ---------------- randomness ---------------- */
@@ -530,6 +621,65 @@ void rt_shake(s32 frames, s32 magnitude) {
     if (magnitude < 1) magnitude = 1;
     if (magnitude > 16) magnitude = 16;
     g_shake_n = (u8)frames; g_shake_mag = (u8)magnitude;
+}
+
+/* ---- palette cycling -----------------------------------------------------
+ * The classic effect nothing else reproduces cheaply: waterfalls, lava,
+ * torchlight, shimmer -- drawn once, animated by rotating a handful of
+ * palette entries every few frames. Four independent cycles may run at once,
+ * each over one contiguous range of BG or OBJ entries. Rotation is lossless,
+ * so stopping a cycle leaves the colours wherever they stood; they are the
+ * same colours, one slot along.
+ *
+ * The room's backdrop lives in BG entry 0 and room changes rewrite it, so a
+ * cycle that includes entry 0 fights the room loader. Nothing forbids it --
+ * cycling the backdrop is a legitimate sky effect -- but it is the author's
+ * fight to pick. Steps happen in the VBlank flush, so a rotation is never
+ * torn mid-frame. */
+#define NB_PAL_CYCLES 4
+typedef struct { u8 on, obj, first, count, frames, tick; } PalCycle;
+static PalCycle g_pal_cyc[NB_PAL_CYCLES];
+
+/* Begin a cycle; the slot number comes back (-1 = none free or bad range).
+   obj: 0 = background palette, 1 = sprite palette. first/count: the entry
+   range, within 0..255. frames: how many frames each step lasts. */
+int rt_pal_cycle(int obj, int first, int count, int frames) {
+    if (first < 0 || count < 2 || first + count > 256
+        || frames < 1 || frames > 255)
+        return -1;
+    for (int i = 0; i < NB_PAL_CYCLES; i++) {
+        PalCycle* c = &g_pal_cyc[i];
+        if (c->on) continue;
+        c->on = 1;
+        c->obj = (u8)(obj != 0);
+        c->first = (u8)first;
+        c->count = (u8)count;
+        c->frames = (u8)frames;
+        c->tick = 0;
+        return i;
+    }
+    return -1;
+}
+
+/* Stop one cycle by slot, or every cycle with -1. */
+void rt_pal_cycle_stop(int slot) {
+    if (slot < 0) {
+        for (int i = 0; i < NB_PAL_CYCLES; i++) g_pal_cyc[i].on = 0;
+    } else if (slot < NB_PAL_CYCLES) {
+        g_pal_cyc[slot].on = 0;
+    }
+}
+
+static void pal_cycle_step(void) {
+    for (int i = 0; i < NB_PAL_CYCLES; i++) {
+        PalCycle* c = &g_pal_cyc[i];
+        if (!c->on || ++c->tick < c->frames) continue;
+        c->tick = 0;
+        volatile u16* p = (c->obj ? OBJ_PALETTE : BG_PALETTE) + c->first;
+        u16 last = p[c->count - 1];
+        for (int n = c->count - 1; n > 0; n--) p[n] = p[n - 1];
+        p[0] = last;
+    }
 }
 
 static void fx_apply(void) {
@@ -1376,56 +1526,181 @@ int rt_link_players(void) {
 }
 
 /* ---- sampled audio (Direct Sound) ---------------------------------------
- * One PCM voice on Direct Sound A, clocked by timer 1 and fed by DMA1.
+ * TWO PCM voices. Direct Sound A carries one-shot samples -- voices, impacts,
+ * anything an author drops on a play_sound action. Direct Sound B carries a
+ * LOOPING sample: a recorded soundtrack that keeps playing underneath while A
+ * fires effects over it, which is the arrangement a sampled-music game needs
+ * and one FIFO cannot provide.
  *
- * TIMER 1 ON PURPOSE. Direct Sound A can take timer 0 or timer 1, and timer 0
- * is the one the Help's interrupt example arms; taking it here would break
- * that example the moment a project played a sample, with nothing to say why.
+ * ONE TIMER FOR BOTH, timer 1, on purpose twice over. Each FIFO may be clocked
+ * by timer 0 or 1; timer 0 is the one the Help's interrupt example arms, and
+ * taking it would break that example the moment a project played a sample.
+ * And both voices sharing a clock means starting the second voice must NOT
+ * re-arm the timer -- that would hiccup the first voice's playback -- so the
+ * timer starts only when no voice was active, and stops only when the last
+ * voice goes quiet.
  *
- * RATE IS FIXED at 16384 Hz. The GBA has no resampler: the timer period IS the
- * sample rate, so a per-sample rate would mean re-arming the timer on every
- * play and re-tuning anything else sharing it. One rate, converted on import,
- * costs a little ROM and removes a whole class of "it plays too fast".
+ * RATE IS FIXED at 16384 Hz. The GBA has no resampler: the timer period IS
+ * the sample rate. One rate, converted on import, removes a whole class of
+ * "it plays too fast".
  *
- * The DMA repeats forever, so playback is stopped by counting frames rather
- * than by the hardware -- an unstopped sample loops its buffer, which sounds
- * like a stuck note and is easy to mistake for a hung game. */
+ * The DMAs repeat forever; A is stopped by counting frames (an unstopped
+ * sample loops its buffer, which sounds like a stuck note), and B loops by
+ * design until told otherwise. */
 #define PCM_RATE    16384u
 #define PCM_PERIOD  (16777216u / PCM_RATE)      /* 1024 cycles per sample */
 
-static u32 g_pcm_frames;        /* frames of playback left, 0 = silent */
+/* ---- the one-shot mixer (voice A) ----------------------------------------
+ * Four one-shot samples audible AT ONCE, summed in software into a double
+ * buffer that Direct Sound A streams. Before this, a second rt_pcm_play cut
+ * the first mid-note: a footstep silenced a sword, a sword silenced a voice.
+ *
+ * The cadence is the part with a trap in it. 16384 Hz against 60 frames is
+ * 273.07 samples a frame: mixing a fixed 273 starves the FIFO by four
+ * samples a second, a fixed 274 overruns it. The mixer owes four EXTRA
+ * samples a second, paid one at a time: every 15th frame mixes 274. The
+ * DMA is re-pointed at the fresh half each VBlank -- inside the blank, so
+ * the swap is never audible as a click.
+ *
+ * Summing saturates. Two loud samples clamp at full scale; wrapping would
+ * turn their loudest instant into a spike of the opposite sign, which is a
+ * CRACK where the design says LOUD. */
+#define MIX_VOICES  4
+#define MIX_MAX     304                 /* room for 274 with margin */
+static s8  g_mixbuf[2][MIX_MAX] __attribute__((aligned(4)));
+static u8  g_mixcur;                    /* which half the DMA is playing */
+static u8  g_mixphase;                  /* 0..14; phase 0 mixes the extra sample */
+typedef struct { const signed char* data; u32 pos, len; u8 on; } MixVoice;
+static MixVoice g_mixv[MIX_VOICES];
+
+static u32 g_pcm_b_frames;      /* voice B frames left (ignored when looping) */
+static u8  g_pcm_b_loop;        /* voice B plays until rt_pcm_stop_b */
+static u8  g_mix_running;       /* the A-side stream is armed */
+
+static void pcm_timer_sync(void) {
+    if (g_mix_running || g_pcm_b_frames || g_pcm_b_loop) {
+        if (!(REG_TM1CNT_H & TM_ENABLE))
+            rt_timer_start(1, PCM_PERIOD, 0);
+    } else {
+        rt_timer_stop(1);
+    }
+}
+
+/* Sum every live voice into dst. IWRAM: this is 274 samples x 4 voices at
+   60 fps, the hottest loop the audio owns. */
+IWRAM_CODE static void mix_block(s8* dst, int n) {
+    for (int i = 0; i < n; i++) {
+        s32 acc = 0;
+        for (int v = 0; v < MIX_VOICES; v++) {
+            MixVoice* mv = &g_mixv[v];
+            if (!mv->on) continue;
+            acc += mv->data[mv->pos];
+            if (++mv->pos >= mv->len) mv->on = 0;
+        }
+        if (acc > 127) acc = 127;
+        if (acc < -128) acc = -128;
+        dst[i] = (s8)acc;
+    }
+}
+
+static void mix_arm_dma(const s8* buf) {
+    REG_DMA1CNT = 0;
+    REG_DMA1SAD = (u32)buf;
+    REG_DMA1DAD = (u32)&REG_FIFO_A;
+    REG_DMA1CNT = DMA_DST_FIX | DMA_SRC_INC | DMA_REPEAT | DMA_32
+                  | DMA_SPECIAL | DMA_ENABLE;
+}
+
+static void mix_start(void) {
+    if (g_mix_running) return;
+    REG_SOUNDCNT_H |= (u16)(PSG_VOL_FULL | DSA_VOL_FULL | DSA_RIGHT
+                            | DSA_LEFT | DSA_TIMER1 | DSA_RESET);
+    for (int i = 0; i < MIX_MAX; i++) { g_mixbuf[0][i] = 0; g_mixbuf[1][i] = 0; }
+    g_mixcur = 0;
+    g_mixphase = 0;
+    mix_arm_dma(g_mixbuf[0]);
+    g_mix_running = 1;
+    pcm_timer_sync();
+}
 
 void rt_pcm_stop(void) {
-    REG_DMA1CNT = 0;
-    rt_timer_stop(1);
-    REG_SOUNDCNT_H &= (u16)~(DSA_VOL_FULL | DSA_RIGHT | DSA_LEFT
-                             | DSA_TIMER1 | DSA_RESET);
-    REG_SOUNDCNT_H |= PSG_VOL_FULL;
-    g_pcm_frames = 0;
+    for (int v = 0; v < MIX_VOICES; v++) g_mixv[v].on = 0;
+    if (g_mix_running) {
+        REG_DMA1CNT = 0;
+        REG_SOUNDCNT_H &= (u16)~(DSA_VOL_FULL | DSA_RIGHT | DSA_LEFT
+                                 | DSA_TIMER1 | DSA_RESET);
+        REG_SOUNDCNT_H |= PSG_VOL_FULL;
+        g_mix_running = 0;
+    }
+    pcm_timer_sync();
+}
+
+void rt_pcm_stop_b(void) {
+    REG_DMA2CNT = 0;
+    REG_SOUNDCNT_H &= (u16)~(DSB_VOL_FULL | DSB_RIGHT | DSB_LEFT
+                             | DSB_TIMER1 | DSB_RESET);
+    g_pcm_b_frames = 0;
+    g_pcm_b_loop = 0;
+    pcm_timer_sync();
 }
 
 void rt_pcm_play(const void *data, u32 nsamples) {
     if (!data || nsamples < 16) return;
-    rt_pcm_stop();
-    REG_SOUNDCNT_H |= (u16)(PSG_VOL_FULL | DSA_VOL_FULL | DSA_RIGHT
-                            | DSA_LEFT | DSA_TIMER1 | DSA_RESET);
-    REG_DMA1CNT = 0;                       /* disable before re-pointing */
-    REG_DMA1SAD = (u32)data;
-    REG_DMA1DAD = (u32)&REG_FIFO_A;
-    REG_DMA1CNT = DMA_DST_FIX | DMA_SRC_INC | DMA_REPEAT | DMA_32
-                  | DMA_SPECIAL | DMA_ENABLE;
-    rt_timer_start(1, PCM_PERIOD, 0);
-    /* Round up: stopping a frame early clips the tail audibly, stopping a
-       frame late is inaudible. */
-    g_pcm_frames = (nsamples * 60u) / PCM_RATE + 1u;
+    mix_start();
+    /* A free voice, or the one closest to finishing: stealing the nearly
+       done voice loses the least audible material. */
+    int pick = -1;
+    u32 least = 0xFFFFFFFFu;
+    for (int v = 0; v < MIX_VOICES; v++) {
+        if (!g_mixv[v].on) { pick = v; break; }
+        u32 left = g_mixv[v].len - g_mixv[v].pos;
+        if (left < least) { least = left; pick = v; }
+    }
+    g_mixv[pick].data = (const signed char*)data;
+    g_mixv[pick].len = nsamples;
+    g_mixv[pick].pos = 0;
+    g_mixv[pick].on = 1;
 }
 
-int rt_pcm_playing(void) { return g_pcm_frames != 0; }
+/* The soundtrack voice. loop=0 plays the buffer once; loop=1 plays it until
+   rt_pcm_stop_b() or rt_stop_music() -- a looping sample IS the music, so the
+   call that silences music silences it. */
+void rt_pcm_play_b(const void *data, u32 nsamples, int loop) {
+    if (!data || nsamples < 16) return;
+    rt_pcm_stop_b();
+    REG_SOUNDCNT_H |= (u16)(PSG_VOL_FULL | DSB_VOL_FULL | DSB_RIGHT
+                            | DSB_LEFT | DSB_TIMER1 | DSB_RESET);
+    REG_DMA2CNT = 0;
+    REG_DMA2SAD = (u32)data;
+    REG_DMA2DAD = (u32)&REG_FIFO_B;
+    REG_DMA2CNT = DMA_DST_FIX | DMA_SRC_INC | DMA_REPEAT | DMA_32
+                  | DMA_SPECIAL | DMA_ENABLE;
+    g_pcm_b_loop = (u8)(loop != 0);
+    g_pcm_b_frames = loop ? 0 : (nsamples * 60u) / PCM_RATE + 1u;
+    pcm_timer_sync();
+}
 
-/* Called once per frame from the main loop. */
+int rt_pcm_playing(void) {
+    for (int v = 0; v < MIX_VOICES; v++)
+        if (g_mixv[v].on) return 1;
+    return 0;
+}
+int rt_pcm_playing_b(void) { return g_pcm_b_loop || g_pcm_b_frames != 0; }
+
+/* Called once per frame from the main loop, inside the VBlank: mix the
+   half the DMA is NOT playing, then hand the DMA the freshly mixed one.
+   Every 15th frame carries the extra sample that keeps 273.07 honest. */
 static void rt_pcm_tick(void) {
-    if (!g_pcm_frames) return;
-    if (--g_pcm_frames == 0) rt_pcm_stop();
+    if (g_mix_running) {
+        int n = 273 + (g_mixphase == 0);
+        if (++g_mixphase >= 15) g_mixphase = 0;
+        u8 next = (u8)(g_mixcur ^ 1);
+        mix_block(g_mixbuf[next], n);
+        mix_arm_dma(g_mixbuf[next]);
+        g_mixcur = next;
+    }
+    if (!g_pcm_b_loop && g_pcm_b_frames && --g_pcm_b_frames == 0)
+        rt_pcm_stop_b();
 }
 
 /* ---- colour blending -----------------------------------------------------
@@ -1490,13 +1765,39 @@ void rt_window(int n, int x, int y, int w, int h, u16 inside, u16 outside) {
     else
         REG_WININ = (u16)((REG_WININ & 0x003F) | ((inside & 0x003F) << 8));
     REG_WINOUT = (u16)((REG_WINOUT & 0x3F00) | (outside & 0x003F));
-    REG_DISPCNT |= (u16)(n == 0 ? WIN0_ON : WIN1_ON);
+    /* Into g_dispcnt, not the register: the frame loop ends every VBlank
+       with REG_DISPCNT = g_dispcnt, so a bit set only in the register
+       lasts one frame -- the same silent revert the display mode had. */
+    g_dispcnt |= (u16)(n == 0 ? WIN0_ON : WIN1_ON);
+    REG_DISPCNT = g_dispcnt;
 }
 
 void rt_window_off(int n) {
-    if (n == 0) REG_DISPCNT &= (u16)~WIN0_ON;
-    else if (n == 1) REG_DISPCNT &= (u16)~WIN1_ON;
-    else REG_DISPCNT &= (u16)~(WIN0_ON | WIN1_ON | WINOBJ_ON);
+    if (n == 0) g_dispcnt &= (u16)~WIN0_ON;
+    else if (n == 1) g_dispcnt &= (u16)~WIN1_ON;
+    else g_dispcnt &= (u16)~(WIN0_ON | WIN1_ON | WINOBJ_ON);
+    REG_DISPCNT = g_dispcnt;
+}
+
+/* The sprite-shaped window. Any instance marked with rt_set_objwin stops
+ * being DRAWN and becomes a stencil: `inside` names the layers visible where
+ * its opaque pixels fall. A spotlight that is actually torch-shaped, water
+ * that ripples the layers behind a sprite-shaped mask -- the effect the two
+ * rectangle windows cannot make. The outside-of-all-windows content is set
+ * by rt_window(); this touches only the OBJ window's own bits. */
+void rt_window_obj(int inside) {
+    REG_WINOUT = (u16)((REG_WINOUT & 0x003F) | ((inside & 0x003F) << 8));
+    g_dispcnt |= WINOBJ_ON;
+    REG_DISPCNT = g_dispcnt;
+}
+
+void rt_window_obj_off(void) {
+    g_dispcnt &= (u16)~WINOBJ_ON;
+    REG_DISPCNT = g_dispcnt;
+}
+
+void rt_set_objwin(Instance* self, int on) {
+    if (self) self->objwin = (u8)(on != 0);
 }
 
 /* ---- mosaic --------------------------------------------------------------
@@ -1902,6 +2203,7 @@ void rt_stop_music(void) {
     rt_square(0, 0, 0, 0, 0);
     rt_square(1, 0, 0, 0, 0);
     REG_SOUND4CNT_L = 0;
+    rt_pcm_stop_b();               /* a looping sample is the music too */
 }
 
 void rt_music_volume(int vol) {
@@ -1958,7 +2260,13 @@ void rt_play_sound(s16 sound) {
        in the generator meant a sampled sound played its (empty) pattern
        whenever it was reached from C -- one rule, two behaviours. */
     const nb_Sound* s = &nb_sounds[sound];
-    if (s->pcm && s->pcm_len >= 16) { rt_pcm_play(s->pcm, s->pcm_len); return; }
+    if (s->pcm && s->pcm_len >= 16) {
+        /* A looping sample is a soundtrack: it belongs on the B voice, under
+           whatever one-shot effects A fires over it. */
+        if (s->pcm_loop) rt_pcm_play_b(s->pcm, s->pcm_len, 1);
+        else rt_pcm_play(s->pcm, s->pcm_len);
+        return;
+    }
     if (s->kind) rt_play_sfx(sound);
     else rt_play_music(sound);
 }
@@ -2186,6 +2494,14 @@ static void rt_bbox(Instance* in, s32* l, s32* t, s32* r, s32* b) {
 }
 
 Instance* rt_meeting(Instance* self, s16 object) {
+    /* Mercy frames: an object that declares hurt_frames feels no contact
+       while its invincibility counts down. The skip lives HERE because
+       collision events are folded into generated step code the engine cannot
+       wrap -- but every one of them asks this function first. */
+    if (self && self->inv && self->object >= 0
+        && self->object < nb_object_count
+        && nb_objects[self->object].hurt_frames)
+        return 0;
     if (!self) return 0;
     s32 al, at, ar, ab; rt_bbox(self, &al, &at, &ar, &ab);
     for (int i = 0; i < NB_MAX_INSTANCES; i++) {
@@ -2199,6 +2515,14 @@ Instance* rt_meeting(Instance* self, s16 object) {
 }
 
 Instance* rt_place_meeting(Instance* self, s32 x, s32 y, s16 object) {
+    /* Mercy frames: an object that declares hurt_frames feels no contact
+       while its invincibility counts down. The skip lives HERE because
+       collision events are folded into generated step code the engine cannot
+       wrap -- but every one of them asks this function first. */
+    if (self && self->inv && self->object >= 0
+        && self->object < nb_object_count
+        && nb_objects[self->object].hurt_frames)
+        return 0;
     if (!self) return 0;
     s32 al, at, ar, ab; rt_bbox_at(self, x, y, &al, &at, &ar, &ab);
     for (int i = 0; i < NB_MAX_INSTANCES; i++) {
@@ -2516,8 +2840,36 @@ static void rt_step_all(void) {
     for (int i = 0; i < NB_MAX_INSTANCES; i++) {
         Instance* in = &g_inst[i];
         if (!in->active) continue;
-        nb_event_fn step = nb_objects[in->object].step;
-        if (step) step(in);
+        if (in->inv) in->inv--;
+        const nb_Object* ob = &nb_objects[in->object];
+        /* Mercy frames arm themselves: whatever inside this step costs
+           health -- a collision event, a script, raw C -- is what grants the
+           invincibility, because the engine watches the ledger rather than
+           the weapon. */
+        s32 h0 = nb_health;
+        if (ob->step) ob->step(in);
+        if (nb_health < h0 && ob->hurt_frames && !in->inv)
+            in->inv = ob->hurt_frames;
+    }
+    /* The floor, and the one death. Health never leaves a step negative, and
+       reaching zero fires each opted-in object's event exactly once -- it
+       cannot refire until health has risen above zero, so death logic is
+       authored without a latch variable in every project. */
+    if (nb_health < 0) nb_health = 0;
+    if (nb_health == 0 && !g_death_fired) {
+        g_death_fired = 1;
+        for (int o = 0; o < nb_object_count; o++) {
+            if (!nb_objects[o].on_no_health) continue;
+            for (int i = 0; i < NB_MAX_INSTANCES; i++) {
+                Instance* in = &g_inst[i];
+                if (in->active && in->object == o) {
+                    nb_objects[o].on_no_health(in);
+                    break;
+                }
+            }
+        }
+    } else if (nb_health > 0) {
+        g_death_fired = 0;
     }
 }
 
@@ -2665,6 +3017,15 @@ static void emit_sprite(Instance* in, int oi) {
     u16 tile = (u16)(s->tile + (u16)frame * s->tiles_per_frame);
     u16 a0 = (u16)(s->shape << 14);
     u16 a1 = OBJ_SIZE(s->size);
+    /* OBJ mode 2: this sprite's opaque pixels define the OBJ window
+       instead of being drawn. The blink and every other attribute still
+       apply -- a blinking stencil flickers the window, which is exactly
+       what a mercy flash should look like through one. */
+    if (in->objwin) a0 |= 0x0800;
+    /* The mercy blink: skipping the draw every other pair of frames is the
+       classic signal, costs nothing, and corrupts no author state -- hidden
+       stays the author's. */
+    if (in->inv & 2) return;
     int transformed = (in->angle || (in->scale && in->scale != 256));
     if (transformed && aff_slot < 32) {
         s32 sc = in->scale ? in->scale : 256;
@@ -2735,11 +3096,13 @@ static void rt_flush(void) {
         REG_BG3VOFS = (u16)(g_scroll_y / div);
     }
     fx_apply();
+    pal_cycle_step();             /* rotations land inside the VBlank */
     REG_DISPCNT = g_dispcnt;
 }
 
 void rt_run(void) {
     REG_WAITCNT = WAITCNT_FAST;   /* ROM prefetch + the SRAM timing a save needs */
+    save_init();                  /* pin the 128K flash part to bank 0 */
     rt_irq_init();                /* before anything waits on a VBlank */
     rt_video_init();
     rt_sound_init();

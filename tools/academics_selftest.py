@@ -273,15 +273,27 @@ check("_add_meeting really adds a class time",
 check("_add_meeting stored what the dialog returned",
       app.classes[0]["meets"][0]["start"] == "13:00")
 
-app._homework_dialog = lambda *a, **k: ("Read chapter 4", 0, day_key(2))
+# The dialog returns a DICT of its fields, the same shape _class_dialog
+# returns — it grew a `note` field, and a positional tuple would have made
+# that a silent breaking change at every call site.
+app._homework_dialog = lambda *a, **k: {
+    "title": "Read chapter 4", "cls": 0, "due": day_key(2),
+    "note": "sections 4.1 to 4.6"}
 app._new_homework()
 check("_new_homework really adds an assignment", len(app.homework) == 1)
 check("a new assignment starts unfinished", app.homework[0]["done"] is False)
+# `note` sat in the saved schema with no field to type it in and no line to
+# show it, so nothing could ever put a character there.
+check("a new assignment keeps the note the dialog returned",
+      app.homework[0]["note"] == "sections 4.1 to 4.6")
 
-app._homework_dialog = lambda *a, **k: ("Read chapter 5", 0, day_key(2))
+app._homework_dialog = lambda *a, **k: {
+    "title": "Read chapter 5", "cls": 0, "due": day_key(2), "note": ""}
 app._edit_homework(0)
 check("_edit_homework really edits it",
       app.homework[0]["title"] == "Read chapter 5")
+check("editing an assignment can clear its note",
+      app.homework[0]["note"] == "")
 
 app._confirm = lambda *a, **k: True
 app._homework_dialog = lambda *a, **k: app._REMOVE
