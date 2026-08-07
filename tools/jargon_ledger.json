@@ -1,0 +1,41 @@
+{
+  "_format": "allow: {exact string: why it is not a leak}. pending: {file: [real leaks awaiting rewrite]}. Both shelves ratchet (task 026, reviewed 2026-08-07). Any lane may DELETE a pending entry in the same change that fixes its string; only the campaign session adds allow entries.",
+  "allow": {
+    ".json": "file-chooser pattern: the on-disk format's real name, shown as such in Save dialogs",
+    "*.json": "file-chooser pattern, as above",
+    "META-INF/container.xml": "EPUB member path used by the parser; not rendered",
+    "Fixed point stores a fraction in an integer by agreeing where the point sits. In 8.8, the low 8 bits are the fraction and the value 256 means 1.0. The CPU sees ordinary integers and integer instructions, which is the entire point.": "gbahelp teaches C on GBA hardware; the terms are the syllabus",
+    "The condition is any expression. Zero is false; every other value is true. There is no separate boolean type in use here.": "gbahelp curriculum: describing C's truth model IS the lesson",
+    "Integer maths in the BIOS": "gbahelp lesson title; the curriculum",
+    "PSG channels cost nothing but a register write and are the right choice for effects. Direct Sound plays sampled audio, which costs ROM at its sample rate and holds a timer and a DMA channel.": "gbahelp audio lesson: sampled audio and its costs are the subject",
+    "File ▸ Import Sound brings in a .wav as a sampled sound. It is converted on the way in to signed 8-bit at 16384 Hz, because the hardware has no resampler: the timer period IS the sample rate.": "gbahelp audio lesson: states the real conversion the tool performs",
+    "The bit-banged transfer to the clock chip has not been run against the hardware. The command encoding, the conversion from BCD and the rejection of an absent clock are covered by the runtime selftest; the transfer itself is written to the chip's published sequence.": "gbahelp hardware note: an honest statement of what is untested",
+    "BOOTX64.EFI": "the literal filename on the EFI system partition; used by the copier and named in firmware-facing instructions",
+    "C.UTF-8": "locale identifier written to configuration; not prose",
+    "en_US.UTF-8": "locale identifier written to configuration",
+    "en_GB.UTF-8": "locale identifier written to configuration",
+    "Details: a %d MiB FAT32 EFI system partition, %san ext4 root filesystem labelled \"%s\" with PARTUUID %s, and the GRUB loader written to /EFI/BOOT/BOOTX64.EFI.": "the destructive-install disclosure names the true objects it creates; vagueness before an irreversible act would be the defect, and the audience is adults",
+    "EFI": "partition-role name / directory name as firmware and disk tools show it",
+    "NAME,PARTUUID,TYPE,PKNAME": "lsblk column list; subprocess argument",
+    "Secure Boot: the Notebook OS key must be approved once, on the first start-up. A blue screen appears: choose \"Enroll key from disk\", pick EFI/BOOT/MOK.cer, confirm, and restart. If a start-up error appears instead, open the firmware boot menu and run EFI/BOOT/mmx64.efi to enrol the key there.": "MokManager guidance must use the words the firmware screen itself shows",
+    "1:EFI System": "sgdisk partition-type argument; subprocess, not UI",
+    "    'Enroll key from disk' -> EFI/BOOT/MOK.cer -> Continue,": "MokManager guidance: the firmware's own menu text and path",
+    "    or 'Enroll hash' and confirm, then reboot.": "MokManager guidance: the firmware's own alternative flow",
+    "  If it boots straight to a GRUB error instead, launch": "recovery instruction: GRUB is the word the failing screen will show",
+    "  EFI/BOOT/mmx64.efi from your firmware's boot menu to enroll.": "recovery instruction: the literal path the firmware needs",
+    "X11": "session-type config value in the installer's written config",
+    "PARTUUID": "parse key for lsblk output; not rendered alone",
+    "vbam pid=%d": "written to the emulator harness log file, not the screen",
+    "lang_%s.json": "catalog filename template in the i18n layer; not rendered",
+    "\\s*\\([^)]*GTK[^)]*\\)": "regex literal that STRIPS toolkit suffixes from package descriptions — it removes jargon",
+    "Gtk": "gi.require_version() argument at every module top; never rendered"
+  },
+  "pending": {
+    "widgets.py": [
+      "Widget Settings…"
+    ],
+    "widgetsettings.py": [
+      "Widget Settings"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "_format": "allow: {exact string: reason it is FUNCTION}. pending: {file: [exact strings that ARE the voice, awaiting rewrite by the owning app lane]}. Both shelves ratchet — voice_check fails on any finding not listed here and on any pending entry whose string has left the source. Reviewed by the campaign session, task 026, 2026-08-07.",
+  "allow": {
+    "%s - Show Menu has no lines in it, so there is nothing to choose from.": "build diagnostic: states the defect and its consequence; length is the genre of a diagnostic, not voice",
+    "%s - Show Menu does not say which variable the answer goes in, so the choice would be lost.": "build diagnostic: same genre — defect plus the consequence that makes it matter",
+    "For a Game Boy Advance console, copy the file to a USB stick, then to a flashcart.": "export handoff: the dialog's function IS the procedure for using the emitted file",
+    "Start the machine from the %s installer and open this app again from that desktop.": "states the required procedure; an installer that cannot run must say what to do instead",
+    "This copy of %s is missing the tools that prepare a disk, so it cannot install itself.": "states fact and consequence — the failure-message pattern the OS standardises on",
+    "Add %d to Media": "imperative verb label naming the action (Add N clips to Media); the coaxing-prompt rule matched the shape, not the voice"
+  },
+  "pending": {
+    "gbabuild.py": [
+      "this is not something you can assign to"
+    ],
+    "music.py": [
+      "Delete the playlist \"%s\" and its %d track%s? Your music files are not deleted."
+    ],
+    "novel.py": [
+      "Your last changes are not saved"
+    ]
+  }
+}

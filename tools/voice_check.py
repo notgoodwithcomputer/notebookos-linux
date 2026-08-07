@@ -19,7 +19,19 @@ sentence that happens to wrap.
 
   python3 tools/voice_check.py [--file X.py ...] [--fail] [-v]
 
-Exit 0 always unless --fail (then non-zero when anything is flagged).
+A bare run is a GATE (task 026): it exits non-zero on any flagged string that
+tools/voice_ledger.json does not account for, and on any ledger entry gone
+stale. The ledger has two shelves — "allow" (judged acceptable, with the
+reason) and "pending" (real voice, awaiting rewrite by the owning app lane) —
+and both ratchet: fixing a pending string without deleting its entry fails,
+deleting an entry without fixing the string fails. --fail is retained for
+compatibility and is now implied.
+
+Format strings are CHECKED, not skipped (this was the gate's largest blind
+spot: 305 strings containing %s — precisely the confirms and destructive
+warnings — were invisible). Placeholders are neutralised to an inert token
+before the rules run, so "%s deleted" is judged as a sentence without the
+substitution inventing words a rule could false-match.
 
 ENGLISH SOURCE ONLY. Do not point this, or the mandate it enforces, at the
 translation catalogs. Measured 2026-08-04: 110 Japanese strings end in
@@ -94,7 +106,10 @@ RULES = [
      "a sentence of prose in a UI; cut to the fact or delete"),
 ]
 
-SKIP_SUBSTR = ("http://", "https://", "%s", "/dev/", "/etc/", "/opt/")
+SKIP_SUBSTR = ("http://", "https://", "/dev/", "/etc/", "/opt/")
+
+# %s / %d / %(name)s / {} / {0} → an inert token no rule can word-match.
+_PLACEHOLDER = re.compile(r"%\([^)]+\)[sdifr]|%[sdifxr%]|%\.\d+[fd]|\{[^{}]*\}")
 
 
 def catalog_keys():
@@ -151,10 +166,26 @@ def judge(text):
     out = []
     if len(text.strip()) < 3:
         return out
+    text = _PLACEHOLDER.sub("X", text)
     for name, pat, why in RULES:
         if re.search(pat, text, re.I):
             out.append((name, why))
     return out
+
+
+def load_ledger():
+    """{'allow': {string: reason}, 'pending': {file: [string, ...]}} — the
+    reviewed state of the tree. Missing file = empty ledger, which simply
+    means every finding fails; the gate cannot go vacuously green."""
+    import json
+    try:
+        with io.open(os.path.join(REPO, "tools", "voice_ledger.json"),
+                     encoding="utf-8") as fh:
+            data = json.load(fh)
+        return (dict(data.get("allow", {})),
+                {f: set(v) for f, v in data.get("pending", {}).items()})
+    except (OSError, ValueError):
+        return {}, {}
 
 
 def main():
@@ -171,9 +202,13 @@ def main():
               for f in a.file] if a.file else
              sorted(os.path.join(DE, f) for f in os.listdir(DE)
                     if f.endswith(".py")))
+    allow, pending = load_ledger()
     total = 0
+    fails = 0
     per_rule = {}
+    seen_pending = {}
     for path in files:
+        base = os.path.basename(path)
         hits = []
         seen = set()
         for lineno, text in strings_in(path):
@@ -186,23 +221,41 @@ def main():
             if found:
                 hits.append((lineno, text, found))
         if hits:
-            print("\n%s" % os.path.basename(path))
+            print("\n%s" % base)
             for lineno, text, found in sorted(hits):
                 tags = ",".join(n for n, _w in found)
-                print("  :%-5d [%s] %r" % (lineno, tags, text[:88]))
+                if text in allow:
+                    status = "allow"
+                elif text in pending.get(base, ()):
+                    status = "pending"
+                    seen_pending.setdefault(base, set()).add(text)
+                else:
+                    status = "NEW"
+                    fails += 1
+                print("  :%-5d [%s] (%s) %r" % (lineno, tags, status,
+                                                text[:80]))
                 if a.verbose:
                     for _n, why in found:
                         print("           %s" % why)
                 for n, _w in found:
                     per_rule[n] = per_rule.get(n, 0) + 1
             total += len(hits)
+    # the ratchet's other direction: a pending entry whose string is gone was
+    # fixed — its entry must go too, or the ledger drifts into fiction
+    if not a.file:
+        for base, texts in sorted(pending.items()):
+            for text in sorted(texts - seen_pending.get(base, set())):
+                print("STALE pending entry (%s): %r — fixed in source, delete "
+                      "it from voice_ledger.json" % (base, text[:60]))
+                fails += 1
 
     print("\n%d flagged string(s) across %d file(s)" % (total, len(files)))
     if per_rule:
         for n in sorted(per_rule, key=lambda k: -per_rule[k]):
             print("   %-24s %d" % (n, per_rule[n]))
-    print("RESULT: " + ("CLEAN" if not total else "%d TO REVIEW" % total))
-    return 1 if (total and a.fail) else 0
+    print("RESULT: " + ("CLEAN" if not fails
+                        else "FAILED: %d unaccounted (new or stale)" % fails))
+    return 1 if fails else 0
 
 
 if __name__ == "__main__":
