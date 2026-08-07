@@ -578,9 +578,14 @@
     "FEEDBACK"
    ],
    "transform": false,
-   "status": "unimplemented",
-   "note": "Code updates the board model and changed labels directly; no tile-position animation call exists despite the prose calling it a reference.",
-   "pacing": null
+   "status": "implemented",
+   "note": "Was recorded unimplemented at baseline despite the spec calling it the reference; built 2026-08-08 on Damaged/LayerCache: traced-provenance slide + settle phases on a pass-through overlay, labels as the resting truth beneath.",
+   "pacing": null,
+   "binding": {
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/g2048.py",
+    "symbol_or_marker": "content.2048"
+   }
   }
  ]
 }

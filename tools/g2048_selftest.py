@@ -185,5 +185,122 @@ b.status = "play"
 b._refresh()
 check("dismissing the banner repaints no tile", b.ops() == 0)
 
+# 7. the motion layer (PAPER-PHYSICS G4 reference: content.2048) ------------
+# Widget-free like everything above: the traced slide is pure, the draw
+# handler runs on a stand-in against a real cairo surface, and instant
+# equivalence is proven through the real engine with a clockless widget.
+
+# 7a. provenance must agree with the game's own arithmetic — exhaustively.
+import itertools                                              # noqa: E402
+disagree = 0
+for line in itertools.product((0, 2, 4, 8), repeat=4):
+    res_a, gain_a = g2048.Game2048._slide(list(line))
+    res_b, gain_b, tj, tm = g2048.Game2048._slide_traced(list(line))
+    if res_a != res_b or gain_a != gain_b:
+        disagree += 1
+check("traced slide agrees with _slide on all 256 lines", disagree == 0)
+res, gain, tj, tm = g2048.Game2048._slide_traced([2, 2, 4, 0])
+check("traced journeys carry pre-merge values",
+      res == [4, 4, 0, 0] and gain == 4
+      and tj == [(0, 0, 2), (1, 0, 2), (2, 1, 4)] and tm == [0])
+
+# 7b. the slide phase INTERPOLATES: rendered ink must move with v.
+import cairo                                                  # noqa: E402
+
+
+class _Layer(object):
+    def __init__(self):
+        self.shown = self.hidden = self.draws = 0
+
+    def show(self):
+        self.shown += 1
+
+    def hide(self):
+        self.hidden += 1
+
+    def queue_draw(self):
+        self.draws += 1
+
+
+class _Stand(object):
+    # _rounded is a staticmethod on the app class; rebinding the bare
+    # function here would re-inject self and shift every argument.
+    _rounded = staticmethod(g2048.Game2048._rounded)
+    _paint_tile = g2048.Game2048._paint_tile
+    _anim_draw = g2048.Game2048._anim_draw
+    _anim_frame = g2048.Game2048._anim_frame
+    _begin_settle = g2048.Game2048._begin_settle
+    _anim_end = g2048.Game2048._anim_end
+    _finish_anim_now = g2048.Game2048._finish_anim_now
+
+    def __init__(self):
+        self.anim_layer = _Layer()
+        self._wells = None
+        self._geom = {(r, c): (10 + c * 70, 10 + r * 70, 60, 60)
+                      for r in range(4) for c in range(4)}
+        self.board = [[0] * 4 for _ in range(4)]
+        self._anim_phase = "slide"
+        self._anim_v = 0.0
+        self._anim_data = {"journeys": [(2, (0, 0), (0, 3))],
+                           "statics": [(4, (2, 2))],
+                           "merges": set(), "spawn": None}
+
+    def _ensure_geom(self):
+        return self._geom
+
+
+def _render(stand, v, phase="slide"):
+    stand._anim_phase = phase
+    stand._anim_v = v
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 320, 320)
+    stand._anim_draw(None, cairo.Context(surf))
+    surf.flush()
+    return bytes(surf.get_data())
+
+
+st = _Stand()
+f0, fh, f1 = _render(st, 0.0), _render(st, 0.5), _render(st, 1.0)
+check("slide frames differ as v advances (the tile actually travels)",
+      f0 != fh and fh != f1 and f0 != f1)
+
+
+def _px(buf, x, y):
+    off = (y * 320 + x) * 4
+    return buf[off:off + 4]
+
+
+check("a static tile's ink does not move between frames",
+      _px(f0, 180, 180) == _px(f1, 180, 180)
+      and _px(f0, 180, 180) != b"\x00\x00\x00\x00")
+check("the mover has left its origin by the end",
+      _px(f0, 40, 40) != _px(f1, 40, 40))
+
+st.board[1][1] = 2
+st._anim_data = {"journeys": [], "statics": [], "merges": set(),
+                 "spawn": (1, 1, 2)}
+s0, s1 = _render(st, 0.0, "settle"), _render(st, 1.0, "settle")
+check("a spawn is absent at v=0 and present at v=1",
+      _px(s0, 110, 110) == b"\x00\x00\x00\x00"
+      and _px(s1, 110, 110) != b"\x00\x00\x00\x00")
+
+# 7c. instant equivalence through the REAL engine: a clockless layer means
+# both phases complete synchronously and the overlay never survives the call.
+st2 = _Stand()
+st2._anim = None
+st2._wells = object()      # the guard reads "no wells = no engine"; arm it
+g2048.Game2048._animate_move(st2, [(2, (0, 0), (0, 1))], [], [], None)
+check("instant path: overlay shown then hidden within the call",
+      st2.anim_layer.shown == 1 and st2.anim_layer.hidden >= 1)
+check("instant path: no animation phase survives",
+      st2._anim_phase is None and st2._anim_data is None)
+
+# 7d. a key mid-flight lands the previous journey before the next begins.
+st3 = _Stand()
+st3._anim = None
+g2048.Game2048._finish_anim_now(st3)
+check("finish-now clears phase, data and the overlay",
+      st3._anim_phase is None and st3._anim_data is None
+      and st3.anim_layer.hidden == 1)
+
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(len(FAILS))

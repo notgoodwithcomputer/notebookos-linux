@@ -18,6 +18,7 @@ import os
 import random
 
 import nbapp
+import nbmotion  # the shared motion engine; degrades to instant headless
 from nbi18n import _t  # noqa: E402
 
 # Best score persists across launches in this app's private JSON file, under
@@ -35,6 +36,19 @@ TILE_COLORS = {
     512: ("#4A3F2E", "#FCFBF8"), 1024: ("#2A2620", "#FCFBF8"),
     2048: ("#1A1916", "#FCFBF8"),
 }
+# Board chrome, shared by the CSS block AND the motion overlay's cairo
+# painter, so the animated frame and the resting frame are one picture.
+# (The same single-source arrangement TILE_COLORS already has with tile_css.)
+BOARD_BG = "#BCAE93"
+CELL_BG = "#CCBF9F"
+SUPER_COLORS = ("#1A1916", "#FCFBF8")     # any tile past 2048
+TILE_RADIUS = 4
+
+
+def _hex_rgb(h):
+    h = h.lstrip("#")
+    return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0,
+            int(h[4:6], 16) / 255.0)
 
 
 def _font_size(v):
@@ -184,6 +198,28 @@ class Game2048(nbapp.AppWindow):
         self.overlay.add_overlay(self.ov_box)
         self.overlay.set_overlay_pass_through(self.ov_box, False)
 
+        # nbmotion-inventory: content.2048
+        # The motion layer: a pass-through DrawingArea covering the board.
+        # During the two 90ms phases of a move (slide, then merge/spawn
+        # settle) it paints the WHOLE board — wells from a LayerCache,
+        # travelling tiles at interpolated positions — and then hides,
+        # revealing the identical resting labels beneath. Tiles are never
+        # widgets in motion, so nothing here animates an allocation (F2).
+        self.anim_layer = Gtk.DrawingArea()
+        self.anim_layer.set_no_show_all(True)
+        self.anim_layer.connect("draw", self._anim_draw)
+        self.anim_layer.connect(
+            "size-allocate", lambda *_: setattr(self, "_geom", None))
+        self.overlay.add_overlay(self.anim_layer)
+        self.overlay.set_overlay_pass_through(self.anim_layer, True)
+        self._anim = None            # the one Scalar driving both phases
+        self._anim_v = 0.0
+        self._anim_phase = None      # None | "slide" | "settle"
+        self._anim_data = None
+        self._geom = None            # cached (r, c) -> rect in layer coords
+        self._wells = (nbmotion.LayerCache(self._draw_wells)
+                       if nbmotion is not None else None)
+
         outer.pack_start(self.overlay, False, False, 0)
 
         # --- footer ---
@@ -329,13 +365,18 @@ class Game2048(nbapp.AppWindow):
                 if not self.board[r][c]]
 
     def _add_random(self):
+        """Place a spawn tile; returns (r, c, value) so the motion overlay
+        can grow it in, or None when the board is full."""
         cells = self._empty_cells()
         if not cells:
-            return
+            return None
         r, c = random.choice(cells)
-        self.board[r][c] = 2 if random.random() < 0.9 else 4
+        v = 2 if random.random() < 0.9 else 4
+        self.board[r][c] = v
+        return (r, c, v)
 
     def new_game(self):
+        self._finish_anim_now()      # a fresh board owes nothing to the old
         self.board = [[0] * 4 for _ in range(4)]
         self.score = 0
         self.status = "play"
@@ -364,6 +405,39 @@ class Game2048(nbapp.AppWindow):
         return res, gained
 
     @staticmethod
+    def _slide_traced(line):
+        """_slide plus provenance — the data the motion overlay draws.
+
+        Returns (res, gained, journeys, merges): `journeys` holds one
+        (src_slot, dst_slot, shown_value) per nonzero source, where
+        shown_value is what the TRAVELLING tile displays (its pre-merge
+        value — two 2s travel as 2s and become a 4 on arrival); `merges`
+        lists the slots where a doubled tile forms. The suite asserts this
+        agrees with _slide on res and gained for every line, so the game's
+        arithmetic cannot drift from what the animation shows."""
+        src = [(j, v) for j, v in enumerate(line) if v]
+        res, journeys, merges = [], [], []
+        gained = 0
+        i = 0
+        while i < len(src):
+            j, v = src[i]
+            dst = len(res)
+            if i + 1 < len(src) and src[i + 1][1] == v:
+                res.append(v * 2)
+                gained += v * 2
+                journeys.append((j, dst, v))
+                journeys.append((src[i + 1][0], dst, v))
+                merges.append(dst)
+                i += 2
+            else:
+                res.append(v)
+                journeys.append((j, dst, v))
+                i += 1
+        while len(res) < 4:
+            res.append(0)
+        return res, gained, journeys, merges
+
+    @staticmethod
     def _rc(direction, i, j):
         if direction == "left":
             return i, j
@@ -379,21 +453,33 @@ class Game2048(nbapp.AppWindow):
         # 2048" sets status back to "play" and re-enables moving.
         if self.status in ("lose", "win"):
             return
+        # A key during the ~180ms of tile motion is a real move, not noise:
+        # the previous journey lands instantly and the new one begins from
+        # the resting board (the retarget rule, at the game's granularity).
+        self._finish_anim_now()
         moved = False
         gained = 0
+        journeys, statics, merges = [], [], []
         for i in range(4):
-            line = [self.board[self._rc(direction, i, j)[0]]
-                    [self._rc(direction, i, j)[1]] for j in range(4)]
-            res, g = self._slide(line)
+            idx = [self._rc(direction, i, j) for j in range(4)]
+            line = [self.board[r][c] for (r, c) in idx]
+            res, g, tj, tm = self._slide_traced(line)
             gained += g
+            for (sj, dj, v) in tj:
+                if sj != dj:
+                    journeys.append((v, idx[sj], idx[dj]))
+                else:
+                    statics.append((v, idx[sj]))
+            for dj in tm:
+                merges.append(idx[dj])
             for j in range(4):
-                r, c = self._rc(direction, i, j)
+                r, c = idx[j]
                 if self.board[r][c] != res[j]:
                     moved = True
                 self.board[r][c] = res[j]
         if not moved:
             return
-        self._add_random()
+        spawn = self._add_random()
         self.score += gained
         # A new high mark is persisted immediately, so it survives a crash or
         # power loss without waiting for a clean close.
@@ -410,7 +496,11 @@ class Game2048(nbapp.AppWindow):
             self._won_shown = True
         if not self._can_move():
             self.status = "lose"
+        # Labels take the final state NOW, under the cover of the motion
+        # overlay; when the journey lands, hiding the overlay reveals an
+        # identical resting frame. Instant paths never show the overlay.
         self._refresh()
+        self._animate_move(journeys, statics, merges, spawn)
 
     def _can_move(self):
         for r in range(4):
@@ -422,6 +512,153 @@ class Game2048(nbapp.AppWindow):
                 if r < 3 and self.board[r][c] == self.board[r + 1][c]:
                     return True
         return False
+
+    # -- motion (PAPER-PHYSICS G4: content.2048, the reference) -----------
+    # Two 90ms FEEDBACK phases, each a damped arrival: the SLIDE carries
+    # every travelling tile to its destination on one shared clock, then the
+    # SETTLE grows the spawn in and marks each merge with a single downward
+    # scale settle (1.06 -> 1.0 - one direction, no bounce, Article H).
+    def _animate_move(self, journeys, statics, merges, spawn):
+        if nbmotion is None or self._wells is None:
+            return                     # resting labels are already final
+        self._anim_data = {"journeys": journeys, "statics": statics,
+                           "merges": set(merges),
+                           "spawn": spawn}
+        if self._anim is None:
+            self._anim = nbmotion.Scalar(
+                widget=self.anim_layer, value=0.0,
+                on_frame=self._anim_frame,
+                duration=nbmotion.FEEDBACK, easing=nbmotion.ARRIVE)
+        self._anim_phase = "slide"
+        self._anim_v = 0.0
+        self.anim_layer.show()
+        self._anim.jump_to(0.0)
+        self._anim.animate_to(1.0, on_done=self._begin_settle)
+
+    def _anim_frame(self, v):
+        self._anim_v = v
+        # The layer covers exactly the board: invalidating it IS the
+        # smallest-changed-rectangle rule at this animation's scale (F1) —
+        # the window around it is never repainted.
+        self.anim_layer.queue_draw()
+
+    def _begin_settle(self, completed):
+        if not completed or self._anim_phase != "slide":
+            return
+        self._anim_phase = "settle"
+        self._anim_v = 0.0
+        self._anim.jump_to(0.0)
+        self._anim.animate_to(1.0, on_done=self._anim_end)
+
+    def _anim_end(self, _completed):
+        self._anim_phase = None
+        self._anim_data = None
+        self.anim_layer.hide()
+
+    def _finish_anim_now(self):
+        """Land any in-flight journey instantly: the labels beneath already
+        show the final board, so hiding the overlay IS the end state."""
+        if self._anim is not None:
+            self._anim.cancel()
+        self._anim_phase = None
+        self._anim_data = None
+        if self.anim_layer is not None:
+            self.anim_layer.hide()
+
+    def _ensure_geom(self):
+        if self._geom is not None:
+            return self._geom
+        geom = {}
+        for r in range(4):
+            for c in range(4):
+                lbl = self.tiles[r][c]
+                at = lbl.translate_coordinates(self.overlay, 0, 0)
+                if at is None:
+                    return None        # not realized yet: skip this frame
+                alloc = lbl.get_allocation()
+                geom[(r, c)] = (at[0], at[1], alloc.width, alloc.height)
+        self._geom = geom
+        return geom
+
+    @staticmethod
+    def _rounded(cr, x, y, w, h, rad):
+        import math
+        cr.new_sub_path()
+        cr.arc(x + w - rad, y + rad, rad, -math.pi / 2, 0)
+        cr.arc(x + w - rad, y + h - rad, rad, 0, math.pi / 2)
+        cr.arc(x + rad, y + h - rad, rad, math.pi / 2, math.pi)
+        cr.arc(x + rad, y + rad, rad, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+
+    def _draw_wells(self, cr, w, h):
+        cr.set_source_rgb(*_hex_rgb(BOARD_BG))
+        self._rounded(cr, 0, 0, w, h, TILE_RADIUS)
+        cr.fill()
+        geom = self._ensure_geom()
+        if geom is None:
+            return
+        cr.set_source_rgb(*_hex_rgb(CELL_BG))
+        for rect in geom.values():
+            self._rounded(cr, rect[0], rect[1], rect[2], rect[3], TILE_RADIUS)
+            cr.fill()
+
+    def _paint_tile(self, cr, rect, value, scale=1.0):
+        x, y, w, h = rect
+        if scale != 1.0:
+            dx, dy = w * (1.0 - scale) / 2.0, h * (1.0 - scale) / 2.0
+            x, y, w, h = x + dx, y + dy, w * scale, h * scale
+        bg, fg = TILE_COLORS.get(value, SUPER_COLORS)
+        cr.set_source_rgb(*_hex_rgb(bg))
+        self._rounded(cr, x, y, w, h, TILE_RADIUS)
+        cr.fill()
+        from gi.repository import Pango, PangoCairo
+        layout = PangoCairo.create_layout(cr)
+        desc = Pango.FontDescription("Nimbus Sans Bold")
+        # Absolute (device-pixel) size, matching the CSS block's px sizes —
+        # a point size here would re-introduce the DPI dependence the tile
+        # CSS deliberately avoids.
+        desc.set_absolute_size(_font_size(value) * scale * Pango.SCALE)
+        layout.set_font_description(desc)
+        layout.set_text(str(value), -1)
+        tw, th = layout.get_pixel_size()
+        cr.set_source_rgb(*_hex_rgb(fg))
+        cr.move_to(x + (w - tw) / 2.0, y + (h - th) / 2.0)
+        PangoCairo.show_layout(cr, layout)
+
+    def _anim_draw(self, _area, cr):
+        data, phase = self._anim_data, self._anim_phase
+        if data is None or phase is None:
+            return False
+        geom = self._ensure_geom()
+        if geom is None:
+            return False
+        if self._wells is not None:
+            self._wells.paint(self.anim_layer, cr)
+        v = self._anim_v
+        if phase == "slide":
+            for (val, cell) in data["statics"]:
+                self._paint_tile(cr, geom[cell], val)
+            for (val, src, dst) in data["journeys"]:
+                a, b = geom[src], geom[dst]
+                rect = (a[0] + (b[0] - a[0]) * v, a[1] + (b[1] - a[1]) * v,
+                        a[2], a[3])
+                self._paint_tile(cr, rect, val)
+        else:
+            spawn = data["spawn"]
+            for r in range(4):
+                for c in range(4):
+                    val = self.board[r][c]
+                    if not val:
+                        continue
+                    if spawn is not None and (r, c) == spawn[:2]:
+                        if v > 0.0:
+                            self._paint_tile(cr, geom[(r, c)], val, scale=v)
+                    elif (r, c) in data["merges"]:
+                        self._paint_tile(cr, geom[(r, c)], val,
+                                         scale=1.06 - 0.06 * v)
+                    else:
+                        self._paint_tile(cr, geom[(r, c)], val)
+        return True
 
     # -- menus ------------------------------------------------------------
     def menu_items(self, name):
@@ -606,8 +843,8 @@ class Game2048(nbapp.AppWindow):
         .score-cap { font-size: 11px; letter-spacing: 1px; color: #EFEBE0;
                      font-weight: 700; }
         .score-val { font-size: 24px; font-weight: 700; color: #FCFBF8; }
-        .boardbg { background: #BCAE93; border-radius: 4px; padding: 14px; }
-        .cell { background: #CCBF9F; border-radius: 4px; }
+        .boardbg { background: %(board_bg)s; border-radius: 4px; padding: 14px; }
+        .cell { background: %(cell_bg)s; border-radius: 4px; }
         .tile { border-radius: 4px; font-weight: 700;
                 background: transparent; }
         .tile.t-super { background: #1A1916; color: #FCFBF8; font-size: 32px; }
@@ -641,7 +878,8 @@ class Game2048(nbapp.AppWindow):
                    border-radius: 8px; box-shadow: none; }
         .g2dlgok, .g2dlgok label { color: #FCFBF8; }   /* see .dark-btn */
         .g2dlgok:hover { background: #B12D19; border-color: #B12D19; }
-        """ + tile_css).encode("utf-8")
+        """ % {"board_bg": BOARD_BG, "cell_bg": CELL_BG} + tile_css
+        ).encode("utf-8")
         try:
             prov = Gtk.CssProvider()
             prov.load_from_data(css)
