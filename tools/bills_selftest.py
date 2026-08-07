@@ -157,6 +157,9 @@ check("...with thousands separated", bills.money(118000) == "$1,180.00",
       bills.money(118000))
 check("...and a real minus, not a hyphen",
       bills.money(-1234).startswith("−"), bills.money(-1234))
+check("a displayed negative amount parses back with its sign intact",
+      bills.parse_money(bills.money(-1234)) == -1234,
+      bills.parse_money(bills.money(-1234)))
 check("zero is $0.00, never -$0.00", bills.money(0) == "$0.00", bills.money(0))
 check("what is typed comes back out unchanged",
       all(bills.money(bills.parse_money(t)) == t.replace(",", "").rjust(0)
@@ -165,6 +168,15 @@ check("what is typed comes back out unchanged",
           for t in ("84.20", "1,204.50", "0.05", "118000")))
 check("a nonsense amount does not raise",
       bills.money("nope") == "$0.00" and bills.money(None) == "$0.00")
+check("malformed punctuation is refused, not silently made into other money",
+      bills.parse_money("12-34") is None
+      and bills.parse_money("1.2.3") is None,
+      (bills.parse_money("12-34"), bills.parse_money("1.2.3")))
+check("digits embedded in words are refused, not charged as dollars",
+      bills.parse_money("room 12") is None, bills.parse_money("room 12"))
+check("a huge typed amount is capped in cents without float overflow",
+      bills.parse_money("9" * 400) == bills.MAX_CENTS,
+      bills.parse_money("9" * 400))
 
 
 # -- 3. what is due ----------------------------------------------------------
@@ -207,6 +219,21 @@ check("a postal deadline that has passed still says POST, not OVERDUE",
       info(due="2026-08-08", method="mail", lead=5)["kind"] == "post")
 check("...until the due date itself goes by",
       info(due="2026-08-04", method="mail", lead=5)["kind"] == "overdue")
+check("a postal lead can cross New Year without losing a day",
+      info(due="2027-01-03", method="mail", lead=5)["post_by"]
+      == "2026-12-29",
+      info(due="2027-01-03", method="mail", lead=5))
+check("a leap-day due date subtracts through February exactly",
+      bills.due_info(bill(due="2024-02-29", method="mail", lead=2),
+                     "2024-02-27")["post_by"] == "2024-02-27")
+check("today exactly on POST BY is actionable, not one day early or late",
+      bills.due_info(bill(due="2024-03-12", method="mail", lead=2),
+                     "2024-03-10")["kind"] == "post")
+before_post = bills.due_info(
+    bill(due="2024-03-12", method="mail", lead=2), "2024-03-09")
+check("the day before POST BY says tomorrow, not post now",
+      before_post["post_days"] == 1 and before_post["state"] == "Post tomorrow",
+      before_post)
 
 # What is outstanding, and what recording a payment does to it.
 b = bill(due="2026-06-15", every=1,
@@ -324,10 +351,60 @@ check("...nor is a long bill list",
 # THE STORE THIS APP CANNOT RECOGNISE MUST SURVIVE BEING OPENED. Valid JSON in
 # an unknown shape parses fine, the app opens empty, and the close-time flush
 # then writes that emptiness over the user's only copy.
+# Malformed JSON needs the same protection.  Put this probe before the GTK
+# window checks so the data-loss contract remains executable on headless audit
+# hosts too.
+MARK_BAD = "CHEQUE-REGISTER-SURVIVES-TRUNCATION"
+put("bills.json", '{"bills":[{"payee":"Power","note":"%s"}' % MARK_BAD)
+headless = bills.Bills.__new__(bills.Bills)
+headless._save_error = ""
+headless.bills = headless._load()
+headless.bills.append(bill(payee="New after damage"))
+headless._save()
+# A single save can appear safe only because atomic_write's ordinary .bak still
+# contains the damaged bytes.  The next autosave rotates that backup away.
+headless.bills.append(bill(payee="Second autosave"))
+headless._save()
+kept_bad = [p for p in os.listdir(CFG) if p.startswith("bills.json")]
+found_bad = False
+for name in kept_bad:
+    try:
+        with open(os.path.join(CFG, name), encoding="utf-8") as fh:
+            if MARK_BAD in fh.read():
+                found_bad = True
+    except OSError:
+        pass
+check("a malformed store survives repeated autosaves after opening",
+      found_bad, sorted(kept_bad))
+
+# Deletion is an ordinary record edit, so OS law gives it Undo rather than
+# making a confirmation the only protection.  Exercise the model path without
+# requiring a display, and guard the absent-method case by name.
+undo_app = bills.Bills.__new__(bills.Bills)
+first = bill(payee="First", paid=[{"on": "2026-08-01",
+                                  "for": "2026-08-15", "amount": 1000}])
+second = bill(payee="Second")
+undo_app.bills, undo_app.sel = [first, second], first["id"]
+undo_app._close_overlay = lambda: True
+undo_app._close_menu = lambda: None
+undo_app._save = lambda: None
+undo_app._refresh = lambda: None
+undo_app._flash = lambda _message: None
+undo_app._deleted = None
+undo_app._do_delete(first["id"])
+undo = getattr(undo_app, "_undo_delete", None)
+if callable(undo):
+    undo()
+check("deleting a bill can be undone with its payment history and position",
+      callable(undo) and undo_app.bills == [first, second]
+      and undo_app.sel == first["id"],
+      [b["payee"] for b in undo_app.bills])
+
 MARK = "PO Box 1188, Springfield"
 put("bills.json", {"payments": [{"who": "City Light", "where": MARK}]})
-w = bills.Bills()
-w.destroy()
+w = bills.Bills.__new__(bills.Bills)
+w._save_error = ""
+w.bills = w._load()
 kept = [p for p in os.listdir(CFG) if p.startswith("bills.json.")]
 found = False
 for name in kept + ["bills.json"]:
@@ -341,13 +418,16 @@ check("a store in an unrecognised shape still exists after an open and close",
       found, sorted(os.listdir(CFG)))
 
 
+
 # -- 5. round trip -----------------------------------------------------------
 print("\n-- round trip --")
 
 for name in os.listdir(CFG):
     os.remove(os.path.join(CFG, name))
 
-w = bills.Bills()
+w = bills.Bills.__new__(bills.Bills)
+w._save_error = ""
+w.bills = w._load()
 check("the app opens with no store at all", w.bills == [])
 w.bills.append(bills.normalise(
     {"payee": "City Light & Power", "account": "44-99", "amount": 8420,
@@ -355,9 +435,10 @@ w.bills.append(bills.normalise(
      "address": "PO Box 1188\nSpringfield IL 62705"}))
 w.sel = w.bills[0]["id"]
 w._save()
-w.destroy()
 
-w2 = bills.Bills()
+w2 = bills.Bills.__new__(bills.Bills)
+w2._save_error = ""
+w2.bills = w2._load()
 check("a bill written by one run is there in the next", len(w2.bills) == 1,
       w2.bills)
 back = w2.bills[0]
@@ -370,19 +451,20 @@ before = bills.due_info(back)["due"]
 back["paid"].append({"on": "2026-08-06", "for": before, "amount": 8420,
                      "method": "mail", "ref": "cheque 1042"})
 w2._save()
-w2.destroy()
-w3 = bills.Bills()
+w3 = bills.Bills.__new__(bills.Bills)
+w3._save_error = ""
+w3.bills = w3._load()
 check("a recorded payment moves the bill to its next date",
       bills.due_info(w3.bills[0])["due"] != before,
       (before, bills.due_info(w3.bills[0])["due"]))
 check("...and the reference is kept with it",
       w3.bills[0]["paid"][0]["ref"] == "cheque 1042", w3.bills[0]["paid"])
-w3.destroy()
 
 # The app must not be the thing that destroys a store it CAN read.
 raw_before = open(os.path.join(CFG, "bills.json"), encoding="utf-8").read()
-w4 = bills.Bills()
-w4.destroy()
+w4 = bills.Bills.__new__(bills.Bills)
+w4._save_error = ""
+w4.bills = w4._load()
 raw_after = open(os.path.join(CFG, "bills.json"), encoding="utf-8").read()
 check("opening and closing changes nothing on disk",
       json.loads(raw_before) == json.loads(raw_after))

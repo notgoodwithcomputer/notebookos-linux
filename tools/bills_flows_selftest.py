@@ -193,35 +193,32 @@ def main():
                     "a payment is recorded", "...and it is on disk",
                     "...and the bill moves on to its next due date")
 
-    # ---- delete asks first, and Cancel means cancel ------------------------
+    # ---- delete is immediately undoable ------------------------------------
     n_before = len(app.bills)
-    app._confirm_delete(bill["id"])
+    history_before_delete = len((app._bill(bill["id"]) or {}).get("paid") or [])
+    app._do_delete(bill["id"])
     pump()
-    asked = check("deleting raises a confirm", bool(overlay_buttons(app)),
-                  overlay_text(app)[:70])
-    if asked:
-        focus = app.get_focus()
-        check("...with Cancel focused, so Return cannot delete a record",
-              isinstance(focus, Gtk.Button)
-              and (focus.get_label() or "").lower().startswith("cancel"),
-              repr(focus.get_label() if isinstance(focus, Gtk.Button) else focus))
-        press(app, "Cancel")
+    removed = check("Delete removes it", len(app.bills) == n_before - 1,
+                    "%d bills" % len(app.bills))
+    check("...and from disk",
+          not any(b["id"] == bill["id"] for b in saved().get("bills", [])))
+    undo = getattr(app, "_undo_delete", None)
+    if removed and callable(undo):
+        undo()
         pump()
-        check("Cancel keeps the bill", len(app.bills) == n_before,
+        restored = app._bill(bill["id"])
+        check("deletion has Undo", restored is not None,
               "%d bills" % len(app.bills))
-        app._confirm_delete(bill["id"])
-        pump()
-        press(app, "Delete")
-        pump()
-        check("Delete removes it", len(app.bills) == n_before - 1,
-              "%d bills" % len(app.bills))
-        check("...and from disk",
-              not any(b["id"] == bill["id"] for b in saved().get("bills", [])))
+        check("...which restores payment history",
+              restored is not None
+              and len(restored.get("paid") or []) == history_before_delete,
+              repr(restored.get("paid") if restored else None))
+        check("...and persists the restored bill",
+              any(b["id"] == bill["id"] for b in saved().get("bills", [])))
     else:
-        not_reached("no confirm",
-                    "...with Cancel focused, so Return cannot delete a record",
-                    "Cancel keeps the bill", "Delete removes it",
-                    "...and from disk")
+        not_reached("no undo", "deletion has Undo",
+                    "...which restores payment history",
+                    "...and persists the restored bill")
 
     # ---- export -----------------------------------------------------------
     if not app.bills:

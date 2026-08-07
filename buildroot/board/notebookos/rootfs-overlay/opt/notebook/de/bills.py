@@ -48,6 +48,7 @@ through read_bills()/due_info() below, so the desktop tile and the app can
 never disagree about what is due.
 """
 import os
+import re
 import time
 
 import gi
@@ -273,11 +274,23 @@ def parse_money(text):
     "1,204.50". Rounds half away from zero on the cent, in integer arithmetic —
     float(text) * 100 rounds 8.4 to 839 cents often enough to matter, and this
     is money."""
-    s = "".join(c for c in str(text) if c.isdigit() or c in ".-")
-    neg = s.startswith("-")
-    s = s.lstrip("-").replace("-", "")
-    if not s or s == ".":
+    s = str(text).strip()
+    neg = False
+    if s.startswith(("-", "−")):
+        neg, s = True, s[1:]
+    if s.startswith("$"):
+        s = s[1:]
+    if s.startswith(("-", "−")):
+        if neg:
+            return None
+        neg, s = True, s[1:]
+    # Refuse ambiguous punctuation and prose instead of extracting their
+    # digits into a different, confidently displayed amount.  Commas, when
+    # present, must be real thousands separators.
+    if not re.fullmatch(r"(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?", s) \
+            or not any(c.isdigit() for c in s):
         return None
+    s = s.replace(",", "")
     whole, _dot, frac = s.partition(".")
     frac = (frac.replace(".", "") + "00")[:3]
     try:
@@ -557,6 +570,7 @@ class Bills(nbapp.AppWindow):
         self.sel = self.bills[0]["id"] if self.bills else ""
         self.sort = "due"
         self._save_error = ""
+        self._deleted = None
         self._flash_id = 0
         self._overlay_layer = None
         self._overlay_holder = None
@@ -1816,51 +1830,39 @@ class Bills(nbapp.AppWindow):
 
     # -- delete --------------------------------------------------------------
 
-    def _confirm_delete(self, bid=None):
-        bill = self._bill(bid)
-        if bill is None:
-            return
-        self._close_menu()
-        name = bill["payee"]
-        if len(name) > 40:
-            name = name[:40] + "…"
-        card = self._card(
-            _t("Delete Bill"),
-            _t("“%s” and its payment history will be removed. "
-               "This cannot be undone.") % name)
-        card.set_size_request(390, -1)
-
-        actions = Gtk.Box(spacing=10)
-        actions.set_margin_top(4)
-        actions.pack_start(Gtk.Box(), True, True, 0)
-        cancel = Gtk.Button(label=_t("Cancel"))
-        cancel.set_relief(Gtk.ReliefStyle.NONE)
-        cancel.get_style_context().add_class("bl-quiet")
-        cancel.connect("clicked", lambda *_: self._close_overlay())
-        actions.pack_start(cancel, False, False, 0)
-        gone = Gtk.Button(label=_t("Delete"))
-        gone.set_relief(Gtk.ReliefStyle.NONE)
-        gone.get_style_context().add_class("bl-danger")
-        gone.connect("clicked", lambda *_: self._do_delete(bill["id"]))
-        actions.pack_start(gone, False, False, 0)
-        card.pack_start(actions, False, False, 0)
-        self._show_overlay(card)
-        # Cancel takes the focus, so a stray Return on a confirm cannot be the
-        # keystroke that deletes a record.
-        cancel.grab_focus()
-
     def _do_delete(self, bid):
+        self._close_menu()
         self._close_overlay()
         bill = self._bill(bid)
         if bill is None:
             return
         i = self.bills.index(bill)
         self.bills.pop(i)
+        self._deleted = (i, bill)
         self.sel = self.bills[min(i, len(self.bills) - 1)]["id"] \
             if self.bills else ""
         self._save()
         self._refresh()
         self._flash(_t("Bill deleted"))
+
+    def _undo_delete(self):
+        """Restore the last deleted record, including its payment history."""
+        deleted = self._deleted
+        if deleted is None:
+            return
+        i, bill = deleted
+        # A reused id means the model has changed underneath this one-step
+        # undo.  Never create two records that future payments cannot tell
+        # apart.
+        if any(b.get("id") == bill.get("id") for b in self.bills):
+            self._deleted = None
+            return
+        self._deleted = None
+        self.bills.insert(min(i, len(self.bills)), bill)
+        self.sel = bill["id"]
+        self._save()
+        self._refresh()
+        self._flash(_t("Bill restored"))
 
     # -- export / print ------------------------------------------------------
 
@@ -1964,7 +1966,8 @@ class Bills(nbapp.AppWindow):
         if name == "File":
             return [
                 ("Add Bill…", lambda: self._open_form(None)),
-                ("Delete Bill…", self._confirm_delete if has else None),
+                ("Delete Bill", (lambda: self._do_delete(self.sel))
+                 if has else None),
                 nbapp.SEP,
                 ("Export to PDF", self._export_pdf),
                 ("Print…", self._print),
@@ -1978,8 +1981,12 @@ class Bills(nbapp.AppWindow):
                 ("Edit Bill…",
                  (lambda: self._open_form(self._bill())) if has else None),
                 nbapp.SEP,
-                ("Delete Bill…", self._confirm_delete if has else None),
+                ("Delete Bill", (lambda: self._do_delete(self.sel))
+                 if has else None),
             ]
+        if name == "Edit":
+            return [(_t("Undo Delete Bill"), self._undo_delete
+                     if self._deleted is not None else None)]
         if name == "View":
             return [(self.SORT_LABEL[how],
                      None if self.sort == how
@@ -1995,6 +2002,11 @@ class Bills(nbapp.AppWindow):
         # this it closed the whole app from under them. It never deletes
         # anything: Esc leaves, it does not act (see the OS-wide rule).
         if ev.keyval == Gdk.KEY_Escape and self._close_overlay():
+            return True
+        if (ev.state & Gdk.ModifierType.CONTROL_MASK
+                and ev.keyval in (Gdk.KEY_z, Gdk.KEY_Z)
+                and self._deleted is not None):
+            self._undo_delete()
             return True
         return super()._on_key(w, ev)
 
