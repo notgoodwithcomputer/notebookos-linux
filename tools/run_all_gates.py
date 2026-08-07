@@ -73,8 +73,8 @@ CHECK_GATES = [
     "catalog_dialect_check", "catalog_script_check", "css_parse_check",
     "data_stress_sweep", "dead_setting_check", "ellipsis_sweep",
     "grid_check", "image_capability_check", "jargon_sweep",
-    "language_content_check", "minsize_sweep", "motion_inventory_check",
-    "picom_conf_check",
+    "language_content_check", "menu_conformance_check", "minsize_sweep",
+    "motion_inventory_check", "picom_conf_check",
     "self_attr_audit", "term_consistency_check", "voice_check",
 ]
 PER_TEST_TIMEOUT = 300
