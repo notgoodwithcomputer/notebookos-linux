@@ -95,11 +95,14 @@ class GameSession:
     Ctrl+Esc grab. Call run(); `on_exit` fires (on the GLib main loop) when the
     game ends by any route."""
 
-    def __init__(self, parent, vbam, rom, on_exit, scale_filter="17"):
+    def __init__(self, parent, vbam, rom, on_exit, scale_filter=None):
         self.parent = parent
         self.vbam = vbam
         self.rom = rom
         self.on_exit = on_exit
+        if scale_filter is None:
+            sw, sh = _screen_size(parent)
+            scale_filter = pick_scale_filter(sw, sh)
         self.scale_filter = scale_filter
         self.proc = None
         self.stage = None
@@ -252,9 +255,10 @@ class GameSession:
 
     # ---- launch + embed ---------------------------------------------------
     def _launch(self):
-        # -f <n> is vbam's software stretch (17 = 4x = 960x640); its window is a
-        # fixed size that matchbox/-F fullscreen won't grow, so we scale here and
-        # centre the window inside the fullscreen stage.
+        # -f <n> is vbam's software stretch; its window is a fixed size that
+        # matchbox/-F fullscreen won't grow, so the factor is chosen per panel
+        # (pick_scale_filter) and the window centred inside the fullscreen
+        # stage.
         cmd = [self.vbam, "-f", self.scale_filter, self.rom]
         try:
             self._logfh = open(_log_path(), "w")
@@ -548,6 +552,33 @@ class GameSession:
 
 
 # ---- helpers ---------------------------------------------------------------
+# vbam's -f filter table (vendored source: src/sdl/filters.h). Plain
+# nearest-neighbour stretch exists at 1x/2x/3x/4x = 0/1/14/17 and STOPS at
+# 4x; 5x and 6x ship only as xbrz (20/21), which smooths pixel art.
+# Host-measured on the build-tree binary (batch gdb, destWidth/destHeight):
+# 0->240x160  1->480x320  14->720x480  17->960x640  20->1200x800  21->1440x960
+GBA_W, GBA_H = 240, 160
+_PLAIN = {1: "0", 2: "1", 3: "14", 4: "17"}
+_XBRZ = {5: "20", 6: "21"}
+
+
+def pick_scale_filter(w, h):
+    """The -f index whose output best fills w x h without overflowing it.
+
+    Nearest-neighbour up to 4x, so the drawn pixels stay the cartridge's
+    own. A panel with five-plus factors of room takes the xbrz tier
+    instead: smoothing is a real cost, but the alternative there is a
+    fixed 960x640 on a panel four times that size. The trade is recorded
+    in release/1.0/HANDOFF.md; the veto is one line — cap k at 4 before
+    the branch."""
+    k = min(w // GBA_W, h // GBA_H)
+    if k <= 1:
+        return _PLAIN[1]
+    if k <= 4:
+        return _PLAIN[k]
+    return _XBRZ[min(k, 6)]
+
+
 def _screen_size(parent):
     try:
         d = Gdk.Display.get_default()
