@@ -505,6 +505,15 @@ class Cookbook(nbapp.AppWindow):
         cookbtn.set_relief(Gtk.ReliefStyle.NONE)
         cookbtn.get_style_context().add_class("startcook")
         cookbtn.set_valign(Gtk.Align.END)
+        # The one hard-minimum label left in the edit header. Beside the
+        # 344px sidebar, the 144px page margin and the 364px stat strip,
+        # this button gets ~150px on a 1024 panel and its Polish label
+        # already uses 151 of it (the sweep measured 5px to spare). A longer
+        # translation must shorten THIS label, never push the method column
+        # off the panel: below its natural width it ellipsizes, exactly like
+        # the kicker above, and the tooltip carries the full sentence. At any
+        # width that fits the natural label, nothing changes.
+        cookbtn.get_child().set_ellipsize(Pango.EllipsizeMode.END)
         cookbtn.set_tooltip_text(
             _t("Show the method one step at a time, in large type"))
         cookbtn.connect("clicked", self._enter_cook)
