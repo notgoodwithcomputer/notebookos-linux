@@ -28,7 +28,10 @@
     "vbam pid=%d": "written to the emulator harness log file, not the screen",
     "lang_%s.json": "catalog filename template in the i18n layer; not rendered",
     "\\s*\\([^)]*GTK[^)]*\\)": "regex literal that STRIPS toolkit suffixes from package descriptions — it removes jargon",
-    "Gtk": "gi.require_version() argument at every module top; never rendered"
+    "Gtk": "gi.require_version() argument at every module top; never rendered",
+    "rt_bitmap_mode selects mode 3, 4 or 5 and enables the BG2 framebuffer. rt_bitmap_pixel plots one clipped pixel; rt_bitmap_rect fills a clipped rectangle; rt_bitmap_clear fills the drawing page; rt_bitmap_blit copies a clipped image in the current mode's pixel format.": "gbahelp curriculum: the Help pane teaches GBA hardware programming — bitmap modes ARE a framebuffer and the save API is the subject matter, not leakage",
+    "OBJ tiles begin at 0x06014000 in bitmap modes. Sprite tile numbers below 512 land in the framebuffer instead of safe OBJ tile memory.": "gbahelp curriculum: the Help pane teaches GBA hardware programming — bitmap modes ARE a framebuffer and the save API is the subject matter, not leakage",
+    "EEPROM changes the cartridge save hardware, not the author API. Its serial device transfers 8-byte blocks through DMA3; the runtime keeps that protocol behind rt_game_save and rt_game_load.": "gbahelp curriculum: the Help pane teaches GBA hardware programming — bitmap modes ARE a framebuffer and the save API is the subject matter, not leakage"
   },
   "pending": {
     "widgets.py": [

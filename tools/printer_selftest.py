@@ -287,13 +287,22 @@ def check_async_discovery():
     check('win.connect("destroy"' in src and "owner.close()" in src,
           "closing the Print window closes its job owner")
 
+    # Task 033 inverted the old pins ON PURPOSE: rendering and spooling left
+    # the UI thread for an nbjobs worker, and the double-click guard's job is
+    # done by the running job itself. These pin the NEW contract; the old
+    # three sat green for a day while asserting the exact freeze 033 removed.
     body = inspect.getsource(nbprint._print_body)
-    check("make_print_file(make_pdf)" in body and "owner.start" not in body,
-          "the app's own PDF rendering stays on the UI thread")
-    check("submit_pdf(" in body,
-          "spooling is unchanged and still happens where it did")
-    check("Gtk.main_iteration()" in body,
-          "the double-click guard on the Print button is unchanged")
+    check("owner.start" in body,
+          "printing runs as an nbjobs job, never on the UI thread")
+    check("Gtk.main_iteration()" not in body,
+          "no main-loop pumping inside the Print handler")
+    check("cancel_print" in body,
+          "the Print window owns one cancellation callable")
+    worker = inspect.getsource(nbprint._print_worker) \
+        if hasattr(nbprint, "_print_worker") else body
+    check("make_print_file" in worker and "submit_pdf(" in worker
+          and "job.checkpoint()" in worker,
+          "render and spool live in the worker, checkpointed between stages")
 
     # Wording and visuals: the two final states are the same widgets they were,
     # and the only new sentence is the one for the state that did not exist.

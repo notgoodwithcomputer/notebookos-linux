@@ -145,9 +145,16 @@ def main():
         for (ln, text) in ui_strings(path):
             for group, words in JARGON.items():
                 for w in words:
-                    if re.search(r"\b" + re.escape(w.strip()) + r"\b", text,
+                    # A term written WITH a trailing space ("dd ") means the
+                    # space is part of it: the disk tool followed by its
+                    # arguments, never the DD in a YYYY-MM-DD placeholder.
+                    # Stripping it here once made a date format read as a
+                    # block-copy command.
+                    term = w.rstrip()
+                    tail = r"\s" if w != term else r"\b"
+                    if re.search(r"\b" + re.escape(term) + tail, text,
                                  re.IGNORECASE):
-                        hits.append((ln, group, w.strip(), text))
+                        hits.append((ln, group, term, text))
                         break
         if hits:
             print("\n=== %s ===" % name)
