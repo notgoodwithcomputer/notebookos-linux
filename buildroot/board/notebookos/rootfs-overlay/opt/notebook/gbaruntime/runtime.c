@@ -550,14 +550,26 @@ static void fx_apply(void) {
  * and the script language sit on top of a runtime that is now interrupt-driven
  * underneath them.
  *
- * The BIOS jumps to whatever address sits at 0x03007FFC, in ARM state, with
- * IRQs already disabled. This build is ARM (no -mthumb), so the handler can be
- * plain C: GCC's interrupt attribute emits the right frame and the
- * `subs pc, lr, #4` return. */
+ * The BIOS, not the CPU, dispatches to 0x03007FFC. The hardware exception at
+ * 0x18 lands in the BIOS; the BIOS saves registers, then calls the address at
+ * 0x03007FFC as a PLAIN ARM FUNCTION with lr pointing back into its own
+ * epilogue, and the BIOS performs the exception return itself. So this must be
+ * an ordinary function: an ordinary prologue, `bx lr` at the end, nothing else.
+ *
+ * It was `__attribute__((interrupt("IRQ")))` for a while, on the reasoning
+ * that an IRQ handler is what this is -- and that attribute emits
+ * `sub lr, lr, #4` on entry and an SPSR-restoring exception return, which is
+ * correct at a raw vector and DOUBLE-APPLIES here, inside the BIOS's own
+ * exception frame. The subtraction bent the return address into the middle of
+ * the BIOS epilogue and the exception return swapped in a stale SPSR, so every
+ * ROM hung at its first VBlankIntrWait while every host-side test stayed
+ * green: the handler's C is correct, and no host test executes the BIOS
+ * calling convention around it. The comment that used to be here asserted the
+ * attribute was right, which is worth remembering when reading any comment
+ * that explains why code is correct. */
 static rt_irq_fn g_irq[RT_IRQ_SLOTS];
 static volatile u32 g_frames;        /* VBlanks since boot */
 
-__attribute__((interrupt("IRQ")))
 static void rt_irq_entry(void) {
     u16 pending = (u16)(REG_IE & REG_IF);
     int i;

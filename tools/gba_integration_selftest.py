@@ -18,9 +18,9 @@ So this builds ONE project that uses all of it -- every resource kind, every
 runtime subsystem, the sheet actions and hand-written C in both languages -- and
 requires a clean compile, no reported problems, and a valid cartridge at the end.
 
-It is deliberately not a test of behaviour. It is a test that the whole thing
-goes through the compiler together, which is the question no other check in this
-repository asks.
+It also boots a small cartridge in VBA-M when an inspectable host emulator is
+available.  That last stage checks the hardware OAM image, not merely generated
+code or the runtime's shadow copy.
 """
 import os
 import re
@@ -55,6 +55,133 @@ def find_gcc():
         if "arm-none-eabi-gcc" in files:
             return os.path.join(base, "arm-none-eabi-gcc")
     return None
+
+
+def find_arm_tool(name, gcc=None):
+    if gcc:
+        beside = os.path.join(os.path.dirname(gcc), name)
+        if os.path.isfile(beside):
+            return beside
+    for base, _dirs, files in os.walk(os.path.join(ROOT, "vendor-dl")):
+        if name in files:
+            return os.path.join(base, name)
+    return None
+
+
+def find_vbam():
+    override = os.environ.get("NB_GBA_VBAM")
+    candidates = ([override] if override else []) + [
+        os.path.join(ROOT, "buildroot/output/build/vbam-2.1.4/vbam"),
+        os.path.join(ROOT, "buildroot/output/target/usr/bin/vbam"),
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def execution_project():
+    pixels = [0x7FFF] * 64
+    return {
+        "name": "OAM execution probe",
+        "sprites": [{"id": "spr", "name": "Sprite", "w": 8, "h": 8,
+                     "ox": 0, "oy": 0, "anim_speed": 0,
+                     "frames": [pixels]}],
+        "tilesets": [], "sounds": [], "tables": [], "scripts": [],
+        "objects": [{"id": "obj", "name": "Object", "sprite": "spr",
+                     "visible": True, "solid": False, "depth": 0,
+                     "events": []}],
+        "rooms": [{"id": "room", "name": "Room", "w": 240, "h": 160,
+                   "speed": 60, "bg": "#102030", "tiles": None,
+                   "far": None,
+                   "instances": [{"object": "obj", "x": 40, "y": 40}]}],
+        "start_room": "room",
+    }
+
+
+def execute_oam_check(gcc):
+    """Return (result, detail): result is True, False, or None for SKIP."""
+    probe = os.environ.get("NB_GBA_VBAM_PROBE")
+    vbam = probe or find_vbam()
+    gdb = "/usr/bin/gdb"
+    if not vbam:
+        return None, "no host VBA-M executable was found"
+    if not probe and not os.path.isfile(gdb):
+        return None, "/usr/bin/gdb is unavailable for emulator state inspection"
+    # A stripped frontend can run a ROM, but cannot expose VBA-M's emulated OAM.
+    nm = find_arm_tool("arm-none-eabi-nm", gcc)
+    if not nm:
+        return None, "arm-none-eabi-nm is unavailable for fresh ELF symbols"
+    host_nm = subprocess.run(["nm", vbam], capture_output=True, text=True)
+    if host_nm.returncode or not re.search(r"\b(oam|internalRAM)$", host_nm.stdout,
+                                           re.M):
+        return None, "host VBA-M is stripped; its OAM globals are not inspectable"
+
+    outdir = tempfile.mkdtemp(prefix="gbaint-exec-")
+    built, rom, log = gbabuild.build_rom(execution_project(), outdir,
+                                         runtime_dir=RT,
+                                         toolchain_dir="/nonexistent")
+    if not built:
+        return False, "execution cartridge did not build: " + (log or "")[-300:]
+    elf = os.path.join(outdir, "game.elf")
+    syms = subprocess.run([nm, "-n", elf], capture_output=True, text=True)
+    match = re.search(r"^([0-9a-fA-F]+)\s+\w\s+g_oam$", syms.stdout, re.M)
+    if not match:
+        return False, "fresh ELF has no g_oam symbol"
+    shadow_off = int(match.group(1), 16) - 0x03000000
+    env = dict(os.environ, SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy")
+    if probe:
+        env["NB_G_OAM_OFFSET"] = str(shadow_off)
+        try:
+            run = subprocess.run([probe, "--no-opengl", rom], capture_output=True,
+                                 text=True, env=env, timeout=20)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return None, "VBA-M probe could not run: %s" % exc
+        output = run.stdout + run.stderr
+        state = re.search(r"NBPROBE .*hw_oam=([0-9a-f]+),([0-9a-f]+),"
+                          r"([0-9a-f]+).*shadow_oam=([0-9a-f]+)", output, re.I)
+        if not state:
+            return None, "VBA-M probe produced no frame state: " + output[-240:]
+        hw0, hw1, hw2, shadow0 = (int(v, 16) for v in state.groups())
+        visible = (hw0 & 0x0300) != 0x0200
+        detail = "hardware OAM=%04x,%04x,%04x; shadow attr0=%04x" % (
+            hw0, hw1, hw2, shadow0)
+        return visible, detail
+    commands = [
+        "set pagination off",
+        "set confirm off",
+        "set args --no-opengl " + rom,
+        "break systemDrawScreen()",
+        "ignore 1 10",
+        "run",
+        "set $op = *(unsigned char **)&oam",
+        "set $ip = *(unsigned char **)&internalRAM",
+        ('printf "NBEXEC hw=%%04x,%%04x,%%04x shadow=%%04x\\n", '
+         '*(unsigned short*)$op, *(unsigned short*)($op+2), '
+         '*(unsigned short*)($op+4), *(unsigned short*)($ip+%d)' % shadow_off),
+        "kill",
+    ]
+    cmd = [gdb, "-q", "-nx", "-batch", vbam]
+    for command in commands:
+        cmd += ["-ex", command]
+    try:
+        run = subprocess.run(cmd, capture_output=True, text=True, env=env,
+                             timeout=20)
+    except subprocess.TimeoutExpired:
+        return None, "VBA-M state inspection timed out"
+    output = run.stdout + run.stderr
+    if "ptrace: Operation not permitted" in output or \
+            "Could not trace the inferior process" in output:
+        return None, "sandbox forbids ptrace; VBA-M state could not be inspected"
+    state = re.search(r"NBEXEC hw=([0-9a-f]+),([0-9a-f]+),([0-9a-f]+) "
+                      r"shadow=([0-9a-f]+)", output, re.I)
+    if not state:
+        return None, "VBA-M produced no inspectable frame state: " + output[-240:]
+    hw0, hw1, hw2, shadow0 = (int(v, 16) for v in state.groups())
+    visible = (hw0 & 0x0300) != 0x0200
+    detail = "hardware OAM=%04x,%04x,%04x; shadow attr0=%04x" % (
+        hw0, hw1, hw2, shadow0)
+    return visible, detail
 
 
 # --------------------------------------------------------------------------
@@ -312,6 +439,13 @@ else:
                                            toolchain_dir="/nonexistent",
                                            multiboot=True)
         ok(mok, "...and as a link-cable image", (mlog or "")[-300:])
+
+    print("\n== and it executes ==")
+    executed, detail = execute_oam_check(gcc)
+    if executed is None:
+        print("  SKIP hardware OAM execution check  -- " + detail)
+    else:
+        ok(executed, "a rendered sprite reaches hardware OAM", detail)
 
 print("\n%s  (%d failed)" % ("FAILURES: " + ", ".join(FAIL) if FAIL
                              else "all checks pass", len(FAIL)))
