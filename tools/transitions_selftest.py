@@ -250,9 +250,11 @@ def set_policy(m, reduced, accel):
 
 
 def test_policy_matrix(m, t):
-    """Article VI §4 as a truth table. GTK's own stack/revealer transitions may
-    run only on an accelerated session with Reduced Motion off; Reduced Motion
-    keeps a crossfade only where the caller explicitly asked for one."""
+    """Article VI §4 as a truth table, as amended by PAPER-PHYSICS §0.5
+    Amendment 1: the render path is not a motion input, so the software
+    column must plan exactly what the accelerated column plans. Reduced
+    Motion is the one off-switch, and it keeps a crossfade only where the
+    caller explicitly asked for one — on either path."""
     # nbmotion needs a frame clock to allow anything; the fake gi shim in this
     # process provides one, but assert it rather than assume it.
     check("frame clock is available to the suite", m.frame_clock_available())
@@ -273,12 +275,14 @@ def test_policy_matrix(m, t):
           == (t.SLIDE_UP, m.SURFACE_OUT))
 
     set_policy(m, False, False)
-    check("software page switch is instant",
-          t.stack_plan(t.FORWARD, t.PAGE) == (t.NONE, 0))
-    check("software crossfade is instant",
-          t.stack_plan(t.CROSSFADE, t.PAGE) == (t.NONE, 0))
-    check("software reveal is instant",
-          t.revealer_plan(t.SLIDE_DOWN) == (t.NONE, 0))
+    check("software forward slides exactly like accel (Amendment 1)",
+          t.stack_plan(t.FORWARD, t.PAGE) == (t.FORWARD, m.PAGE),
+          str(t.stack_plan(t.FORWARD, t.PAGE)))
+    check("software crossfade crossfades exactly like accel",
+          t.stack_plan(t.CROSSFADE, t.PAGE) == (t.CROSSFADE, m.PAGE))
+    check("software reveal slides exactly like accel",
+          t.revealer_plan(t.SLIDE_DOWN, t.SURFACE_IN)
+          == (t.SLIDE_DOWN, m.SURFACE_IN))
 
     set_policy(m, True, True)
     check("reduced motion never slides",
@@ -295,8 +299,10 @@ def test_policy_matrix(m, t):
           t.revealer_plan(t.CROSSFADE) == (t.CROSSFADE, m.REDUCED_FADE))
 
     set_policy(m, True, False)
-    check("reduced motion on software is still",
-          t.stack_plan(t.CROSSFADE, t.PAGE) == (t.NONE, 0))
+    check("reduced motion on software keeps the asked crossfade too",
+          t.stack_plan(t.CROSSFADE, t.PAGE) == (t.CROSSFADE, m.REDUCED_FADE))
+    check("reduced motion on software never slides",
+          t.stack_plan(t.FORWARD, t.PAGE) == (t.NONE, 0))
     check("explicit none is always still",
           t.stack_plan(t.NONE, t.PAGE) == (t.NONE, 0))
 
@@ -343,8 +349,8 @@ def test_switch_equivalence(m, t):
     stack = FakeStack()
     p = t.PageSwitcher(stack, order=["a", "b"])
     p.switch("b")
-    check("software mode sets a zero duration", stack.tduration == 0,
-          str(stack.tduration))
+    check("software mode animates at the full token (Amendment 1)",
+          stack.tduration == m.PAGE, str(stack.tduration))
 
 
 def test_switch_generation(m, t):
@@ -376,14 +382,19 @@ def test_switch_generation(m, t):
 
 # -------------------------------------------------------------- revealer -----
 def test_reveal(m, t):
+    # Amendment 1: the software path animates identically — same duration,
+    # same completion discipline, and it must clean its driver up the same
+    # way (the old stanza asserted instant here).
     set_policy(m, False, False)
     r = FakeRevealer()
     fired = []
     ms = t.reveal(r, True, on_done=lambda ok: fired.append(ok))
-    check("software reveal is instant", ms == 0 and r.tduration == 0)
-    check("software reveal lands revealed",
-          r.revealed and r.child_revealed)
-    check("software reveal reports completion synchronously", fired == [True])
+    check("software reveal animates like accel (Amendment 1)",
+          ms == m.SURFACE_IN)
+    check("software reveal does not report before it finishes", fired == [])
+    r.finish()
+    check("software reveal lands revealed and reports once",
+          r.revealed and r.child_revealed and fired == [True])
 
     set_policy(m, False, True)
     r = FakeRevealer()
@@ -420,28 +431,39 @@ def test_reveal(m, t):
 
 # --------------------------------------------------------------- replace -----
 def test_replace_instant(m, t):
+    # Amendment 1 removed "software = instant", so the synchronous path is
+    # now reached by its one honest remaining route: no frame clock. The
+    # contract this proves is unchanged — when no animation is possible the
+    # swap is complete, destructive and reported before replace() returns,
+    # which is what lets callers never branch on the policy.
     set_policy(m, False, False)
-    holder = FakeWidget("holder")
-    old = FakeWidget("old")
-    holder.add(old)
-    new = FakeWidget("new")
-    fired = []
-    ms = t.replace(holder, new, on_done=lambda ok: fired.append(ok))
-    check("software replace is instant", ms == 0)
-    check("software replace swaps the child",
-          holder.get_children() == [new], str(holder.get_children()))
-    check("software replace destroys the old child", old.destroyed)
-    check("software replace leaves opacity at exactly 1.0",
-          holder.opacity == 1.0, str(holder.opacity))
-    check("software replace reports completion synchronously", fired == [True])
+    real_clock = m.frame_clock_available
+    m.frame_clock_available = lambda: False
+    try:
+        holder = FakeWidget("holder")
+        old = FakeWidget("old")
+        holder.add(old)
+        new = FakeWidget("new")
+        fired = []
+        ms = t.replace(holder, new, on_done=lambda ok: fired.append(ok))
+        check("clockless replace is instant", ms == 0)
+        check("clockless replace swaps the child",
+              holder.get_children() == [new], str(holder.get_children()))
+        check("clockless replace destroys the old child", old.destroyed)
+        check("clockless replace leaves opacity at exactly 1.0",
+              holder.opacity == 1.0, str(holder.opacity))
+        check("clockless replace reports completion synchronously",
+              fired == [True])
 
-    holder = FakeWidget()
-    kept = FakeWidget("kept")
-    holder.add(kept)
-    t.replace(holder, FakeWidget("new"), destroy_old=False)
-    check("destroy_old=False keeps the old child alive", not kept.destroyed)
-    check("but still unparents it so it cannot affect layout",
-          kept.get_parent() is None)
+        holder = FakeWidget()
+        kept = FakeWidget("kept")
+        holder.add(kept)
+        t.replace(holder, FakeWidget("new"), destroy_old=False)
+        check("destroy_old=False keeps the old child alive", not kept.destroyed)
+        check("but still unparents it so it cannot affect layout",
+              kept.get_parent() is None)
+    finally:
+        m.frame_clock_available = real_clock
 
 
 def test_replace_animated(m, t, clock):

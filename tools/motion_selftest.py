@@ -173,12 +173,16 @@ def test_policy(m):
     real_clock = m.frame_clock_available
     m.frame_clock_available = lambda: True
     try:
-        # (reduced, accel) -> movement duration, crossfade duration
+        # (reduced, accel) -> movement duration, crossfade duration.
+        # PAPER-PHYSICS §0.5 Amendment 1: NB_ACCEL is not a motion input, so
+        # each row must be identical across the accel column — the same
+        # language runs on both render paths, and Reduced Motion is the one
+        # human off-switch (its fade survives on any path).
         matrix = {
             (False, True): (m.PAGE, m.PAGE),
-            (False, False): (0, 0),
+            (False, False): (m.PAGE, m.PAGE),
             (True, True): (0, m.REDUCED_FADE),
-            (True, False): (0, 0),
+            (True, False): (0, m.REDUCED_FADE),
         }
         for (reduced, accel), (move, fade) in sorted(matrix.items()):
             with_env(reduced, accel, m)
@@ -192,9 +196,17 @@ def test_policy(m):
             check("policy_state reports inputs reduced=%s accel=%s"
                   % (reduced, accel),
                   st["reduced_motion"] is reduced and st["accelerated"] is accel)
-        # order of resolution: reduced motion wins over an accelerated machine
+        # order of resolution: reduced motion wins over everything
         with_env(True, True, m)
-        check("reduced motion outranks NB_ACCEL", m.policy(m.SURFACE_IN) == 0)
+        check("reduced motion outranks everything", m.policy(m.SURFACE_IN) == 0)
+        # Amendment 1's own regression test: flipping NB_ACCEL alone must
+        # change nothing about motion (a reintroduced gate fails HERE)
+        with_env(False, True, m)
+        on_accel = (m.policy(m.PAGE), m.policy(m.PAGE, fade=True))
+        with_env(False, False, m)
+        on_soft = (m.policy(m.PAGE), m.policy(m.PAGE, fade=True))
+        check("NB_ACCEL is not a motion input", on_accel == on_soft,
+              "accel %r != soft %r" % (on_accel, on_soft))
         # a zero token stays zero everywhere
         with_env(False, True, m)
         check("INSTANT token stays 0", m.policy(m.INSTANT) == 0)
@@ -504,7 +516,19 @@ def test_settings_page_wiring():
               for n in ast.walk(tree)))
     nbapp_src = open(os.path.join(DE, "nbapp.py")).read()
     check("nbapp motion policy honours reduced motion",
-          "reduced_motion()" in nbapp_src and "and not reduced" in nbapp_src)
+          "reduced_motion()" in nbapp_src and "not reduced)" in nbapp_src)
+    # Amendment 1 (PAPER-PHYSICS §0.5): the render path is not a motion
+    # input. The docstring may TALK about NB_ACCEL; the code must not read
+    # it — so walk the AST rather than grep the prose.
+    ntree = ast.parse(nbapp_src)
+    fn = next((n for n in ast.walk(ntree)
+               if isinstance(n, ast.FunctionDef)
+               and n.name == "_apply_motion_policy"), None)
+    reads_accel = fn is not None and any(
+        isinstance(n, ast.Constant) and n.value == "NB_ACCEL"
+        for n in ast.walk(fn))
+    check("nbapp motion policy does not consult NB_ACCEL (Amendment 1)",
+          fn is not None and not reads_accel)
 
 
 def test_no_timeout_per_frame():

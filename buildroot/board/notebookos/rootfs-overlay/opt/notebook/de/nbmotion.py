@@ -160,11 +160,16 @@ MOVE = ease_in_out
 
 
 # --------------------------------------------------------------------------
-# Policy — Article VI §4
+# Policy — Article VI §4, as amended by PAPER-PHYSICS §0.5 Amendment 1
 # --------------------------------------------------------------------------
-# Resolution order is fixed: Reduced Motion, then NB_ACCEL, then the token.
-# Either of the first two resolving to "still" yields 0, and a 0 lands on the
-# same end state as an animation would.
+# Resolution order is fixed: Reduced Motion, then the frame clock, then the
+# token. NB_ACCEL is NO LONGER a motion input: the original gate reasoned
+# that six dropped frames read as a struggling computer, and the amendment
+# reverses the conclusion — the render path is the problem to solve (Article
+# F damage-limiting, the GPU source restore), not a reason for most machines
+# to live without the motion language. Reduced Motion is the one human
+# off-switch. A "still" resolution yields 0, and a 0 lands on the same end
+# state as an animation would.
 _REDUCED = None                 # None = not read yet; cached per process
 
 
@@ -217,9 +222,10 @@ def reload_prefs():
 def accelerated():
     """True when session.sh proved Mesa can actually drive this machine.
 
-    Absent or unreadable means software, which is the answer that is never
-    worse: see the long note on nbapp._apply_motion_policy for why six dropped
-    frames read as "this computer is struggling"."""
+    NOT a motion input since PAPER-PHYSICS §0.5 Amendment 1 — policy() does
+    not consult it. It remains for RENDER-PATH decisions that genuinely
+    depend on the hardware: compositor gating, frame-budget selection, and
+    the frame-pacing harness reporting which path it measured."""
     return os.environ.get("NB_ACCEL", "0").strip() == "1"
 
 
@@ -238,7 +244,12 @@ def policy(duration=SURFACE_IN, fade=False):
     `fade=True` says the caller's change would be incomprehensible as an
     instant swap (a whole surface replacing another) and that a restrained
     crossfade is an acceptable substitute. It is the ONLY thing that survives
-    Reduced Motion, and only on an accelerated machine.
+    Reduced Motion.
+
+    NB_ACCEL is deliberately not consulted (PAPER-PHYSICS §0.5 Amendment 1):
+    the same motion language runs on both render paths, and the software
+    path's cost is answered by damage-limited drawing (Article F), never by
+    switching the language off for the majority of machines.
 
     Returns 0 for "do it now". A caller never branches on this: `Scalar`
     already lands on the end state synchronously when it is 0."""
@@ -249,17 +260,17 @@ def policy(duration=SURFACE_IN, fade=False):
     if duration <= 0:
         return 0
     if reduced_motion():
-        return REDUCED_FADE if (fade and accelerated()) else 0
-    if not accelerated():
-        return 0
+        return REDUCED_FADE if fade else 0
     if not frame_clock_available():
         return 0
     return duration
 
 
 def policy_state():
-    """The three inputs to `policy()`, for a debug line or a test — one dict
-    so a failure says WHICH input made the system still."""
+    """policy()'s two inputs plus the render-path fact, for a debug line or a
+    test — one dict so a failure says WHICH input made the system still.
+    `accelerated` stays in the dict although it no longer feeds policy():
+    the frame-pacing harness reports which path it measured."""
     return {"reduced_motion": reduced_motion(),
             "accelerated": accelerated(),
             "frame_clock": frame_clock_available()}
@@ -270,14 +281,15 @@ def _apply_gtk_animations():
 
     The Papertone theme's 90ms state feedback runs through GTK's animation
     machinery, not through this module. If Reduced Motion silenced only
-    nbmotion the switch would be a half-truth on every button in the OS."""
+    nbmotion the switch would be a half-truth on every button in the OS.
+    Reduced Motion is the only input here — see Amendment 1."""
     if Gtk is None:
         return
     try:
         settings = Gtk.Settings.get_default()
         if settings is not None:
             settings.set_property("gtk-enable-animations",
-                                  accelerated() and not reduced_motion())
+                                  not reduced_motion())
     except Exception:                                             # noqa: BLE001
         pass                     # a missing setting must never stop an app
 

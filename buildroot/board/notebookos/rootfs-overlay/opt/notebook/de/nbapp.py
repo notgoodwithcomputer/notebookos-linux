@@ -1575,28 +1575,28 @@ class PaperSwitch(Gtk.Switch):
 
 
 def _apply_motion_policy():
-    """Turn GTK's animations on only where they will actually be smooth.
+    """Turn GTK's animations on everywhere Reduced Motion has not said no.
 
     The Papertone theme defines a small motion vocabulary (90ms state feedback,
     140ms for a surface arriving) — see the MOTION section of its gtk.css. All of
     it runs through GTK's animation machinery, which this switch controls.
 
-    IT IS GATED ON NB_ACCEL, and that is the point rather than a caveat. A 90ms
-    transition is six frames; on a machine with no accelerated rendering, where a
-    first paint can take the better part of a second, those frames are not
-    dropped evenly — the control lurches between two or three states and arrives
-    late. That reads as a computer struggling, which is materially worse than
-    the honest instant snap of no animation at all. Motion here is meant to say
-    "this responded to you"; it must never end up saying "this is slow".
+    This switch USED to be gated on NB_ACCEL, on the argument that a 90ms
+    transition is six frames and a software renderer drops them unevenly — the
+    control lurches and arrives late, reading as a struggling computer.
+    PAPER-PHYSICS §0.5 Amendment 1 reverses that conclusion: the motion
+    language is part of what the OS IS, most target machines (second-hand
+    AMD/NVIDIA laptops) are on the software path, and shipping them a still OS
+    was the wrong resolution of the conflict. The cost argument is answered
+    where the cost lives — damage-limited drawing (Article F), short damped
+    settles rather than long floats, and the frame-pacing gate that measures
+    BOTH paths — never by switching the language off. NB_ACCEL remains a
+    render-path fact (compositor gating, frame budgets); it is no longer a
+    motion input.
 
-    session.sh exports NB_ACCEL after probing what Mesa can actually drive (see
-    opt/notebook/accel.sh). Absent or unreadable -> assume software and stay
-    still, which is the answer that is never worse.
-
-    Reduced Motion (Settings > Accessibility) is the SECOND, independent switch
-    and applies regardless of NB_ACCEL: a person who turned it on gets no theme
-    transitions on an accelerated machine either. nbmotion owns that preference
-    so the shared motion engine and GTK's own animations cannot disagree; it is
+    Reduced Motion (Settings > Accessibility) is now the ONE switch, and it is
+    a person's choice rather than a probe's. nbmotion owns that preference so
+    the shared motion engine and GTK's own animations cannot disagree; it is
     imported here rather than at module scope because this is on the import
     path of every app and a missing nbmotion must not be fatal."""
     reduced = False
@@ -1604,11 +1604,10 @@ def _apply_motion_policy():
         import nbmotion
         reduced = nbmotion.reduced_motion()
     except Exception:                                             # noqa: BLE001
-        pass                          # no engine, no preference: accel decides
+        pass                     # no engine, no preference: motion stays on
     try:
-        accel = (os.environ.get("NB_ACCEL", "0").strip() == "1")
         Gtk.Settings.get_default().set_property("gtk-enable-animations",
-                                                accel and not reduced)
+                                                not reduced)
     except Exception:                                             # noqa: BLE001
         # Never fatal: a missing setting must not stop an app from opening.
         pass

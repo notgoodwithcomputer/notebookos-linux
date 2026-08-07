@@ -69,8 +69,9 @@ def reduced_motion_contract():
               "Reduced Motion makes shared animations instant")
         nbmotion.set_reduced_motion(False)
         os.environ["NB_ACCEL"] = "0"
-        check(nbmotion.policy(200) == 0,
-              "software rendering also uses instant-equivalent transitions")
+        check(nbmotion.policy(200) == 200,
+              "software rendering keeps the motion language — the render "
+              "path is not a motion input (PAPER-PHYSICS §0.5 Amendment 1)")
     finally:
         nbmotion.set_reduced_motion(old)
         if old_accel is None:
