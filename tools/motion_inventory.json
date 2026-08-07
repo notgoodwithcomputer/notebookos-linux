@@ -1,0 +1,586 @@
+{
+ "schema_version": 1,
+ "source": "docs/PAPER-PHYSICS.md Article G",
+ "pacing_required": false,
+ "entries": [
+  {
+   "id": "system.boot-session",
+   "origin": "\u2014",
+   "motion": "splash progress, always advancing",
+   "tokens": [
+    "linear"
+   ],
+   "transform": false,
+   "status": "implemented",
+   "binding": {
+    "binding_kind": "module-behavior",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/splash.py",
+    "symbol_or_marker": "_tick_bar"
+   },
+   "pacing": null
+  },
+  {
+   "id": "system.splash-desktop",
+   "origin": "splash",
+   "motion": "splash lifts, desktop settles beneath",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "note": "Splash exits after a grace period; no lift/settle transition was found.",
+   "pacing": null
+  },
+  {
+   "id": "system.app-launch",
+   "origin": "its icon",
+   "motion": "icon rectangle grows into the window",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": true,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "system.app-close",
+   "origin": "the window",
+   "motion": "collapses back into the icon",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": true,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "system.app-app",
+   "origin": "outgoing window",
+   "motion": "outgoing departs, incoming arrives from its icon",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "system.desktop-board-appearing",
+   "origin": "\u2014",
+   "motion": "cards settle in, staggered along their columns",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "system.panel-menu-open",
+   "origin": "its title",
+   "motion": "drops from the title, down its column",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "implemented",
+   "binding": {
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/shell.py",
+    "symbol_or_marker": "system.panel-menu-open"
+   },
+   "pacing": null
+  },
+  {
+   "id": "system.panel-menu-close",
+   "origin": "\u2014",
+   "motion": "retracts to the title",
+   "tokens": [
+    "SURFACE_OUT"
+   ],
+   "transform": false,
+   "status": "implemented",
+   "binding": {
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/shell.py",
+    "symbol_or_marker": "system.panel-menu-close"
+   },
+   "pacing": null
+  },
+  {
+   "id": "system.login-first-run-step",
+   "origin": "previous step",
+   "motion": "directional slide along the grid",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "system.sleep-wake",
+   "origin": "\u2014",
+   "motion": "field dims and returns",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "system.shutdown",
+   "origin": "\u2014",
+   "motion": "desktop settles out",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.navigate-forward",
+   "origin": "the opened row",
+   "motion": "contents slide left, along the grid",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.navigate-back",
+   "origin": "\u2014",
+   "motion": "contents slide right",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.open-folder",
+   "origin": "the clicked row",
+   "motion": "row grows into the new listing",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": true,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.list-grid",
+   "origin": "\u2014",
+   "motion": "crossfade in place (different presentations, not a transform)",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.selection-change",
+   "origin": "previous row",
+   "motion": "the highlight travels between rows",
+   "tokens": [
+    "SELECT"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.sidebar-reveal",
+   "origin": "its edge",
+   "motion": "slides along the column edge",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.search-results",
+   "origin": "the search field",
+   "motion": "results settle in beneath it",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.copy-move-trash",
+   "origin": "the source row",
+   "motion": "the object visibly goes where it went",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "finder.get-info",
+   "origin": "the selected row",
+   "motion": "card grows from the row",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "app.page-pane-switch",
+   "origin": "previous pane",
+   "motion": "directional, consistent OS-wide",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "module-behavior",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+    "symbol_or_marker": "switch_page"
+   },
+   "note": "Shared primitive exists; pervasive adoption is not established.",
+   "pacing": null
+  },
+  {
+   "id": "app.overlay-card",
+   "origin": "the control that raised it",
+   "motion": "grows from that control",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "note": "The reveal primitive does not implement origin-bound growth.",
+   "pacing": null
+  },
+  {
+   "id": "app.confirm",
+   "origin": "the destructive control",
+   "motion": "grows from it",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "note": "No origin-bound growth behavior found.",
+   "pacing": null
+  },
+  {
+   "id": "app.about",
+   "origin": "app-name title",
+   "motion": "drops from it",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "module-behavior",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+    "symbol_or_marker": "reveal"
+   },
+   "note": "Generic directional reveal can carry this, but does not establish pervasive adoption.",
+   "pacing": null
+  },
+  {
+   "id": "app.picker",
+   "origin": "the menu item",
+   "motion": "grows from it",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "note": "No origin-bound growth behavior found.",
+   "pacing": null
+  },
+  {
+   "id": "app.tab-section-change",
+   "origin": "previous tab",
+   "motion": "underline travels; content crossfades",
+   "tokens": [
+    "SELECT",
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "module-behavior",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+    "symbol_or_marker": "replace"
+   },
+   "note": "Content crossfade exists; travelling underline is not supplied.",
+   "pacing": null
+  },
+  {
+   "id": "app.list-insert",
+   "origin": "insertion point",
+   "motion": "row opens and settles",
+   "tokens": [
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "module-behavior",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+    "symbol_or_marker": "reveal"
+   },
+   "note": "Inline reveal can carry opening; row-specific adoption is not established.",
+   "pacing": null
+  },
+  {
+   "id": "app.list-remove",
+   "origin": "\u2014",
+   "motion": "row closes; neighbours settle up",
+   "tokens": [
+    "SURFACE_OUT"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "module-behavior",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+    "symbol_or_marker": "reveal"
+   },
+   "note": "Inline reveal can close allocation; pervasive adoption is not established.",
+   "pacing": null
+  },
+  {
+   "id": "app.list-reorder",
+   "origin": "the row's own position",
+   "motion": "rows travel to their new positions",
+   "tokens": [
+    "SELECT"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "app.inline-edit-begin-end",
+   "origin": "the field",
+   "motion": "field takes and releases its edit state",
+   "tokens": [
+    "FEEDBACK"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "css-section",
+    "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
+    "symbol_or_marker": "90ms   state feedback: hover, press, focus, check, selection"
+   },
+   "note": "Theme supplies short state feedback, not a named field-level behavior.",
+   "pacing": null
+  },
+  {
+   "id": "app.toolbar-state",
+   "origin": "the control",
+   "motion": "colour and border only",
+   "tokens": [
+    "FEEDBACK"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "css-section",
+    "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
+    "symbol_or_marker": "transition-property: background-color, background-image, border-color, color,"
+   },
+   "note": "Theme applies the 90ms allowed-property feedback broadly.",
+   "pacing": null
+  },
+  {
+   "id": "app.any-value-change",
+   "origin": "the value",
+   "motion": "old value settles out, new settles in",
+   "tokens": [
+    "FEEDBACK"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "module-behavior",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+    "symbol_or_marker": "replace"
+   },
+   "note": "Crossfade replacement can carry values, but pervasive adoption is not established.",
+   "pacing": null
+  },
+  {
+   "id": "app.any-toggle",
+   "origin": "the control",
+   "motion": "state travels, never jumps",
+   "tokens": [
+    "FEEDBACK"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "css-section",
+    "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
+    "symbol_or_marker": "90ms   state feedback: hover, press, focus, check, selection"
+   },
+   "note": "Theme animates check/state feedback; it does not prove travelling geometry everywhere.",
+   "pacing": null
+  },
+  {
+   "id": "app.progress",
+   "origin": "\u2014",
+   "motion": "continuous, never stepped",
+   "tokens": [
+    "linear"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "app.empty-populated",
+   "origin": "the empty state",
+   "motion": "empty departs, content settles",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "partial",
+   "binding": {
+    "binding_kind": "module-behavior",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+    "symbol_or_marker": "replace"
+   },
+   "note": "Crossfade replace can carry the state change; pervasive adoption is not established.",
+   "pacing": null
+  },
+  {
+   "id": "app.scroll",
+   "origin": "\u2014",
+   "motion": "momentum, bounded rubber-band, no overshoot past the band",
+   "tokens": [],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "app.zoom",
+   "origin": "the zoom origin",
+   "motion": "scales about the pointer or centre",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "content.language",
+   "origin": "Language",
+   "motion": "lesson flow, crown and streak moments",
+   "tokens": [
+    "PAGE",
+    "SURFACE_IN"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "content.illustrator",
+   "origin": "Illustrator",
+   "motion": "tool change, layer add/remove/reorder",
+   "tokens": [
+    "FEEDBACK",
+    "SELECT"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "content.sequencer",
+   "origin": "Sequencer",
+   "motion": "transport state, playhead travel",
+   "tokens": [
+    "FEEDBACK",
+    "linear"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "content.video",
+   "origin": "Video",
+   "motion": "timeline scrub, clip select, trim handles",
+   "tokens": [
+    "linear",
+    "SELECT"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "content.media",
+   "origin": "Media",
+   "motion": "fullscreen enter and exit",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "content.maps",
+   "origin": "Maps",
+   "motion": "pan and zoom",
+   "tokens": [
+    "linear",
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "content.ebook",
+   "origin": "E-book",
+   "motion": "page turn",
+   "tokens": [
+    "PAGE"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "pacing": null
+  },
+  {
+   "id": "content.2048",
+   "origin": "2048",
+   "motion": "tile slide and merge",
+   "tokens": [
+    "FEEDBACK"
+   ],
+   "transform": false,
+   "status": "unimplemented",
+   "note": "Code updates the board model and changed labels directly; no tile-position animation call exists despite the prose calling it a reference.",
+   "pacing": null
+  }
+ ]
+}
