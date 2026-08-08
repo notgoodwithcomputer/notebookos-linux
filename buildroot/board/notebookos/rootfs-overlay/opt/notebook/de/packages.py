@@ -986,7 +986,8 @@ class Packages(nbapp.AppWindow):
             current.discard(p[NAME])
         try:
             nbapp.atomic_write_json(self._removed_apps_path(), sorted(current))
-        except (OSError, TypeError, ValueError):
+        except (OSError, TypeError, ValueError) as exc:
+            nbapp.save_failure_reason = str(exc)
             return
         self._removed_apps = current
         self._rebuild_detail()

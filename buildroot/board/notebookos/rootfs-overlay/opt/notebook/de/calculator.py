@@ -163,6 +163,12 @@ def sanitize_state(state):
     if not isinstance(state, dict):
         state = {}
 
+    known = {"tape", "tape_results", "variables", "ans", "fix", "ys",
+             "y_enabled", "window", "tbl_start", "tbl_step", "trace_x",
+             "deg", "_extra"}
+    extra = dict(state.get("_extra")) if isinstance(state.get("_extra"), dict) else {}
+    extra.update((k, v) for k, v in state.items() if k not in known)
+
     raw = state.get("tape")
     tape = [str(x) for x in raw] if isinstance(raw, list) else []
     raw = state.get("tape_results")
@@ -226,7 +232,7 @@ def sanitize_state(state):
         "tbl_start": _finite(state.get("tbl_start"), 0.0),
         "tbl_step": _finite(state.get("tbl_step"), 1.0),
         "trace_x": _finite(state.get("trace_x"), 0.0),
-        "deg": deg if isinstance(deg, bool) else True,
+        "deg": deg if isinstance(deg, bool) else True, "_extra": extra,
     }
 
 
@@ -503,6 +509,7 @@ class Calculator(nbapp.AppWindow):
         self._tape_i = None       # position while walking it (None = not)
         self._tape_draft = ""     # what was on the display before walking
         self.deg = state["deg"]
+        self._extra = state["_extra"]
         self.just_evaled = False
         self.second = False
         self.error = False   # last "=" failed; the display says why, in red
@@ -1420,15 +1427,17 @@ class Calculator(nbapp.AppWindow):
         try:
             if not self._store_readable:
                 return
-            nbapp.atomic_write_json(STATE_FILE, {
+            payload = dict(getattr(self, "_extra", {}) or {})
+            payload.update({
                 "deg": bool(self.deg), "fix": self.fix, "ans": self.ans,
                 "tape": self.tape, "tape_results": self.tape_results,
                 "variables": self.variables, "ys": self.ys,
                 "y_enabled": self.y_enabled, "window": self.window,
                 "tbl_start": self.tbl_start, "tbl_step": self.tbl_step,
-                "trace_x": self.trace_x})
-        except Exception:
-            pass
+                "trace_x": self.trace_x, "_extra": getattr(self, "_extra", {})})
+            nbapp.atomic_write_json(STATE_FILE, payload)
+        except Exception as exc:
+            nbapp.save_failure_reason = str(exc)
 
     def _on_destroy(self, *_):
         self._save_prefs()

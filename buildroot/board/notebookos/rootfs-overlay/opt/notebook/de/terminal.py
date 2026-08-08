@@ -459,7 +459,8 @@ class Terminal(nbapp.AppWindow):
             try:
                 self.term.feed_child(data)
             except TypeError:
-                self.term.feed_child(data.decode(), len(data))
+                text = data.decode("utf-8", "replace")
+                self.term.feed_child(text, len(text))
         except Exception:
             pass
 
@@ -605,10 +606,15 @@ class Terminal(nbapp.AppWindow):
         defaults (1.0, blinking on) when the file is missing or malformed. Must
         never crash the launch, so every value is range/type checked."""
         scale, blink = 1.0, True
+        self._extra = {}
         try:
             with open(STATE_FILE) as fh:
                 data = json.load(fh)
             if isinstance(data, dict):
+                known = {"font_scale", "cursor_blink", "_extra"}
+                self._extra = (dict(data.get("_extra"))
+                               if isinstance(data.get("_extra"), dict) else {})
+                self._extra.update((k, v) for k, v in data.items() if k not in known)
                 s = data.get("font_scale")
                 if isinstance(s, (int, float)) and 0.5 <= s <= 3.0:
                     scale = float(s)
@@ -633,10 +639,13 @@ class Terminal(nbapp.AppWindow):
         except Exception:
             blink = True
         try:
-            nbapp.atomic_write_json(STATE_FILE, {"font_scale": round(scale, 3),
-                                                 "cursor_blink": bool(blink)})
-        except Exception:
-            pass
+            payload = dict(getattr(self, "_extra", {}) or {})
+            payload.update({"font_scale": round(scale, 3),
+                            "cursor_blink": bool(blink),
+                            "_extra": getattr(self, "_extra", {})})
+            nbapp.atomic_write_json(STATE_FILE, payload)
+        except Exception as exc:
+            nbapp.save_failure_reason = str(exc)
 
     # -- destructive-action confirmation --
     def _confirm(self, title, body, ok_label):

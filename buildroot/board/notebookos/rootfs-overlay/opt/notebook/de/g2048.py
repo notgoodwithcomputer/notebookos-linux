@@ -274,12 +274,18 @@ class Game2048(nbapp.AppWindow):
         try:
             with open(STATE_FILE) as fh:
                 data = json.load(fh)
+            known = {"best", "board", "score", "_extra"}
+            self._extra = (dict(data.get("_extra"))
+                           if isinstance(data.get("_extra"), dict) else {})
+            self._extra.update((k, v) for k, v in data.items() if k not in known)
             best = data.get("best")
             if isinstance(best, (int, float)) and not isinstance(best, bool) \
                     and best >= 0:
                 return int(best)
         except Exception:
             pass
+        if not hasattr(self, "_extra"):
+            self._extra = {}
         return 0
 
     def _load_saved_game(self):
@@ -318,14 +324,16 @@ class Game2048(nbapp.AppWindow):
         JSON file. Never crash on I/O — a read-only or missing config dir just
         skips the save."""
         try:
-            state = {"best": self.best}
+            state = dict(getattr(self, "_extra", {}) or {})
+            state["best"] = self.best
             # A finished game is not worth resuming into its own end banner.
             if self.status == "play":
                 state["board"] = self.board
                 state["score"] = self.score
+            state["_extra"] = getattr(self, "_extra", {})
             nbapp.atomic_write_json(STATE_FILE, state)
-        except Exception:
-            pass
+        except Exception as exc:
+            nbapp.save_failure_reason = str(exc)
 
     def _queue_save(self):
         """Persist shortly after a move. Debounced, so mashing the arrow keys
@@ -377,6 +385,9 @@ class Game2048(nbapp.AppWindow):
 
     def new_game(self):
         self._finish_anim_now()      # a fresh board owes nothing to the old
+        if getattr(self, "board", None) and any(v for row in self.board for v in row):
+            self._new_game_undo = ([list(row) for row in self.board], self.score,
+                                   self.status, self._won_shown)
         self.board = [[0] * 4 for _ in range(4)]
         self.score = 0
         self.status = "play"
@@ -385,6 +396,18 @@ class Game2048(nbapp.AppWindow):
         self._add_random()
         self._refresh()
         self._save_best()
+
+    def undo_new_game(self):
+        """Restore the game replaced by New Game, once, without a warning card."""
+        saved = getattr(self, "_new_game_undo", None)
+        if not saved:
+            return False
+        self._finish_anim_now()
+        self.board, self.score, self.status, self._won_shown = saved
+        self._new_game_undo = None
+        self._refresh()
+        self._save_best()
+        return True
 
     @staticmethod
     def _slide(line):
@@ -672,6 +695,8 @@ class Game2048(nbapp.AppWindow):
             playing = self.status == "play"
             return [
                 ("New Game", self.new_game),
+                ("Undo New Game", self.undo_new_game
+                 if getattr(self, "_new_game_undo", None) else None),
                 nbapp.SEP,
                 ("Move Up", (lambda: self.move("up")) if playing else None),
                 ("Move Down", (lambda: self.move("down")) if playing else None),
@@ -683,22 +708,29 @@ class Game2048(nbapp.AppWindow):
                 nbapp.SEP,
                 ("Reset Best Score…",
                  self._reset_best if self.best > 0 else None),
+                ("Undo Reset Best Score", self.undo_reset_best
+                 if getattr(self, "_best_undo", None) else None),
             ]
         return super().menu_items(name)
 
     def _reset_best(self):
-        # Clearing the persisted record has no undo, so confirm before wiping.
-        self._confirm(
-            "Reset Best Score",
-            "Reset the best score to zero? This cannot be undone.",
-            "Reset", self._do_reset_best)
+        self._do_reset_best()
 
     def _do_reset_best(self):
         # Persist the cleared value too, or the old best would return on the
         # next launch and the reset would look like it did nothing.
+        self._best_undo = self.best
         self.best = 0
         self._save_best()
         self._refresh()
+
+    def undo_reset_best(self):
+        if not getattr(self, "_best_undo", None):
+            return False
+        self.best, self._best_undo = self._best_undo, None
+        self._save_best()
+        self._refresh()
+        return True
 
     def _confirm(self, title, message, ok_label, on_yes):
         """Modal confirmation for a destructive action. Runs `on_yes` only when
