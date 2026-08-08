@@ -63,6 +63,20 @@ _RENAME_NOREPLACE = 1 << 0
 _libc = None
 
 
+def _quarantine_store(path):
+    """Move an unreadable app store aside immediately before its replacement."""
+    try:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = "%s.damaged-%s" % (path, stamp)
+        n = 2
+        while os.path.lexists(dest):
+            dest = "%s.damaged-%s-%d" % (path, stamp, n)
+            n += 1
+        os.replace(path, dest)
+    except OSError:
+        pass
+
+
 def _libc_renameat2():
     """The libc renameat2 entry point, resolved once and kept.
 
@@ -1013,12 +1027,21 @@ class Finder(Gtk.Window):
         # Restore the view mode and Show-hidden toggle from the last session so
         # a chosen Grid view (or shown dotfiles) survives a close/reopen.
         # Guarded end-to-end: a missing or garbage file just leaves the defaults.
+        self._prefs_extra = {}
+        self._prefs_quarantine_pending = False
         try:
             import json
             with open(self._prefs_path()) as fh:
                 data = json.load(fh)
             if not isinstance(data, dict):
+                self._prefs_quarantine_pending = True
                 return
+            known = {"view", "show_hidden", "sort", "sort_desc", "_extra"}
+            extra = data.get("_extra")
+            self._prefs_extra = dict(extra) if isinstance(extra, dict) else {}
+            for key, value in data.items():
+                if key not in known:
+                    self._prefs_extra[key] = value
             if data.get("view") in ("list", "grid"):
                 self._view = data["view"]
             if isinstance(data.get("show_hidden"), bool):
@@ -1031,7 +1054,8 @@ class Finder(Gtk.Window):
             if isinstance(data.get("sort_desc"), bool):
                 self._sort_desc = data["sort_desc"]
         except (OSError, ValueError, TypeError):
-            pass
+            if os.path.lexists(self._prefs_path()):
+                self._prefs_quarantine_pending = True
 
     def _save_prefs(self):
         # Persist view mode + show-hidden. Never runs during construction
@@ -1041,12 +1065,17 @@ class Finder(Gtk.Window):
         try:
             import json
             path = self._prefs_path()
+            if getattr(self, "_prefs_quarantine_pending", False):
+                self._prefs_quarantine_pending = False
+                _quarantine_store(path)
             nbapp.atomic_write_json(path, {"view": self._view,
                                            "show_hidden": self._show_hidden,
                                            "sort": self._sort_col,
-                                           "sort_desc": self._sort_desc})
-        except (OSError, TypeError, ValueError):
-            pass
+                                           "sort_desc": self._sort_desc,
+                                           "_extra": getattr(
+                                               self, "_prefs_extra", {})})
+        except (OSError, TypeError, ValueError) as exc:
+            nbapp.save_failure_reason = str(exc)
 
     # ---- removed applications (hidden from the Applications listing) ----
     # The user can hide an app from the Applications view ("Remove from
@@ -3161,6 +3190,9 @@ class Finder(Gtk.Window):
         same_dir = os.path.dirname(src) == dest_dir
         if self._taken(dst) or (same_dir and not is_cut):
             dst = self._unique_path(dest_dir, base, suffix=" copy")
+        if self._recursive_target(src, dst):
+            self._flash_status(_t("A folder cannot be copied inside itself"))
+            return
         if is_cut and self._same_filesystem(src, dest_dir):
             # same disk: a move is a rename, so it is instant however big it is
             try:
@@ -3256,10 +3288,26 @@ class Finder(Gtk.Window):
         except OSError:
             return True
 
+    @staticmethod
+    def _recursive_target(src, dst):
+        """True when a directory destination is itself or below itself."""
+        if not os.path.isdir(src) or os.path.islink(src):
+            return False
+        try:
+            source = os.path.realpath(src)
+            target = os.path.realpath(dst)
+            return os.path.commonpath((source, target)) == source
+        except (OSError, ValueError):
+            return False
+
     def _copy(self, src, dst, on_done):
         """Copy, choosing the quiet path or the visible one. A small file is
         instant, so a progress card would only flash; anything big enough to be
         noticed gets one, with Cancel."""
+        if self._recursive_target(src, dst):
+            on_done(False)
+            self._flash_status(_t("A folder cannot be copied inside itself"))
+            return
         # Claim the destination for as long as this job owns it. The claim is
         # what makes the cleanup below safe to describe as "only removes ours":
         # while it stands, no other Paste or Duplicate can choose this name.
@@ -3384,6 +3432,9 @@ class Finder(Gtk.Window):
         if self.rel == "Applications":
             self._flash_status(_t("Applications are managed in Packages."))
             return
+        if self.rel == ".Trash":
+            self._flash_status(_t("Put items back before renaming them"))
+            return
         model, it = self._selected_iter()
         if it is None:
             self._flash_status(_t("Select an item to rename"))
@@ -3485,6 +3536,9 @@ class Finder(Gtk.Window):
         self._end_rename_mode()
         if self.rel == "Applications":
             self._flash_status(_t("Applications are managed in Packages."))
+            return
+        if self.rel == ".Trash":
+            self._flash_status(_t("Put items back before renaming them"))
             return
         new_name = (new_text or "").strip()
         try:

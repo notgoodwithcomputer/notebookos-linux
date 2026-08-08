@@ -35,6 +35,7 @@ import math
 import time
 import random
 import unicodedata
+from datetime import date, timedelta
 
 import nbapp
 import nbicons
@@ -192,7 +193,9 @@ def _today():
 
 
 def _yesterday():
-    return time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+    # Calendar arithmetic, not "24 hours ago": the local day before the
+    # spring DST change is only 23 hours long.
+    return (date.fromtimestamp(time.time()) - timedelta(days=1)).isoformat()
 
 
 def load_courses():
@@ -208,10 +211,44 @@ def load_courses():
             with open(os.path.join(DE_DIR, fn), encoding="utf-8") as fh:
                 c = json.load(fh)
             if isinstance(c, dict) and c.get("code") and c.get("units"):
+                # Course files are authored data, not an all-or-nothing
+                # executable blob.  Keep every usable sibling when one row is
+                # malformed: losing a word is honest; losing forty skills and
+                # someone's route into their sunk progress is not.
+                clean_units = []
+                for unit in c.get("units", []):
+                    if not isinstance(unit, dict):
+                        continue
+                    skills = []
+                    for skill in unit.get("skills", []):
+                        if not isinstance(skill, dict) or not isinstance(
+                                skill.get("name"), str):
+                            continue
+                        skill = dict(skill)
+                        skill["words"] = [row for row in skill.get("words", [])
+                                          if _valid_course_row(
+                                              row, ("t", "e", "ipa", "pos"))]
+                        skill["phrases"] = [row for row in skill.get("phrases", [])
+                                            if _valid_course_row(
+                                                row, ("t", "e", "ipa"))]
+                        skill["tips"] = [row for row in skill.get("tips", [])
+                                         if _valid_course_row(row, ("h", "b"))]
+                        skills.append(skill)
+                    unit = dict(unit)
+                    unit["skills"] = skills
+                    clean_units.append(unit)
+                c = dict(c)
+                c["units"] = clean_units
                 courses.append(c)
         except Exception:
             continue
     return courses
+
+
+def _valid_course_row(row, required):
+    return (isinstance(row, dict)
+            and all(isinstance(row.get(key), str) and row.get(key).strip()
+                    for key in required))
 
 
 class Language(nbapp.AppWindow):
@@ -375,6 +412,15 @@ class Language(nbapp.AppWindow):
         A wrong type costs ITSELF (that one counter resets) and nothing else,
         and every other key in the file rides through untouched."""
         out = dict(d) if isinstance(d, dict) else {}
+        known = {"xp", "streak", "day_xp", "hearts", "streak_day", "day",
+                 "heart_time", "goal", "hearts_on", "crowns", "seen",
+                 "strength", "tests", "stats", "awards", "_extra"}
+        extra = out.get("_extra")
+        extra = dict(extra) if isinstance(extra, dict) else {}
+        for key in list(out):
+            if key not in known:
+                extra[key] = out.pop(key)
+        out["_extra"] = extra
         for key in ("xp", "streak", "day_xp"):
             v = out.get(key)
             if isinstance(v, bool) or not isinstance(v, (int, float)):
@@ -496,7 +542,8 @@ class Language(nbapp.AppWindow):
         # with a fresh, empty one. nbapp's generic quarantine cannot see it --
         # valid JSON of the wrong shape parses perfectly -- so move it aside on
         # the way past instead, the same way accounting.py and cookbook.py do.
-        if d is not None and not isinstance(d, dict):
+        if ((d is not None and not isinstance(d, dict))
+                or (d is None and os.path.lexists(CFG_FILE))):
             self._quarantine_pending = True
         self._roll_day()
 
@@ -506,8 +553,8 @@ class Language(nbapp.AppWindow):
                 self._quarantine_pending = False
                 _quarantine(CFG_FILE)
             nbapp.atomic_write_json(CFG_FILE, self.progress)
-        except Exception:
-            pass
+        except Exception as exc:
+            nbapp.save_failure_reason = str(exc)
 
     def _roll_day(self):
         """Start today's XP ledger. The daily goal is what the streak is scored
