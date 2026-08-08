@@ -257,6 +257,9 @@ class Music(nbapp.AppWindow):
         self._build_engine()
         if not self._engine_ok():
             self._disable_engine_controls()
+        with self._restoring:
+            self.shuffle.set_active(bool(getattr(self, "_saved_shuffle", False)))
+            self.repeat.set_active(bool(getattr(self, "_saved_repeat", False)))
         self._refresh_transport()
 
         self._restore_selection()
@@ -1344,6 +1347,7 @@ class Music(nbapp.AppWindow):
     def _on_toggle(self, btn):
         color = "#FCFBF8" if btn.get_active() else "#1A1916"
         nbicons.set_image(btn._img, btn._glyph, 16, color)
+        self._save()
 
     # ---------------- view switching ----------------
     def _select(self, vid):
@@ -2380,6 +2384,12 @@ class Music(nbapp.AppWindow):
             saved_pl = data.get("playlist")
             self._saved_playlist = (saved_pl.strip() or None
                                     if isinstance(saved_pl, str) else None)
+            self._saved_shuffle = (data.get("shuffle")
+                                   if isinstance(data.get("shuffle"), bool)
+                                   else False)
+            self._saved_repeat = (data.get("repeat")
+                                  if isinstance(data.get("repeat"), bool)
+                                  else False)
             names = data.get("playlists")
             tracks = data.get("tracks")
             if not isinstance(names, list):
@@ -2475,6 +2485,16 @@ class Music(nbapp.AppWindow):
                 "view": nbstate.choice(self.view, [v[0] for v in self.VIEWS],
                                        "songs"),
                 "playlist": self._current_playlist or "",
+                # Read the live toggle when the transport is built; before that
+                # (or on a bare test instance) fall back to the value last
+                # loaded, so a save can never crash the whole write on a
+                # half-constructed window.
+                "shuffle": bool(self.shuffle.get_active()) if hasattr(
+                    self, "shuffle") else bool(getattr(self, "_saved_shuffle",
+                                                       False)),
+                "repeat": bool(self.repeat.get_active()) if hasattr(
+                    self, "repeat") else bool(getattr(self, "_saved_repeat",
+                                                      False)),
             }
             nbapp.atomic_write_json(CFG_FILE, data)
         except Exception:

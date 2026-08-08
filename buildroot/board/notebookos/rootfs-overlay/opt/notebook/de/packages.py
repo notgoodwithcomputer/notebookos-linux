@@ -266,10 +266,12 @@ class Packages(nbapp.AppWindow):
         # running past the window is a callback into a dead inspector.
         try:
             self.connect("destroy", lambda *_: self._cancel_flash_timer())
+            self.connect("destroy", lambda *_: self._save_view_prefs())
         except Exception:
             pass
         self.sort_field = None
         self.sort_desc, self._removed_apps = False, self._load_removed_apps()
+        self._load_view_prefs()
         # index -> row widget, and the visible packages in display order, kept
         # in sync by _rebuild_list. Selection re-styles rows in place (see
         # _select_row) instead of rebuilding, so keyboard focus is preserved
@@ -314,7 +316,7 @@ class Packages(nbapp.AppWindow):
         # crossfade. Routed through the pager anyway so it records where the app
         # starts — otherwise the first real click has no origin to measure a
         # direction against and Installed -> Updates would fade, not slide.
-        self._pager.switch("installed", direction=nbtransitions.NONE)
+        self._pager.switch(self.view, direction=nbtransitions.NONE)
 
         self._rebuild_list()
         self._rebuild_detail()
@@ -402,7 +404,7 @@ class Packages(nbapp.AppWindow):
         note.set_valign(Gtk.Align.END)
         box.pack_end(note, False, False, 0)
 
-        self._nav["installed"].get_style_context().add_class("active")
+        self._nav[self.view].get_style_context().add_class("active")
         return box
 
     def _on_nav(self, _b, vid):
@@ -422,6 +424,7 @@ class Packages(nbapp.AppWindow):
         # click came from; the page is refreshed BEFORE the switch either way,
         # so what slides in is already current.
         self._pager.switch(vid)
+        self._save_view_prefs()
 
     # ---------------------------------------------------------------- installed
     def _installed_page(self):
@@ -629,6 +632,7 @@ class Packages(nbapp.AppWindow):
                 self.sort_desc = False
             self._update_sort_labels()
             self._rebuild_list()
+            self._save_view_prefs()
         except Exception:
             # Sorting is a convenience; never let a bad state crash the app.
             pass
@@ -967,9 +971,39 @@ class Packages(nbapp.AppWindow):
                 data = json.load(fh)
             if isinstance(data, list):
                 return {str(item) for item in data}
+            if isinstance(data, dict) and isinstance(data.get("removed"), list):
+                return {str(item) for item in data["removed"]}
         except (OSError, ValueError, TypeError):
             pass
         return set()
+
+    def _load_view_prefs(self):
+        """Restore the last section and installed-list ordering."""
+        try:
+            import json
+            with open(self._removed_apps_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                return
+            if data.get("view") in ("installed", "updates", "sources"):
+                self.view = data["view"]
+            if data.get("sort_field") in (None, "name", "kind", "modified", "size"):
+                self.sort_field = data.get("sort_field")
+            if isinstance(data.get("sort_desc"), bool):
+                self.sort_desc = data["sort_desc"]
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save_view_prefs(self):
+        try:
+            nbapp.atomic_write_json(self._removed_apps_path(), {
+                "removed": sorted(self._removed_apps),
+                "view": self.view,
+                "sort_field": self.sort_field,
+                "sort_desc": bool(self.sort_desc),
+            })
+        except (OSError, TypeError, ValueError) as exc:
+            nbapp.save_failure_reason = str(exc)
 
     def _set_app_removed(self, remove):
         """Read-modify-write the current store after a real user action."""
@@ -985,11 +1019,11 @@ class Packages(nbapp.AppWindow):
         else:
             current.discard(p[NAME])
         try:
-            nbapp.atomic_write_json(self._removed_apps_path(), sorted(current))
+            self._removed_apps = current
+            self._save_view_prefs()
         except (OSError, TypeError, ValueError) as exc:
             nbapp.save_failure_reason = str(exc)
             return
-        self._removed_apps = current
         self._rebuild_detail()
 
     def _on_uninstall(self, _button=None):
