@@ -621,6 +621,15 @@ class Terminal(nbapp.AppWindow):
                 b = data.get("cursor_blink")
                 if isinstance(b, bool):
                     blink = b
+            else:
+                # Parsed, but a scalar or list — not our shape. The block above
+                # read nothing from it, so the close-time _save_prefs would write
+                # the default prefs straight over it, and the .bak cannot save it
+                # past the second open (a fresh default weighs more than a bare
+                # marker, so _bak_would_shrink refreshes the backup over it — the
+                # same loss fixed in g2048/journal). Move it aside now, at load,
+                # before any save.
+                nbapp.quarantine_unrecognized(STATE_FILE)
         except Exception:
             pass
         return scale, blink
