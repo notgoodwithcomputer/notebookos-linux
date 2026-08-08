@@ -542,18 +542,29 @@ COVERAGE = {
     # that got misread twice in an hour, so the status carries it explicitly.
     "writer": "defended-untested: writer.py _sane_page salvage, 11 shapes "
               "measured, 0 lost, .bak kept; needs a gate",
-    "video": "defended-untested: 11 shapes measured, 0 lost, .bak kept; "
+    # All 8 formerly-uncovered apps were measured by app-improve 2026-08-09
+    # (8 damaged shapes each): every one DEFENDS — original kept as .bak or
+    # quarantined on an unreadable store, 0 losses. So none is a wound; each
+    # is a coverage debt (a defence with no gate over it). The C2 picture
+    # across the OS: the ONLY genuine data-loss defects are journal/calendar/
+    # contacts (the bug-fix session's), and everything else needs a GUARD, not
+    # a fix. Burn-down = give each defended-untested app a damage case here.
+    "video": "defended-untested: 11 shapes, 0 lost, .bak; "
              "shape {bin,clips,music,size,version}; needs a gate",
-    "novel": "defended-untested: 10 shapes measured, 0 lost, .bak kept; "
+    "novel": "defended-untested: 10 shapes, 0 lost, .bak; "
              "shape {active,author,chapters,doc_path,parts,title}; needs a gate",
-    # no test AND unmeasured — a reader's library metadata + reading position,
-    # genuinely unknown behaviour on a damaged store
-    "ebook": "unmeasured: library metadata + reading position, unchecked",
-    # light stores, loss judged low, recorded rather than accidental
-    "calculator": "small-store-judged: the tape, re-derivable",
-    "g2048": "small-store-judged: a board and a best score",
-    "maps": "small-store-judged: last view/bookmarks",
-    "terminal": "small-store-judged: scrollback/geometry",
+    "ebook": "defended-untested: quarantines properly (ebook.json.damaged-*); "
+             "library metadata + reading position; needs a gate",
+    "calculator": "defended-untested: several shapes not rewritten at all; "
+                  "the tape; needs a gate",
+    "g2048": "defended-untested: .bak every shape; board + best score",
+    "terminal": "defended-untested: .damaged-* unreadable / .bak wrong-type; "
+                "scrollback + geometry",
+    # read path safe by measurement AND construction; the write-over-damaged
+    # path needs a real map-pack fixture to reach (atomic by source comment)
+    "maps": "read-safe-write-unmeasured: _load_cfg catches all, 0 crashes; "
+            "_save_cfg needs a loaded pack to reach — atomic by construction, "
+            "not yet measured",
     "finder": "small-store-judged: view mode + removed-apps list, prefs",
     "illustrator": "small-store-judged: recent-files list (drawings are "
                    "separate .nb document files, not this store)",
