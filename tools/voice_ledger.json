@@ -11,9 +11,6 @@
   "pending": {
     "gbabuild.py": [
       "this is not something you can assign to"
-    ],
-    "music.py": [
-      "Delete the playlist \"%s\" and its %d track%s? Your music files are not deleted."
     ]
   }
 }

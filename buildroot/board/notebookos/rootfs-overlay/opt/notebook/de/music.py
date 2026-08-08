@@ -27,6 +27,8 @@ import sys
 import json
 import random
 import subprocess
+import copy
+import unicodedata
 
 # The audio engine is optional at import time: GStreamer (Gst) is only
 # guaranteed on the built guest, not on the host running construct_all.py /
@@ -206,6 +208,10 @@ class Music(nbapp.AppWindow):
         self.songs = []
         self._query = ""      # current search text (filters the rendered list)
         self._current = None  # the track cued in the playback bar, if any
+        # Forward shuffle is a bag, not an independent coin toss: every track
+        # in the visible queue plays once before any can repeat.
+        self._shuffle_remaining = []
+        self._shuffle_queue_key = ()
         # track lengths: {path: [stat-key, seconds]}, read once by the background
         # scan below and cached on disk so a relaunch is instant.
         self._lengths = {}
@@ -254,6 +260,9 @@ class Music(nbapp.AppWindow):
         self._refresh_transport()
 
         self._restore_selection()
+        self.undo = nbapp.UndoHistory(self._undo_snapshot,
+                                      self._restore_undo_snapshot)
+        self.undo.reset()
         # A song handed in as argv[1] (the Finder opens audio files this way)
         # is cued and played on launch, so double-clicking a track in the file
         # manager actually plays it rather than just opening the library.
@@ -1039,7 +1048,7 @@ class Music(nbapp.AppWindow):
         except Exception:
             pass
         if shuffle and direction > 0:
-            self._play_track(self._random_other(tracks, idx))
+            self._play_track(self._shuffle_next(tracks, idx))
             return
         if auto:
             # end-of-track (sequential): loop only when Repeat is on
@@ -1068,6 +1077,26 @@ class Music(nbapp.AppWindow):
         if j >= idx:
             j += 1
         return tracks[j]
+
+    def _shuffle_next(self, tracks, idx):
+        """Draw once from every other track before starting a new cycle.
+
+        Identity, rather than metadata equality, defines queue membership: two
+        different files are allowed to carry the same tags.
+        """
+        key = tuple(id(t) for t in tracks)
+        remaining = getattr(self, "_shuffle_remaining", [])
+        if getattr(self, "_shuffle_queue_key", ()) != key:
+            remaining = []
+        if not remaining:
+            current = tracks[idx]
+            remaining = [t for t in tracks if t is not current]
+        self._shuffle_queue_key = key
+        self._shuffle_remaining = remaining
+        if not remaining:
+            return tracks[idx]
+        j = random.randrange(len(remaining))
+        return remaining.pop(j)
 
     def _stop_playback(self):
         """Halt the pipeline and reset the transport to a cued-but-idle state
@@ -1703,8 +1732,10 @@ class Music(nbapp.AppWindow):
             if self._disc_dirty:
                 self._disc_dirty = False
                 self._save()
-            # an Albums view on screen can now show real album lengths
-            if self.view == "albums":
+            # Tags can change every library ordering/grouping, not just album
+            # lengths. Rebuild the active library view once after the pass;
+            # playlists retain their deliberate user order.
+            if self.view in ("songs", "albums", "artists", "scope"):
                 self._populate()
         except Exception:
             pass
@@ -1724,6 +1755,24 @@ class Music(nbapp.AppWindow):
         return (q in song.get("title", "").lower()
                 or q in song.get("artist", "").lower()
                 or q in song.get("album", "").lower())
+
+    @staticmethod
+    def _sort_key(value):
+        """A reader-facing key: ignore leading articles, case and accents."""
+        text = unicodedata.normalize("NFKD", str(value or "").strip())
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = text.casefold()
+        for article in ("the ", "an ", "a "):
+            if text.startswith(article):
+                text = text[len(article):]
+                break
+        return text
+
+    def _ordered_songs(self, songs=None):
+        return sorted(self.songs if songs is None else songs,
+                      key=lambda s: (self._sort_key(s.get("title")),
+                                     self._sort_key(s.get("artist")),
+                                     self._sort_key(s.get("album"))))
 
     def _populate(self):
         """Build the main pane's rows for the current view — the WHOLE view, not
@@ -1873,7 +1922,7 @@ class Music(nbapp.AppWindow):
             pass
 
     def _song_rows(self):
-        return [self._song_row(s) for s in self.songs]
+        return [self._song_row(s) for s in self._ordered_songs()]
 
     def _song_row(self, s, in_playlist=None):
         # a track row whose columns line up beneath the Title/Artist/Album/Time
@@ -2032,6 +2081,8 @@ class Music(nbapp.AppWindow):
         tracks = self._playlist_tracks.get(name)
         if not tracks:
             return
+        if hasattr(self, "undo"):
+            self.undo.checkpoint("Remove Track")
         self._playlist_tracks[name] = [t for t in tracks if t is not song]
         self._save()   # persist the new membership
         if (self.view is None
@@ -2040,6 +2091,8 @@ class Music(nbapp.AppWindow):
             self.colhead.set_visible(has)
             self.colhead.set_no_show_all(not has)
             self._populate()
+        if hasattr(self, "undo"):
+            self.undo.commit()
 
     @staticmethod
     def _album_id(s):
@@ -2065,7 +2118,8 @@ class Music(nbapp.AppWindow):
             else:
                 a["whole"] = False      # a length we haven't read yet
         rows = []
-        for key in order:
+        for key in sorted(order, key=lambda k: (self._sort_key(k[1]),
+                                                self._sort_key(k[0]))):
             artist, alb = key
             a = index[key]
             n = a["count"]
@@ -2086,7 +2140,7 @@ class Music(nbapp.AppWindow):
             index[art]["albums"].add(s.get("album") or "")
             index[art]["count"] += 1
         rows = []
-        for art in order:
+        for art in sorted(order, key=self._sort_key):
             a = index[art]
             na, ns = len(a["albums"]), a["count"]
             sub = "%d album%s · %d song%s" % (
@@ -2248,8 +2302,8 @@ class Music(nbapp.AppWindow):
         return False
 
     def _scope_rows(self):
-        return [self._song_row(s) for s in self.songs
-                if self._scope_matches(s)]
+        return [self._song_row(s) for s in self._ordered_songs(
+                [s for s in self.songs if self._scope_matches(s)])]
 
     def _visible_tracks(self):
         # the ordered list of track dicts currently on screen, used by the
@@ -2257,13 +2311,15 @@ class Music(nbapp.AppWindow):
         # not tracks) fall back to the whole filtered library.
         q = (self._query or "").strip().lower()
         if self.view == "scope":
-            return [s for s in self.songs
-                    if self._scope_matches(s) and self._match(s, q)]
+            return self._ordered_songs([s for s in self.songs
+                                        if self._scope_matches(s)
+                                        and self._match(s, q)])
         if self.view is None:
             name = getattr(self, "_current_playlist", None)
             return [s for s in self._playlist_tracks.get(name, [])
                     if self._match(s, q)]
-        return [s for s in self.songs if self._match(s, q)]
+        return self._ordered_songs([s for s in self.songs
+                                    if self._match(s, q)])
 
     def _on_search(self, entry):
         # live-filter the rows already on screen as the search text changes —
@@ -2302,11 +2358,16 @@ class Music(nbapp.AppWindow):
         self._loaded_playlists, applied to the sidebar once it is built. Must
         run after the library is populated so saved tracks can be re-linked."""
         self._loaded_playlists = []
+        # Closing the window is not consent to replace a store we could not
+        # parse.  Stay read-only for this run after damage; a missing file is
+        # the normal first-run case and is handled separately below.
+        self._store_load_ok = False
         try:
             with open(CFG_FILE) as fh:
                 data = json.load(fh)
             if not isinstance(data, dict):
                 return
+            damaged = False
             # be strict about the shapes: a garbage file whose "playlists" is a
             # string (or "tracks" a list) must not iterate characters or crash —
             # it just yields no saved playlists
@@ -2322,18 +2383,28 @@ class Music(nbapp.AppWindow):
             names = data.get("playlists")
             tracks = data.get("tracks")
             if not isinstance(names, list):
+                if "playlists" in data:
+                    damaged = True
                 names = []
             if not isinstance(tracks, dict):
+                if "tracks" in data:
+                    damaged = True
                 tracks = {}
             seen = set()
             for name in names:
+                if not isinstance(name, str):
+                    damaged = True
                 name = str(name).strip()
                 if not name or name in seen:
                     continue
                 seen.add(name)      # never restore a duplicate playlist name
                 tlist = tracks.get(name)
                 if not isinstance(tlist, list):
+                    if name in tracks:
+                        damaged = True
                     tlist = []
+                if any(not isinstance(t, dict) for t in tlist):
+                    damaged = True
                 linked = [self._link_track(t) for t in tlist
                           if isinstance(t, dict)]
                 self._loaded_playlists.append((name, linked))
@@ -2347,7 +2418,12 @@ class Music(nbapp.AppWindow):
                         try:
                             self._lengths[str(path)] = [ent[0], int(ent[1])]
                         except (TypeError, ValueError):
+                            damaged = True
                             pass
+                    else:
+                        damaged = True
+            elif "lengths" in data:
+                damaged = True
             # cached tags: {path: [stat-key, title, artist, album]}. Same
             # shape-or-drop rule, so an older music.json with no "tags" key
             # simply re-reads them on the next discovery pass.
@@ -2357,6 +2433,13 @@ class Music(nbapp.AppWindow):
                     if (isinstance(ent, list) and len(ent) == 4
                             and all(isinstance(x, str) for x in ent)):
                         self._tags[str(path)] = list(ent)
+                    else:
+                        damaged = True
+            elif "tags" in data:
+                damaged = True
+            self._store_load_ok = not damaged
+        except FileNotFoundError:
+            self._store_load_ok = True
         except Exception:
             # no file yet / unreadable — start with no saved playlists
             self._loaded_playlists = []
@@ -2368,7 +2451,7 @@ class Music(nbapp.AppWindow):
         A write is skipped while _restore_selection is running: putting the
         sidebar back walks the same setters a click walks, and restoration must
         never be recorded as a change the user made."""
-        if self._restoring.active:
+        if self._restoring.active or not getattr(self, "_store_load_ok", False):
             return
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
@@ -2396,6 +2479,52 @@ class Music(nbapp.AppWindow):
             nbapp.atomic_write_json(CFG_FILE, data)
         except Exception:
             pass
+
+    def _undo_snapshot(self):
+        return {
+            "playlists": list(self._playlists),
+            "tracks": {name: [self._track_dict(t) for t in tracks]
+                       for name, tracks in self._playlist_tracks.items()},
+            "playlist": self._current_playlist,
+            "view": self.view,
+        }
+
+    def _restore_undo_snapshot(self, state):
+        names = list(state.get("playlists", []))
+        saved = state.get("tracks", {})
+        tracks = {name: [self._link_track(copy.deepcopy(t)) for t in
+                         saved.get(name, []) if isinstance(t, dict)]
+                  for name in names}
+        # Rebuild the sidebar rows when a real window owns them. Model-only
+        # execution (the selftests) deliberately has no GTK widgets.
+        if hasattr(self, "_pl_box"):
+            for row in list(getattr(self, "_playlist_rows", [])):
+                try:
+                    self._pl_box.remove(row)
+                except Exception:
+                    pass
+            self._playlists = []
+            self._playlist_rows = []
+            self._playlist_tracks = {}
+            for name in names:
+                self._create_playlist(name, tracks.get(name, []))
+            try:
+                self._none.set_no_show_all(bool(names))
+                self._none.set_visible(not names)
+            except Exception:
+                pass
+            current = state.get("playlist")
+            if current in self._playlists:
+                i = self._playlists.index(current)
+                self._select_playlist(self._playlist_rows[i], current)
+            else:
+                self._select(state.get("view", "songs"))
+        else:
+            self._playlists = names
+            self._playlist_tracks = tracks
+            self._current_playlist = state.get("playlist")
+            self.view = state.get("view", "songs")
+        self._save()
 
     def _on_destroy(self, *_):
         # tear the engine down cleanly: stop the poll, the length scan and the
@@ -2442,6 +2571,8 @@ class Music(nbapp.AppWindow):
                     ("Open Music Folder", self._open_music_folder),
                     nbapp.SEP,
                     ("Close    Esc", self.close)]
+        if name == "Edit":
+            return nbapp.undo_menu_items(self.undo)
         if name == "View":
             # what the main pane shows — nothing else
             return [("Songs", lambda: self._select("songs")),
@@ -2554,15 +2685,13 @@ class Music(nbapp.AppWindow):
         name = getattr(self, "_current_playlist", None)
         if not name:
             return
-        n = len(self._playlist_tracks.get(name, []))
-        if n:
-            msg = ('Delete the playlist "%s" and its %d track%s? '
-                   "Your music files are not deleted." %
-                   (name, n, "" if n == 1 else "s"))
-        else:
-            msg = 'Delete the empty playlist "%s"?' % name
-        self._confirm("Delete Playlist", msg, "Delete",
-                      lambda: self._remove_playlist(name))
+        if hasattr(self, "undo"):
+            self.undo.checkpoint("Delete Playlist")
+        self._remove_playlist(name)
+        if hasattr(self, "undo"):
+            self.undo.commit()
+        self._flash(_t('Playlist “%s” deleted; tracks remain in the music library.')
+                    % name)
 
     def _remove_playlist(self, name):
         # remove the playlist row + its data, restore the empty placeholder when
@@ -2757,6 +2886,8 @@ class Music(nbapp.AppWindow):
                     and self._search.get_text()):
                 self._search.set_text("")
                 return True
+        if hasattr(self, "undo") and nbapp.undo_keys(self.undo, ev):
+            return True
         # Ctrl+F puts the cursor in the search field — with a library of any
         # size, searching is how you find a song, and it was mouse-only.
         if ev.state & Gdk.ModifierType.CONTROL_MASK:
