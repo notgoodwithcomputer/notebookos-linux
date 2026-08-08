@@ -155,8 +155,9 @@ def _is_usb(name):
         real = os.path.realpath("/sys/block/%s/device" % name)
     except OSError:
         return False
-    return "/usb" in real or "/usb" in os.path.realpath(
-        "/sys/block/%s" % name)
+    paths = (real, os.path.realpath("/sys/block/%s" % name))
+    return any(part.startswith("usb") for path in paths
+               for part in path.split("/") if part)
 
 
 def _drives():
@@ -193,6 +194,24 @@ def _drives():
         })
     found.sort(key=lambda d: -d["bytes"])
     return found
+
+
+def _image_fits(image_bytes, drive_bytes):
+    """Byte-exact capacity gate; block images may end mid-sector."""
+    try:
+        return int(image_bytes) <= int(drive_bytes) and int(image_bytes) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _target_still_safe(snapshot):
+    """Revalidate a confirmed target against a fresh, fail-closed scan."""
+    if not isinstance(snapshot, dict):
+        return False
+    return any(d.get("name") == snapshot.get("name")
+               and d.get("node") == snapshot.get("node")
+               and d.get("bytes") == snapshot.get("bytes")
+               for d in _drives())
 
 
 def image_boot_note(path):
@@ -605,7 +624,7 @@ class UsbWriter(nbapp.AppWindow):
         if self.busy:
             return
         if self.image and self.selected:
-            if self.image["bytes"] > self.selected["bytes"]:
+            if not _image_fits(self.image["bytes"], self.selected["bytes"]):
                 self.warn.set_text(
                     _t("This image is %s and the stick holds %s. Choose a "
                        "larger stick.")
@@ -721,6 +740,15 @@ class UsbWriter(nbapp.AppWindow):
 
     def _write_job(self, job, d, img):
         try:
+            # Selection and confirmation are snapshots. A stick can be pulled,
+            # or become the boot/system disk, before the worker runs. Repeat
+            # both safety guards immediately before opening any target.
+            if not _target_still_safe(d):
+                raise OSError("The selected USB target is no longer safe")
+            actual_image_bytes = os.path.getsize(img["path"])
+            if not _image_fits(actual_image_bytes, d.get("bytes")):
+                raise _OutOfRoom(_t("The image is larger than the stick."))
+            img["bytes"] = actual_image_bytes
             # Anything mounted off the target has to go first, or the kernel is
             # writing to the same sectors we are and the result is neither the
             # old filesystem nor the new image.

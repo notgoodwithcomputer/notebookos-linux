@@ -25,6 +25,7 @@ import shutil
 import threading
 import time
 import subprocess
+import hashlib
 
 import nbapp
 import nbprefs
@@ -593,21 +594,28 @@ class Settings(nbapp.AppWindow):
                 data = json.load(fh)
             if isinstance(data, dict):
                 return data
+            # Valid JSON in an alien shape will not be caught by the shared
+            # parse-damage guard at save time. Preserve it now, before the
+            # empty settings default can replace the only copy.
+            nbapp.quarantine_unrecognized(CFG_FILE)
         except Exception:
             pass
         return {}
 
     def _save_settings(self):
-        # Every preference handler mutates self._settings and calls this, so
-        # this one line is what makes restoration read-only: a control that
-        # emits its signal while its page is being built during a restore
-        # cannot persist anything the user did not ask for.
-        if getattr(self, "_restore", None) is not None and self._restore.active:
-            return
         try:
             nbapp.atomic_write_json(CFG_FILE, self._settings)
-        except Exception:
-            pass
+            self._save_error = None
+            return True
+        except Exception as exc:
+            # Keep the in-memory choice and say why it did not leave this
+            # process. Call through the module attribute so the shared,
+            # errno-specific durability wording is the one the app surfaces.
+            self._save_error = nbapp.save_failure_reason(exc, CFG_FILE)
+            label = getattr(self, "_save_error_label", None)
+            if label is not None:
+                self._set_status(label, self._save_error, warn=True)
+            return False
 
     def _on_destroy(self, *_):
         self._alive = False
@@ -2899,7 +2907,10 @@ class Settings(nbapp.AppWindow):
                     # _t() explicitly: the automatic pass needs about five
                     # letters of fixed text to be sure it has recognised a
                     # substituted phrase, and "free" is four.
-                    free = _t("%s free") % human_kb(self._free_kb(mnt))
+                    free_bytes = self._free_bytes(mnt)
+                    free = (_t("%s free") % human_kb(free_bytes // 1024)
+                            if free_bytes is not None
+                            else _t("Free space unavailable"))
                 # Built by hand rather than through _row_widget: the stick's
                 # name IS the row's label, so it belongs on the left with the
                 # radio, and the free space is the value on the right.
@@ -2922,12 +2933,20 @@ class Settings(nbapp.AppWindow):
         card.show_all()
         self._update_backup_button()
 
-    def _free_kb(self, path):
+    def _free_bytes(self, path):
         try:
             st = os.statvfs(path)
-            return st.f_bavail * st.f_frsize // 1024
+            return st.f_bavail * st.f_frsize
         except OSError:
-            return 0
+            return None
+
+    @staticmethod
+    def _backup_preflight(free_bytes, needed_bytes):
+        """True only when measured free bytes cover the measured payload."""
+        try:
+            return int(free_bytes) >= int(needed_bytes)
+        except (TypeError, ValueError):
+            return False
 
     def _on_backup_dest(self, btn, mnt, readonly):
         if btn.get_active() and not readonly:
@@ -2993,14 +3012,16 @@ class Settings(nbapp.AppWindow):
     def _on_backup_start(self, _btn=None):
         if getattr(self, "_bk_working", False) or not self._bk_dest:
             return
-        free = self._free_kb(self._bk_dest) * 1024
+        free = self._free_bytes(self._bk_dest)
         # Check for room BEFORE writing anything: half a backup that stopped
         # when the stick filled up is worse than being told it will not fit,
         # because it looks finished.
-        if self._bk_total and free and free < self._bk_total * 1.02:
+        if self._bk_total and not self._backup_preflight(free, self._bk_total):
             self._show_backup_result(
-                _t("Not enough room on that stick: %s needed, %s free.")
-                % (human_kb(self._bk_total // 1024), human_kb(free // 1024)),
+                (_t("Not enough room on that stick: %s needed, %s free.")
+                 % (human_kb(self._bk_total // 1024), human_kb(free // 1024))
+                 if free is not None else
+                 _t("The stick's free space could not be checked. Nothing was copied.")),
                 warn=True)
             return
         self._bk_working = True
@@ -3234,15 +3255,38 @@ class Settings(nbapp.AppWindow):
             self._bk_stop.hide()
             self._bk_stop.set_sensitive(True)
         there = there_bytes = 0
-        for root, _dirs, names in os.walk(dest):
-            for n in names:
-                try:
-                    there_bytes += os.path.getsize(os.path.join(root, n))
-                    there += 1
-                except OSError:
-                    continue
+        verified = True
+        def digest(path):
+            h = hashlib.sha256()
+            with open(path, "rb") as fh:
+                while True:
+                    block = fh.read(1024 * 1024)
+                    if not block:
+                        return h.digest()
+                    h.update(block)
+        for src in self._backup_sources():
+            top = os.path.join(dest, os.path.basename(src)
+                               if not src.endswith(APP_DATA_DIR)
+                               else "App data")
+            for root, _dirs, names in os.walk(src):
+                rel = os.path.relpath(root, src)
+                outdir = top if rel == "." else os.path.join(top, rel)
+                for n in names:
+                    sp = os.path.join(root, n)
+                    if os.path.islink(sp):
+                        continue
+                    dp = os.path.join(outdir, n)
+                    try:
+                        size = os.path.getsize(dp)
+                        there_bytes += size
+                        there += 1
+                        if size != os.path.getsize(sp) or digest(dp) != digest(sp):
+                            verified = False
+                    except OSError:
+                        verified = False
         where = os.path.basename(dest)
-        if there == copied and there_bytes == done_bytes and not failed:
+        if (verified and there == copied and there_bytes == done_bytes
+                and not failed):
             # "the stick now holds", not "N files are on the stick": the verb
             # then agrees with the stick rather than with the count, so one
             # file reads as correctly as nine hundred.
