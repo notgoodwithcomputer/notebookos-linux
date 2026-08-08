@@ -1339,10 +1339,56 @@ class Calculator(nbapp.AppWindow):
     def _copy_result(self):
         """Copy the current display value to the system clipboard, so a result
         can be pasted into another app (the keypad has no selectable text)."""
+        # An error explanation is not a calculator result. Preserve whatever
+        # useful value is already on the clipboard rather than replacing it
+        # with translated UI prose such as "That cannot be calculated".
+        if getattr(self, "error", False):
+            return
         try:
             clip = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
             clip.set_text(self.disp_lbl.get_text(), -1)
             clip.store()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _clipboard_expression(text):
+        """Return a small, single-line calculator expression or ``None``.
+
+        Clipboard text is outside input.  In particular, do not let terminal
+        control characters, pasted prose, or a multi-megabyte selection become
+        calculator state.  Names are limited to the vocabulary the keypad can
+        produce (functions/constants plus the single-letter variable slots).
+        """
+        if not isinstance(text, str) or not text or len(text) > 256:
+            return None
+        if text != text.strip() or any(ord(ch) < 32 or ord(ch) == 127
+                                      for ch in text):
+            return None
+        if not re.fullmatch(r"[0-9A-Za-z_+\-*/^().,!% ×÷π√]+", text):
+            return None
+        names = re.findall(r"[A-Za-z_]+", text)
+        allowed = {"sin", "cos", "tan", "asin", "acos", "atan", "sqrt",
+                   "log", "ln", "abs", "pi", "e", "ANS"}
+        if any(name not in allowed and not re.fullmatch(r"[A-Z]", name)
+               for name in names):
+            return None
+        return text
+
+    def _paste_expression(self):
+        """Request text from CLIPBOARD and replace the keypad expression."""
+        try:
+            clip = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+
+            def received(_clipboard, text, *_unused):
+                value = self._clipboard_expression(text)
+                if value is None:
+                    return
+                self.expr = value.replace("×", "*").replace("÷", "/")
+                self.error = False
+                self._refresh()
+
+            clip.request_text(received)
         except Exception:
             pass
 
@@ -1451,6 +1497,9 @@ class Calculator(nbapp.AppWindow):
         # Result, so the usual keyboard reflex just works.
         if (ev.state & Gdk.ModifierType.CONTROL_MASK) and name in ("c", "C"):
             self._copy_result()
+            return True
+        if (ev.state & Gdk.ModifierType.CONTROL_MASK) and name in ("v", "V"):
+            self._paste_expression()
             return True
         if ev.state & Gdk.ModifierType.CONTROL_MASK:
             if name in ("1", "2", "3"):
