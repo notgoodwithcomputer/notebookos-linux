@@ -80,6 +80,7 @@ class Game2048(nbapp.AppWindow):
 
         self.board = [[0] * 4 for _ in range(4)]
         self.score = 0
+        self._quarantine_unrecognized_store()
         self.best = self._load_best()
         self._save_timer = None
         self.status = "play"
@@ -268,6 +269,32 @@ class Game2048(nbapp.AppWindow):
             self.new_game()
 
     # -- persistence ------------------------------------------------------
+    def _quarantine_unrecognized_store(self):
+        """Move a store that parses but is NOT this app's shape aside at load,
+        once, before any save can replace it.
+
+        A scalar or a list (`5`, `"..."`, `[...]`) holds no board or best we
+        can read, so the app opens blank and the close-time save writes that
+        blankness over it. The .bak does not save it: a fresh new-game board
+        carries two spawned tiles, so it OUTWEIGHS a scalar marker, and on the
+        second open _bak_would_shrink judges the blank game the fuller copy and
+        refreshes the .bak over the user's bytes — gone on the second
+        open+close, no user action. quarantine_unrecognized keeps them at
+        <store>.damaged-<stamp> the way journal and calculator do.
+
+        A wrong-shape DICT is deliberately left alone: its unknown keys ride
+        through _extra and are written back, so only a non-object is a loss.
+        Missing, empty and unparseable stores are handled on the write path
+        (preserve_damaged) and are not this method's business — a first run is
+        not damage."""
+        try:
+            with open(STATE_FILE) as fh:
+                data = json.load(fh)
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            nbapp.quarantine_unrecognized(STATE_FILE)
+
     def _load_best(self):
         """Return the stored best score, or 0 when the file is missing or
         malformed. Reading must never crash the launch."""
