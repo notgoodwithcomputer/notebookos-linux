@@ -44,7 +44,6 @@ STD = ("File", "Edit", "View")
 DEBT = {
     ("accounting.py", 1900, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
     ("bills.py", 1973, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
-    ("contacts.py", 1316, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
     ("cookbook.py", 1823, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
     ("ebook.py", 2163, "registry-accelerator", "Open: shown '', registry 'Ctrl+O'"),
     ("journal.py", 1366, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
