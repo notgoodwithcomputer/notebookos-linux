@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Display-free adversarial execution checks for Journal."""
+import json
 import os
 import subprocess
 import tempfile
@@ -31,8 +32,32 @@ def bare():
     return app
 
 
+def _damaged_asides():
+    return sorted(f for f in os.listdir(journal.CFG_DIR)
+                  if f.startswith("journal.json.damaged-"))
+
+
+def _clear_asides():
+    for f in _damaged_asides():
+        os.unlink(os.path.join(journal.CFG_DIR, f))
+
+
+def _aside_holds(original):
+    for f in _damaged_asides():
+        with open(os.path.join(journal.CFG_DIR, f), "rb") as fh:
+            if fh.read() == original:
+                return True
+    return False
+
+
 def damaged_store_check():
+    # THE OS CONTRACT (store_damage gate): bytes the app could not read are
+    # MOVED ASIDE, never overwritten — and the journal keeps saving. The
+    # earlier cure kept the bytes at the original path by suppressing every
+    # write for the session, which preserved the file and silently killed
+    # persistence: a journal that never saves again is its own data loss.
     os.makedirs(journal.CFG_DIR, exist_ok=True)
+    _clear_asides()
     original = b'{"entries":[{"text":"private diary"}]'
     with open(journal.JOURNAL_FILE, "wb") as fh:
         fh.write(original)
@@ -41,22 +66,15 @@ def damaged_store_check():
     app._persist()
     with open(journal.JOURNAL_FILE, "rb") as fh:
         after = fh.read()
-    check("damaged journal survives open+close byte-for-byte",
-          after == original, "store was rewritten as %r" % after)
+    check("damaged journal bytes survive open+close (path or .damaged-*)",
+          after == original or _aside_holds(original),
+          "bytes at path: %r  asides: %r" % (after[:40], _damaged_asides()))
+    saved_ok = app._persist()
+    check("...and the journal still saves after the damage",
+          saved_ok and json.load(open(journal.JOURNAL_FILE)) is not None,
+          "persist returned %r" % saved_ok)
 
-    # PASS-MUTANT: the destructive legacy close is the exact sabotage.
-    with open(journal.JOURNAL_FILE, "wb") as fh:
-        fh.write(original)
-    mutant = bare()
-    mutant.entries, mutant.active = [], -1
-    journal._atomic_write_json(
-        journal.JOURNAL_FILE,
-        {"entries": mutant.entries, "active": mutant.active})
-    with open(journal.JOURNAL_FILE, "rb") as fh:
-        mutated = fh.read()
-    check("MUTANT: unguarded close DOES rewrite damaged journal",
-          mutated != original, "legacy write unexpectedly preserved bytes")
-
+    _clear_asides()
     wrong_shape = b'{"diary":"private writing under an unknown key"}'
     with open(journal.JOURNAL_FILE, "wb") as fh:
         fh.write(wrong_shape)
@@ -68,8 +86,41 @@ def damaged_store_check():
             after_shape = fh.read()
     except FileNotFoundError:
         after_shape = None
-    check("unrecognized journal survives open+close byte-for-byte",
-          after_shape == wrong_shape, "store became %r" % after_shape)
+    check("unrecognized journal bytes survive open+close (path or aside)",
+          after_shape == wrong_shape or _aside_holds(wrong_shape),
+          "bytes at path: %r  asides: %r"
+          % (after_shape, _damaged_asides()))
+
+    # A store written by a NEWER build keeps its unknown top-level keys
+    # through this build's save — rebuilding the file from only the keys
+    # this build knows silently deletes the rest (the accounting finding).
+    _clear_asides()
+    newer = {"entries": [{"title": "kept", "tags": []}], "active": 0,
+             "mood_index": {"2026-08-08": "clear"}}
+    with open(journal.JOURNAL_FILE, "w") as fh:
+        json.dump(newer, fh)
+    app = bare()
+    app.entries, app.active = app._load_entries()
+    app._persist()
+    saved = json.load(open(journal.JOURNAL_FILE))
+    check("a newer build's unknown top-level key survives the save",
+          saved.get("mood_index") == newer["mood_index"],
+          "saved keys: %r" % sorted(saved))
+
+    # PASS-MUTANT: a shape-blind flush is the exact sabotage. Valid JSON of
+    # the wrong shape sails through nbapp's parse check (preserve_damaged
+    # only sees unparseable files), so writing without the app-level
+    # quarantine destroys the bytes at the path AND leaves no recovery copy.
+    _clear_asides()
+    with open(journal.JOURNAL_FILE, "wb") as fh:
+        fh.write(wrong_shape)
+    journal._atomic_write_json(
+        journal.JOURNAL_FILE, {"entries": [], "active": -1})
+    with open(journal.JOURNAL_FILE, "rb") as fh:
+        mutated = fh.read()
+    check("MUTANT: shape-blind flush DOES destroy an unrecognized journal",
+          mutated != wrong_shape and not _aside_holds(wrong_shape),
+          "sabotage unexpectedly preserved the bytes")
 
 
 class UndoProbe:

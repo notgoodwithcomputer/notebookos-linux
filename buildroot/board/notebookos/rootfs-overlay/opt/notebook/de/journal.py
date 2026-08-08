@@ -147,30 +147,38 @@ class Journal(nbapp.AppWindow):
         here that cannot be re-derived from anything. So a malformed record now
         costs ITSELF and nothing else, and anything that still plausibly holds
         entries is read as entries."""
-        self._store_load_ok = True
+        self._quarantine_pending = False
         try:
             with open(JOURNAL_FILE) as fh:
                 data = json.load(fh)
         except FileNotFoundError:
-            return [], -1        # missing / unreadable file -> empty journal
+            return [], -1        # first run: nothing to protect
         except Exception:
-            # Do not turn a read failure into a write.  The destroy-time flush
-            # is unconditional, so without this gate merely opening a damaged
-            # diary replaces its bytes with an empty journal.  A sidecar copy
-            # is useful recovery evidence, but it is not permission to destroy
-            # the source of truth at its original path.
-            self._store_load_ok = False
+            # Unreadable bytes. nbapp.atomic_write_json moves the original
+            # aside (preserve_damaged) immediately before its next replacing
+            # write, so the diary's bytes land in journal.json.damaged-* and
+            # persistence KEEPS WORKING. The earlier cure — suppressing every
+            # write for the session — protected the bytes but left a journal
+            # that silently never saved again, which is its own lie.
             return [], -1
         entries, active = self._parse_entries(data)
-        # Nothing came back, and the file was not our own empty journal: the
-        # diary may be in a shape this loader does not read. Keep the original
-        # at its path and suppress this session's writes. Moving it to a
-        # recovery name and then writing an empty replacement still violates
-        # the open+close law and makes the next launch look authoritatively
-        # empty.
-        if not entries and not (isinstance(data, dict)
-                                and data.get("entries") == []):
-            self._store_load_ok = False
+        # Top-level keys a NEWER build may have added are carried through the
+        # save untouched (accounting's _extra idiom): rebuilding the file from
+        # only the keys this build knows silently deletes the rest.
+        self._extra = ({k: v for k, v in data.items()
+                        if k not in ("entries", "active")}
+                       if isinstance(data, dict) else {})
+        if not entries and data and not (isinstance(data, dict)
+                                         and data.get("entries") == []):
+            # Parsed fine, but nothing in it reads as a journal — a shape
+            # only this app can judge, because valid JSON of the wrong shape
+            # sails straight through nbapp's parse check. _persist moves the
+            # file aside immediately before the first replacing write — the
+            # same moment nbapp picks for the files IT can detect — so there
+            # is never a window in which the journal has no file at all. An
+            # empty dict or an empty entries list is OUR OWN empty journal,
+            # not somebody's data in a foreign shape.
+            self._quarantine_pending = True
         return entries, active
 
     def _parse_entries(self, data):
@@ -218,17 +226,37 @@ class Journal(nbapp.AppWindow):
             active = 0 if entries else -1
         return entries, active
 
+    def _quarantine(self):
+        """Move a journal file this app could not read AS A JOURNAL aside,
+        under the same <name>.damaged-<stamp> name nbapp.preserve_damaged
+        uses. nbapp quarantines a store that fails to PARSE on every write;
+        it deliberately cannot cover this case — valid JSON of the wrong
+        shape parses perfectly, and only this app knows the shape is not a
+        journal. Without this, the next flush would write an empty journal
+        straight over whatever the file really held."""
+        try:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            dest = "%s.damaged-%s" % (JOURNAL_FILE, stamp)
+            n = 2
+            while os.path.exists(dest):
+                dest = "%s.damaged-%s-%d" % (JOURNAL_FILE, stamp, n)
+                n += 1
+            os.replace(JOURNAL_FILE, dest)
+        except OSError:
+            pass
+
     def _persist(self):
         """Write the full entries model + active index to disk. Swallows I/O
         errors so a bad write never crashes the app; returns True only when the
         write actually succeeded (used to gate the 'Saved' indicator)."""
-        if not getattr(self, "_store_load_ok", True):
-            return False
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
-            _atomic_write_json(
-                JOURNAL_FILE,
-                {"entries": self.entries, "active": self.active})
+            if getattr(self, "_quarantine_pending", False):
+                self._quarantine()
+                self._quarantine_pending = False
+            payload = dict(getattr(self, "_extra", None) or {})
+            payload.update({"entries": self.entries, "active": self.active})
+            _atomic_write_json(JOURNAL_FILE, payload)
             self._save_warned = False
             return True
         except Exception as exc:
