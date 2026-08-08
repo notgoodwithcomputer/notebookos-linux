@@ -41,26 +41,36 @@ GAP = "    "
 STD = ("File", "Edit", "View")
 
 # Exact rows: (file, line, rule, detail).  Existing deviations, not exceptions.
+# Debt is keyed on (file, rule, detail) → COUNT, deliberately WITHOUT a line
+# number. An earlier version keyed on the line, which any peer edit ABOVE a
+# debt line silently broke: the line shifted, the old entry went stale, and
+# the SAME violation reappeared as "new" one line lower — a stale+new pair
+# for a defect that never moved in substance (four apps hit this in one run
+# as the app lanes edited above their Print items). The violation's identity
+# is "this file shows this menu item with the wrong accelerator", not "at
+# line N"; the count carries the two-of-a-kind cases (terminal's two Esc
+# Close items) that a plain set would have collapsed. Both-direction ratchet:
+# more findings than the count is a regression, fewer is a stale entry to
+# prune.
 DEBT = {
-    ("accounting.py", 1900, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
-    ("bills.py", 1973, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
-    ("cookbook.py", 1823, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
-    ("ebook.py", 2163, "registry-accelerator", "Open: shown '', registry 'Ctrl+O'"),
-    ("journal.py", 1366, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
-    ("maps.py", 913, "registry-accelerator", "Zoom In: shown '', registry 'Ctrl+Plus'"),
-    ("maps.py", 914, "registry-accelerator", "Zoom Out: shown '', registry 'Ctrl+Minus'"),
-    ("packages.py", 339, "registry-accelerator", "Find: shown '', registry 'Ctrl+F'"),
-    ("packages.py", 339, "registry-ellipsis", "Find: shown ellipsis True, registry False"),
-    ("screenplay.py", 1418, "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"),
-    ("sequencer.py", 5318, "registry-accelerator", "Zoom In: shown '+', registry 'Ctrl+Plus'"),
-    ("sequencer.py", 5319, "registry-accelerator", "Zoom Out: shown '−', registry 'Ctrl+Minus'"),
-    ("terminal.py", 354, "registry-accelerator", "Close: shown '', registry 'Esc'"),
-    ("terminal.py", 367, "registry-accelerator", "Close: shown '', registry 'Esc'"),
-    ("terminal.py", 373, "registry-accelerator", "Copy: shown 'Ctrl+Shift+C', registry 'Ctrl+C'"),
-    ("terminal.py", 374, "registry-accelerator", "Paste: shown 'Ctrl+Shift+V', registry 'Ctrl+V'"),
-    ("terminal.py", 375, "registry-accelerator", "Select All: shown 'Ctrl+Shift+A', registry 'Ctrl+A'"),
-    ("music.py", 1969, "context-subset", "'Add to playlist'"),
-    ("sequencer.py", 5371, "title-case", "'No microphone or input found'"),
+    ("accounting.py", "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"): 1,
+    ("bills.py", "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"): 1,
+    ("cookbook.py", "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"): 1,
+    ("ebook.py", "registry-accelerator", "Open: shown '', registry 'Ctrl+O'"): 1,
+    ("journal.py", "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"): 1,
+    ("maps.py", "registry-accelerator", "Zoom In: shown '', registry 'Ctrl+Plus'"): 1,
+    ("maps.py", "registry-accelerator", "Zoom Out: shown '', registry 'Ctrl+Minus'"): 1,
+    ("packages.py", "registry-accelerator", "Find: shown '', registry 'Ctrl+F'"): 1,
+    ("packages.py", "registry-ellipsis", "Find: shown ellipsis True, registry False"): 1,
+    ("screenplay.py", "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"): 1,
+    ("sequencer.py", "registry-accelerator", "Zoom In: shown '+', registry 'Ctrl+Plus'"): 1,
+    ("sequencer.py", "registry-accelerator", "Zoom Out: shown '−', registry 'Ctrl+Minus'"): 1,
+    ("terminal.py", "registry-accelerator", "Close: shown '', registry 'Esc'"): 2,
+    ("terminal.py", "registry-accelerator", "Copy: shown 'Ctrl+Shift+C', registry 'Ctrl+C'"): 1,
+    ("terminal.py", "registry-accelerator", "Paste: shown 'Ctrl+Shift+V', registry 'Ctrl+V'"): 1,
+    ("terminal.py", "registry-accelerator", "Select All: shown 'Ctrl+Shift+A', registry 'Ctrl+A'"): 1,
+    ("music.py", "context-subset", "'Add to playlist'"): 1,
+    ("sequencer.py", "title-case", "'No microphone or input found'"): 1,
 }
 
 checks = 0
@@ -270,9 +280,27 @@ def main():
         except SyntaxError as exc:
             checks += 1; parse_fail.append(violation(path, exc.lineno or 0, "parse", exc.msg))
     real.update(parse_fail)
-    new, stale = sorted(real - DEBT), sorted(DEBT - real)
-    for row in new: print("FAIL NEW   %s:%d [%s] %s" % row)
-    for row in stale: print("FAIL STALE %s:%d [%s] %s" % row)
+    # Count findings by their line-agnostic identity, keeping one line per
+    # identity for a readable report.
+    counts, a_line = {}, {}
+    for (fn, line, rule, detail) in real:
+        key = (fn, rule, detail)
+        counts[key] = counts.get(key, 0) + 1
+        a_line.setdefault(key, line)
+    new = []      # (file, line, rule, detail, over) — findings past the debt
+    for key, c in sorted(counts.items()):
+        allowed = DEBT.get(key, 0)
+        if c > allowed:
+            fn, rule, detail = key
+            new.append((fn, a_line[key], rule, detail, c - allowed))
+    stale = sorted(key for key, allowed in DEBT.items()
+                   if counts.get(key, 0) < allowed)
+    for (fn, line, rule, detail, over) in new:
+        print("FAIL NEW   %s:%d [%s] %s%s" % (fn, line, rule, detail,
+              "" if over == 1 else "  (x%d over debt)" % over))
+    for (fn, rule, detail) in stale:
+        print("FAIL STALE %s [%s] %s — fewer than the %d in debt; prune it"
+              % (fn, rule, detail, DEBT[(fn, rule, detail)]))
     print("%d checks" % checks)
     print("RESULT: %s" % ("PASS" if not new and not stale else
                           "FAILED: %d new, %d stale" % (len(new), len(stale))))
