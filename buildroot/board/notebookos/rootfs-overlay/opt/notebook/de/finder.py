@@ -1599,8 +1599,7 @@ class Finder(Gtk.Window):
             # generic "could not be removed" here is honest but tells the user
             # nothing they can act on, which is its own small dishonesty.
             self._flash_status(
-                _t("The drive is in use — close the files and folders open "
-                   "on it, then eject."))
+                _t("The drive is in use — close open files, then eject."))
         else:
             # umount's stderr can contain errno jargon and absolute device or
             # mount paths.  It is diagnostic output, not safe interface text.
