@@ -121,6 +121,170 @@ class ActionTests(unittest.TestCase):
             actions.close()
 
 
+class FakeXInput:
+    def __init__(self, devices=(), events=None):
+        self.inventory = list(devices)
+        self.events = events
+        self.changed = []
+
+    def devices(self):
+        return list(self.inventory)
+
+    def set_enabled(self, device_id, enabled):
+        self.changed.append((device_id, enabled))
+        if self.events is not None:
+            self.events.append("enable" if enabled else "inhibit")
+        return True
+
+
+class FakeOsk:
+    child = None
+
+    def __init__(self, confirmed=True, events=None):
+        self.confirmed = confirmed
+        self.events = events
+
+    def start_confirmed(self):
+        if self.events is not None:
+            self.events.extend(("start-osk", "confirm"))
+        return self.confirmed
+
+    def stop(self):
+        if self.events is not None:
+            self.events.append("stop-osk")
+
+
+def fake_device(device_id, name, use, node="/dev/input/event0", phys="",
+                bus_type=None, touch=False):
+    return {"id": device_id, "name": name, "use": use,
+            "node": node, "phys": phys, "bus_type": bus_type,
+            "touch": touch}
+
+
+class MatcherTests(unittest.TestCase):
+    def test_internal_at_keyboard_matches(self):
+        device = fake_device(1, "AT Translated Set 2 keyboard",
+                             xt.XI_SLAVE_KEYBOARD, phys="isa0060/serio0/input0")
+        self.assertTrue(xt.device_is_internal(device))
+
+    def test_internal_i2c_touchpad_matches(self):
+        device = fake_device(2, "ELAN Touchpad", xt.XI_SLAVE_POINTER,
+                             phys="i2c-ELAN0000:00/input0")
+        self.assertTrue(xt.device_is_internal(device))
+
+    def test_usb_keyboard_never_matches(self):
+        device = fake_device(3, "Generic Keyboard", xt.XI_SLAVE_KEYBOARD,
+                             phys="usb-0000:00:14.0-1/input0",
+                             bus_type="0003")
+        self.assertFalse(xt.device_is_internal(device))
+
+    def test_bluetooth_keyboard_never_matches(self):
+        device = fake_device(4, "Generic Keyboard", xt.XI_SLAVE_KEYBOARD,
+                             phys="11:22:33:44:55:66", bus_type="0005")
+        self.assertFalse(xt.device_is_internal(device))
+
+    def test_usb_and_bluetooth_mice_never_match(self):
+        usb = fake_device(7, "Generic Mouse", xt.XI_SLAVE_POINTER,
+                          phys="usb-1/input0", bus_type="0003")
+        bluetooth = fake_device(8, "Generic Mouse", xt.XI_SLAVE_POINTER,
+                                phys="11:22:33:44:55:66", bus_type="0005")
+        self.assertFalse(xt.device_is_internal(usb))
+        self.assertFalse(xt.device_is_internal(bluetooth))
+
+    def test_touchscreen_never_matches(self):
+        device = fake_device(5, "ELAN Finger", xt.XI_SLAVE_POINTER,
+                             phys="i2c-ELAN9008:00/input0", touch=True)
+        self.assertFalse(xt.device_is_internal(device))
+
+    def test_missing_device_node_never_matches(self):
+        device = fake_device(6, "AT keyboard", xt.XI_SLAVE_KEYBOARD,
+                             node=None, phys="isa0060/serio0/input0")
+        self.assertFalse(xt.device_is_internal(device))
+
+
+class SafetyTests(unittest.TestCase):
+    def _actions(self, directory, devices=(), events=None, confirmed=True):
+        return xt.Actions(
+            flag=os.path.join(directory, "mode"),
+            xinput=FakeXInput(devices, events),
+            inhibited_file=os.path.join(directory, "inhibited"),
+            osk=FakeOsk(confirmed, events))
+
+    def test_enter_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            events = []
+            device = fake_device(1, "AT keyboard", xt.XI_SLAVE_KEYBOARD,
+                                 phys="isa0060/serio0/input0")
+            actions = self._actions(td, [device], events)
+            actions(True)
+            self.assertEqual(events, ["start-osk", "confirm", "inhibit"])
+            with open(actions.inhibited_file) as fh:
+                self.assertEqual(fh.read(), "AT keyboard\n")
+            actions.close()
+
+    def test_failed_confirmation_does_not_inhibit(self):
+        with tempfile.TemporaryDirectory() as td:
+            events = []
+            device = fake_device(1, "AT keyboard", xt.XI_SLAVE_KEYBOARD,
+                                 phys="isa0060/serio0/input0")
+            actions = self._actions(td, [device], events, confirmed=False)
+            actions(True)
+            self.assertEqual(events, ["start-osk", "confirm"])
+            self.assertEqual(actions.xinput.changed, [])
+            actions.close()
+
+    def test_leave_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            events = []
+            actions = self._actions(td, events=events)
+            actions.disabled = {7: "internal keyboard"}
+            actions(False)
+            self.assertEqual(events, ["enable", "stop-osk"])
+            actions.close()
+
+    def test_sigterm_reenables_entire_disabled_set(self):
+        with tempfile.TemporaryDirectory() as td:
+            actions = self._actions(td)
+            actions.disabled = {7: "keyboard", 9: "touchpad"}
+
+            class Loop:
+                stopped = False
+
+                def stop(self):
+                    self.stopped = True
+
+            loop = Loop()
+            xt.fail_open_stop(actions, loop, signal.SIGTERM, None)
+            self.assertEqual(actions.xinput.changed, [(7, True), (9, True)])
+            self.assertTrue(loop.stopped)
+
+    def test_startup_heals_matches_and_removes_stale_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            internal = fake_device(1, "AT keyboard", xt.XI_SLAVE_KEYBOARD,
+                                   phys="isa0060/serio0/input0")
+            external = fake_device(2, "USB Keyboard", xt.XI_SLAVE_KEYBOARD,
+                                   phys="usb-1/input0")
+            actions = self._actions(td, [internal, external])
+            with open(actions.inhibited_file, "w") as fh:
+                fh.write("stale keyboard\n")
+            actions.startup_heal()
+            self.assertEqual(actions.xinput.changed, [(1, True)])
+            self.assertFalse(os.path.exists(actions.inhibited_file))
+
+    def test_watch_exception_reenables_disabled_set(self):
+        with tempfile.TemporaryDirectory() as td:
+            actions = self._actions(td)
+            actions.disabled = {3: "keyboard", 4: "touchpad"}
+
+            class BrokenLoop:
+                def run(self):
+                    raise RuntimeError("injected watch failure")
+
+            with self.assertRaisesRegex(RuntimeError, "injected watch failure"):
+                xt.run_watch_loop(actions, BrokenLoop())
+            self.assertEqual(actions.xinput.changed, [(3, True), (4, True)])
+
+
 # ---------------------------------------------------------------------------
 # UINPUT CHAIN -- real kernel routing, discovery, decoding, and daemon actions
 # ---------------------------------------------------------------------------

@@ -10,14 +10,24 @@ another session.  With no switch source this daemon therefore does nothing but
 sleep and keep looking for a device to appear; it never invents a hinge state.
 
 Tablet mode is published in /tmp and, when an X display is usable, on the root
-window as NB_TABLET_MODE.  The on-screen keyboard is also best effort:
-matchbox-keyboard is not yet in the image (BR2_PACKAGE_MATCHBOX_KEYBOARD is
-queued), but when it ships its path will be /usr/bin/matchbox-keyboard.
+window as NB_TABLET_MODE.
+
+WHY: a folded convertible rests on its physical keyboard, so keys, touchpads,
+and pointing sticks on its back can be pressed accidentally.  Once the native
+OSK is visibly alive, this daemon disables only input devices proven internal
+by both their Linux physical path and a narrow keyboard/touchpad/trackpoint
+class allowlist; touchscreens and external input must remain usable.  The order
+is a lockout rule: start and confirm the OSK before inhibition, and re-enable
+physical input before stopping the OSK.  Every shutdown and failure path is
+fail-open and restores all devices this daemon disabled.  If no OSK can be
+confirmed, physical input is never inhibited.
 
 The small parsing and state-machine core is deliberately independent of device,
 process, and X I/O so it can be exercised without hardware or a display.
 """
 import errno
+import atexit
+import ctypes
 import fcntl
 import glob
 import os
@@ -27,6 +37,8 @@ import struct
 import subprocess
 import sys
 import time
+from ctypes import (POINTER, Structure, byref, c_char_p, c_int, c_long,
+                    c_ubyte, c_ulong, c_void_p)
 
 EV_SYN = 0
 EV_KEY = 1
@@ -35,6 +47,153 @@ SW_TABLET_MODE = 1
 EVENT = struct.Struct("llHHi")       # Linux input_event on x86-64
 SW_BYTES = 8                         # comfortably covers current SW_MAX
 RESCAN_SECONDS = 5
+XI_ALL_DEVICES = 0
+XI_SLAVE_POINTER = 3
+XI_SLAVE_KEYBOARD = 4
+XI_TOUCH_CLASS = 8
+PROP_MODE_REPLACE = 0
+XA_INTEGER = 19
+
+
+class _XIDeviceInfo(Structure):
+    _fields_ = [("deviceid", c_int), ("name", c_char_p), ("use", c_int),
+                ("attachment", c_int), ("enabled", c_int),
+                ("num_classes", c_int), ("classes", c_void_p)]
+
+
+class _XIAnyClassInfo(Structure):
+    _fields_ = [("type", c_int), ("sourceid", c_int)]
+
+
+def device_is_internal(device):
+    """Conservatively select an internal keyboard/touchpad/trackpoint."""
+    name = (device.get("name") or "").lower()
+    node = device.get("node")
+    phys = (device.get("phys") or "").lower()
+    bus_type = (device.get("bus_type") or "").lower()
+    use = device.get("use")
+    if not node or not phys:
+        return False
+    if device.get("touch") or any(
+            word in name for word in ("touchscreen", "touch screen")):
+        return False
+    if ("usb" in phys or "bluetooth" in phys or "bluetooth" in name or
+            bus_type in ("0003", "0005", "usb", "bluetooth")):
+        return False
+    keyboard = use == XI_SLAVE_KEYBOARD and "keyboard" in name
+    pointer = use == XI_SLAVE_POINTER and any(
+        word in name for word in ("touchpad", "trackpad", "trackpoint",
+                                  "pointing stick"))
+    if not (keyboard or pointer):
+        return False
+    return ("isa0060" in phys or "serio" in phys or "i2c" in phys)
+
+
+class XInput2:
+    """Small ctypes XInput2 adapter; callers may inject a headless fake."""
+
+    def __init__(self, sys_class="/sys/class/input"):
+        self.sys_class = sys_class
+        self.x11 = ctypes.CDLL("libX11.so.6")
+        self.xi = ctypes.CDLL("libXi.so.6")
+        self.x11.XOpenDisplay.restype = c_void_p
+        self.x11.XOpenDisplay.argtypes = [c_char_p]
+        self.x11.XInternAtom.restype = c_ulong
+        self.x11.XInternAtom.argtypes = [c_void_p, c_char_p, c_int]
+        self.x11.XFree.argtypes = [c_void_p]
+        self.x11.XFlush.argtypes = [c_void_p]
+        self.x11.XCloseDisplay.argtypes = [c_void_p]
+        self.xi.XIQueryDevice.restype = POINTER(_XIDeviceInfo)
+        self.xi.XIQueryDevice.argtypes = [c_void_p, c_int, POINTER(c_int)]
+        self.xi.XIFreeDeviceInfo.argtypes = [POINTER(_XIDeviceInfo)]
+        self.xi.XIGetProperty.argtypes = [
+            c_void_p, c_int, c_ulong, c_long, c_long, c_int, c_ulong,
+            POINTER(c_ulong), POINTER(c_int), POINTER(c_ulong),
+            POINTER(c_ulong), POINTER(POINTER(c_ubyte))]
+        self.xi.XIChangeProperty.argtypes = [
+            c_void_p, c_int, c_ulong, c_ulong, c_int, c_int,
+            POINTER(c_ubyte), c_int]
+
+    def _open(self):
+        if not os.environ.get("DISPLAY"):
+            return None
+        return self.x11.XOpenDisplay(None)
+
+    def _node(self, dpy, device_id):
+        prop = self.x11.XInternAtom(dpy, b"Device Node", False)
+        actual, count, remain = c_ulong(), c_ulong(), c_ulong()
+        fmt = c_int()
+        data = POINTER(c_ubyte)()
+        status = self.xi.XIGetProperty(
+            dpy, device_id, prop, 0, 1024, False, 0, byref(actual),
+            byref(fmt), byref(count), byref(remain), byref(data))
+        if status != 0 or not data or fmt.value != 8:
+            return None
+        try:
+            return ctypes.string_at(data, count.value).decode("utf-8", "replace")
+        finally:
+            self.x11.XFree(data)
+
+    def devices(self):
+        dpy = self._open()
+        if not dpy:
+            return []
+        count = c_int()
+        infos = self.xi.XIQueryDevice(dpy, XI_ALL_DEVICES, byref(count))
+        result = []
+        try:
+            for index in range(count.value):
+                info = infos[index]
+                if info.use not in (XI_SLAVE_POINTER, XI_SLAVE_KEYBOARD):
+                    continue
+                node = self._node(dpy, info.deviceid)
+                classes = ctypes.cast(
+                    info.classes, POINTER(POINTER(_XIAnyClassInfo)))
+                touch = any(classes[item].contents.type == XI_TOUCH_CLASS
+                            for item in range(info.num_classes))
+                phys = None
+                bus_type = None
+                if node:
+                    device_dir = os.path.join(self.sys_class,
+                                              os.path.basename(node), "device")
+                    try:
+                        with open(os.path.join(device_dir, "phys"),
+                                  encoding="utf-8") as fh:
+                            phys = fh.read().strip()
+                    except OSError:
+                        pass
+                    try:
+                        with open(os.path.join(device_dir, "id", "bustype"),
+                                  encoding="ascii") as fh:
+                            bus_type = fh.read().strip()
+                    except OSError:
+                        pass
+                result.append({"id": info.deviceid,
+                               "name": (info.name or b"").decode(
+                                   "utf-8", "replace"),
+                               "use": info.use, "node": node, "phys": phys,
+                               "bus_type": bus_type, "touch": touch})
+        finally:
+            if infos:
+                self.xi.XIFreeDeviceInfo(infos)
+            self.x11.XCloseDisplay(dpy)
+        return result
+
+    def set_enabled(self, device_id, enabled):
+        dpy = self._open()
+        if not dpy:
+            return False
+        try:
+            prop = self.x11.XInternAtom(dpy, b"Device Enabled", False)
+            value = (c_ubyte * 1)(1 if enabled else 0)
+            self.xi.XIChangeProperty(dpy, device_id, prop, XA_INTEGER, 8,
+                                     PROP_MODE_REPLACE, value, 1)
+            self.x11.XFlush(dpy)
+            return True
+        finally:
+            # X connection loss needs no special recovery: the X session has
+            # ended and its server-side device state is discarded on restart.
+            self.x11.XCloseDisplay(dpy)
 
 
 def switch_mask_has_tablet(text):
@@ -93,16 +252,93 @@ class ModeCore:
                 self.set_mode(value != 0)
 
 
+class OskController:
+    """Own exactly one OSK process group and confirm it survives startup."""
+
+    def __init__(self, native="/opt/notebook/de/osk.py",
+                 fallback="/usr/bin/matchbox-keyboard", stderr=None,
+                 confirm_seconds=2.0):
+        self.native = native
+        self.fallback = fallback
+        self.stderr = stderr or sys.stderr
+        self.confirm_seconds = confirm_seconds
+        self.child = None
+        self._fallback_reported = False
+        self._missing_reported = False
+
+    @staticmethod
+    def _usable(path, executable=False):
+        return os.path.isfile(path) and (not executable or os.access(path, os.X_OK))
+
+    def _launch(self, command):
+        try:
+            self.child = subprocess.Popen(
+                command, start_new_session=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            self.child = None
+            return False
+
+    def _survives(self):
+        deadline = time.monotonic() + self.confirm_seconds
+        while time.monotonic() < deadline:
+            if self.child.poll() is not None:
+                self.child = None
+                return False
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        return self.child.poll() is None
+
+    def start_confirmed(self):
+        if self.child is not None and self.child.poll() is None:
+            return True
+        self.child = None
+        native_ok = self._usable(self.native) and \
+            self._launch(["python3", self.native]) and self._survives()
+        if native_ok:
+            return True
+        if self._usable(self.fallback, executable=True):
+            if not self._fallback_reported:
+                print("xtabletd: native OSK unavailable; falling back to "
+                      "matchbox-keyboard", file=self.stderr)
+                self._fallback_reported = True
+            return self._launch([self.fallback]) and self._survives()
+        if not self._missing_reported:
+            print("xtabletd: no usable on-screen keyboard", file=self.stderr)
+            self._missing_reported = True
+        return False
+
+    def stop(self):
+        child, self.child = self.child, None
+        if child is None or child.poll() is not None:
+            return
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            child.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 class Actions:
-    """Publish the state and own exactly the keyboard process we start."""
+    """Publish state, enforce safe transition order, and own inhibition."""
 
     def __init__(self, flag="/tmp/nb-tablet-mode",
-                 keyboard="/usr/bin/matchbox-keyboard", stderr=None):
+                 keyboard="/usr/bin/matchbox-keyboard", stderr=None,
+                 xinput=None, inhibited_file="/tmp/nb-tablet-inhibited",
+                 osk=None):
         self.flag = flag
-        self.keyboard = keyboard
         self.stderr = stderr or sys.stderr
-        self.child = None
-        self._missing_reported = False
+        self.xinput = xinput if xinput is not None else XInput2()
+        self.inhibited_file = inhibited_file
+        self.osk = osk or OskController(fallback=keyboard, stderr=self.stderr)
+        self.disabled = {}              # device id -> human-readable name
+
+    @property
+    def child(self):
+        return self.osk.child
 
     def _write_flag(self, enabled):
         directory = os.path.dirname(self.flag) or "."
@@ -142,53 +378,70 @@ class Actions:
         except Exception:
             pass
 
-    def _start_keyboard(self):
-        if self.child is not None and self.child.poll() is None:
+    def _record_disabled(self):
+        if not self.disabled:
+            try:
+                os.unlink(self.inhibited_file)
+            except FileNotFoundError:
+                pass
             return
-        self.child = None
-        if not (os.path.isfile(self.keyboard) and os.access(self.keyboard, os.X_OK)):
-            if not self._missing_reported:
-                print("xtabletd: matchbox-keyboard is not installed",
-                      file=self.stderr)
-                self._missing_reported = True
-            return
-        try:
-            self.child = subprocess.Popen([self.keyboard],
-                                          start_new_session=True,
-                                          stdin=subprocess.DEVNULL,
-                                          stdout=subprocess.DEVNULL,
-                                          stderr=subprocess.DEVNULL)
-        except OSError as exc:
-            if not self._missing_reported:
-                print("xtabletd: cannot start matchbox-keyboard: %s" % exc,
-                      file=self.stderr)
-                self._missing_reported = True
+        with open(self.inhibited_file, "w", encoding="utf-8") as fh:
+            for name in self.disabled.values():
+                fh.write(name + "\n")
 
-    def _stop_keyboard(self):
-        child, self.child = self.child, None
-        if child is None or child.poll() is not None:
-            return
+    def inhibit(self):
         try:
-            os.killpg(child.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
+            for device in self.xinput.devices():
+                if device_is_internal(device):
+                    self.disabled[device["id"]] = device["name"]
+                    if not self.xinput.set_enabled(device["id"], False):
+                        self.disabled.pop(device["id"], None)
+                        continue
+                    self._record_disabled()
+        except Exception:
+            self.enable_all()
+            raise
+
+    def enable_all(self):
+        pending = dict(self.disabled)
+        for device_id in pending:
+            try:
+                if self.xinput.set_enabled(device_id, True):
+                    self.disabled.pop(device_id, None)
+            except Exception:
+                # Continue through the entire set: one bad ID must not keep a
+                # second keyboard disabled.
+                pass
+        self._record_disabled()
+
+    def startup_heal(self):
         try:
-            child.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            # SIGTERM is intentionally the strongest action: do not kill an
-            # OSK that is merely taking time to save/close.
-            pass
+            for device in self.xinput.devices():
+                if device_is_internal(device):
+                    try:
+                        self.xinput.set_enabled(device["id"], True)
+                    except Exception:
+                        pass
+        finally:
+            try:
+                os.unlink(self.inhibited_file)
+            except FileNotFoundError:
+                pass
 
     def __call__(self, enabled):
-        self._write_flag(enabled)
         if enabled:
-            self._start_keyboard()
+            self._write_flag(enabled)
+            if self.osk.start_confirmed():
+                self.inhibit()
         else:
-            self._stop_keyboard()
+            self.enable_all()
+            self.osk.stop()
+            self._write_flag(enabled)
         self._set_x_property(enabled)
 
     def close(self):
-        self._stop_keyboard()
+        self.enable_all()
+        self.osk.stop()
         try:
             os.unlink(self.flag)
         except FileNotFoundError:
@@ -297,18 +550,39 @@ def claim_single_instance(path="/tmp/xtabletd.lock"):
     return fd                       # keeping it open keeps the flock owned
 
 
+def fail_open_stop(actions, loop, *_args):
+    """Signal callback: restore input synchronously before stopping the loop."""
+    actions.enable_all()
+    loop.stop()
+
+
+def run_watch_loop(actions, loop):
+    """Run a watcher with fail-open cleanup, including exceptional exits."""
+    try:
+        loop.run()
+    finally:
+        actions.enable_all()
+
+
 def main():
     lock = claim_single_instance()
     if lock is None:
         return 0
     actions = Actions()
+    actions.startup_heal()
+    atexit.register(actions.enable_all)
     loop = DeviceLoop(ModeCore(actions))
-    signal.signal(signal.SIGTERM, loop.stop)
-    signal.signal(signal.SIGINT, loop.stop)
+
+    def stop_fail_open(*args):
+        fail_open_stop(actions, loop, *args)
+
+    signal.signal(signal.SIGTERM, stop_fail_open)
+    signal.signal(signal.SIGINT, stop_fail_open)
     try:
-        loop.run()
+        run_watch_loop(actions, loop)
     finally:
         actions.close()
+        atexit.unregister(actions.enable_all)
         os.close(lock)
     return 0
 
