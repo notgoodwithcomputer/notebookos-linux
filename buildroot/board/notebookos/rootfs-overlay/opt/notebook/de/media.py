@@ -1867,7 +1867,7 @@ class MediaViewer(nbapp.AppWindow):
            the one active accent among the tools (never decorative). */
         .toolbtn.active { background: #EAE3D2; }
         .toolbtn.active:hover { background: #DED4C2; }
-        .zoompct { font-size: 12px; color: #9A9484; }
+        .zoompct { font-size: 12px; color: #7D7767; }
         /* the zoom percentage is also the Fit-to-window button: it reads as
            plain text but takes the same calm hover as the other tools. */
         .fitbtn { min-width: 44px; padding: 0 4px; }

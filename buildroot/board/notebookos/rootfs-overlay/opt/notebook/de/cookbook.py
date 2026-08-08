@@ -2013,7 +2013,7 @@ class Cookbook(nbapp.AppWindow):
                      border: none; box-shadow: none;
                      font-family: "Nimbus Sans","Helvetica",sans-serif;
                      font-size: 11px; letter-spacing: 1px; color: #9A9484; }
-        .paneledit label { color: #9A9484; letter-spacing: 1px; }
+        .paneledit label { color: #7D7767; letter-spacing: 1px; }
         .paneledit:hover, .paneledit:hover label { color: #1A1916; }
         .edbox { font-family: "Newsreader","Liberation Serif",serif;
                  font-size: 16px; color: #1A1916; background: transparent;

@@ -381,8 +381,8 @@ class MealPlanner(nbapp.AppWindow):
         /* "Add" is an invitation, not content: it stays quiet until the cell
            is hovered, so a mostly-empty week reads as a blank page to fill in
            rather than as a wall of the word "Add". */
-        .mp-empty { font-size: 14px; color: #C9C4B6; }
-        .mp-slothit:hover .mp-empty { color: #6E695E; }
+        .mp-empty { font-size: 14px; color: #7D7767; }
+        .mp-slothit:hover .mp-empty { color: #1A1916; }
         .mp-kind { font-size: 10px; letter-spacing: 0.08em; font-weight: 700;
                    color: #9A9484; }
         .mp-status { padding: 7px 16px; font-size: 12px; color: #6E695E;

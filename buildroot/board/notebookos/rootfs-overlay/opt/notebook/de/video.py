@@ -5105,7 +5105,7 @@ class VideoEditor(nbapp.AppWindow):
                       margin-bottom: 2px; }
         .storymattext { font-size: 11px; color: #F1EEE6; padding: 0 6px; }
         .storynum { font-size: 12px; color: #9A9484; font-weight: 600; }
-        .storyhint { font-size: 11px; color: #9A9484; }
+        .storyhint { font-size: 11px; color: #7D7767; }
         .storyname { font-size: 12px; color: #1A1916; font-weight: 600; }
         .storymeta { font-size: 11px; color: #6E695E; }
         .storytitleovl { font-size: 10px; color: #1A1916; }
