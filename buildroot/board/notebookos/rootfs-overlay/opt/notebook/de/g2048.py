@@ -695,7 +695,12 @@ class Game2048(nbapp.AppWindow):
             playing = self.status == "play"
             return [
                 ("New Game", self.new_game),
-                ("Undo New Game", self.undo_new_game
+                # Compose the undo label from the OS-wide "Undo %s" pattern and
+                # the action's own already-translated name, exactly as
+                # nbapp.UndoHistory does for the editor apps — so this custom
+                # one-level undo needs no new catalog keys and reads right in
+                # all 17 languages.
+                (_t("Undo %s") % _t("New Game"), self.undo_new_game
                  if getattr(self, "_new_game_undo", None) else None),
                 nbapp.SEP,
                 ("Move Up", (lambda: self.move("up")) if playing else None),
@@ -708,7 +713,7 @@ class Game2048(nbapp.AppWindow):
                 nbapp.SEP,
                 ("Reset Best Score…",
                  self._reset_best if self.best > 0 else None),
-                ("Undo Reset Best Score", self.undo_reset_best
+                (_t("Undo %s") % _t("Reset Best Score"), self.undo_reset_best
                  if getattr(self, "_best_undo", None) else None),
             ]
         return super().menu_items(name)
