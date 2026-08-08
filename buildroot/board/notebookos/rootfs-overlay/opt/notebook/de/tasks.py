@@ -1061,7 +1061,6 @@ class Tasks(nbapp.AppWindow):
         list's tasks are NOT deleted — they are reassigned to Inbox (no list)."""
         if name not in PROJ_COLOR:
             return
-        self.undo.checkpoint("Remove List")
         try:
             self._close_menu()
         except Exception:
@@ -1140,6 +1139,7 @@ class Tasks(nbapp.AppWindow):
         self._close_removelist()
         if name not in PROJ_COLOR:
             return
+        self.undo.checkpoint("Remove List")
         for t in self.tasks:
             if t.get("project") == name:
                 t["project"] = None

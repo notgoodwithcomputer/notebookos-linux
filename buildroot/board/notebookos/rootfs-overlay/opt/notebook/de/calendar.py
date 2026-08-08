@@ -670,20 +670,30 @@ class Calendar(nbapp.AppWindow):
         """The user-owned calendar state needed to reverse a destructive edit."""
         visible = {c["name"]: self.cals_on.get(c["name"], True)
                    for c in self.calendars}
+        # The view fields are read through getattr for the same reason
+        # _orphans/_seen are: a snapshot must never crash on a partially
+        # constructed instance and take the whole undo history down with it.
+        # A real Calendar always has them; a bare test harness may not.
         return (copy.deepcopy(self.events), copy.deepcopy(self.calendars),
                 visible, copy.deepcopy(getattr(self, "_orphans", [])),
-                set(getattr(self, "_seen", set())))
+                set(getattr(self, "_seen", set())),
+                getattr(self, "_doc_path", None), getattr(self, "sel", None),
+                getattr(self, "cur_y", None), getattr(self, "cur_m", None),
+                getattr(self, "view", None))
 
     def _undo_restore(self, state):
-        events, calendars, visible, orphans, seen = copy.deepcopy(state)
+        (events, calendars, visible, orphans, seen, doc_path, sel,
+         cur_y, cur_m, view) = copy.deepcopy(state)
         self.events = events
         self.calendars = calendars
         self._orphans = orphans
         self._seen = seen
+        self._doc_path = doc_path
+        self.sel, self.cur_y, self.cur_m, self.view = sel, cur_y, cur_m, view
         self.cals_on = {c["name"]: visible.get(c["name"], True)
                         for c in calendars}
         self._save_calendars()
-        self._save_events()
+        self._save_events(merge=False)
         self._populate_cal_list()
         self._refresh()
 
@@ -3317,10 +3327,13 @@ class Calendar(nbapp.AppWindow):
         # same store the Tasks app and desktop widget read from. Guard it exactly
         # as File ▸ New does, and as the other document apps guard their Open, so
         # a stray file pick can never destroy built-up data without consent.
+        # Bank the old state before _apply_document replaces it.  Checkpointing
+        # afterwards made Open's undo snapshot a copy of the newly-opened file.
+        self.undo.checkpoint("Open Calendar File")
         if not self._apply_document(data):
+            self.undo.cancel()
             self._flash_status("Unrecognized file")
             return
-        self.undo.checkpoint("Open Calendar File")
         self._doc_path = path
         # Authoritative write: Open replaces the whole store with this document,
         # so do NOT merge back the events it is replacing.

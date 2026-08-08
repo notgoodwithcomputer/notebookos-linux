@@ -59,6 +59,7 @@ import os
 import re
 import json
 import array
+import copy
 import queue
 import shutil
 import subprocess
@@ -2765,38 +2766,41 @@ class Sequencer(nbapp.AppWindow):
     # on a track's bin — or Clear All Takes, or shortening the tape — threw it
     # away for good. Every one of those is now a step back.
     def _arrangement(self):
-        """The part of a project a single click can destroy: the tape length,
-        and each track's takes, name and switches.
-        The continuous mix controls (gain, tempo, pitch, master) are
-        deliberately NOT in here — they are visible on their own faders and
-        putting one back is a drag, not a lost recording. Leaving them out keeps
-        Undo from moving a control the user never touched."""
+        """The complete project plus transient editing position.
+
+        New and Open replace every project control, while the clip-destructive
+        actions need the same snapshot shape so all history steps interoperate.
+        Selection and playhead state are transient and therefore travel beside
+        the serialized project rather than inside its on-disk format."""
+        sel = None
+        if self.sel:
+            try:
+                sel = (self.sel[0], self.tracks[self.sel[0]]["clips"].index(
+                       self.sel[1]))
+            except (ValueError, IndexError):
+                pass
         return {
-            "length": self.length,
+            # New and Open replace more than clips: tempo, mix, grid and every
+            # per-track control are user-visible project state too.
+            "project": copy.deepcopy(self._serialize()),
             # the file the arrangement belongs to travels with it, so undoing a
             # New or an Open cannot leave Save pointed at the wrong project
             "path": self._path,
-            "tracks": [
-                {"name": tk["name"],
-                 "armed": tk["armed"], "muted": tk["muted"], "solo": tk["solo"],
-                 # deep — a clip is a dict the lane edits in place, and a
-                 # snapshot that shared it would step back to the very edit it
-                 # was banked to undo
-                 "clips": [clip_copy(c) for c in tk["clips"]]}
-                for tk in self.tracks],
+            "sel": sel, "pos": self.pos, "rec_start": self.rec_start,
         }
 
     def _restore_arrangement(self, snap):
-        for tk, saved in zip(self.tracks, snap["tracks"]):
-            tk.update(saved)
-            tk["clips"] = [clip_copy(c) for c in saved["clips"]]
-        self.length = snap["length"]
+        self._apply(copy.deepcopy(snap["project"]))
         self._path = snap["path"]
-        # the editor may have been showing a clip that no longer exists
-        self._validate_sel()
-        self.pos = min(self.pos, self.length)
-        if self.rec_start is not None:
-            self.rec_start = min(self.rec_start, self.length)
+        self.pos = min(snap["pos"], self.length)
+        rec_start = snap["rec_start"]
+        self.rec_start = (min(rec_start, self.length)
+                          if rec_start is not None else None)
+        self.sel = None
+        if snap["sel"] is not None:
+            ti, ci = snap["sel"]
+            if 0 <= ti < len(self.tracks) and 0 <= ci < len(self.tracks[ti]["clips"]):
+                self.sel = (ti, self.tracks[ti]["clips"][ci])
 
     def _remember(self, name=None):
         """Bank the arrangement so the edit about to happen can be undone. Any
