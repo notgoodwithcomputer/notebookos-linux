@@ -107,7 +107,7 @@ def main():
     ents = entries_in(win.detail_holder)
     check("edit-mode-shows-entries", len(ents) > 0)
     # A real tracked field is present in the live editable set...
-    check("editable-field-tracked", "phone" in win._entries)
+    check("editable-field-tracked", "phones" in win._entries)
     check("name-editable", "name" in win._entries)
     # ...notes is a multi-line area (Gtk.TextView), not one of the single-line
     # Entry fields, so it lives in win._notes_view — NOT in win._entries.
@@ -118,12 +118,13 @@ def main():
 
     # Type into the entries, then leave edit mode -> must persist into the dict.
     win._entries["name"].set_text("Alice Test")
-    win._entries["phone"].set_text("555-0100")
+    win._entries["phones"].set_text("mobile: 555-0100")
     win._notes_view.get_buffer().set_text("coffee friend")
     win._toggle_edit()  # Done
     p = win.people[win.active]
     check("leave-edit-writes-name", p.get("name") == "Alice Test")
-    check("leave-edit-writes-phone", p.get("phone") == "555-0100")
+    check("leave-edit-writes-phone", p.get("phones") == [
+          {"label": "mobile", "value": "555-0100"}])
     check("leave-edit-writes-notes", p.get("notes") == "coffee friend")
     check("left-edit-mode", win.editing is False)
     check("labels-after-done", len(entries_in(win.detail_holder)) == 0)
@@ -132,10 +133,11 @@ def main():
     win._toggle_edit()  # Edit
     check("re-enter-edit-shows-entries",
           win.editing is True and len(entries_in(win.detail_holder)) > 0)
-    win._entries["phone"].set_text("555-0200")
+    win._entries["phones"].set_text("work: 555-0200")
     win._toggle_edit()  # Done
     check("edit-tracked-field-persists",
-          win.people[win.active].get("phone") == "555-0200")
+          win.people[win.active].get("phones") == [
+              {"label": "work", "value": "555-0200"}])
 
     # --- 3. No Message button: the Messages app was removed ------------
     # Contacts used to carry a "Message" action that launched messages.py over
@@ -150,7 +152,8 @@ def main():
     if win2.people:
         loaded = win2.people[0]
         check("persistence-preserves-name", loaded.get("name") == "Alice Test")
-        check("persistence-preserves-phone", loaded.get("phone") == "555-0200")
+        check("persistence-preserves-phone", loaded.get("phones") == [
+              {"label": "work", "value": "555-0200"}])
         check("persistence-no-node-key", "node" not in loaded)
     else:
         check("persistence-preserves-name", False)

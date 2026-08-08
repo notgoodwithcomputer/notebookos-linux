@@ -18,6 +18,7 @@ import ast
 import re
 import json
 import os
+import random
 
 import nbapp
 import nbicons  # pictographic backspace glyph on the ⌫ key
@@ -43,10 +44,209 @@ _WHY_TOOBIG = "The answer is too big to show"
 _WHY_NOANSWER = "There is no answer to that"
 _WHY_UNREADABLE = "That is not a calculation this can work out"
 
+CATALOG = {
+    "Trigonometry": (("sin(", "sin("), ("cos(", "cos("), ("tan(", "tan("),
+                     ("sin^-1(", "asin("), ("cos^-1(", "acos("),
+                     ("tan^-1(", "atan("), ("sinh(", "sinh("),
+                     ("cosh(", "cosh("), ("tanh(", "tanh(")),
+    "Logarithms": (("ln(", "ln("), ("log(", "log("), ("log2(", "log2("),
+                   ("e^x", "exp("), ("10^x", "pow10(")),
+    "Number": (("sqrt(", "sqrt("), ("nthRoot(", "root("), ("abs(", "abs("),
+               ("floor(", "floor("), ("ceil(", "ceil("), ("round(", "round("),
+               ("frac(", "frac("), ("int(", "int(")),
+    "Probability": (("factorial(", "fact("), ("nCr(", "nCr("),
+                    ("nPr(", "nPr("), ("random", "random()")),
+}
+
+
+def format_number(value, fix=None):
+    """Format display, trace and table numbers through one mode."""
+    if fix is not None:
+        return ("%%.%df" % max(0, min(9, int(fix)))) % float(value)
+    return "%.12g" % float(value)
+
+
+def graph_to_pixel(x, y, window, width, height):
+    return ((x - window["xmin"]) * width / (window["xmax"] - window["xmin"]),
+            (window["ymax"] - y) * height / (window["ymax"] - window["ymin"]))
+
+
+def pixel_to_graph(px, py, window, width, height):
+    return (window["xmin"] + px * (window["xmax"] - window["xmin"]) / width,
+            window["ymax"] - py * (window["ymax"] - window["ymin"]) / height)
+
+
+def sample_segments(fn, xmin, xmax, samples=401):
+    """Return finite polyline segments, splitting poles instead of walls."""
+    points, segments, previous = [], [], None
+    dx = (xmax - xmin) / max(1, samples - 1)
+    for i in range(samples):
+        x = xmin + i * dx
+        try:
+            y = float(fn(x))
+            good = math.isfinite(y)
+        except Exception:
+            good, y = False, float("nan")
+        # A sign flip with huge endpoints is the characteristic sampled pole.
+        pole = (previous is not None and good and previous[1] * y < 0 and
+                max(abs(previous[1]), abs(y)) > 20.0)
+        if not good or pole:
+            if points:
+                segments.append(points)
+            points = []
+        if good:
+            points.append((x, y))
+            previous = (x, y)
+        else:
+            previous = None
+    if points:
+        segments.append(points)
+    return segments
+
+
+def tape_rows(tape, tape_results):
+    """The (expression, result) rows the display tape paints, oldest first.
+
+    The two lists are kept in lockstep (a None result marks an attempt that
+    failed and paints nothing), but the pairing is still clamped to the
+    shorter list, so a desynced pair — an older or hand-edited state file —
+    paints what it can instead of crashing the repaint with an IndexError."""
+    rows = []
+    for i in range(min(len(tape), len(tape_results))):
+        result = tape_results[i]
+        if result is not None:
+            rows.append((tape[i], result))
+    return rows
+
+
+def tape_window(tape, tape_results, offset=None, count=3):
+    """Return a bounded slice of the rows painted in the compact tape area.
+
+    ``offset`` is the first visible row; ``None`` follows the newest rows.  Both
+    ends are clamped after result-less attempts have been removed, so empty,
+    short, recalled and just-cleared tapes all produce a safe slice.
+    """
+    rows = tape_rows(tape, tape_results)
+    count = max(0, int(count))
+    last_offset = max(0, len(rows) - count)
+    if offset is None:
+        offset = last_offset
+    offset = min(max(0, int(offset)), last_offset)
+    return rows[offset:min(offset + count, len(rows))]
+
+
+# How many worked-out calculations the tape keeps (mirrored by the class as
+# _TAPE_MAX; sanitize_state trims a loaded file to the same window).
+TAPE_MAX = 30
+
+_WINDOW_DEFAULT = {"xmin": -10.0, "xmax": 10.0, "ymin": -10.0, "ymax": 10.0,
+                   "xscl": 1.0, "yscl": 1.0}
+
+
+def _finite(value, fallback):
+    """float(value) when it names a real, finite number; the fallback else."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return v if math.isfinite(v) else fallback
+
+
+def sanitize_state(state):
+    """Reduce whatever calculator.json held to fields every windowed/indexed
+    render can use blindly: the tape pair-aligned and trimmed to its window,
+    exactly four graph functions and enable flags, a window whose bounds are
+    ordered and whose scales are positive, and numeric table/trace/format
+    fields. A file from an older build (which stored results only for
+    successful "="s) or a hand-edited one must degrade to something drawable,
+    never to an IndexError or a KeyError inside a paint."""
+    if not isinstance(state, dict):
+        state = {}
+
+    raw = state.get("tape")
+    tape = [str(x) for x in raw] if isinstance(raw, list) else []
+    raw = state.get("tape_results")
+    results = ([None if x is None else str(x) for x in raw]
+               if isinstance(raw, list) else [])
+    # Older files hold one result per SUCCESS, not per attempt: pair those
+    # from the end, the way that build painted them, and pad the front with
+    # blanks. A longer results list (the desync this replaces) keeps its tail.
+    if len(results) < len(tape):
+        results = [None] * (len(tape) - len(results)) + results
+    elif len(results) > len(tape):
+        results = results[len(results) - len(tape):]
+    tape, results = tape[-TAPE_MAX:], results[-TAPE_MAX:]
+
+    variables = {}
+    raw = state.get("variables")
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if (isinstance(k, str) and re.match(r"^[A-Z]$", k)
+                    and isinstance(v, (int, float))
+                    and not isinstance(v, bool) and math.isfinite(float(v))):
+                variables[k] = float(v)
+
+    ans = state.get("ans", 0)
+    if (isinstance(ans, bool) or not isinstance(ans, (int, float))
+            or not math.isfinite(float(ans))):
+        ans = 0
+
+    fix = state.get("fix")
+    if isinstance(fix, bool) or not isinstance(fix, int) or not 0 <= fix <= 9:
+        fix = None
+
+    raw = state.get("ys")
+    raw = raw if isinstance(raw, list) else ["sin(X)", "", "", ""]
+    ys = ["" if x is None else str(x) for x in raw[:4]]
+    ys += [""] * (4 - len(ys))
+    raw = state.get("y_enabled")
+    raw = raw if isinstance(raw, list) else [True, False, False, False]
+    y_enabled = [bool(x) for x in raw[:4]]
+    y_enabled += [False] * (4 - len(y_enabled))
+
+    window = dict(_WINDOW_DEFAULT)
+    raw = state.get("window")
+    if isinstance(raw, dict):
+        for key in window:
+            window[key] = _finite(raw.get(key), window[key])
+    if window["xmin"] >= window["xmax"]:
+        window["xmin"], window["xmax"] = _WINDOW_DEFAULT["xmin"], _WINDOW_DEFAULT["xmax"]
+    if window["ymin"] >= window["ymax"]:
+        window["ymin"], window["ymax"] = _WINDOW_DEFAULT["ymin"], _WINDOW_DEFAULT["ymax"]
+    if window["xscl"] <= 0:
+        window["xscl"] = _WINDOW_DEFAULT["xscl"]
+    if window["yscl"] <= 0:
+        window["yscl"] = _WINDOW_DEFAULT["yscl"]
+
+    deg = state.get("deg")
+    return {
+        "tape": tape, "tape_results": results, "variables": variables,
+        "ans": ans, "fix": fix, "ys": ys, "y_enabled": y_enabled,
+        "window": window,
+        "tbl_start": _finite(state.get("tbl_start"), 0.0),
+        "tbl_step": _finite(state.get("tbl_step"), 1.0),
+        "trace_x": _finite(state.get("trace_x"), 0.0),
+        "deg": deg if isinstance(deg, bool) else True,
+    }
+
+
+def table_values(fn, start, step, rows=10):
+    out = []
+    for i in range(rows):
+        x = start + i * step
+        try:
+            y = fn(x)
+            y = y if math.isfinite(float(y)) else None
+        except Exception:
+            y = None
+        out.append((x, y))
+    return out
+
 
 # key defs: (label, action, value, type)
 #   type -> num / op / eq / clear / fn
 KEYS = [
+    ("STO→", "store", None, "fn"), ("MATH", "catalog", None, "fn"),
     ("2nd", "second", None, "fn"), ("DEG", "deg", None, "fn"),
     ("sin", "app", "sin(", "fn"), ("cos", "app", "cos(", "fn"),
     ("tan", "app", "tan(", "fn"), ("AC", "ac", None, "clear"),
@@ -287,10 +487,22 @@ class Calculator(nbapp.AppWindow):
         # typed out again from the beginning, which is the single most common
         # thing anyone wants back from a calculator. Not persisted — the
         # calculator still opens empty, showing 0.
-        self.tape = []
+        state = sanitize_state(self._load_state())
+        self.tape = state["tape"]
+        self.tape_results = state["tape_results"]
+        self.variables = state["variables"]
+        self.ans = state["ans"]
+        self.fix = state["fix"]
+        self.ys = state["ys"]
+        self.y_enabled = state["y_enabled"]
+        self.window = state["window"]
+        self.tbl_start = state["tbl_start"]
+        self.tbl_step = state["tbl_step"]
+        self.trace_x = state["trace_x"]
+        self.trace_curve = 0
         self._tape_i = None       # position while walking it (None = not)
         self._tape_draft = ""     # what was on the display before walking
-        self.deg = self._load_prefs()
+        self.deg = state["deg"]
         self.just_evaled = False
         self.second = False
         self.error = False   # last "=" failed; the display says why, in red
@@ -313,6 +525,21 @@ class Calculator(nbapp.AppWindow):
         self._mode_txt = None      # last DEGREES/RADIANS text
 
         # background desk
+        shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        nav = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        nav.get_style_context().add_class("calcnav")
+        self._views = {}
+        for key, label in (("home", "Home"), ("graph", "Graph"), ("table", "Table")):
+            button = Gtk.Button(label=_t(label))
+            button.connect("clicked", lambda _b, k=key: self._switch_view(k))
+            nav.pack_start(button, True, True, 0)
+            self._views[key] = button
+        shell.pack_start(nav, False, False, 0)
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        shell.pack_start(self.stack, True, True, 0)
+        self.content.pack_start(shell, True, True, 0)
+
         stage = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         stage.get_style_context().add_class("calcstage")
         stage.set_hexpand(True)
@@ -333,7 +560,7 @@ class Calculator(nbapp.AppWindow):
         scroller.set_hexpand(True)
         scroller.set_vexpand(True)
         scroller.add(stage)
-        self.content.pack_start(scroller, True, True, 0)
+        self.stack.add_named(scroller, "home")
 
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         card.get_style_context().add_class("calccard")
@@ -351,10 +578,202 @@ class Calculator(nbapp.AppWindow):
 
         card.pack_start(self._display(), False, False, 0)
         card.pack_start(self._keypad(), False, False, 0)
+        self.stack.add_named(self._graph_page(), "graph")
+        self.stack.add_named(self._table_page(), "table")
+        self._switch_view("home")
 
         self.connect("key-press-event", self._on_key_calc)
         self.connect("destroy", self._on_destroy)
         self._refresh()
+
+    def _switch_view(self, name):
+        self.current_view = name
+        self.stack.set_visible_child_name(name)
+        for key, button in self._views.items():
+            ctx = button.get_style_context()
+            (ctx.add_class if key == name else ctx.remove_class)("active")
+        if name == "table":
+            self._refresh_table()
+        if name == "graph":
+            self.graph.queue_draw()
+
+    def _graph_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        page.get_style_context().add_class("graphpage")
+        editor = Gtk.Grid(column_spacing=8, row_spacing=4)
+        self.y_entries = []
+        self.y_checks = []
+        for i in range(4):
+            check = Gtk.CheckButton(label="Y%d" % (i + 1))
+            check.set_active(bool(self.y_enabled[i]))
+            entry = Gtk.Entry()
+            entry.set_text(self.ys[i])
+            entry.connect("changed", self._on_y_changed, i)
+            check.connect("toggled", self._on_y_toggle, i)
+            editor.attach(check, 0, i, 1, 1)
+            editor.attach(entry, 1, i, 1, 1)
+            self.y_entries.append(entry)
+            self.y_checks.append(check)
+        page.pack_start(editor, False, False, 0)
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        for label, fn in (("Window…", self._window_dialog),
+                          ("Zoom Standard", lambda *_: self._zoom("standard")),
+                          ("Zoom Fit", lambda *_: self._zoom("fit")),
+                          ("Zoom In", lambda *_: self._zoom("in")),
+                          ("Zoom Out", lambda *_: self._zoom("out"))):
+            b = Gtk.Button(label=_t(label)); b.connect("clicked", fn)
+            controls.pack_start(b, False, False, 0)
+        page.pack_start(controls, False, False, 0)
+        self.graph = Gtk.DrawingArea()
+        self.graph.set_size_request(320, 240)
+        self.graph.set_can_focus(True)
+        self.graph.connect("draw", self._draw_graph)
+        self.graph.connect("key-press-event", self._on_graph_key)
+        page.pack_start(self.graph, True, True, 0)
+        self.trace_label = Gtk.Label(label="", xalign=0)
+        page.pack_start(self.trace_label, False, False, 0)
+        return page
+
+    def _table_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        page.get_style_context().add_class("tablepage")
+        settings = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for label, value, attr in (("Table Start", self.tbl_start, "tbl_start"),
+                                   ("Table Step", self.tbl_step, "tbl_step")):
+            settings.pack_start(Gtk.Label(label=_t(label)), False, False, 0)
+            ent = Gtk.Entry(); ent.set_width_chars(8); ent.set_text(str(value))
+            ent.connect("activate", self._table_setting, attr)
+            settings.pack_start(ent, False, False, 0)
+        page.pack_start(settings, False, False, 0)
+        self.table_grid = Gtk.Grid(column_spacing=20, row_spacing=4)
+        scroll = Gtk.ScrolledWindow(); scroll.add(self.table_grid)
+        page.pack_start(scroll, True, True, 0)
+        return page
+
+    def _on_y_changed(self, entry, i):
+        self.ys[i] = entry.get_text(); self.graph.queue_draw()
+
+    def _on_y_toggle(self, check, i):
+        self.y_enabled[i] = check.get_active(); self.graph.queue_draw()
+
+    def _table_setting(self, entry, attr):
+        try:
+            value = float(entry.get_text())
+        except ValueError:
+            return
+        if attr == "tbl_start":
+            self.tbl_start = value
+        else:
+            self.tbl_step = value
+        self._refresh_table()
+
+    def _eval_x(self, expression, x):
+        old = self.expr
+        self.expr = expression.replace("X", "(%r)" % x)
+        result = self.evaluate()
+        self.expr = old
+        if result == "Error": raise ValueError(self._err_why)
+        return float(result)
+
+    def _draw_graph(self, area, cr):
+        w, h = area.get_allocated_width(), area.get_allocated_height()
+        cr.set_source_rgb(0.98, 0.97, 0.94); cr.paint()
+        win = self.window
+        cr.set_line_width(1)
+        cr.set_source_rgb(0.84, 0.82, 0.76)
+        for axis, scale in (("x", win["xscl"]), ("y", win["yscl"])):
+            lo, hi = win[axis + "min"], win[axis + "max"]
+            # A scale putting more gridlines across the view than it has
+            # pixels would freeze the paint in this loop (xscl 1e-9 over a
+            # 20-wide window is 2e10 iterations); such a grid is solid ink
+            # anyway, so draw none for that axis.
+            if scale <= 0 or (hi - lo) / scale > 400:
+                continue
+            n = math.ceil(lo / scale) * scale
+            while n <= hi:
+                px, py = graph_to_pixel(n if axis == "x" else 0,
+                                        0 if axis == "x" else n, win, w, h)
+                cr.move_to(px if axis == "x" else 0, 0 if axis == "x" else py)
+                cr.line_to(px if axis == "x" else w, h if axis == "x" else py)
+                n += scale
+        cr.stroke(); cr.set_source_rgb(0.1, 0.1, 0.09)
+        ox, oy = graph_to_pixel(0, 0, win, w, h)
+        cr.move_to(0, oy); cr.line_to(w, oy); cr.move_to(ox, 0); cr.line_to(ox, h); cr.stroke()
+        colors = ((0.78, .2, .12), (.1, .35, .55), (.3, .5, .2), (.45, .25, .5))
+        for i, expression in enumerate(self.ys):
+            if not self.y_enabled[i] or not expression.strip(): continue
+            cr.set_source_rgb(*colors[i])
+            for segment in sample_segments(lambda x, e=expression: self._eval_x(e, x),
+                                           win["xmin"], win["xmax"], max(100, w)):
+                for j, (x, y) in enumerate(segment):
+                    px, py = graph_to_pixel(x, y, win, w, h)
+                    (cr.move_to if j == 0 else cr.line_to)(px, py)
+                cr.stroke()
+        self._update_trace()
+        return False
+
+    def _on_graph_key(self, _area, event):
+        name = Gdk.keyval_name(event.keyval)
+        enabled = [i for i, on in enumerate(self.y_enabled) if on and self.ys[i].strip()]
+        if name in ("Left", "Right"):
+            self.trace_x += (-1 if name == "Left" else 1) * (self.window["xmax"] - self.window["xmin"]) / 100
+        elif name in ("Up", "Down") and enabled:
+            try: p = enabled.index(self.trace_curve)
+            except ValueError: p = 0
+            self.trace_curve = enabled[(p + (-1 if name == "Up" else 1)) % len(enabled)]
+        else: return False
+        self._update_trace(); self.graph.queue_draw(); return True
+
+    def _update_trace(self):
+        try: y = self._eval_x(self.ys[self.trace_curve], self.trace_x); sy = format_number(y, self.fix)
+        except Exception: sy = _t("Undefined")
+        self.trace_label.set_text("Y%d  X=%s  Y=%s" % (self.trace_curve + 1,
+            format_number(self.trace_x, self.fix), sy))
+
+    def _refresh_table(self):
+        for child in self.table_grid.get_children(): self.table_grid.remove(child)
+        enabled = [(i, e) for i, e in enumerate(self.ys) if self.y_enabled[i] and e.strip()]
+        headers = ["X"] + ["Y%d" % (i + 1) for i, _e in enabled]
+        for c, label in enumerate(headers): self.table_grid.attach(Gtk.Label(label=label), c, 0, 1, 1)
+        for row in range(40):
+            x = self.tbl_start + row * self.tbl_step
+            self.table_grid.attach(Gtk.Label(label=format_number(x, self.fix)), 0, row + 1, 1, 1)
+            for c, (_i, expression) in enumerate(enabled, 1):
+                try: value = format_number(self._eval_x(expression, x), self.fix)
+                except Exception: value = _t("Undefined")
+                self.table_grid.attach(Gtk.Label(label=value), c, row + 1, 1, 1)
+        self.table_grid.show_all()
+
+    def _zoom(self, kind):
+        if kind == "standard": self.window.update(xmin=-10., xmax=10., ymin=-10., ymax=10., xscl=1., yscl=1.)
+        else:
+            factor = .5 if kind == "in" else 2.
+            if kind == "fit": factor = 1.
+            if kind == "fit":
+                vals = []
+                for e in [e for i, e in enumerate(self.ys) if self.y_enabled[i] and e.strip()]:
+                    for seg in sample_segments(lambda x, q=e: self._eval_x(q, x), self.window["xmin"], self.window["xmax"], 120): vals.extend(y for _x, y in seg if abs(y) < 1e6)
+                if vals: self.window["ymin"], self.window["ymax"] = min(vals), max(vals)
+            else:
+                for a, b in (("xmin", "xmax"), ("ymin", "ymax")):
+                    mid = (self.window[a] + self.window[b]) / 2; half = (self.window[b] - self.window[a]) * factor / 2
+                    self.window[a], self.window[b] = mid - half, mid + half
+        self.graph.queue_draw()
+
+    def _window_dialog(self, *_):
+        dialog = Gtk.Dialog(title=_t("Window"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
+        dialog.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL); dialog.add_button(_t("Apply"), Gtk.ResponseType.OK)
+        grid = Gtk.Grid(column_spacing=8, row_spacing=4); entries = {}
+        for row, key in enumerate(("xmin", "xmax", "ymin", "ymax", "xscl", "yscl")):
+            grid.attach(Gtk.Label(label=key), 0, row, 1, 1); ent = Gtk.Entry(); ent.set_text(str(self.window[key])); grid.attach(ent, 1, row, 1, 1); entries[key] = ent
+        dialog.get_content_area().add(grid); dialog.show_all()
+        if dialog.run() == Gtk.ResponseType.OK:
+            try:
+                values = {k: float(e.get_text()) for k, e in entries.items()}
+                if values["xmin"] >= values["xmax"] or values["ymin"] >= values["ymax"] or values["xscl"] <= 0 or values["yscl"] <= 0: raise ValueError()
+                self.window.update(values); self.graph.queue_draw()
+            except ValueError: pass
+        dialog.destroy()
 
     # ---- display ----
     def _display(self):
@@ -369,6 +788,13 @@ class Calculator(nbapp.AppWindow):
         self.mode_lbl.get_style_context().add_class("disp-mode")
         top.pack_end(self.mode_lbl, False, False, 0)
         box.pack_start(top, False, False, 0)
+
+        tape_scroll = Gtk.ScrolledWindow()
+        tape_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        tape_scroll.set_size_request(-1, 92)
+        self.tape_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        tape_scroll.add(self.tape_box)
+        box.pack_start(tape_scroll, False, False, 0)
 
         # Both readouts ellipsize from the START (the tail of a long expression
         # is the part you are still typing), and both cap their NATURAL width to
@@ -474,6 +900,10 @@ class Calculator(nbapp.AppWindow):
         self._tape_i = None
         if action == "second":
             self.second = not self.second
+        elif action == "store":
+            self._store_dialog()
+        elif action == "catalog":
+            self._catalog_dialog()
         elif action == "deg":
             self.deg = not self.deg
             self._save_prefs()
@@ -500,12 +930,16 @@ class Calculator(nbapp.AppWindow):
             if not prev.strip():
                 self.second = False          # nothing to compute; stay at 0
             else:
-                self._remember(prev)
+                idx = self._remember(prev)
                 r = self.evaluate()
                 if r == "Error":
                     # Keep what was tried visible on the history line and show a
                     # clear, honest "Error" in the main display — never a silent
-                    # "0" that reads as though the bad input equalled zero.
+                    # "0" that reads as though the bad input equalled zero. The
+                    # attempt keeps its tape slot (so Up can recall it to fix)
+                    # but its result slot is None, which the tape never paints.
+                    if idx is not None:
+                        self.tape_results[idx] = None
                     self.history = prev.strip() + " ="
                     self.expr = ""
                     self.error = True
@@ -513,11 +947,19 @@ class Calculator(nbapp.AppWindow):
                 else:
                     self.history = prev + " ="
                     self.expr = r
+                    try: self.ans = float(r)
+                    except ValueError: self.ans = r
+                    if idx is not None:
+                        self.tape_results[idx] = r
                     self.just_evaled = True
+                    self._save_prefs()
                 self.second = False
         elif action == "app":
             v = ALT_VALUE[value] if (self.second and value in ALT_VALUE) else value
             is_op = ktype == "op" or v in ("^", "%", "^2", "!", ")")
+            if (not self.expr and ktype == "op" and v in ("+", "×", "÷", "^")
+                    and any(r is not None for r in self.tape_results)):
+                self.expr = "Ans"
             if self.just_evaled and not is_op:
                 self.expr = v
             else:
@@ -529,17 +971,25 @@ class Calculator(nbapp.AppWindow):
     # How many worked-out calculations are kept for Up / Down. Long enough to
     # cover a session's worth of adding things up, short enough that walking
     # back through it stays quick.
-    _TAPE_MAX = 30
+    _TAPE_MAX = TAPE_MAX
 
     def _remember(self, expr):
-        """File an expression that was worked out, newest last. A repeat of the
-        one already on top is not stored twice — pressing = on the same sum
-        again should not fill the history with copies of it."""
+        """File an attempted expression, newest last, with a result slot filed
+        alongside it in lockstep ("=" fills the slot on success, leaves it None
+        on failure; the tape paints only filled slots). A repeat of the one
+        already on top reuses its slot rather than being stored twice —
+        pressing = on the same sum again should not fill the history with
+        copies of it. Returns the tape index this attempt lives at, or None
+        for an empty expression."""
         expr = expr.strip()
-        if not expr or (self.tape and self.tape[-1] == expr):
-            return
-        self.tape.append(expr)
-        del self.tape[:-self._TAPE_MAX]
+        if not expr:
+            return None
+        if not (self.tape and self.tape[-1] == expr):
+            self.tape.append(expr)
+            self.tape_results.append(None)
+            del self.tape[:-self._TAPE_MAX]
+            del self.tape_results[:-self._TAPE_MAX]
+        return len(self.tape) - 1
 
     def recall(self, step):
         """Walk the history back (step -1) or forward (+1) into the display.
@@ -583,6 +1033,10 @@ class Calculator(nbapp.AppWindow):
         js = (js.replace("×", "*").replace("÷", "/")
                 .replace("−", "-").replace("π", "(PI)")
                 .replace("√", "sqrt").replace("^", "**"))
+        # Protect digits that are part of function names from the implicit
+        # multiplication rule below (which correctly turns ordinary 2e into
+        # 2*e, but must not turn log2 into log*2).
+        js = js.replace("log2(", "logtwo(").replace("pow10(", "powten(")
         # percent: "+10%" / "-10%" is ten percent OF the left-hand value, any
         # other "n%" is n/100 (see _expand_percent)
         js = _expand_percent(js)
@@ -674,14 +1128,25 @@ class Calculator(nbapp.AppWindow):
             "asin": lambda x: math.asin(x) / d2r,
             "acos": lambda x: math.acos(x) / d2r,
             "atan": lambda x: math.atan(x) / d2r,
+            "sinh": math.sinh, "cosh": math.cosh, "tanh": math.tanh,
             "ln": math.log,
             "log": math.log10,
+            "logtwo": math.log2, "exp": math.exp,
+            "powten": lambda x: _guarded_pow(10, x),
             "sqrt": math.sqrt,
+            "root": lambda x, n: math.copysign(abs(x) ** (1.0 / n), x) if int(n) % 2 else x ** (1.0 / n),
+            "abs": abs, "floor": math.floor, "ceil": math.ceil, "round": round,
+            "frac": lambda x: x - math.trunc(x), "int": math.trunc,
+            "nCr": lambda n, r: math.factorial(int(n)) // (math.factorial(int(r)) * math.factorial(int(n-r))) if n == int(n) and r == int(r) and 0 <= r <= n else (_ for _ in ()).throw(ValueError()),
+            "nPr": lambda n, r: math.factorial(int(n)) // math.factorial(int(n-r)) if n == int(n) and r == int(r) and 0 <= r <= n else (_ for _ in ()).throw(ValueError()),
+            "random": random.random,
             "fact": fact,
             "_pow": _guarded_pow,
             "PI": math.pi,
             "e": math.e,
+            "Ans": getattr(self, "ans", 0),
         }
+        env.update({k: v for k, v in getattr(self, "variables", {}).items() if re.match(r"^[A-Z]$", k)})
         try:
             # Rewrite  **  into bounded _pow() calls before evaluating so an
             # oversized power (9^9^9) is rejected up front instead of building a
@@ -725,8 +1190,8 @@ class Calculator(nbapp.AppWindow):
             # match toPrecision(12) then trim
             r = float("%.12g" % r)
             if r == int(r) and abs(r) < 1e16:
-                return str(int(r))
-            return repr(r)
+                return format_number(r, getattr(self, "fix", None)) if getattr(self, "fix", None) is not None else str(int(r))
+            return format_number(r, getattr(self, "fix", None)) if getattr(self, "fix", None) is not None else repr(r)
         except OverflowError:
             return self._fail(_WHY_TOOBIG)
         except (TypeError, ValueError):
@@ -738,6 +1203,14 @@ class Calculator(nbapp.AppWindow):
             return self._fail(_WHY_UNREADABLE)
 
     def _refresh(self):
+        if hasattr(self, "tape_box"):
+            for child in self.tape_box.get_children(): self.tape_box.remove(child)
+            for expression, result in tape_window(self.tape, self.tape_results):
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+                row.pack_start(Gtk.Label(label=expression, xalign=0), True, True, 0)
+                row.pack_end(Gtk.Label(label=result, xalign=1), False, False, 0)
+                self.tape_box.pack_start(row, False, False, 0)
+            self.tape_box.show_all()
         disp_ctx = self.disp_lbl.get_style_context()
         if self.error:
             # "Error" names nothing. Say which of the four things happened,
@@ -828,6 +1301,7 @@ class Calculator(nbapp.AppWindow):
                 # advertised a keystroke that does not exist; Del is the key
                 # that actually does this (see _on_key_calc).
                 (_t("Clear    Del"), self._clear_all),
+                (_t("Store Variable…"), self._store_dialog),
             ]
         if name == "View":
             # A leading BULLET marks the active choice, the OS-wide convention
@@ -839,8 +1313,15 @@ class Calculator(nbapp.AppWindow):
             deg_mark = "•  " if self.deg else "    "
             rad_mark = "•  " if not self.deg else "    "
             return [
+                (_t("Home    Ctrl+1"), lambda: self._switch_view("home")),
+                (_t("Graph    Ctrl+2"), lambda: self._switch_view("graph")),
+                (_t("Table    Ctrl+3"), lambda: self._switch_view("table")),
+                (_t("Function Catalog…"), self._catalog_dialog),
+                (_t("Variables…"), self._variables_dialog),
+                nbapp.SEP,
                 (deg_mark + _t("Degrees"), lambda: self._set_deg(True)),
                 (rad_mark + _t("Radians"), lambda: self._set_deg(False)),
+                ((_t("Float") if self.fix is None else _t("Fix %d") % self.fix), self._display_mode_dialog),
             ]
         return super().menu_items(name)
 
@@ -864,6 +1345,45 @@ class Calculator(nbapp.AppWindow):
     def _clear_all(self):
         self.press(("AC", "ac", None, "clear"))
 
+    def _store_dialog(self):
+        dialog = Gtk.Dialog(title=_t("Store Variable"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
+        dialog.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL); dialog.add_button(_t("Store"), Gtk.ResponseType.OK)
+        entry = Gtk.Entry(); entry.set_max_length(1); entry.set_placeholder_text(_t("Letter A-Z")); dialog.get_content_area().add(entry); dialog.show_all()
+        if dialog.run() == Gtk.ResponseType.OK and re.match(r"^[A-Za-z]$", entry.get_text()):
+            try: self.variables[entry.get_text().upper()] = float(self.expr)
+            except ValueError: pass
+            self._save_prefs()
+        dialog.destroy()
+
+    def _variables_dialog(self):
+        dialog = Gtk.Dialog(title=_t("Variables"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
+        dialog.add_button(_t("Close"), Gtk.ResponseType.CLOSE)
+        text = "\n".join("%s = %s" % item for item in sorted(self.variables.items())) or _t("No Stored Variables")
+        dialog.get_content_area().add(Gtk.Label(label=text, xalign=0)); dialog.show_all(); dialog.run(); dialog.destroy()
+
+    def _catalog_dialog(self):
+        dialog = Gtk.Dialog(title=_t("Function Catalog"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
+        dialog.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL); dialog.add_button(_t("Insert"), Gtk.ResponseType.OK)
+        store = Gtk.TreeStore(str, str)
+        for category, items in CATALOG.items():
+            parent = store.append(None, [_t(category), ""])
+            for label, value in items: store.append(parent, [label, value])
+        tree = Gtk.TreeView(model=store); cell = Gtk.CellRendererText(); tree.append_column(Gtk.TreeViewColumn(_t("Function"), cell, text=0)); tree.expand_all()
+        scroll = Gtk.ScrolledWindow(); scroll.set_size_request(320, 360); scroll.add(tree); dialog.get_content_area().add(scroll); dialog.show_all()
+        if dialog.run() == Gtk.ResponseType.OK:
+            model, it = tree.get_selection().get_selected()
+            if it is not None and model[it][1]: self._press_value(model[it][1])
+        dialog.destroy()
+
+    def _display_mode_dialog(self):
+        dialog = Gtk.Dialog(title=_t("Display Mode"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
+        dialog.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL); dialog.add_button(_t("Apply"), Gtk.ResponseType.OK)
+        combo = Gtk.ComboBoxText(); combo.append_text(_t("Float"))
+        for i in range(10): combo.append_text(_t("Fix %d") % i)
+        combo.set_active(0 if self.fix is None else self.fix + 1); dialog.get_content_area().add(combo); dialog.show_all()
+        if dialog.run() == Gtk.ResponseType.OK: self.fix = None if combo.get_active() == 0 else combo.get_active() - 1; self._save_prefs()
+        dialog.destroy()
+
     # ---- persistence ----
     def _load_prefs(self):
         """Return the stored angle mode (True = degrees), or the degrees default
@@ -878,11 +1398,31 @@ class Calculator(nbapp.AppWindow):
             pass
         return True
 
+    def _load_state(self):
+        self._store_readable = True
+        try:
+            with open(STATE_FILE) as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            return {}
+        except Exception:
+            self._store_readable = False
+            return {}
+
     def _save_prefs(self):
         """Persist the angle mode to this app's private JSON file. Never crash
         on I/O — a read-only or missing config dir just skips the save."""
         try:
-            nbapp.atomic_write_json(STATE_FILE, {"deg": bool(self.deg)})
+            if not self._store_readable:
+                return
+            nbapp.atomic_write_json(STATE_FILE, {
+                "deg": bool(self.deg), "fix": self.fix, "ans": self.ans,
+                "tape": self.tape, "tape_results": self.tape_results,
+                "variables": self.variables, "ys": self.ys,
+                "y_enabled": self.y_enabled, "window": self.window,
+                "tbl_start": self.tbl_start, "tbl_step": self.tbl_step,
+                "trace_x": self.trace_x})
         except Exception:
             pass
 
@@ -899,6 +1439,18 @@ class Calculator(nbapp.AppWindow):
         if (ev.state & Gdk.ModifierType.CONTROL_MASK) and name in ("c", "C"):
             self._copy_result()
             return True
+        if ev.state & Gdk.ModifierType.CONTROL_MASK:
+            if name in ("1", "2", "3"):
+                self._switch_view({"1": "home", "2": "graph", "3": "table"}[name])
+                return True
+            if name in ("m", "M"):
+                self._catalog_dialog(); return True
+            if name in ("s", "S"):
+                self._store_dialog(); return True
+        if name == "Escape":
+            if getattr(self, "current_view", "home") != "home":
+                self._switch_view("home"); return True
+            return False
         table = {
             "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
             "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
@@ -924,6 +1476,8 @@ class Calculator(nbapp.AppWindow):
         if name in table:
             self._press_value(table[name])
             return True
+        if name and len(name) == 1 and name.isalpha():
+            self._press_value(name.upper()); return True
         # Up / Down walk the history, the way they do at any command line.
         # They are swallowed either way so a stray Up never silently moves the
         # keyboard focus around the keypad instead; Tab and Left/Right still do
@@ -959,6 +1513,10 @@ class Calculator(nbapp.AppWindow):
            short panel never exposes a transparent (black) window surface. */
         .calcscroll, .calcscroll viewport { background: #DED4C2; }
         .calcstage { background: #DED4C2; padding: 40px; }
+        .calcnav { background: #F1EEE6; border-bottom: 1px solid #C9C4B6; }
+        .calcnav button { border-radius: 0; min-height: 34px; }
+        .calcnav button.active { background: #C8341E; color: #FCFBF8; }
+        .graphpage, .tablepage { background: #F8F7F2; padding: 14px; }
         .calccard { background: #F8F7F2; border: 1px solid #1A1916;
                     box-shadow: 4px 4px 0 rgba(26,25,22,0.12); }
         .calccard * { font-family: "Nimbus Sans","Helvetica",sans-serif; }

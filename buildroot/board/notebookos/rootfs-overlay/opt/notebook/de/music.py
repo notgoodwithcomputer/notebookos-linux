@@ -1984,14 +1984,7 @@ class Music(nbapp.AppWindow):
                     lambda _mi, s=song: self._add_to_new_playlist(s))
                 menu.append(item)
             menu.show_all()
-            try:
-                # anchor the menu to the + button (GTK 3.22+)
-                menu.popup_at_widget(button, Gdk.Gravity.SOUTH_WEST,
-                                     Gdk.Gravity.NORTH_WEST, None)
-            except (AttributeError, TypeError):
-                # older GTK: fall back to the deprecated popup
-                menu.popup(None, None, None, None, 0,
-                           Gtk.get_current_event_time())
+            nbapp.popup_at(menu, widget=button, anchor="widget-sw")
         except Exception:
             # the add affordance must never crash a row click
             pass

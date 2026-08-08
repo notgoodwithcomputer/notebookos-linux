@@ -29,6 +29,7 @@ os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="calc-selftest-")
 
 import gi                                                     # noqa: E402
 gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk                                # noqa: E402
 import calculator                                             # noqa: E402
 
 C = calculator.Calculator
@@ -168,6 +169,10 @@ check("_sci keeps a negative", calculator._sci("-12345678901234567890")
       == "-1.23456789012e+19", calculator._sci("-12345678901234567890"))
 
 print("== display and history ==")
+if not Gtk.init_check()[0]:
+    print("SKIP GTK display/history checks: no display connection")
+    print("\n%d check(s) failed" % len(FAILS) if FAILS else "\nall headless checks passed")
+    sys.exit(len(FAILS))
 app = C()
 app.press(("1", "app", "1", "num"))
 app.press(("+", "app", "+", "op"))

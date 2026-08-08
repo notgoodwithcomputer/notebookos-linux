@@ -58,7 +58,8 @@ frames (matching the Finder).
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Gio, Pango  # noqa: E402
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Gio, Pango, PangoCairo  # noqa: E402
 
 import os
 import json
@@ -565,6 +566,114 @@ def _fmt_time(hhmm):
     return "" if mins is None else "%02d:%02d" % (mins // 60, mins % 60)
 
 
+def _classes_for_day(classes, weekday):
+    """Clean one weekday's meetings into drawable schedule records."""
+    out = []
+    for cls in classes if isinstance(classes, list) else []:
+        if not isinstance(cls, dict):
+            continue
+        name = cls.get("name") or cls.get("label")
+        if not name:
+            continue
+        meets = cls.get("meets") if isinstance(cls.get("meets"), list) else []
+        for meet in meets:
+            if not isinstance(meet, dict) or meet.get("day") != weekday:
+                continue
+            start = _minutes(meet.get("start"))
+            end = _minutes(meet.get("end"))
+            if start is None:
+                continue
+            if end is None or end <= start:
+                end = min(24 * 60, start + 60)
+            out.append({"start": start, "end": end, "name": str(name),
+                        "room": str(meet.get("room") or cls.get("room") or "")})
+    return sorted(out, key=lambda event: (event["start"], event["end"],
+                                          event["name"]))
+
+
+def _classes_window(events):
+    """Whole-hour span with one hour of context around today's classes."""
+    if not events:
+        return None
+    first = min(event["start"] for event in events)
+    last = max(event["end"] for event in events)
+    return max(0, (first // 60 - 1) * 60), min(
+        24 * 60, ((last + 59) // 60 + 1) * 60)
+
+
+def _classes_block_geometry(start, end, window_start, window_end, height):
+    """Proportional (top, height) for a meeting in a bounded time window."""
+    span = max(1.0, float(window_end - window_start))
+    top = (max(window_start, start) - window_start) * float(height) / span
+    bottom = (min(window_end, end) - window_start) * float(height) / span
+    return top, max(1.0, bottom - top)
+
+
+def _classes_collision_lanes(events):
+    """Return copies carrying lane/lane_count for each overlapping run."""
+    result = []
+    run = []
+    run_end = None
+
+    def flush():
+        lanes = []
+        placed = []
+        for event in run:
+            for lane, free in enumerate(lanes):
+                if event["start"] >= free:
+                    lanes[lane] = event["end"]
+                    placed.append((event, lane))
+                    break
+            else:
+                lanes.append(event["end"])
+                placed.append((event, len(lanes) - 1))
+        for event, lane in placed:
+            item = dict(event)
+            item.update({"lane": lane, "lane_count": len(lanes)})
+            result.append(item)
+
+    for event in sorted(events, key=lambda item: (item["start"], item["end"])):
+        if run and event["start"] >= run_end:
+            flush()
+            run = []
+            run_end = None
+        run.append(event)
+        run_end = event["end"] if run_end is None else max(run_end, event["end"])
+    if run:
+        flush()
+    return result
+
+
+def _classes_now_position(now_minutes, window_start, window_end, school_day,
+                          height):
+    """Y for the now rule, or None outside a populated school-day window."""
+    if not school_day or not window_start <= now_minutes <= window_end:
+        return None
+    return ((now_minutes - window_start) * float(height) /
+            max(1.0, float(window_end - window_start)))
+
+
+def _classes_text_layout(cr, text, size, bold=False):
+    layout = PangoCairo.create_layout(cr)
+    font = Pango.FontDescription("Nimbus Sans")
+    font.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
+    font.set_absolute_size(size * Pango.SCALE)
+    layout.set_font_description(font)
+    layout.set_text(str(text), -1)
+    layout.set_ellipsize(Pango.EllipsizeMode.END)
+    return layout
+
+
+def _classes_show_text(cr, x, baseline, text, size, width, bold=False):
+    """Classes-tile Pango baseline helper; never use cairo's toy text API."""
+    if width <= 2:
+        return
+    layout = _classes_text_layout(cr, text, size, bold)
+    layout.set_width(int(width * Pango.SCALE))
+    cr.move_to(x, baseline - layout.get_baseline() / Pango.SCALE)
+    PangoCairo.show_layout(cr, layout)
+
+
 def _fmt_money(total):
     """A balance formatted the way the Accounting app itself formats one:
     thousands separated, a real Unicode minus, and the currency sign. The two
@@ -732,6 +841,79 @@ class _Dots(Gtk.DrawingArea):
                 else:
                     cr.set_source_rgb(*_GREY)
                     cr.stroke()
+        except Exception:
+            pass
+        return False
+
+
+class _ClassesSchedule(Gtk.DrawingArea):
+    """The Calendar day view reduced to one non-scrolling board tile."""
+
+    GUTTER = 43
+
+    def __init__(self, events, window, now_minutes):
+        super().__init__()
+        self.events = _classes_collision_lanes(events)
+        self.window = window
+        self.now_minutes = now_minutes
+        self.set_vexpand(True)
+        self.set_hexpand(True)
+        self.connect("draw", self._draw)
+
+    def _draw(self, _area, cr):
+        try:
+            width = self.get_allocated_width()
+            height = self.get_allocated_height()
+            if width <= self.GUTTER + 8 or height <= 0:
+                return False
+            start, end = self.window
+            span = max(1, end - start)
+            cr.set_line_width(1)
+            for minute in range(start, end + 1, 60):
+                y = (minute - start) * height / float(span)
+                cr.set_source_rgb(0.843, 0.824, 0.773)  # board hairline
+                cr.move_to(self.GUTTER, y + 0.5)
+                cr.line_to(width, y + 0.5)
+                cr.stroke()
+                if minute < end:
+                    cr.set_source_rgb(*_GREY)
+                    _classes_show_text(cr, 0, y + 11,
+                                       "%02d:00" % (minute // 60), 9,
+                                       self.GUTTER - 7)
+            content_w = width - self.GUTTER
+            for event in self.events:
+                top, block_h = _classes_block_geometry(
+                    event["start"], event["end"], start, end, height)
+                lanes = max(1, event["lane_count"])
+                lane_w = max(1.0, (content_w - 5) / lanes)
+                x = self.GUTTER + 3 + event["lane"] * lane_w
+                block_w = max(1.0, lane_w - 2)
+                # Calendar's quiet colour wash + solid class-colour spine,
+                # translated into the board's neutral papertone idiom.
+                cr.set_source_rgb(0.902, 0.886, 0.831)
+                cr.rectangle(x, top + 1, block_w, max(1, block_h - 2))
+                cr.fill()
+                cr.set_source_rgb(*_GOOD)
+                cr.rectangle(x, top + 1, 3, max(1, block_h - 2))
+                cr.fill()
+                pad = 7 if block_w >= 70 else 5
+                cr.set_source_rgb(*_INK)
+                _classes_show_text(cr, x + pad, top + 13, event["name"],
+                                   10.5, block_w - pad - 4, True)
+                if block_h >= 28 and event["room"]:
+                    cr.set_source_rgb(0.431, 0.412, 0.369)
+                    _classes_show_text(cr, x + pad, top + 25, event["room"],
+                                       9, block_w - pad - 4)
+            now_y = _classes_now_position(self.now_minutes, start, end,
+                                          bool(self.events), height)
+            if now_y is not None:
+                cr.set_source_rgb(0.784, 0.204, 0.118)  # board signage red
+                cr.set_line_width(1.5)
+                cr.move_to(self.GUTTER - 3, now_y)
+                cr.line_to(width, now_y)
+                cr.stroke()
+                cr.arc(self.GUTTER - 3, now_y, 2.5, 0, 6.2831853)
+                cr.fill()
         except Exception:
             pass
         return False
@@ -1317,6 +1499,8 @@ class Widgets(Gtk.Window):
         """One app tile: the same card as Tasks and the calendar, with the app's
         name in the header, its summary on the right, and its content rows
         beneath."""
+        if tid == "academics":
+            return self._classes_tile()
         meta, rows, cta, empty = self._tile_content(tid)
         card, body = self._card_shell(_t(TILE_TITLE[tid]), meta)
         card.set_size_request(self._tile_w, -1)
@@ -1382,6 +1566,28 @@ class Widgets(Gtk.Window):
 
         return self._clickable(card, TILE_APP[tid], TILE_ARG.get(tid),
                                _t("Open %s") % _t(TILE_APP_NAME[tid]))
+
+    def _classes_tile(self):
+        """Classes as the Calendar day schedule in the existing card shell."""
+        try:
+            schedule = self._read_classes_schedule()
+        except Exception:
+            schedule = None
+        card, body = self._card_shell(_t(TILE_TITLE["academics"]),
+                                      _t("Today") if schedule else "")
+        card.set_size_request(self._tile_w, -1)
+        if schedule:
+            events, window, now_minutes = schedule
+            body.pack_start(_ClassesSchedule(events, window, now_minutes),
+                            True, True, 0)
+        else:
+            state, action = TILE_EMPTY["academics"]
+            block = self._cta_block(_t(state), _t(action))
+            block.set_valign(Gtk.Align.CENTER)
+            body.pack_start(block, True, True, 0)
+        return self._clickable(card, TILE_APP["academics"],
+                               TILE_ARG.get("academics"),
+                               _t("Open %s") % _t(TILE_APP_NAME["academics"]))
 
     def _card_shell(self, title, meta, strong=False):
         """(card, body) -- the header row every card on this board shares."""
@@ -1689,6 +1895,18 @@ class Widgets(Gtk.Window):
         return _t("in %d days") % days
 
     # -- readers -------------------------------------------------------------
+
+    def _read_classes_schedule(self, now=None):
+        """Today's safe, drawable Classes schedule, or None when empty."""
+        data = self._read_store(self._academics_store())
+        if now is None:
+            now = time.localtime()
+        events = _classes_for_day(self._as_list(data.get("classes")),
+                                  now.tm_wday)
+        window = _classes_window(events)
+        if not events or window is None:
+            return None
+        return events, window, now.tm_hour * 60 + now.tm_min
 
     def _read_academics(self):
         """TODAY'S TIMETABLE, one row per class: when it starts, what it is and
@@ -2638,10 +2856,10 @@ class Widgets(Gtk.Window):
                 menu.append(item)
             menu.show_all()
             # attach_to_widget so GTK tears the menu down with the board, and
-            # popup_at_pointer so it opens where the click was rather than at
+            # nbapp.popup_at so it opens where the click was rather than at
             # the top-left of a full-desktop window.
             menu.attach_to_widget(self, None)
-            menu.popup_at_pointer(ev)
+            nbapp.popup_at(menu, event=ev)
         except Exception:
             return False
         return True

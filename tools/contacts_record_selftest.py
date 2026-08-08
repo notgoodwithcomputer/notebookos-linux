@@ -88,7 +88,8 @@ def main():
         # The card itself is untouched: the colour is decoration, the number
         # is the reason the record exists.
         check("normalize-keeps-fields-%r" % bad,
-              person["name"] == "Alice Test" and person["phone"] == "555-0100")
+              person["name"] == "Alice Test" and person["phones"] == [
+                  {"label": "mobile", "value": "555-0100"}])
 
     # --- 3. A readable colour is kept exactly as written ----------------
     for i, good in enumerate(GOOD_COLORS):

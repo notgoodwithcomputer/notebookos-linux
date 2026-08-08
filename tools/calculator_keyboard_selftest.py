@@ -133,6 +133,11 @@ def main():
     check("a percentage inside a group uses that group's value (6.6)",
           abs(got - 6.6) < 1e-9, repr(got))
 
+    if not Gtk.init_check()[0]:
+        print("SKIP GTK interaction checks: no display connection")
+        print("RESULT: %s" % ("ALL PASS" if not FAILED else "FAILED"))
+        return 1 if FAILED else 0
+
     app = C.Calculator()
     pump()
 
@@ -210,7 +215,14 @@ def main():
     # would make the calculator the one app you cannot close with Esc.
     check("Esc falls through so it can still leave",
           press_key(app, "Escape") is False)
-    check("a letter falls through", press_key(app, "z") is False)
+    # STO variables made letters calculator vocabulary; fall-through is for
+    # Esc, Tab, and genuinely unowned keys, not expression vocabulary.
+    press_key(app, "Delete")
+    took = press_key(app, "z")
+    check("a letter is claimed and enters its uppercase variable",
+          took is True and shown(app).strip() == "Z",
+          "%r, %r" % (took, shown(app)))
+    check("an unowned F5 key falls through", press_key(app, "F5") is False)
 
     # ---- the on-screen keypad reaches the same place the keyboard does ----
     # _on_press is a one-line wrapper, which is exactly the sort of thing that

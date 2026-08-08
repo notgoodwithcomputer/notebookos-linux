@@ -22,6 +22,7 @@ import json
 import re
 import time
 import subprocess
+import copy
 from datetime import date, timedelta
 
 import cairo
@@ -30,6 +31,7 @@ import nbapp
 import nbcommands
 import nbicons
 import nbprint
+import nbpicker
 from nbi18n import _t  # noqa: E402
 
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,16 +63,13 @@ AVATAR_COLORS = ["#8A857A", "#6E7B57", "#9A6B4F", "#5B6B7B", "#7B5B6E", "#6B7B6E
 
 # Standard address-book fields (label, storage key). Every field is free-text
 # and editable; there is no radio/network metadata on a card.
-FIELDS = [
-    ("Phone", "phone"),
-    ("Email", "email"),
-    ("Address", "address"),
-    ("Birthday", "bday"),
-]
+FIELDS = [("Organization", "organization"), ("Address", "address"),
+          ("Birthday", "bday")]
 
 # The canonical set of string keys every card carries (color is added
 # separately). Kept in one place so load / new / normalize agree.
-FIELD_KEYS = ("name", "role", "phone", "email", "address", "bday", "notes")
+FIELD_KEYS = ("name", "role", "organization", "address", "bday", "notes")
+VALUE_LABELS = ("mobile", "home", "work")
 
 # The contact card is a fixed reading measure centred in the detail pane —
 # the width the design draws it at, and the width it keeps until the pane is
@@ -81,7 +80,8 @@ CARD_MARGIN = 64
 # Top-to-bottom order of the single-line edit fields, used so Enter advances
 # to the next field (Tab-like) instead of dropping out of edit mid-form. Notes
 # is a multi-line area (its own widget) and is deliberately not in this list.
-EDIT_ORDER = ("name", "role", "phone", "email", "address", "bday")
+EDIT_ORDER = ("name", "role", "organization", "phones", "emails",
+              "address", "bday")
 
 # Letter dividers only appear once a book is long enough that scanning it needs
 # them; a handful of contacts reads better as the flat list the design draws.
@@ -97,6 +97,228 @@ DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
 _BDAY_NUM_RE = re.compile(r"^(\d{1,4})\D+(\d{1,2})(?:\D+(\d{1,4}))?\D*$")
 _WORD_RE = re.compile(r"[A-Za-z]+")
 _DIGITS_RE = re.compile(r"\d+")
+
+
+def _labeled_values(value, fallback_label):
+    """Normalize old strings and new labeled objects without dropping values."""
+    if isinstance(value, str):
+        return [{"label": fallback_label, "value": value}] if value else []
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        if isinstance(item, str) and item:
+            out.append({"label": fallback_label, "value": item})
+        elif isinstance(item, dict) and item.get("value") not in (None, ""):
+            row = dict(item)
+            label = str(row.get("label") or fallback_label).lower()
+            row["label"] = ("mobile" if label in ("cell", "mobile") else
+                            label if label in VALUE_LABELS else fallback_label)
+            row["value"] = str(row["value"])
+            out.append(row)
+    return out
+
+
+def normalize_person(p, i=0):
+    """Return the lossless current record shape for old or current data."""
+    person = dict(p)
+    for key in FIELD_KEYS:
+        person[key] = str(person.get(key, "") or "")
+    person["phones"] = _labeled_values(
+        person.get("phones", person.get("phone", "")), "mobile")
+    person["emails"] = _labeled_values(
+        person.get("emails", person.get("email", "")), "home")
+    person.pop("phone", None)
+    person.pop("email", None)
+    person["favorite"] = bool(person.get("favorite", False))
+    color = person.get("color")
+    if not isinstance(color, str) or not _is_css_color(color):
+        color = AVATAR_COLORS[i % len(AVATAR_COLORS)]
+    person["color"] = color
+    return person
+
+
+def labeled_text(values):
+    """Editable one-item-per-line spelling: ``mobile: 555-0100``."""
+    return "; ".join("%s: %s" % (v["label"], v["value"]) for v in values)
+
+
+def parse_labeled_text(text, fallback):
+    out = []
+    for line in re.split(r"[;\n]+", text or ""):
+        line = line.strip()
+        if not line:
+            continue
+        label, sep, value = line.partition(":")
+        if not sep or not value.strip():
+            label, value = fallback, line
+        label = label.strip().lower()
+        label = "mobile" if label == "cell" else label
+        out.append({"label": label if label in VALUE_LABELS else fallback,
+                    "value": value.strip()})
+    return out
+
+
+def contact_matches(person, query):
+    q = (query or "").strip().lower()
+    if not q:
+        return True
+    text = [str(person.get(k, "")) for k in FIELD_KEYS]
+    text += [v["value"] for k in ("phones", "emails")
+             for v in person.get(k, [])]
+    if q in " ".join(text).lower():
+        return True
+    digits = "".join(c for c in q if c.isdigit())
+    return bool(digits and any(digits in "".join(c for c in v["value"]
+                                                  if c.isdigit())
+                               for v in person.get("phones", [])))
+
+
+def ordered_people(people, query=""):
+    pairs = [(i, p) for i, p in enumerate(people) if contact_matches(p, query)]
+    pairs.sort(key=lambda ip: ((ip[1].get("name") or "").lower(),
+                               not ip[1].get("favorite")))
+    # Favorites come first inside each initial group, while letters remain A-Z.
+    pairs.sort(key=lambda ip: (((ip[1].get("name") or "#")[:1].upper()
+                                if (ip[1].get("name") or "")[:1].isalpha()
+                                else "#"),
+                               not ip[1].get("favorite"),
+                               (ip[1].get("name") or "").lower()))
+    return pairs
+
+
+def _vc_escape(value):
+    return (str(value).replace("\\", "\\\\").replace("\n", "\\n")
+            .replace(";", "\\;").replace(",", "\\,"))
+
+
+def _vc_unescape(value):
+    out, escaped = [], False
+    for ch in value:
+        if escaped:
+            out.append("\n" if ch in "nN" else ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        else:
+            out.append(ch)
+    if escaped:
+        out.append("\\")
+    return "".join(out)
+
+
+def _vc_split(value, delimiter=";"):
+    parts, buf, escaped = [], [], False
+    for ch in value:
+        if escaped:
+            buf.extend(("\\", ch)); escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == delimiter:
+            parts.append(_vc_unescape("".join(buf))); buf = []
+        else:
+            buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    parts.append(_vc_unescape("".join(buf)))
+    return parts
+
+
+def export_vcards(people):
+    cards = []
+    for p in people:
+        name = p.get("name", "")
+        words = name.split()
+        family, given = (words[-1], " ".join(words[:-1])) if len(words) > 1 \
+            else (name, "")
+        lines = ["BEGIN:VCARD", "VERSION:3.0", "FN:" + _vc_escape(name),
+                 "N:%s;%s;;;" % (_vc_escape(family), _vc_escape(given))]
+        for v in p.get("phones", []):
+            lines.append("TEL;TYPE=%s:%s" % (v["label"].upper(),
+                                              _vc_escape(v["value"])))
+        for v in p.get("emails", []):
+            lines.append("EMAIL;TYPE=%s:%s" % (v["label"].upper(),
+                                                _vc_escape(v["value"])))
+        for prop, key in (("ORG", "organization"), ("ADR", "address"),
+                          ("NOTE", "notes"), ("BDAY", "bday")):
+            if p.get(key):
+                value = p[key]
+                if prop == "ADR":
+                    lines.append("ADR:;;%s;;;;" % _vc_escape(value))
+                    continue
+                lines.append(prop + ":" + _vc_escape(value))
+        lines.append("END:VCARD")
+        cards.append("\r\n".join(lines))
+    return "\r\n".join(cards) + ("\r\n" if cards else "")
+
+
+def parse_vcards(text):
+    raw = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = []
+    for line in raw:
+        if line[:1] in (" ", "\t") and lines:
+            lines[-1] += line[1:]
+        else:
+            lines.append(line)
+    cards, current = [], None
+    for line in lines:
+        upper = line.upper()
+        if upper == "BEGIN:VCARD":
+            current = normalize_person({}, len(cards)); continue
+        if upper == "END:VCARD":
+            if current is not None:
+                cards.append(current)
+            current = None; continue
+        if current is None or ":" not in line:
+            continue
+        left, value = line.split(":", 1)
+        bits = left.split(";"); prop = bits[0].upper()
+        params = ";".join(bits[1:])
+        label_match = re.search(r"(?:^|;)TYPE=([^;,:]+)", params,
+                                re.IGNORECASE)
+        label = (label_match.group(1).split(",")[0].lower()
+                 if label_match else "home")
+        label = "mobile" if label == "cell" else label
+        if label not in VALUE_LABELS:
+            label = "home"
+        value = _vc_unescape(value)
+        if prop == "FN": current["name"] = value
+        elif prop == "N" and not current["name"]:
+            n = _vc_split(line.split(":", 1)[1])
+            current["name"] = " ".join(x for x in (n[1], n[0]) if x)
+        elif prop == "TEL": current["phones"].append({"label": label,
+                                                        "value": value})
+        elif prop == "EMAIL": current["emails"].append({"label": label,
+                                                          "value": value})
+        elif prop == "ORG": current["organization"] = value
+        elif prop == "ADR":
+            current["address"] = "\n".join(x for x in _vc_split(
+                line.split(":", 1)[1]) if x)
+        elif prop == "NOTE": current["notes"] = value
+        elif prop == "BDAY": current["bday"] = value
+    return cards
+
+
+def merge_contacts(existing, incoming):
+    """Merge exact-name imports, filling blanks and retaining list conflicts."""
+    for got in incoming:
+        target = next((p for p in existing if p.get("name") == got.get("name")),
+                      None)
+        if target is None:
+            existing.append(copy.deepcopy(got)); continue
+        for key in FIELD_KEYS:
+            if not target.get(key) and got.get(key):
+                target[key] = got[key]
+        for key in ("phones", "emails"):
+            seen = {(v["label"], v["value"]) for v in target.get(key, [])}
+            target.setdefault(key, []).extend(copy.deepcopy(v)
+                for v in got.get(key, []) if (v["label"], v["value"]) not in seen)
+    return existing
+
+
+def _vc_menu(text):
+    """Translate a vCard menu label while preserving the standard brand case."""
+    return _t(text)
 
 
 def _is_css_color(text):
@@ -221,6 +443,8 @@ class Contacts(nbapp.AppWindow):
         # callback (search debounce, status clear) reads this to decide whether
         # the window it belongs to is still there.
         self._closed = False
+        self._store_damaged = False
+        self._deleted = None
 
         # Load the saved address book (empty on a fresh device — nothing is
         # seeded). Normalization guarantees every render / edit / delete /
@@ -264,8 +488,12 @@ class Contacts(nbapp.AppWindow):
         try:
             with open(CONTACTS_FILE) as fh:
                 data = json.load(fh)
+        except FileNotFoundError:
+            return []
         except Exception:
-            # missing / unreadable / malformed -> empty state
+            # Preserve an unreadable store byte-for-byte. _save remains gated
+            # for the whole session, including the final destroy handler.
+            self._store_damaged = True
             return []
         raw = data.get("people") if isinstance(data, dict) else data
         if raw is None and isinstance(data, dict):
@@ -284,6 +512,7 @@ class Contacts(nbapp.AppWindow):
         if isinstance(raw, dict):
             raw = list(raw.values())
         if not isinstance(raw, list):
+            self._store_damaged = True
             return []
         return [self._normalize_person(p, i)
                 for i, p in enumerate(raw) if isinstance(p, dict)]
@@ -292,24 +521,13 @@ class Contacts(nbapp.AppWindow):
     def _normalize_person(p, i):
         """Coerce one loaded record into the canonical card shape so every field
         key is present (as a string) and a palette colour is guaranteed."""
-        person = {k: str(p.get(k, "") or "") for k in FIELD_KEYS}
-        color = p.get("color")
-        # The colour is pasted straight into the avatar's CSS, and GTK RAISES on
-        # a value it cannot parse — so a record whose colour is not a colour
-        # ("8A857A" without the hash, a truncated "#GG", anything hand-edited)
-        # threw out of _avatar -> _contact_row -> _rebuild_list inside
-        # __init__: Contacts then failed to open at all, every launch, saying
-        # nothing, with the whole book unreachable behind one bad field. A
-        # colour is decoration; it can never be the reason the address book
-        # will not open. Anything GTK cannot read falls back to the palette.
-        if not isinstance(color, str) or not _is_css_color(color):
-            color = AVATAR_COLORS[i % len(AVATAR_COLORS)]
-        person["color"] = color
-        return person
+        return normalize_person(p, i)
 
     def _save(self):
         """Persist the full address book. Never raises, so a bad write cannot
         crash the app — but it does SAY when the write failed."""
+        if self._store_damaged:
+            return
         try:
             nbapp.atomic_write_json(CONTACTS_FILE, {"people": self.people})
             self._save_warned = False
@@ -550,15 +768,13 @@ class Contacts(nbapp.AppWindow):
         text fields (name, role, phone, email, address, birthday, notes) — a
         novice searching a phone number or email expects a hit, not just names.
         An empty query matches everything."""
-        return not q or any(q in (p.get(k) or "").lower() for k in FIELD_KEYS)
+        return contact_matches(p, q)
 
     def _visible_order_pairs(self):
         """(index, card) pairs for the current filter, sorted alphabetically by
         name — the single source of truth for the list and for step/jump."""
         q = self.search_text.strip().lower()
-        pairs = [(i, p) for i, p in enumerate(self.people) if self._matches(p, q)]
-        pairs.sort(key=lambda ip: ip[1]["name"].lower())
-        return pairs
+        return ordered_people(self.people, q)
 
     def _contact_row(self, i, p):
         row = Gtk.Button()
@@ -582,6 +798,10 @@ class Contacts(nbapp.AppWindow):
             role.get_style_context().add_class("rowrole")
             col.pack_start(role, False, False, 0)
         hb.pack_start(col, True, True, 0)
+        if p.get("favorite"):
+            star = Gtk.Label(label="★")
+            star.set_tooltip_text(_t("Favorite contact"))
+            hb.pack_end(star, False, False, 0)
         row.add(hb)
         return row
 
@@ -714,14 +934,24 @@ class Contacts(nbapp.AppWindow):
             edit.get_style_context().add_class("editon")
         edit.connect("clicked", self._toggle_edit)
         btns.pack_start(edit, False, False, 0)
+        fav = Gtk.Button(label="★" if a.get("favorite") else "☆")
+        fav.set_relief(Gtk.ReliefStyle.NONE)
+        fav.set_tooltip_text(_t("Remove from favorites") if a.get("favorite")
+                             else _t("Add to favorites"))
+        fav.connect("clicked", self._toggle_favorite)
+        btns.pack_start(fav, False, False, 0)
         head.pack_start(btns, False, False, 0)
         col.pack_start(head, False, False, 0)
 
         # fields
         grid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         grid.get_style_context().add_class("fieldgrid")
+        grid.pack_start(self._field_row(a, _t("Phones"), "phones"),
+                        False, False, 0)
+        grid.pack_start(self._field_row(a, _t("Emails"), "emails"),
+                        False, False, 0)
         for label, key in FIELDS:
-            grid.pack_start(self._field_row(a, label, key), False, False, 0)
+            grid.pack_start(self._field_row(a, _t(label), key), False, False, 0)
         col.pack_start(grid, False, False, 0)
 
         # notes
@@ -791,7 +1021,8 @@ class Contacts(nbapp.AppWindow):
         row.pack_start(lbl, False, False, 0)
         if self.editing:
             ent = Gtk.Entry()
-            ent.set_text(a.get(key, "") or "")
+            ent.set_text(labeled_text(a.get(key, [])) if key in
+                         ("phones", "emails") else (a.get(key, "") or ""))
             ent.set_placeholder_text(label)
             ent.get_style_context().add_class("fieldentry")
             self._entries[key] = ent
@@ -799,6 +1030,32 @@ class Contacts(nbapp.AppWindow):
             row.pack_start(ent, True, True, 0)
         else:
             col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            if key in ("phones", "emails"):
+                values = a.get(key, [])
+                if not values:
+                    val = Gtk.Label(label="—", xalign=0)
+                    val.get_style_context().add_class("fieldempty")
+                    col.pack_start(val, False, False, 0)
+                for item in values:
+                    line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                                   spacing=8)
+                    val = Gtk.Label(label="%s  %s" %
+                                    (_t(item["label"].capitalize()),
+                                     item["value"]), xalign=0)
+                    val.set_selectable(True)
+                    val.set_line_wrap(True)
+                    val.get_style_context().add_class("fieldval")
+                    line.pack_start(val, True, True, 0)
+                    copy_btn = Gtk.Button(label=_t("Copy"))
+                    copy_btn.set_relief(Gtk.ReliefStyle.NONE)
+                    copy_btn.set_tooltip_text(_t("Copy phone") if key ==
+                                              "phones" else _t("Copy email"))
+                    copy_btn.connect("clicked", self._copy_value, key,
+                                     item["value"])
+                    line.pack_end(copy_btn, False, False, 0)
+                    col.pack_start(line, False, False, 0)
+                row.pack_start(col, True, True, 0)
+                return row
             val = Gtk.Label(label=a.get(key, "") or "—", xalign=0)
             val.get_style_context().add_class("fieldval")
             val.set_line_wrap(True)                 # long email / address wraps
@@ -951,7 +1208,11 @@ class Contacts(nbapp.AppWindow):
             return
         a = self.people[self.active]
         for key, ent in self._entries.items():
-            a[key] = ent.get_text()
+            if key in ("phones", "emails"):
+                a[key] = parse_labeled_text(ent.get_text(),
+                    "mobile" if key == "phones" else "home")
+            else:
+                a[key] = ent.get_text()
         nv = self._notes_view
         if nv is not None:
             buf = nv.get_buffer()
@@ -962,7 +1223,8 @@ class Contacts(nbapp.AppWindow):
     def _is_blank(self, p):
         """True when a card carries no user content at all (every text field
         empty). Used to recognise an untouched New Contact."""
-        return not any((p.get(k) or "").strip() for k in FIELD_KEYS)
+        return (not any((p.get(k) or "").strip() for k in FIELD_KEYS)
+                and not p.get("phones") and not p.get("emails"))
 
     def _finish_new_card(self):
         """Drop a just-created card the user never filled in, so navigating away
@@ -1028,6 +1290,9 @@ class Contacts(nbapp.AppWindow):
         # an unnamed card reads as "Unnamed" until the user types.
         color = AVATAR_COLORS[len(self.people) % len(AVATAR_COLORS)]
         person = {k: "" for k in FIELD_KEYS}
+        person["phones"] = []
+        person["emails"] = []
+        person["favorite"] = False
         person["color"] = color
         self.people.append(person)
         self.active = len(self.people) - 1
@@ -1049,67 +1314,15 @@ class Contacts(nbapp.AppWindow):
                 pass
 
     def _delete_contact(self, *_):
-        """Confirm, then remove the active card. Destructive, so it always asks
-        first; Cancel is the default so a stray Return never deletes."""
-        if not (0 <= self.active < len(self.people)):
-            return
-        name = (self.people[self.active].get("name") or "").strip() or "this contact"
-        self._confirm(
-            "Delete Contact",
-            "Delete “%s”? This cannot be undone." % name,
-            "Delete", self._do_delete)
-
-    def _confirm(self, title, message, ok_label, on_yes):
-        """Modal confirmation for a destructive action, drawn as a papertone card
-        in the app's own design language (not a stock system dialog): darker-beige
-        border, signage-red only on the destructive primary button, Cancel focused
-        by default so a stray Space/Return never deletes. Esc cancels. Runs
-        `on_yes` only on the primary button; crash-safe if the dialog can't build."""
-        try:
-            dlg = Gtk.Dialog(title=title, transient_for=self, modal=True)
-            dlg.set_decorated(False)
-            dlg.get_style_context().add_class("cdlg")
-            area = dlg.get_content_area()
-            area.set_spacing(0)
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-            box.get_style_context().add_class("cdlgbox")
-            hd = Gtk.Label(label=title, xalign=0)
-            hd.get_style_context().add_class("cdlgtitle")
-            msg = Gtk.Label(label=message, xalign=0)
-            msg.set_line_wrap(True)
-            msg.set_line_wrap_mode(Pango.WrapMode.WORD)
-            msg.set_max_width_chars(40)
-            msg.get_style_context().add_class("cdlgmsg")
-            btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            btns.set_halign(Gtk.Align.END)
-            cancel = Gtk.Button(label=_t("Cancel"))
-            cancel.get_style_context().add_class("cdlgcancel")
-            ok = Gtk.Button(label=ok_label)
-            ok.get_style_context().add_class("cdlgok")
-            btns.pack_start(cancel, False, False, 0)
-            btns.pack_start(ok, False, False, 0)
-            box.pack_start(hd, False, False, 0)
-            box.pack_start(msg, False, False, 0)
-            box.pack_start(btns, False, False, 0)
-            area.add(box)
-            cancel.connect("clicked", lambda *_: dlg.destroy())
-            ok.connect("clicked", lambda *_: (dlg.destroy(), on_yes()))
-            # The modal dialog is a separate window with its own key focus, so the
-            # app-window Esc handler never sees these events — wire Esc here or it
-            # would be dead inside the dialog.
-            dlg.connect(
-                "key-press-event",
-                lambda _w, e: (dlg.destroy() or True)
-                if e.keyval == Gdk.KEY_Escape else False)
-            dlg.show_all()
-            cancel.grab_focus()   # focus the safe default
-        except Exception:
-            pass
+        """Delete immediately. The one-step undo is saved when restored."""
+        self._do_delete()
 
     def _do_delete(self):
         if not (0 <= self.active < len(self.people)):
             return
-        del self.people[self.active]
+        index = self.active
+        person = self.people.pop(index)
+        self._deleted = (index, copy.deepcopy(person))
         if self.active >= len(self.people):
             self.active = max(0, len(self.people) - 1)
         self.editing = False
@@ -1117,6 +1330,75 @@ class Contacts(nbapp.AppWindow):
         self._save()   # the deletion sticks (and an emptied book stays empty)
         self._rebuild_list()
         self._rebuild_detail()
+        self._flash(_t("Contact deleted") + "  ·  " + _t("Ctrl+Z to undo"))
+
+    def _undo_delete(self):
+        deleted = self._deleted
+        if deleted is None:
+            self._flash(_t("There is nothing to undo"))
+            return
+        index, person = deleted
+        self._deleted = None
+        self.people.insert(min(index, len(self.people)), copy.deepcopy(person))
+        self.active = min(index, len(self.people) - 1)
+        self._save()
+        self._rebuild_list()
+        self._rebuild_detail()
+        self._flash(_t("Contact restored"))
+
+    def _toggle_favorite(self, *_):
+        if not (0 <= self.active < len(self.people)):
+            return
+        person = self.people[self.active]
+        person["favorite"] = not person.get("favorite", False)
+        self._save()
+        self._rebuild_list()
+        self._rebuild_detail()
+        self._flash(_t("Added to favorites") if person["favorite"]
+                    else _t("Removed from favorites"))
+
+    def _copy_value(self, _button, kind, value):
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(value, -1)
+        self._flash(_t("Phone copied") if kind == "phones"
+                    else _t("Email copied"))
+
+    def _import_vcard(self, *_):
+        path = nbpicker.open_file(self, title=_t("Import vCard"),
+                                  start_dir=DOCS_DIR,
+                                  patterns=("*.vcf", "*.vcard"))
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8-sig") as fh:
+                incoming = parse_vcards(fh.read())
+            if not incoming:
+                self._flash(_t("No contacts found")); return
+            merge_contacts(self.people, incoming)
+            self.active = 0
+            self._save()
+            self._rebuild_list(); self._rebuild_detail()
+            self._flash(_t("Imported %d contacts") % len(incoming))
+        except Exception:
+            self._flash(_t("Import failed"))
+
+    def _export_vcard(self, whole_book=True):
+        if not self.people:
+            return
+        default = "contacts.vcf" if whole_book else \
+            re.sub(r"[^A-Za-z0-9._-]+", "-", self.people[self.active]["name"]
+                   or "contact").strip("-") + ".vcf"
+        path = nbpicker.save_file(self, title=_t("Export vCard"),
+                                  start_dir=DOCS_DIR, suggested_name=default,
+                                  patterns=("*.vcf",), default_ext=".vcf")
+        if not path:
+            return
+        try:
+            chosen = self.people if whole_book else [self.people[self.active]]
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            nbapp.atomic_write_text(path, export_vcards(chosen))
+            self._flash(_t("vCard exported"))
+        except Exception:
+            self._flash(_t("Export failed"))
 
     # -------------- File menu: Export to PDF under $NB_HOME/Documents ------
     # No file open/save. contacts.json is the always-saved store (the source of
@@ -1222,6 +1504,11 @@ class Contacts(nbapp.AppWindow):
                 if val:
                     emit("%s   %s" % (label.upper(), val), 10.5, False,
                          "#2A2620", gap_after=2)
+            for label, key in (("PHONE", "phones"), ("EMAIL", "emails")):
+                for item in p.get(key, []):
+                    emit("%s %s   %s" % (label, item["label"].upper(),
+                                          item["value"]), 10.5, False,
+                         "#2A2620", gap_after=2)
             notes = p.get("notes", "")
             if notes:
                 emit("NOTES", 9, False, "#9A9484", gap_before=6, gap_after=2)
@@ -1296,6 +1583,10 @@ class Contacts(nbapp.AppWindow):
                 and ev.keyval in (Gdk.KEY_f, Gdk.KEY_F)):
             self._focus_search()
             return True
+        if (ev.state & Gdk.ModifierType.CONTROL_MASK
+                and ev.keyval in (Gdk.KEY_z, Gdk.KEY_Z)):
+            self._undo_delete()
+            return True
         return super()._on_key(w, ev)
 
     # ------------------------------------------------------------- menus
@@ -1312,11 +1603,22 @@ class Contacts(nbapp.AppWindow):
             return [
                 ("New Contact", lambda: self._new_contact()),
                 nbapp.SEP,
+                (_vc_menu("Import vCard…"), self._import_vcard),
+                (_vc_menu("Export Contact vCard…"),
+                 (lambda: self._export_vcard(False)) if has else None),
+                (_vc_menu("Export All vCards…"),
+                 (lambda: self._export_vcard(True)) if has else None),
+                nbapp.SEP,
                 ("Export to PDF", self._export_pdf if has else None),
-                ("Print…", self._print if has else None),
+                nbcommands.item("file.print", self._print) if has else
+                nbcommands.item("file.print", None),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]
+        if name == "Edit":
+            return [((_t("Undo Delete Contact") + "    Ctrl+Z")
+                     if self._deleted else (_t("Undo") + "    Ctrl+Z"),
+                     self._undo_delete if self._deleted else None)]
         if name == "Card":
             has = bool(self.people)
             return [
@@ -1324,7 +1626,8 @@ class Contacts(nbapp.AppWindow):
                 ("Done Editing" if self.editing else "Edit Card",
                  (lambda: self._toggle_edit()) if has else None),
                 nbapp.SEP,
-                ("Delete Card…", (lambda: self._delete_contact()) if has else None),
+                (_t("Delete Card"),
+                 (lambda: self._delete_contact()) if has else None),
             ]
         if name == "View":
             has_text = bool(self.search.get_text())

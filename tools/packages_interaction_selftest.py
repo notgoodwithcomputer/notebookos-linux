@@ -241,10 +241,21 @@ def main():
     if sysp is not None:
         search(app, "")
         app._select_row(sysp)
+        system_detail = labels(app.detail)
+        check("a system component has no uninstall or restore affordance",
+              "Uninstall" not in system_detail and "Restore" not in system_detail,
+              repr(system_detail))
         items = dict((i[0], i[1]) for i in app.menu_items("Package")
                      if isinstance(i, tuple))
         check("Open is greyed out for a system component, not a dead stub",
               items.get("Open") is None, P.PACKAGES[sysp][P.NAME])
+
+    appi = next((i for i, p in enumerate(P.PACKAGES)
+                 if p[P.KIND] == "Application"), None)
+    if appi is not None:
+        app._select_row(appi)
+        check("an installed app offers Uninstall in its detail pane",
+              "Uninstall" in labels(app.detail), repr(labels(app.detail)))
 
     # ---- clicking a row selects it ----------------------------------------
     search(app, "")
@@ -336,7 +347,12 @@ def main():
 
 
 try:
-    rc = main()
+    gtk_ready = Gtk.init_check()[0]
+    if gtk_ready:
+        rc = main()
+    else:
+        print("SKIP: GTK3 display is unavailable; interaction section not run")
+        rc = 0
 finally:
     shutil.rmtree(_HOME, ignore_errors=True)
 sys.exit(rc)

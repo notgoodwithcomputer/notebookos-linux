@@ -97,13 +97,44 @@ SIZE_MIN, SIZE_MAX = 1, 64
 # rather than fifteen. They are DRAWN at their relative size in the current
 # brush shape, which is also the only place the round/square tip is visible.
 SIZE_RAMP = (1, 2, 4, 8, 16)
-# Zoom is always an INTEGER magnification: at 2.5x a nearest-neighbour blit
-# gives some image pixels 2 screen pixels and some 3, which reads as a wobble
-# in the artwork rather than as a zoom level.
-ZOOM_MIN, ZOOM_MAX = 1, 32
-ZOOM_STEPS = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32)
+# Enlargement stays on integer steps, where every image pixel is an exact
+# screen-pixel block. Reduction necessarily shares screen pixels; those steps
+# exist so a document larger than the field can still be seen as a whole.
+ZOOM_MIN, ZOOM_MAX = 1 / 8, 32
+ZOOM_STEPS = (1 / 8, 1 / 6, 1 / 4, 1 / 3, 1 / 2,
+              1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32)
 # Draw the pixel grid from here up; below it the lines eat the artwork.
 GRID_FROM = 8
+
+
+def view_pixel(x, y, zoom, width, height, clamp=False):
+    """Map display coordinates to one document pixel.
+
+    `clamp` is for a gesture begun on the surrounding field: its anchor is the
+    nearest edge pixel, while ordinary canvas motion remains unclamped so a
+    brush may travel naturally out of bounds and return."""
+    px = int(math.floor(float(x) / float(zoom)))
+    py = int(math.floor(float(y) / float(zoom)))
+    if clamp:
+        px = max(0, min(int(width) - 1, px))
+        py = max(0, min(int(height) - 1, py))
+    return px, py
+
+
+def fit_zoom(width, height, available_width, available_height):
+    """Largest standard zoom step that fits the whole document."""
+    limit = min(float(available_width) / width,
+                float(available_height) / height)
+    choices = [z for z in ZOOM_STEPS if z <= limit]
+    return choices[-1] if choices else ZOOM_MIN
+
+
+def paint_field(cr, width, height):
+    """Paint every pixel behind the document with the canvas-field colour."""
+    cr.set_operator(cairo.OPERATOR_SOURCE)
+    cr.set_source_rgb(*_rgb("#DED4C2"))
+    cr.rectangle(0, 0, width, height)
+    cr.fill()
 
 # Bound the Undo/Redo history. A frame stores only the RECTANGLE an edit
 # actually touched (see _begin_edit / _commit_edit), so an ordinary brush stroke
@@ -635,13 +666,19 @@ class Illustrator(nbapp.AppWindow):
         self.mat.set_capture_button_press(False)
         self.mat.connect("size-allocate", self._on_mat_allocate)
 
-        canvas_wrap = Gtk.Box()
-        canvas_wrap.get_style_context().add_class("canvasframe")
-        canvas_wrap.set_halign(Gtk.Align.CENTER)
-        canvas_wrap.set_valign(Gtk.Align.CENTER)
+        canvas_wrap = Gtk.EventBox()
+        self.canvas_wrap = canvas_wrap
+        canvas_wrap.get_style_context().add_class("canvasfield")
+        canvas_wrap.connect("draw", self._draw_canvas_field)
+
+        canvas_holder = Gtk.Box()
+        canvas_holder.get_style_context().add_class("canvasframe")
+        canvas_holder.set_halign(Gtk.Align.CENTER)
+        canvas_holder.set_valign(Gtk.Align.CENTER)
 
         self.canvas = Gtk.DrawingArea()
-        self.canvas.set_size_request(self.cw * self.zoom, self.ch * self.zoom)
+        self.canvas.set_size_request(int(math.ceil(self.cw * self.zoom)),
+                                     int(math.ceil(self.ch * self.zoom)))
         self.canvas.add_events(
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
@@ -655,7 +692,19 @@ class Illustrator(nbapp.AppWindow):
         self.canvas.connect("scroll-event", self._on_scroll)
         self.canvas.connect("leave-notify-event", self._on_leave)
         self.canvas.connect("realize", self._on_canvas_realize)
-        canvas_wrap.add(self.canvas)
+        canvas_holder.add(self.canvas)
+        canvas_wrap.add(canvas_holder)
+        # The frame owns the margin around the document. A press there must be
+        # able to begin a gesture before the pointer crosses onto the drawing
+        # area; canvas events stop propagation, so normal presses are not seen
+        # twice here.
+        canvas_wrap.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.POINTER_MOTION_MASK)
+        canvas_wrap.connect("button-press-event", self._on_press)
+        canvas_wrap.connect("button-release-event", self._on_release)
+        canvas_wrap.connect("motion-notify-event", self._on_motion)
         self.mat.add(canvas_wrap)   # ScrolledWindow auto-wraps it in a Viewport
         work.pack_start(self.mat, True, True, 0)
 
@@ -1425,6 +1474,15 @@ class Illustrator(nbapp.AppWindow):
         return "\u2066%d × %d\u2069" % (w, h)
 
     # ---------------- chrome painting ----------------
+    def _draw_canvas_field(self, area, cr):
+        # CSS normally supplies this colour, but a resized native child window
+        # can be exposed before style painting reaches its newly allocated
+        # strip. An explicit full allocation paint makes zoom transitions
+        # deterministic and prevents the display server's black clear colour
+        # from flashing or remaining around a reduced document.
+        paint_field(cr, area.get_allocated_width(), area.get_allocated_height())
+        return False
+
     def _draw_chip(self, area, cr):
         w = area.get_allocated_width()
         h = area.get_allocated_height()
@@ -1476,13 +1534,15 @@ class Illustrator(nbapp.AppWindow):
             cr.set_source_surface(ly.surface, 0, 0)
             # NEAREST or the zoom smears the artwork into a blur, which is the
             # one thing a pixel editor's zoom must never do.
-            cr.get_source().set_filter(cairo.FILTER_NEAREST)
+            cr.get_source().set_filter(
+                cairo.FILTER_NEAREST if z >= 1 else cairo.FILTER_BILINEAR)
             cr.paint_with_alpha(ly.opacity / 100.0)
         # the live shape guide is real pixels in a scratch surface, so what is
         # previewed is exactly what commits
         if self._preview is not None and self._scratch is not None:
             cr.set_source_surface(self._scratch, 0, 0)
-            cr.get_source().set_filter(cairo.FILTER_NEAREST)
+            cr.get_source().set_filter(
+                cairo.FILTER_NEAREST if z >= 1 else cairo.FILTER_BILINEAR)
             cr.paint()
         cr.restore()
         if self.grid and z >= GRID_FROM:
@@ -1819,7 +1879,8 @@ class Illustrator(nbapp.AppWindow):
         self._set_dim(self.shape_grp, self.tool in SHAPE_TOOLS)
         self._set_dim(self.mirror_grp, self.tool in MIRROR_TOOLS)
         self.size_lbl.set_text(_t("%d px") % self.size)
-        self.zoom_lbl.set_text("%d%%" % (self.zoom * 100))
+        pct = float(self.zoom * 100)
+        self.zoom_lbl.set_text(("%d%%" if pct.is_integer() else "%.1f%%") % pct)
         self.color_lbl.set_text(mix_name(self.color))
         self.ramp_area.queue_draw()
         self.chip.queue_draw()
@@ -1837,7 +1898,7 @@ class Illustrator(nbapp.AppWindow):
     def _set_zoom(self, z):
         if self._closed:
             return
-        z = max(ZOOM_MIN, min(ZOOM_MAX, int(z)))
+        z = max(ZOOM_MIN, min(ZOOM_MAX, float(z)))
         if z == self.zoom:
             return
         # keep whatever is in the middle of the viewport in the middle of it
@@ -1847,7 +1908,8 @@ class Illustrator(nbapp.AppWindow):
         cx = (ha.get_value() + ha.get_page_size() / 2.0) / old
         cy = (va.get_value() + va.get_page_size() / 2.0) / old
         self.zoom = z
-        self.canvas.set_size_request(self.cw * z, self.ch * z)
+        self.canvas.set_size_request(int(math.ceil(self.cw * z)),
+                                     int(math.ceil(self.ch * z)))
         self.canvas.queue_draw()
         self._sync_controls()
         self._refresh_status()
@@ -1888,10 +1950,7 @@ class Illustrator(nbapp.AppWindow):
         ah = alloc.height - 12 if alloc.height > 20 else 0
         if aw <= 0 or ah <= 0:
             return
-        # integer only: a fractional magnification gives some image pixels one
-        # more screen pixel than their neighbours
-        self._set_zoom(max(ZOOM_MIN, min(ZOOM_MAX,
-                                         min(aw // self.cw, ah // self.ch))))
+        self._set_zoom(fit_zoom(self.cw, self.ch, aw, ah))
 
     def _on_mat_allocate(self, *_a):
         # The first real allocation is the first moment the window's size is
@@ -1931,14 +1990,19 @@ class Illustrator(nbapp.AppWindow):
         self.canvas.queue_draw()
 
     # ---- coordinates ----
-    def _pos(self, ev):
+    def _pos(self, ev, widget=None, clamp=False):
         """Event coordinate -> IMAGE PIXEL. The canvas widget is exactly
         cw*zoom by ch*zoom, so this is a floor division by the zoom and nothing
         else. Deliberately NOT clamped to the canvas: a brush half off the left
         edge has to paint the half that is on it, and clamping would bend the
         stroke back along the edge instead."""
-        z = float(self.zoom)
-        return (int(math.floor(ev.x / z)), int(math.floor(ev.y / z)))
+        x, y = ev.x, ev.y
+        if widget is not None and widget is not self.canvas:
+            try:
+                x, y = widget.translate_coordinates(self.canvas, x, y)
+            except (TypeError, AttributeError):
+                pass
+        return view_pixel(x, y, self.zoom, self.cw, self.ch, clamp)
 
     def _inside(self, p):
         return 0 <= p[0] < self.cw and 0 <= p[1] < self.ch
@@ -1950,14 +2014,16 @@ class Illustrator(nbapp.AppWindow):
             return
         x, y, w, h = rect
         z = self.zoom
-        self.canvas.queue_draw_area(int(x) * z - 1, int(y) * z - 1,
-                                    int(w) * z + 2, int(h) * z + 2)
+        x0, y0 = math.floor(x * z) - 1, math.floor(y * z) - 1
+        x1, y1 = math.ceil((x + w) * z) + 1, math.ceil((y + h) * z) + 1
+        self.canvas.queue_draw_area(int(x0), int(y0), int(x1 - x0),
+                                    int(y1 - y0))
 
     def _on_press(self, _w, ev):
         if ev.button != 1:
             return False
         self._shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
-        p = self._pos(ev)
+        p = self._pos(ev, _w, clamp=(_w is not self.canvas))
         # The eyedropper samples the composited canvas, so it works no matter
         # which layer is active or whether it is hidden — handle it before the
         # active-layer visibility guard.
@@ -1989,7 +2055,7 @@ class Illustrator(nbapp.AppWindow):
         return True
 
     def _on_motion(self, _w, ev):
-        p = self._pos(ev)
+        p = self._pos(ev, _w, clamp=(self._drawing and _w is not self.canvas))
         was = self._cursor_rect()
         self._cursor = p if self._inside(p) else None
         self._refresh_status()
@@ -2017,7 +2083,7 @@ class Illustrator(nbapp.AppWindow):
     def _on_release(self, _w, ev):
         if not self._drawing:
             return False
-        p = self._pos(ev)
+        p = self._pos(ev, _w, clamp=(_w is not self.canvas))
         ly = self.layers[self.active]
         if self.tool in ("line", "rect", "ellipse"):
             self._shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
@@ -2742,7 +2808,8 @@ class Illustrator(nbapp.AppWindow):
         """Re-fit everything that is sized in image pixels after cw/ch change."""
         self._new_scratch()
         self._preview = None
-        self.canvas.set_size_request(self.cw * self.zoom, self.ch * self.zoom)
+        self.canvas.set_size_request(int(math.ceil(self.cw * self.zoom)),
+                                     int(math.ceil(self.ch * self.zoom)))
         self.canvas.queue_draw()
         self._zoom_fit()
         self._refresh_status()
@@ -2915,7 +2982,8 @@ class Illustrator(nbapp.AppWindow):
         self._drawing = False
         self.op_scale.set_value(100)
         self._new_scratch()
-        self.canvas.set_size_request(self.cw * self.zoom, self.ch * self.zoom)
+        self.canvas.set_size_request(int(math.ceil(self.cw * self.zoom)),
+                                     int(math.ceil(self.ch * self.zoom)))
         self._rebuild_layers()
         self._refresh_status()
         self.canvas.queue_draw()
@@ -3506,7 +3574,7 @@ class Illustrator(nbapp.AppWindow):
         /* ---- canvas mat ---- */
         /* Papertone field on the scroll AND its viewport, so the field fills the
            area whether the canvas is centred (large panel) or scrolled. */
-        .mat, .mat viewport { background: #DED4C2; }
+        .mat, .mat viewport, .canvasfield { background: #DED4C2; }
         .canvasframe { background: #FCFBF8; padding: 1px;
                        border: 1px solid #C9C4B6;
                        box-shadow: 4px 4px 0 rgba(26,25,22,0.10); }

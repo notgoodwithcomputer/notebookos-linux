@@ -9,12 +9,12 @@ disk (de/*.py): real names, sizes, and modification dates — nothing seeded. It
 lists the applications and the system components a person can actually name;
 internal plumbing modules are skipped (see _APP_NAMES / _SYS_NAMES).
 
-This is an offline system with no network install path. New packages install
-from a USB stick; a package format and SDK for that are planned, so for now the
-installed set is fixed and read-only. A selected package can be verified (its
-module file is re-read and parsed to confirm it is intact) but not removed.
-Updates is an honest "up to date" surface — this system never polls. Sources
-reports the local disk and any mounted USB media, read live from /proc/mounts.
+This is an offline system with no package-install path. The installed system
+image is fixed and read-only. Applications can be removed from Finder's
+Applications view and restored later; their files stay on disk. A selected
+package can also be verified by re-reading and parsing its module file. Updates
+states the image-level update boundary without claiming to perform one. Sources
+reports the local disk and mounted USB media, read live from /proc/mounts.
 """
 import gi
 gi.require_version("Gtk", "3.0")
@@ -269,7 +269,7 @@ class Packages(nbapp.AppWindow):
         except Exception:
             pass
         self.sort_field = None
-        self.sort_desc = False
+        self.sort_desc, self._removed_apps = False, self._load_removed_apps()
         # index -> row widget, and the visible packages in display order, kept
         # in sync by _rebuild_list. Selection re-styles rows in place (see
         # _select_row) instead of rebuilding, so keyboard focus is preserved
@@ -322,8 +322,8 @@ class Packages(nbapp.AppWindow):
     # -------------------------------------------------------------------- menus
     def menu_items(self, name):
         if name == "Package":
-            # Every entry is a real action. There is no "Remove" — the image is
-            # read-only, so a permanently-disabled item would be a dead stub.
+            # Every entry is a real action. Application visibility belongs in
+            # the inspector, where its scope and always-available undo fit.
             # menu_items() is re-read each time the menu opens, so items that
             # depend on state (a selection to verify, a query to clear) are
             # greyed out when they would be no-ops rather than looking live.
@@ -395,7 +395,7 @@ class Packages(nbapp.AppWindow):
             self._nav_count[vid] = cnt
 
         note = Gtk.Label(
-            label=_t("New packages install from a USB stick."))
+            label=_t("Packages lists the system image and app visibility."))
         note.get_style_context().add_class("sidenote")
         _wrap_to_panel(note)
         note.set_xalign(0)
@@ -846,6 +846,8 @@ class Packages(nbapp.AppWindow):
 
         table = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         table.get_style_context().add_class("insp-table")
+        removed = (p[KIND] == "Application"
+                   and p[NAME] in self._removed_apps)
         rows = [
             ("Kind", p[KIND]),
             # "File", not "Module": the row shows a file name, and a reader of
@@ -857,6 +859,9 @@ class Packages(nbapp.AppWindow):
             # machine "Local Disk" while the other calls it "This computer".
             ("Source", _t("This computer")),
         ]
+        if p[KIND] == "Application":
+            rows.append(("Applications", _t("Removed") if removed
+                         else _t("Shown")))
         for i, (k, v) in enumerate(rows):
             r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
             r.get_style_context().add_class("insp-row")
@@ -890,9 +895,19 @@ class Packages(nbapp.AppWindow):
             op.set_tooltip_text(_t("Start this app."))
             op.connect("clicked", self._on_open)
             btns.pack_start(op, False, False, 0)
+            visibility = Gtk.Button(
+                label=_t("Restore") if removed else _t("Uninstall"))
+            visibility.set_relief(Gtk.ReliefStyle.NONE)
+            visibility.get_style_context().add_class("btn-primary")
+            visibility.set_tooltip_text(
+                _t("Show this app in Applications again.") if removed else
+                _t("Remove this app from Applications."))
+            visibility.connect("clicked", self._on_restore if removed
+                               else self._on_uninstall)
+            btns.pack_start(visibility, False, False, 0)
         # Verify re-reads the file and parses it to confirm the package is
-        # intact. There is no Remove: the image is read-only, so a
-        # permanently-disabled control would be a dead stub.
+        # intact. System components have no visibility control: the image is
+        # read-only, so such a control would be a dead stub.
         ver = Gtk.Button(label=_t("Verify"))
         ver.set_relief(Gtk.ReliefStyle.NONE)
         ver.get_style_context().add_class("btn-primary")
@@ -902,9 +917,13 @@ class Packages(nbapp.AppWindow):
         btns.pack_start(ver, False, False, 0)
         self.detail.pack_start(btns, False, False, 0)
 
-        note = Gtk.Label(
-            label=_t("Packages in this image can be verified. They cannot be "
-                     "removed."))
+        note = Gtk.Label(label=(
+            _t("This app is removed from Applications. It stays on disk and "
+               "can always be restored.") if removed else
+            _t("Uninstall removes this app from Applications. It stays on "
+               "disk and can always be restored.")
+            if p[KIND] == "Application" else
+            _t("System files stay in the read-only system image.")))
         _wrap_to_panel(note)
         note.set_xalign(0)
         note.get_style_context().add_class("insp-note")
@@ -934,6 +953,49 @@ class Packages(nbapp.AppWindow):
             self.detail.pack_start(flash, True, True, 0)
 
         self.detail.show_all()
+
+    # ----------------------------------------------------- app visibility store
+    def _removed_apps_path(self):
+        home = os.environ.get("NB_HOME", os.path.expanduser("~"))
+        return os.path.join(home, ".config", "notebook", "removed_apps.json")
+
+    def _load_removed_apps(self):
+        """Read Finder's exact list contract without repairing bad data."""
+        try:
+            import json
+            with open(self._removed_apps_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, list):
+                return {str(item) for item in data}
+        except (OSError, ValueError, TypeError):
+            pass
+        return set()
+
+    def _set_app_removed(self, remove):
+        """Read-modify-write the current store after a real user action."""
+        try:
+            p = PACKAGES[self.sel]
+        except (IndexError, TypeError):
+            return
+        if p[KIND] != "Application":
+            return
+        current = self._load_removed_apps()
+        if remove:
+            current.add(p[NAME])
+        else:
+            current.discard(p[NAME])
+        try:
+            nbapp.atomic_write_json(self._removed_apps_path(), sorted(current))
+        except (OSError, TypeError, ValueError):
+            return
+        self._removed_apps = current
+        self._rebuild_detail()
+
+    def _on_uninstall(self, _button=None):
+        self._set_app_removed(True)
+
+    def _on_restore(self, _button=None):
+        self._set_app_removed(False)
 
     def _on_open(self, _b=None):
         # Start the selected application, the same way the Finder does: a fresh
@@ -1033,7 +1095,9 @@ class Packages(nbapp.AppWindow):
         h = Gtk.Label(label=_t("No updates"))
         h.get_style_context().add_class("empty-h")
         page.pack_start(h, False, False, 0)
-        s = Gtk.Label(label=_t("Package updates install from a USB stick."))
+        s = Gtk.Label(label=_t(
+            "Packages does not install updates. Notebook OS is delivered as "
+            "a complete system image."))
         s.set_line_wrap(True)
         s.set_justify(Gtk.Justification.CENTER)
         s.set_max_width_chars(46)
@@ -1100,7 +1164,7 @@ class Packages(nbapp.AppWindow):
         page.pack_start(self._sources_list, False, False, 0)
 
         note = Gtk.Label(
-            label=_t("New packages install from a USB stick."))
+            label=_t("Sources lists storage attached to this computer."))
         note.set_line_wrap(True)
         # A readable measure, not one long line across a 1920px page. halign
         # must be pinned too: max_width_chars only caps the NATURAL width, and a
@@ -1123,8 +1187,8 @@ class Packages(nbapp.AppWindow):
         for c in box.get_children():
             box.remove(c)
 
-        # USB sticks are the install path; show whatever is actually plugged in
-        # now. The stick's OWN name is what a person recognises — automount.sh
+        # Show whatever is actually plugged in now. The stick's OWN name is
+        # what a person recognises — automount.sh
         # names the mount point after the volume label precisely so that name
         # can be shown here instead of "/media/sda1", which tells a reader
         # nothing and looks like a fault.
@@ -1133,8 +1197,7 @@ class Packages(nbapp.AppWindow):
             usb_detail = _t("Plugged in: %s") % ", ".join(m[0] for m in media)
             usb_status, usb_active = _t("IN USE"), True
         else:
-            # The empty state carries the next step rather than only the news.
-            usb_detail = _t("Plug one in to install new packages")
+            usb_detail = _t("No USB storage is connected")
             usb_status, usb_active = _t("NOT PRESENT"), False
 
         # Keep the sidebar badge honest with what is actually connected now
@@ -1227,7 +1290,8 @@ class Packages(nbapp.AppWindow):
         .cell-hdr { font-size: 11px; letter-spacing: 0.11em; color: #9A9484;
                     font-weight: 600; }
         .sorthdr { background: transparent; border: none; box-shadow: none;
-                   padding: 0; margin: 0; min-height: 0; }
+                   color: #6E695E; padding: 0; margin: 0; min-height: 0; }
+        .sorthdr label { color: inherit; }
         .sorthdr:hover { background: #EFEBE0; }
         .pk-list { background: #FCFBF8; }
         .datarow { padding: 0 28px; min-height: 46px;

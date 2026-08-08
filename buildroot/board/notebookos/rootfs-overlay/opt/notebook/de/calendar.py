@@ -182,7 +182,7 @@ REPEATS = [
     ("day", "Every day"),
     ("week", "Every week"),
     ("fortnight", "Every 2 weeks"),
-    ("month", "Every month"),
+    ("month", "Monthly (same date)"),
     ("year", "Every year"),
 ]
 REPEAT_LABELS = dict(REPEATS)
@@ -235,7 +235,7 @@ def _whole_periods(anchor, d, rule):
     return months // 12 if rule == "year" else months
 
 
-def _repeat_dates(start, rule):
+def _repeat_dates(start, rule, end_date=None):
     """Every day a series occupies, starting at `start`, for the rule's cap.
     Returns [start] for an unknown or non-repeating rule, so a caller can always
     treat the result as the full set of days to write."""
@@ -246,15 +246,18 @@ def _repeat_dates(start, rule):
     for i in range(n):
         try:
             if rule == "day":
-                out.append(start + timedelta(days=i))
+                occurrence = start + timedelta(days=i)
             elif rule == "week":
-                out.append(start + timedelta(days=7 * i))
+                occurrence = start + timedelta(days=7 * i)
             elif rule == "fortnight":
-                out.append(start + timedelta(days=14 * i))
+                occurrence = start + timedelta(days=14 * i)
             elif rule == "month":
-                out.append(_add_months(start, i))
+                occurrence = _add_months(start, i)
             else:                                   # year
-                out.append(_add_months(start, 12 * i))
+                occurrence = _add_months(start, 12 * i)
+            if end_date is not None and occurrence > end_date:
+                break
+            out.append(occurrence)
         except (OverflowError, ValueError):
             break                                   # ran past the date range
     return out or [start]
@@ -1394,7 +1397,7 @@ class Calendar(nbapp.AppWindow):
             if lay is not None and lay.is_ellipsized():
                 self._dow_short = True
                 break
-        if self._dow_short:
+        if getattr(self, "_dow_short", False):
             # Not inside size-allocate: setting a label's text there re-enters
             # the layout that is already running.
             GLib.idle_add(self._dow_shorten)
@@ -1554,9 +1557,11 @@ class Calendar(nbapp.AppWindow):
     def _chip_detail(self, e):
         """'09:30 - 10:30  ·  Blood test  ·  Doctor' — the whole of an event in
         one line, for the hover on a chip too narrow to say it all."""
-        return "%s - %s  ·  %s  ·  %s" % (
-            self._hhmm(e.get("start")), self._hhmm(e.get("end")),
-            e.get("title", ""), e.get("cal", ""))
+        when = (_t("All Day") if e.get("all_day") else "%s - %s" % (
+            self._hhmm(e.get("start")), self._hhmm(e.get("end"))))
+        parts = [when, e.get("title", ""), e.get("location", ""),
+                 e.get("cal", ""), e.get("notes", "")]
+        return "  ·  ".join(p for p in parts if p)
 
     def _month_cell(self, d, weekend):
         ev = Gtk.EventBox(); ev.set_hexpand(True); ev.set_vexpand(True)
@@ -1591,6 +1596,7 @@ class Calendar(nbapp.AppWindow):
             cc = chip.get_style_context()
             cc.add_class("evchip"); cc.add_class(self._event_chip_class(e))
             chipbox = Gtk.Button(); chipbox.set_relief(Gtk.ReliefStyle.NONE)
+            chipbox.set_hexpand(bool(e.get("all_day", False)))
             chipbox.get_style_context().add_class("eventhit")
             chipbox.add(chip)
             # A month cell is too narrow to print the time beside the name
@@ -1623,7 +1629,7 @@ class Calendar(nbapp.AppWindow):
         # The day carries a column header in the same style as the Week view's,
         # rather than the full date restated as a sub-heading — that line read
         # exactly like the title directly above it.
-        day_ev = self._events_on(self.sel)
+        all_day_ev, day_ev = self._partition_day_events(self.sel)
         if not day_ev:
             self.body_area.pack_start(self._empty_hint(), False, False, 0)
 
@@ -1644,8 +1650,19 @@ class Calendar(nbapp.AppWindow):
             dhc.add_class("istoday")
         grid.attach(dayhead, 1, 0, 1, 1)
 
+        # All-day events live above the clock, not misleadingly at 00:00.
+        if all_day_ev:
+            band = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            band.get_style_context().add_class("alldayband")
+            for event in all_day_ev:
+                band.pack_start(self._time_chip(event, True), False, False, 0)
+            grid.attach(band, 1, 1, 1, 1)
+            row_offset = 1
+        else:
+            row_offset = 0
+
         for i, h in enumerate(HOURS):
-            i += 1                      # row 0 is the day header
+            i += 1 + row_offset         # row 0 is the day header
             hl = Gtk.Label(label="%02d:00" % h, xalign=1)
             hl.get_style_context().add_class("hourlabel")
             hl.set_size_request(56, 62); hl.set_valign(Gtk.Align.START)
@@ -1719,7 +1736,7 @@ class Calendar(nbapp.AppWindow):
                 grid.attach(slot, di + 1, i + 1, 1, 1)
                 cells[(di, h)] = inner
         for di, d in enumerate(days):
-            for e in self._events_on(d):
+            for e in self._partition_day_events(d)[1]:
                 # Fill every hour cell the event spans (start hour .. end), so
                 # the week block grows with its duration; only its first row is
                 # titled (see _build_day); out-of-band events are pinned to an
@@ -1797,7 +1814,10 @@ class Calendar(nbapp.AppWindow):
         untitled continuations of the same block. `narrow` caps the width the
         chip ASKS for (it still fills its column) so one long title cannot
         stretch a week-view day column wider than the other six."""
-        chip = Gtk.Label(label=e["title"] if lead else "", xalign=0)
+        label = e["title"] if lead else ""
+        if lead and e.get("location"):
+            label += "  ·  " + e["location"]
+        chip = Gtk.Label(label=label, xalign=0)
         chip.set_ellipsize(3)
         if narrow:
             chip.set_max_width_chars(6)
@@ -1939,13 +1959,21 @@ class Calendar(nbapp.AppWindow):
         carried through the round trip instead of being quietly deleted on
         close."""
         self._orphans = []
+        self._events_readable = True
         try:
             with open(EVENTS_FILE) as fh:
                 data = json.load(fh)
+        except FileNotFoundError:
+            return []
         except Exception:
+            # Data-safety law: a malformed or unreadable existing store is not
+            # an empty calendar.  Refuse later automatic writes so close can
+            # never replace the only copy with [].
+            self._events_readable = False
             return []
         items = self._event_list(data)
         if items is None:
+            self._events_readable = False
             return []
         out = []
         for item in items:
@@ -1969,9 +1997,10 @@ class Calendar(nbapp.AppWindow):
         d = self._iso_to_date(item.get("date"))
         if d is None:
             return None
+        all_day = bool(item.get("all_day", False))
         try:
-            start = float(item.get("start", 9.0))
-            end = float(item.get("end", start + 1))
+            start = float(item.get("start", 9.0)) if not all_day else 0.0
+            end = float(item.get("end", start + 1)) if not all_day else 24.0
         except (TypeError, ValueError):
             start, end = 9.0, 10.0
         default_cal = self._cal_names()[0] if self.calendars else "Personal"
@@ -1981,7 +2010,14 @@ class Calendar(nbapp.AppWindow):
         ev = {"id": rid if rid else _gen_id(), "date": d, "start": start,
               "end": end, "title": str(item.get("title", "")), "cal": cal,
               "repeat": rep if rep in REPEAT_LABELS else "none",
-              "series": str(item.get("series", "") or "")}
+              "series": str(item.get("series", "") or ""),
+              "location": str(item.get("location", "") or ""),
+              "notes": str(item.get("notes", "") or ""),
+              "all_day": all_day,
+              "series_end": str(item.get("series_end", "") or ""),
+              "pattern_date": str(item.get("pattern_date", "") or ""),
+              "detached": bool(item.get("detached", False)),
+              "cancelled": bool(item.get("cancelled", False))}
         ev["_loadkey"] = self._content_key(ev["title"], d, start)
         return ev
 
@@ -2087,8 +2123,15 @@ class Calendar(nbapp.AppWindow):
         whole; anything that ignores them still reads a correct calendar."""
         rec = {"id": self._ensure_id(e),
                "date": self._date_to_iso(e["date"]),
-               "start": e["start"], "end": e["end"],
                "title": e["title"], "cal": e["cal"]}
+        if not e.get("all_day", False):
+            rec.update({"start": e["start"], "end": e["end"]})
+        for key, default in (("location", ""), ("notes", ""),
+                             ("all_day", False), ("series_end", ""),
+                             ("pattern_date", ""),
+                             ("detached", False), ("cancelled", False)):
+            if e.get(key, default) != default:
+                rec[key] = e[key]
         if e.get("series"):
             rec["series"] = e["series"]
             rec["repeat"] = e.get("repeat", "none")
@@ -2104,6 +2147,8 @@ class Calendar(nbapp.AppWindow):
         clobbered by this wholesale rewrite. merge=False writes authoritatively —
         used only by New / Open, which intentionally replace the whole store.
         Never crashes the app on an I/O error."""
+        if merge and not getattr(self, "_events_readable", True):
+            return
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
         except Exception:
@@ -2179,8 +2224,15 @@ class Calendar(nbapp.AppWindow):
         Academics."""
         return sorted(
             [e for e in list(self.events) + list(self.class_events)
-             if e["date"] == d and self.cals_on.get(e["cal"], True)],
-            key=lambda e: e["start"])
+             if e["date"] == d and not e.get("cancelled")
+             and self.cals_on.get(e["cal"], True)],
+            key=lambda e: (not e.get("all_day", False), e.get("start", 0)))
+
+    def _partition_day_events(self, d):
+        """Return (all-day, timed) visible events for the day."""
+        events = self._events_on(d)
+        return ([e for e in events if e.get("all_day", False)],
+                [e for e in events if not e.get("all_day", False)])
 
     def _covers(self, e, h):
         """Whether event `e` should paint in the Day/Week grid row for hour `h`.
@@ -2394,6 +2446,17 @@ class Calendar(nbapp.AppWindow):
             title.set_text(existing["title"])
         area.pack_start(title, False, False, 0)
 
+        location = Gtk.Entry()
+        location.set_placeholder_text(_t("Location"))
+        location.set_max_length(120)
+        if editing:
+            location.set_text(existing.get("location", ""))
+        area.pack_start(location, False, False, 0)
+
+        all_day = Gtk.CheckButton(label=_t("All Day"))
+        all_day.set_active(bool(existing and existing.get("all_day", False)))
+        area.pack_start(all_day, False, False, 0)
+
         # Inline empty-title flag (hidden until the user tries to save blank);
         # clears itself the moment they start typing.
         err = Gtk.Label(label=_t("Enter an event title."), xalign=0)
@@ -2419,6 +2482,9 @@ class Calendar(nbapp.AppWindow):
         fields.pack_start(self._field("Starts", start), True, True, 0)
         fields.pack_start(self._field("Duration", dur), True, True, 0)
         area.pack_start(fields, False, False, 0)
+        all_day.connect("toggled", lambda w: fields.set_sensitive(
+            not w.get_active()))
+        fields.set_sensitive(not all_day.get_active())
 
         calrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         calpick = Gtk.ComboBoxText()
@@ -2432,7 +2498,20 @@ class Calendar(nbapp.AppWindow):
             calpick.set_active(cal_names.index(existing["cal"]))
         elif cal_names:
             calpick.set_active(0)
-        calrow.pack_start(self._field("Calendar", calpick), True, True, 0)
+        calchoice = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        calswatch = Gtk.DrawingArea(); calswatch.set_size_request(18, 18)
+        def _draw_event_cal(_area, ctx):
+            idx = calpick.get_active()
+            name = cal_names[idx] if 0 <= idx < len(cal_names) else ""
+            self._round_rect(ctx, 1, 1, 16, 16, 3)
+            ctx.set_source_rgb(*nbicons._hex(self._cal_color(name)))
+            ctx.fill()
+            return False
+        calswatch.connect("draw", _draw_event_cal)
+        calpick.connect("changed", lambda *_: calswatch.queue_draw())
+        calchoice.pack_start(calswatch, False, False, 0)
+        calchoice.pack_start(calpick, True, True, 0)
+        calrow.pack_start(self._field("Calendar", calchoice), True, True, 0)
 
         # Bin day, the monthly standing order, a Tuesday class: these are the
         # events people actually keep, and before this they had to be typed out
@@ -2445,6 +2524,20 @@ class Calendar(nbapp.AppWindow):
         reppick.set_active(keys.index(cur_rule) if cur_rule in keys else 0)
         calrow.pack_start(self._field("Repeats", reppick), True, True, 0)
         area.pack_start(calrow, False, False, 0)
+
+        end_entry = Gtk.Entry()
+        end_entry.set_placeholder_text(_t("Optional end date (YYYY-MM-DD)"))
+        if editing:
+            end_entry.set_text(existing.get("series_end", ""))
+        area.pack_start(self._field(_t("Series End Date"), end_entry),
+                        False, False, 0)
+
+        notes = Gtk.TextView()
+        notes.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        notes.set_size_request(-1, 64)
+        if editing:
+            notes.get_buffer().set_text(existing.get("notes", ""))
+        area.pack_start(self._field(_t("Notes"), notes), False, False, 0)
 
         dlg.show_all()
         # Focus the title so typing starts there, not on the day-step arrows the
@@ -2495,11 +2588,31 @@ class Calendar(nbapp.AppWindow):
             # the drawn rows at 20:00; _covers keeps the paint in-bounds.
             end = sh + dh
             target_day = dayval[0]
-            fields = {"start": sh, "end": end, "title": name, "cal": cal}
+            nb = notes.get_buffer()
+            note_text = nb.get_text(nb.get_start_iter(), nb.get_end_iter(), True)
+            is_all_day = all_day.get_active()
+            fields = {"start": 0.0 if is_all_day else sh,
+                      "end": 24.0 if is_all_day else end,
+                      "title": name, "cal": cal,
+                      "location": location.get_text().strip(),
+                      "notes": note_text, "all_day": is_all_day}
+            series_end = self._iso_to_date(end_entry.get_text().strip())
+            if end_entry.get_text().strip() and series_end is None:
+                end_entry.get_style_context().add_class("field-error")
+                end_entry.grab_focus()
+                continue
             if editing:
-                self._save_edit(existing, target_day, fields, rule, cur_rule)
+                fields["series_end"] = (self._date_to_iso(series_end)
+                                        if series_end else "")
+                if existing.get("series") and rule == cur_rule:
+                    scope = self._choose_series_scope(_t("Edit Repeating Event"))
+                    if scope is None:
+                        continue
+                    self._edit_series_scope(existing, target_day, fields, scope)
+                else:
+                    self._save_edit(existing, target_day, fields, rule, cur_rule)
             else:
-                self._create_event(target_day, fields, rule)
+                self._create_event(target_day, fields, rule, series_end)
             # Follow the event to its (possibly moved) day so it stays visible
             # after Save — the selection and current month track the result.
             self.sel = target_day
@@ -2548,15 +2661,26 @@ class Calendar(nbapp.AppWindow):
                 groups.setdefault((sid, rule), []).append(e)
         added = False
         for (sid, rule), members in groups.items():
-            seed = max(members, key=lambda m: m["date"])
+            active = [m for m in members if not m.get("cancelled")
+                      and not m.get("detached")]
+            if not active:
+                continue
+            seed = max(active, key=lambda m: m["date"])
             last = seed["date"]
             want = today + timedelta(days=REPEAT_AHEAD[rule])
+            end_date = self._iso_to_date(seed.get("series_end"))
+            if end_date is not None and end_date < want:
+                want = end_date
             if last >= want:
                 continue
             fields = {"start": seed.get("start", 9.0),
                       "end": seed.get("end", 10.0),
                       "title": seed.get("title", ""),
-                      "cal": seed.get("cal", DEFAULT_CAL["name"])}
+                      "cal": seed.get("cal", DEFAULT_CAL["name"]),
+                      "location": seed.get("location", ""),
+                      "notes": seed.get("notes", ""),
+                      "all_day": seed.get("all_day", False),
+                      "series_end": seed.get("series_end", "")}
             # A month / year rule is counted from the day the series STARTED,
             # exactly as _repeat_dates wrote the original run. Stepping one turn
             # off the LAST occurrence instead compounds the short-month clamp:
@@ -2580,7 +2704,13 @@ class Calendar(nbapp.AppWindow):
                     break
                 if nxt is None or nxt > want:
                     break
-                if nxt <= last:
+                # A detached edit or cancellation is a persisted exception at
+                # its original pattern date.  Never regenerate a second copy.
+                occupied = any(m["date"] == nxt or
+                               self._iso_to_date(m.get("pattern_date")) == nxt
+                               for m in members)
+                if nxt <= last or occupied:
+                    d = nxt
                     continue      # an occurrence that was moved off the pattern
                 self._new_event(nxt, fields, rule, sid)
                 d = nxt
@@ -2592,7 +2722,8 @@ class Calendar(nbapp.AppWindow):
         bookkeeping, so a concurrent writer can never resurrect or clobber it."""
         ev = {"id": _gen_id(), "date": day, "repeat": rule, "series": series}
         ev.update(fields)
-        ev["_loadkey"] = self._content_key(ev["title"], ev["date"], ev["start"])
+        ev["_loadkey"] = self._content_key(ev["title"], ev["date"],
+                                            ev.get("start", 0.0))
         self.events.append(ev)
         self._mark_seen(ev)
         return ev
@@ -2778,14 +2909,61 @@ class Calendar(nbapp.AppWindow):
         self._save_events()
         self._refresh()
 
-    def _create_event(self, day, fields, rule):
+    def _create_event(self, day, fields, rule, end_date=None):
         """Add an event — or, with a repeat rule, the whole run of them."""
         if rule == "none":
             self._new_event(day, fields)
             return
         sid = _gen_id()
-        for d in _repeat_dates(day, rule):
-            self._new_event(d, fields, rule, sid)
+        enriched = dict(fields)
+        enriched["series_end"] = (self._date_to_iso(end_date)
+                                  if end_date is not None else "")
+        for d in _repeat_dates(day, rule, end_date):
+            self._new_event(d, enriched, rule, sid)
+
+    def _edit_series_scope(self, existing, day, fields, scope="one"):
+        """Apply fields to one, following, or every occurrence.
+
+        A one-occurrence edit remains in the series but is marked detached;
+        its original pattern date is occupied, so regeneration cannot clone it.
+        """
+        members = self._series_members(existing)
+        if scope == "one":
+            original = existing["date"]
+            existing.update(fields)
+            existing["date"] = day
+            existing["detached"] = True
+            existing["pattern_date"] = self._date_to_iso(original)
+            return
+        targets = members if scope == "all" else [
+            e for e in members if e["date"] >= existing["date"]]
+        delta = day - existing["date"]
+        for e in targets:
+            e.update(fields)
+            if scope == "following":
+                e["date"] += delta
+
+    def _delete_series_scope(self, existing, scope="one"):
+        """Delete one/following/all without allowing extension to resurrect it."""
+        members = self._series_members(existing)
+        if scope == "one":
+            # Keep a tombstone at the pattern date. It is omitted from views
+            # but persisted and blocks _extend_series regeneration.
+            existing["cancelled"] = True
+            existing["detached"] = True
+            existing["pattern_date"] = self._date_to_iso(existing["date"])
+            return
+        cutoff = existing["date"]
+        doomed = members if scope == "all" else [e for e in members
+                                                  if e["date"] >= cutoff]
+        if scope == "following":
+            previous = [e for e in members if e["date"] < cutoff]
+            end = cutoff - timedelta(days=1)
+            for e in previous:
+                e["series_end"] = self._date_to_iso(end)
+        for e in doomed:
+            if e in self.events:
+                self.events.remove(e)
 
     def _save_edit(self, existing, day, fields, rule, was):
         """Apply the dialog's fields to an event.
@@ -2831,10 +3009,11 @@ class Calendar(nbapp.AppWindow):
         title = existing.get("title") or _t("this event")
         members = self._series_members(existing)
         if len(members) > 1:
-            choice = self._confirm_series(title, len(members))
+            choice = self._choose_series_scope(_t("Delete Repeating Event"))
             if choice is None:
                 return False
-            doomed = members if choice == "all" else [existing]
+            self._delete_series_scope(existing, choice)
+            doomed = []
         else:
             if not self._confirm("Delete Event", "Delete “%s”?" % title,
                                  "Delete"):
@@ -2848,6 +3027,27 @@ class Calendar(nbapp.AppWindow):
         self._save_events()
         self._refresh()
         return True
+
+    def _choose_series_scope(self, title):
+        """Ask how far a repeating edit/delete reaches."""
+        responses = {31: "one", 32: "following", 33: "all"}
+        dlg = Gtk.Dialog(transient_for=self, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("nbdialog")
+        dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        dlg.add_button(_t("This Occurrence Only"), 31)
+        dlg.add_button(_t("This and Following"), 32)
+        dlg.add_button(_t("Whole Series"), 33)
+        area = dlg.get_content_area()
+        area.set_margin_top(20); area.set_margin_bottom(12)
+        area.set_margin_start(24); area.set_margin_end(24)
+        label = Gtk.Label(label=title, xalign=0)
+        label.get_style_context().add_class("dlgtitle")
+        area.pack_start(label, False, False, 0)
+        dlg.show_all()
+        response = dlg.run()
+        dlg.destroy()
+        return responses.get(response)
 
     def _confirm_series(self, title, n):
         """Ask which part of a repeating event to delete. Returns 'one', 'all'

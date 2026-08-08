@@ -26,6 +26,10 @@ import nbicons
 import nbapp  # for nudge_paint (swrast first-paint flush)
 import nbstate  # navigation generations + stable-identity restoration
 import nbtransitions  # direction vocabulary shared with the rest of the OS
+try:
+    import nbmotion  # launch-card motion; None means instant (headless/stripped)
+except Exception:  # noqa: BLE001
+    nbmotion = None
 from nbi18n import _t  # noqa: E402
 
 # Whether the GPU stack is accelerated (a compositor is running). session.sh
@@ -1063,6 +1067,15 @@ class Finder(Gtk.Window):
                 self._removed_apps = {str(x) for x in data}
         except (OSError, ValueError, TypeError):
             pass
+        self._removed_apps_mtime = self._removed_apps_stamp()
+
+    def _removed_apps_stamp(self):
+        """Cheap identity for Packages' store, including atomic replacement."""
+        try:
+            st = os.stat(self._removed_apps_path())
+            return (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            return None
 
     def _save_removed_apps(self):
         try:
@@ -1071,6 +1084,9 @@ class Finder(Gtk.Window):
             nbapp.atomic_write_json(path, sorted(self._removed_apps))
         except (OSError, TypeError, ValueError):
             pass
+
+    def _app_is_removed(self, name):
+        return name.endswith(".app") and name[:-4] in self._removed_apps
 
     # ---- chrome ----
     def _titlebar(self):
@@ -1300,10 +1316,8 @@ class Finder(Gtk.Window):
         hidden.set_active(self._show_hidden)   # reflect the restored preference
         hidden.connect("toggled", self._on_toggle_hidden)
         bar.pack_start(hidden, False, False, 0)
-        # Overflow / actions menu. Its entries (Remove from Applications, Restore
-        # removed apps) act on the Applications view, so the button lives with
-        # the left-hand tools; the menu items dim themselves when they don't
-        # apply (see _popup_actions_menu).
+        # Overflow menu. Installing, removing, and restoring applications live
+        # in Packages; Finder keeps only general file inspection here.
         self.actions_btn = Gtk.Button(label=_t("Actions"))
         self.actions_btn.get_style_context().add_class("toolbtn")
         self.actions_btn.set_tooltip_text(_t("More actions"))
@@ -1551,6 +1565,10 @@ class Finder(Gtk.Window):
                 self._fill_sidebar()
         except Exception:
             pass
+        if (getattr(self, "rel", None) == "Applications"
+                and self._removed_apps_stamp()
+                != getattr(self, "_removed_apps_mtime", None)):
+            self.load(self.rel, record=False, keep_filter=True)
         return True
 
     def _devices(self):
@@ -1751,6 +1769,10 @@ class Finder(Gtk.Window):
             self._wide = []
             self._schedule_wide_search()
         self.rel = rel
+        if rel == "Applications":
+            # Packages owns uninstall/restore; every Applications rebuild reads
+            # the shared store before filtering the on-disk app entries.
+            self._load_removed_apps()
         full = self.abspath(rel)
         if rel.startswith("/"):
             name = os.path.basename(full) or "Computer"
@@ -1776,8 +1798,7 @@ class Finder(Gtk.Window):
                 # Apps the user hid via "Remove from Applications" are dropped
                 # from the Applications listing (persisted; restorable). The
                 # .app file stays on disk — this only affects what is shown.
-                if (rel == "Applications" and nm.endswith(".app")
-                        and nm[:-4] in self._removed_apps):
+                if rel == "Applications" and self._app_is_removed(nm):
                     continue
                 # Apps WE have withheld because they are not finished (see
                 # HIDDEN_APPS). Unlike the user's list this is not restorable
@@ -2152,7 +2173,8 @@ class Finder(Gtk.Window):
         self._set_nav(self.back_btn, "back", self._hpos > 0)
         self._set_nav(self.fwd_btn, "fwd", self._hpos < len(self._history) - 1)
         in_trash = (self.rel == ".Trash")
-        self.trash_btn.set_visible(not in_trash)
+        in_apps = (self.rel == "Applications")
+        self.trash_btn.set_visible(not in_trash and not in_apps)
         self.empty_btn.set_visible(in_trash)
         self.restore_btn.set_visible(in_trash)
         # New Folder / Rename make no sense in the Trash — and dropping them
@@ -2160,7 +2182,7 @@ class Finder(Gtk.Window):
         # Empty Trash) inside a 1024px panel instead of pushing the view
         # switcher off the right edge where it cannot be clicked.
         for b in getattr(self, "folder_btns", ()):
-            b.set_visible(not in_trash)
+            b.set_visible(not in_trash and not in_apps)
         self._update_sidebar()
         # request a redraw so the new folder actually shows: on real hardware
         # this repaints immediately; under the emulator it may wait for an
@@ -2226,6 +2248,9 @@ class Finder(Gtk.Window):
         return d
 
     def _trash_selected(self):
+        if self.rel == "Applications":
+            self._flash_status(_t("Applications are managed in Packages."))
+            return
         model, it = self._selected_iter()
         if it is None:
             self._flash_status(_t("Select an item to move to Trash"))
@@ -3030,6 +3055,9 @@ class Finder(Gtk.Window):
         return dlg, bar, namelbl
 
     def _new_folder(self):
+        if self.rel == "Applications":
+            self._flash_status(_t("Applications are managed in Packages."))
+            return
         dest = self.abspath(self.rel)
         base = "untitled folder"
         path = os.path.join(dest, base)
@@ -3081,6 +3109,9 @@ class Finder(Gtk.Window):
             self._flash_status(_t("Select an item to copy"))
 
     def _cut_selected(self):
+        if self.rel == "Applications":
+            self._flash_status(_t("Applications are managed in Packages."))
+            return
         p = self._selected_path()
         if p:
             self._clipboard = (p, True)
@@ -3091,6 +3122,9 @@ class Finder(Gtk.Window):
             self._flash_status(_t("Select an item to cut"))
 
     def _paste(self):
+        if self.rel == "Applications":
+            self._flash_status(_t("Applications are managed in Packages."))
+            return
         if not self._clipboard:
             return
         src, is_cut = self._clipboard
@@ -3328,6 +3362,9 @@ class Finder(Gtk.Window):
         # renderer is editable only for this edit (flipped back off when the
         # edit commits or is cancelled), so ordinary clicks keep selecting and
         # double-click keeps opening.
+        if self.rel == "Applications":
+            self._flash_status(_t("Applications are managed in Packages."))
+            return
         model, it = self._selected_iter()
         if it is None:
             self._flash_status(_t("Select an item to rename"))
@@ -3427,6 +3464,9 @@ class Finder(Gtk.Window):
         # by the list and grid renderers (both
         # drive self.store, so the path string maps straight to a store row).
         self._end_rename_mode()
+        if self.rel == "Applications":
+            self._flash_status(_t("Applications are managed in Packages."))
+            return
         new_name = (new_text or "").strip()
         try:
             it = self.store.get_iter_from_string(path_str)
@@ -3469,6 +3509,9 @@ class Finder(Gtk.Window):
     def _duplicate_selected(self):
         # Copy the selected item alongside itself with a ' copy' suffix (files
         # and, recursively, folders), then select the duplicate.
+        if self.rel == "Applications":
+            self._flash_status(_t("Applications are managed in Packages."))
+            return
         p = self._selected_path()
         if not p:
             self._flash_status(_t("Select an item to duplicate"))
@@ -3519,29 +3562,6 @@ class Finder(Gtk.Window):
         self._popup_context_menu(event)
         return True
 
-    def _raise_menu(self, menu):
-        # Keep a popup menu in front of every window.
-        # A Gtk.Menu lives in its own override-redirect toplevel; on this
-        # no-compositor stack (matchbox, with the Finder itself floating as a
-        # dialog) that toplevel is not reliably stacked above the windows it
-        # belongs to, so a menu could open BEHIND the Finder. Raise the menu's
-        # own X window once it is mapped, when it actually exists.
-        def _do_raise(*_a):
-            try:
-                tl = menu.get_toplevel()
-                if tl is not None:
-                    gw = tl.get_window()
-                    if gw is not None:
-                        gw.raise_()
-            except Exception:
-                pass
-            return False
-        try:
-            menu.connect("map-event", _do_raise)
-        except Exception:
-            pass
-        GLib.idle_add(_do_raise)
-
     def _popup_context_menu(self, event):
         menu = Gtk.Menu()
         menu.get_style_context().add_class("findermenu")
@@ -3553,6 +3573,12 @@ class Finder(Gtk.Window):
                     (None, None),
                     (_t("Put Back"), self._restore_selected),
                     (_t("Delete Immediately…"), self._confirm_delete_forever),
+                    (None, None),
+                    (_t("Get Info"), self._get_info)]
+        elif self.rel == "Applications":
+            rows = [(_t("Open"), self._context_open),
+                    (None, None),
+                    (_t("Copy"), self._copy_selected),
                     (None, None),
                     (_t("Get Info"), self._get_info)]
         else:
@@ -3575,11 +3601,7 @@ class Finder(Gtk.Window):
             mi.connect("activate", lambda _m, fn=cb: fn())
             menu.append(mi)
         menu.show_all()
-        try:
-            menu.popup_at_pointer(event)          # GTK 3.22+
-            self._raise_menu(menu)
-        except (AttributeError, TypeError):
-            menu.popup(None, None, None, None, event.button, event.time)
+        nbapp.popup_at(menu, event=event)
 
     def _popup_background_menu(self, event):
         # Right-click on empty space: the folder-level actions a novice reaches
@@ -3591,51 +3613,11 @@ class Finder(Gtk.Window):
         # faith — and it is the first thing reached for after a wrong move.
         undo_label = (_t("Undo %s") % self._undo["label"]) if self._undo \
             else _t("Undo")
-        for label, cb, enabled in (
-                (undo_label, self._do_undo, self._undo is not None),
-                (None, None, False),
-                (_t("New Folder"), self._new_folder, True),
-                (_t("Paste"), self._paste, self._clipboard is not None)):
-            if label is None:
-                menu.append(Gtk.SeparatorMenuItem())
-                continue
-            mi = Gtk.MenuItem(label=label)
-            mi.get_style_context().add_class("findermenuitem")
-            mi.set_sensitive(enabled)
-            mi.connect("activate", lambda _m, fn=cb: fn())
-            menu.append(mi)
-        menu.show_all()
-        try:
-            menu.popup_at_pointer(event)
-            self._raise_menu(menu)
-        except (AttributeError, TypeError):
-            menu.popup(None, None, None, None, event.button, event.time)
-
-    def _context_open(self):
-        model, it = self._selected_iter()
-        if it is None:
-            return
-        self._open_path(model.get_path(it))
-
-    # ---- actions menu (Remove from / Restore removed Applications) ----
-    def _popup_actions_menu(self, btn):
-        # The navbar's overflow menu. Both entries operate on the Applications
-        # view, so they are only sensitive there: Remove needs an .app selected;
-        # Restore needs at least one previously-removed app.
-        menu = Gtk.Menu()
-        menu.get_style_context().add_class("findermenu")
-        in_apps = (self.rel == "Applications")
-        _model, it = self._selected_iter()
-        sel_app = None
-        if in_apps and it is not None:
-            nm = _model.get_value(it, 1)
-            if nm.endswith(".app"):
-                sel_app = nm[:-4]
-        rows = [("Remove from Applications", self._remove_selected_app,
-                 in_apps and sel_app is not None),
-                (None, None, False),
-                ("Restore Removed Apps…", self._restore_removed_apps_dialog,
-                 in_apps and bool(self._removed_apps))]
+        rows = [(undo_label, self._do_undo, self._undo is not None)]
+        if self.rel != "Applications":
+            rows += [(None, None, False),
+                     (_t("New Folder"), self._new_folder, True),
+                     (_t("Paste"), self._paste, self._clipboard is not None)]
         for label, cb, enabled in rows:
             if label is None:
                 menu.append(Gtk.SeparatorMenuItem())
@@ -3646,12 +3628,33 @@ class Finder(Gtk.Window):
             mi.connect("activate", lambda _m, fn=cb: fn())
             menu.append(mi)
         menu.show_all()
-        try:
-            menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST,
-                                 Gdk.Gravity.NORTH_WEST, None)
-            self._raise_menu(menu)
-        except (AttributeError, TypeError):
-            menu.popup(None, None, None, None, 0, Gtk.get_current_event_time())
+        nbapp.popup_at(menu, event=event)
+
+    def _context_open(self):
+        model, it = self._selected_iter()
+        if it is None:
+            return
+        self._open_path(model.get_path(it))
+
+    # ---- actions menu -----------------------------------------------------
+    def _popup_actions_menu(self, btn):
+        # App management belongs to Packages. This menu remains a compact route
+        # to information about the selected item.
+        menu = Gtk.Menu()
+        menu.get_style_context().add_class("findermenu")
+        _model, it = self._selected_iter()
+        rows = [(_t("Get Info"), self._get_info, it is not None)]
+        for label, cb, enabled in rows:
+            if label is None:
+                menu.append(Gtk.SeparatorMenuItem())
+                continue
+            mi = Gtk.MenuItem(label=label)
+            mi.get_style_context().add_class("findermenuitem")
+            mi.set_sensitive(enabled)
+            mi.connect("activate", lambda _m, fn=cb: fn())
+            menu.append(mi)
+        menu.show_all()
+        nbapp.popup_at(menu, widget=btn, anchor="widget-sw")
 
     def _remove_selected_app(self):
         # Hide the selected app from the Applications listing (persisted). The

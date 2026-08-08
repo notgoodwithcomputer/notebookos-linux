@@ -590,10 +590,7 @@ class SystemMonitor(nbapp.AppWindow):
             mi.connect("activate", lambda _m, fn=cb: fn())
             menu.append(mi)
         menu.show_all()
-        try:
-            menu.popup_at_pointer(event)          # GTK 3.22+
-        except (AttributeError, TypeError):
-            menu.popup(None, None, None, None, event.button, event.time)
+        nbapp.popup_at(menu, event=event)
         return True
 
     def _copy_pid(self):

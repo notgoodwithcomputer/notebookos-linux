@@ -317,14 +317,37 @@ check("zoom is clamped to %dx" % illustrator.ZOOM_MAX,
       a.zoom == illustrator.ZOOM_MAX, a.zoom)
 for _ in range(40):
     a._step_zoom(-1)
-check("zoom never goes below 1x (a fractional zoom would resample)",
-      a.zoom == 1, a.zoom)
-check("every zoom level is an integer",
-      all(isinstance(z, int) for z in illustrator.ZOOM_STEPS))
+# The user explicitly asked to zoom out below 1x: 1x is the boundary between
+# reduction and exact enlargement now, not the floor.  Drive the real fit path
+# with a document twice the available viewport in both dimensions.
+a.show_all()
+while Gtk.events_pending():
+    Gtk.main_iteration()
+alloc = a.mat.get_allocation()
+fit_w, fit_h = alloc.width - 12, alloc.height - 12
+a.cw, a.ch = fit_w * 2, fit_h * 2
+a._zoom_fit()
+check("user-requested fit can select below 1x and keep the whole document visible",
+      a.zoom < 1 and a.cw * a.zoom <= fit_w
+      and a.ch * a.zoom <= fit_h,
+      (a.zoom, (a.cw * a.zoom, a.ch * a.zoom), (fit_w, fit_h)))
+# The user-requested reductions are one exact reciprocal ladder below the 1x
+# boundary; at and above that boundary integer-exactness remains the law.
+below_1x = [z for z in illustrator.ZOOM_STEPS if z < 1]
+check("the 1x boundary separates the reciprocal zoom-out ladder from exact integer zoom",
+      below_1x == [1 / 8, 1 / 6, 1 / 4, 1 / 3, 1 / 2]
+      and all(a < b for a, b in zip(illustrator.ZOOM_STEPS,
+                                    illustrator.ZOOM_STEPS[1:]))
+      and 1 in illustrator.ZOOM_STEPS
+      and all(isinstance(z, int) for z in illustrator.ZOOM_STEPS if z >= 1),
+      illustrator.ZOOM_STEPS)
 src = open(os.path.join(DE, "illustrator.py"), encoding="utf-8").read()
-check("the zoom blit is nearest-neighbour, never a smoothing filter",
-      "FILTER_NEAREST" in src and "FILTER_GOOD" not in src
-      and "FILTER_BILINEAR" not in src)
+# The 1x boundary preserves nearest-neighbour integer enlargement, while the
+# newly requested reductions deliberately use a non-nearest smoothing filter.
+zoom_filter = "cairo.FILTER_NEAREST if z >= 1 else cairo.FILTER_BILINEAR"
+check("the 1x boundary keeps exact nearest blits above and smooths only zoom-out",
+      src.count(zoom_filter) >= 2
+      and cairo.FILTER_BILINEAR != cairo.FILTER_NEAREST)
 check("the pixel grid appears at high zoom", illustrator.GRID_FROM <= 8
       and a.grid is True)
 

@@ -1,0 +1,16 @@
+{
+  "Packages lists the system image and app visibility.": "Paketi prikazuju sliku sistema i vidljivost aplikacija.",
+  "Applications": "Aplikacije",
+  "Removed": "Uklonjeno",
+  "Shown": "Prikazano",
+  "Restore": "Vrati",
+  "Uninstall": "Deinstaliraj",
+  "Show this app in Applications again.": "Ponovo prikaži ovu aplikaciju u Aplikacijama.",
+  "Remove this app from Applications.": "Ukloni ovu aplikaciju iz Aplikacija.",
+  "This app is removed from Applications. It stays on disk and can always be restored.": "Ova aplikacija je uklonjena iz Aplikacija. Ostaje na disku i uvek se može vratiti.",
+  "Uninstall removes this app from Applications. It stays on disk and can always be restored.": "Deinstaliranje uklanja ovu aplikaciju iz Aplikacija. Ostaje na disku i uvek se može vratiti.",
+  "System files stay in the read-only system image.": "Sistemske datoteke ostaju u slici sistema koja je samo za čitanje.",
+  "Packages does not install updates. Notebook OS is delivered as a complete system image.": "Paketi ne instaliraju ažuriranja. Notebook OS se isporučuje kao cela slika sistema.",
+  "Sources lists storage attached to this computer.": "Izvori prikazuju skladišta povezana sa ovim računarom.",
+  "No USB storage is connected": "Nije povezano USB skladište"
+}
