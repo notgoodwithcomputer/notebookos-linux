@@ -623,6 +623,17 @@ python3 /opt/notebook/de/widgets.py &
 # installer is launched like any other app: Finder ▸ Applications ▸
 # "Install Notebook OS" (finder.py maps that .app to de/installer.py).
 
+# clipboard keeper: X11 selections belong to the copying window, so remember
+# CLIPBOARD and serve it only after that window exits. PRIMARY stays untouched.
+python3 /opt/notebook/de/xclipd.py >/dev/null 2>&1 &
+
+# tablet-mode watch: a convertible's flip arrives as SW_TABLET_MODE on a
+# platform input device (intel-vbtn / ideapad-laptop / thinkpad-acpi). The
+# daemon tracks it into /tmp/nb-tablet-mode, raises the on-screen keyboard
+# while folded, and stays quietly dormant on hardware that never produces the
+# switch — so this line is safe on every machine, convertible or not.
+python3 /opt/notebook/de/xtabletd.py >/dev/null 2>&1 &
+
 # the desktop shell (panel + session). It runs in the foreground; when it
 # exits, the session ends.
 exec python3 /opt/notebook/de/shell.py

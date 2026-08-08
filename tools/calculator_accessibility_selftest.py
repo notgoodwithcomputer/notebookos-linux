@@ -7,6 +7,9 @@ text = (Path(__file__).resolve().parents[1] /
 section = text[text.index("        self._histbox = Gtk.EventBox()"):
                text.index("    # ---- keypad ----")]
 checks = {
+    "full-allocation root carries opaque paper background":
+        ('shell.get_style_context().add_class("calcroot")' in text
+         and ".calcroot { background: #F8F7F2;" in text),
     "framebuffer-safe history target remains an EventBox": "Gtk.EventBox()" in section,
     "history target is keyboard focusable": "set_can_focus(True)" in section,
     "history action is described": "Recall last calculation" in section,

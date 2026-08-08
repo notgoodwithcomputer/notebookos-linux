@@ -526,6 +526,7 @@ class Calculator(nbapp.AppWindow):
 
         # background desk
         shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        shell.get_style_context().add_class("calcroot")
         nav = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         nav.get_style_context().add_class("calcnav")
         self._views = {}
@@ -564,6 +565,9 @@ class Calculator(nbapp.AppWindow):
 
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         card.get_style_context().add_class("calccard")
+        # Keep the card capped and centred with papertone flanks: stretching a
+        # keypad to the full 1280px allocation would hurt the paper/letterpress
+        # grammar and make its keys absurdly wide.
         # Card width tracks the real panel, never a hardcoded 1920/1080 stack:
         # 640 on a normal desk, but capped to the live screen (minus the desk
         # margin) so the card can never overflow a small 1366x768 / 1280x800
@@ -1508,6 +1512,10 @@ class Calculator(nbapp.AppWindow):
     # ---- css ----
     def _install_css(self):
         css = b"""
+        /* The root owns the whole toplevel allocation, including the flanks
+           beyond the centred card; keep those pixels opaque on framebuffer /
+           no-compositor sessions, where an unpainted surface appears black. */
+        .calcroot { background: #F8F7F2; }
         /* Desk tone shared OS-wide (calendar/g2048/illustrator). The scroller
            and its viewport paint the same OPAQUE desk so an over-scrolled or
            short panel never exposes a transparent (black) window surface. */

@@ -206,3 +206,21 @@ because STO variables made them vocabulary; Esc, Tab, and unowned keys retain
 the original fall-through intent. F5 now pins genuine unowned-key fall-through.
 The revised consumption/insertion assertion is the static red-proof pending the
 orchestrator's live display run; `calculator.py` stayed byte-identical at SHA-256 `a270ecea08958f8ac012af244fe24e8d492e82b75f5fdd9700ee48524ec43f90`.
+
+## Follow-up 3
+
+On the no-compositor stack, the maximized toplevel allocation extended beyond
+Calculator's centred content but had no opaque paint of its own, so those
+unpainted pixels appeared as solid-black gutters.
+
+The Calculator's full-expansion root `shell` now carries the `calcroot` style
+class, whose application-priority CSS paints opaque paper (`#F8F7F2`) across
+the root's entire allocation. The content card deliberately remains capped and
+centred with papertone flanks: stretching a keypad across 1280px would make the
+keys absurdly wide and work against the paper/letterpress house grammar.
+
+Red/green proof was executed with the additive headless check in
+`tools/calculator_accessibility_selftest.py`. Before the root class and CSS rule
+were added, it exited 1 with `FAIL full-allocation root carries opaque paper
+background`; after restoring the fix, it exited 0 with that check passing and
+`RESULT: ALL PASS`.

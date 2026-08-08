@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Headless self-test for the tablet-mode daemon."""
 import importlib.util
+import fcntl
 import io
 import os
 import signal
 import struct
+import subprocess
 import tempfile
 import time
 import unittest
+import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DAEMON = os.path.join(ROOT, "buildroot", "board", "notebookos",
@@ -116,6 +119,174 @@ class ActionTests(unittest.TestCase):
             self.assertEqual(len(err.getvalue().splitlines()), 1)
             self.assertIsNone(actions.child)
             actions.close()
+
+
+# ---------------------------------------------------------------------------
+# UINPUT CHAIN -- real kernel routing, discovery, decoding, and daemon actions
+# ---------------------------------------------------------------------------
+
+UINPUT_SKIP = ("SKIP: /dev/uinput not accessible -- chain section needs "
+               "root (runs on the guest)")
+
+
+def uinput_chain_available(uinput="/dev/uinput", sys_input="/sys/class/input"):
+    """Keep the live-test gate small enough to red-proof without uinput."""
+    return os.path.exists(uinput) and os.access(uinput, os.W_OK) and \
+        os.path.isdir(sys_input)
+
+
+def _ioc(direction, kind, number, size=0):
+    """Encode Linux's generic ioctl number (dir:2,size:14,type:8,nr:8)."""
+    return ((direction << 30) | (size << 16) |
+            (ord(kind) << 8) | number)
+
+
+# uinput.h uses _IOW('U', nr, int) for capability bits, _IO for lifecycle,
+# and _IOW('U', 3, struct uinput_setup) for the modern device setup call.
+_IOC_WRITE = 1
+UI_SET_EVBIT = _ioc(_IOC_WRITE, "U", 100, struct.calcsize("i"))
+UI_SET_SWBIT = _ioc(_IOC_WRITE, "U", 109, struct.calcsize("i"))
+UI_DEV_CREATE = _ioc(0, "U", 1)
+UI_DEV_DESTROY = _ioc(0, "U", 2)
+UINPUT_SETUP = struct.Struct("HHHH80sI")
+UI_DEV_SETUP = _ioc(_IOC_WRITE, "U", 3, UINPUT_SETUP.size)
+
+
+class UinputChainTests(unittest.TestCase):
+    def test_gate_decision_headlessly(self):
+        """Red-proof both decisions without pretending a live device exists."""
+        with tempfile.TemporaryDirectory() as td:
+            fake_uinput = os.path.join(td, "uinput")
+            fake_sys = os.path.join(td, "sys", "class", "input")
+            os.makedirs(fake_sys)
+            with open(fake_uinput, "wb"):
+                pass
+            self.assertTrue(uinput_chain_available(fake_uinput, fake_sys))
+            self.assertFalse(uinput_chain_available(
+                os.path.join(td, "missing-uinput"), fake_sys))
+            self.assertFalse(uinput_chain_available(
+                fake_uinput, os.path.join(td, "missing-sysfs")))
+
+    @staticmethod
+    def _wait_for_device(name, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for event_dir in sorted(os.path.join("/sys/class/input", entry)
+                                    for entry in os.listdir("/sys/class/input")
+                                    if entry.startswith("event")):
+                try:
+                    with open(os.path.join(event_dir, "device", "name"),
+                              encoding="utf-8") as fh:
+                        matches = fh.read().strip() == name
+                    cap = os.path.join(event_dir, "device", "capabilities", "sw")
+                    with open(cap, encoding="ascii") as fh:
+                        tablet = xt.switch_mask_has_tablet(fh.read())
+                    node = os.path.join("/dev/input", os.path.basename(event_dir))
+                    if matches and tablet and os.path.exists(node):
+                        return node
+                except OSError:
+                    continue
+            time.sleep(0.02)
+        return None
+
+    def _wait_for_flag(self, expected, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with open("/tmp/nb-tablet-mode", encoding="ascii") as fh:
+                    if fh.read() == expected:
+                        return True
+            except OSError:
+                pass
+            time.sleep(0.02)
+        return False
+
+    @staticmethod
+    def _emit(fd, value):
+        event = struct.Struct("llHHi")
+        os.write(fd, event.pack(0, 0, xt.EV_SW, xt.SW_TABLET_MODE, value))
+        os.write(fd, event.pack(0, 0, xt.EV_SYN, 0, 0))
+
+    def test_real_kernel_event_chain(self):
+        if not uinput_chain_available():
+            print(UINPUT_SKIP)
+            return
+
+        print("UINPUT CHAIN: OSK path is hardcoded; asserting flag-file actions only")
+        flag = "/tmp/nb-tablet-mode"
+        daemon = None
+        uinput_fd = None
+        created = False
+        # xtabletd has no flag override.  This guest-only lock serializes use of
+        # the real /tmp path; cleanup below is intentionally unconditional.
+        chain_lock = os.open("/tmp/xtabletd-uinput-selftest.lock",
+                             os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(chain_lock, fcntl.LOCK_EX)
+        try:
+            try:
+                os.unlink(flag)
+            except FileNotFoundError:
+                pass
+
+            uinput_fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+            fcntl.ioctl(uinput_fd, UI_SET_EVBIT, xt.EV_SW)
+            fcntl.ioctl(uinput_fd, UI_SET_SWBIT, xt.SW_TABLET_MODE)
+            name = "nb-xtabletd-selftest-" + uuid.uuid4().hex
+            setup = UINPUT_SETUP.pack(0x03, 0x1, 0x1, 1,
+                                      name.encode("ascii"), 0)
+            fcntl.ioctl(uinput_fd, UI_DEV_SETUP, setup)
+            fcntl.ioctl(uinput_fd, UI_DEV_CREATE)
+            created = True
+            self.assertIsNotNone(self._wait_for_device(name),
+                                 "uinput event node/capabilities did not appear")
+
+            with tempfile.TemporaryDirectory() as scratch:
+                env = os.environ.copy()
+                env.update(HOME=scratch, TMPDIR=scratch)
+                env.pop("DISPLAY", None)
+                daemon = subprocess.Popen(
+                    [os.environ.get("PYTHON", "python3"), DAEMON], env=env,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL)
+                self._emit(uinput_fd, 1)
+                self.assertTrue(self._wait_for_flag("1"),
+                                "daemon did not publish tablet mode")
+                self._emit(uinput_fd, 0)
+                self.assertTrue(self._wait_for_flag("0"),
+                                "daemon did not publish laptop mode")
+
+                stable_mtime = os.stat(flag).st_mtime_ns
+                self._emit(uinput_fd, 0)
+                self._emit(uinput_fd, 0)
+                time.sleep(0.25)
+                self.assertEqual(os.stat(flag).st_mtime_ns, stable_mtime,
+                                 "repeat values rewrote/flapped the flag")
+
+                daemon.send_signal(signal.SIGTERM)
+                daemon.wait(timeout=7)
+                daemon = None
+                self.assertFalse(os.path.exists(flag),
+                                 "SIGTERM did not remove the mode flag")
+        finally:
+            if daemon is not None:
+                daemon.terminate()
+                try:
+                    daemon.wait(timeout=7)
+                except subprocess.TimeoutExpired:
+                    daemon.kill()
+                    daemon.wait(timeout=2)
+            try:
+                os.unlink(flag)
+            except FileNotFoundError:
+                pass
+            if uinput_fd is not None:
+                if created:
+                    try:
+                        fcntl.ioctl(uinput_fd, UI_DEV_DESTROY)
+                    except OSError:
+                        pass
+                os.close(uinput_fd)
+            os.close(chain_lock)
 
 
 if __name__ == "__main__":

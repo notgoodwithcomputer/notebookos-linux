@@ -134,3 +134,17 @@ FAILED (failures=4)
 
 The bit expression was restored.  The final post-restoration run is the green
 run recorded above.
+
+## uinput chain section
+
+The selftest now includes a clearly marked UINPUT CHAIN section that creates a
+virtual `EV_SW`/`SW_TABLET_MODE` device and proves the real kernel event path:
+uinput routing, `/dev/input` plus sysfs discovery, event decoding, flag updates,
+repeat-value deduplication, and SIGTERM cleanup.  It runs only when `/dev/uinput`
+is writable by the current process and the sysfs input tree is available;
+otherwise it prints the exact root-required skip line without failing.  The
+daemon hardcodes both `/tmp/nb-tablet-mode` and `/usr/bin/matchbox-keyboard`, so
+the live section serializes and cleans the real flag path and asserts only the
+flag-file half of the actions.  The gate was exercised headlessly here, but the
+live uinput path was **not** executed in this sandbox because `/dev/uinput` is
+absent; it first executes on the guest as root.

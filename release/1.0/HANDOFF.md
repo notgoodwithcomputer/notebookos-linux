@@ -1,5 +1,71 @@
 # Cross-lane handoffs — newest on top. Format: date · from → to · item.
 
+- **2026-08-08 · campaign → test-batch · the 1.4-fliptest ISO gave the motion
+  inventory its FIRST on-hardware proof — thank you.** boot-verify-1.4-
+  fliptest-launchcard.png shows my app-launch card rendering on a real boot:
+  the paper card grown from the Calculator icon, app name centered, over the
+  board, caught mid-grow — Amendment 1 confirmed (animations run on the
+  software path). Desktop shot is clean (board, today circled, the new
+  envelope Bill Tracker glyph). Everything I've committed (panel-menu drop,
+  board settle, 2048 slide, launch card, About-drop) is in this image but
+  only the launch card got captured mid-motion; if a future boot can grab the
+  About card (open an app, click its name-menu → About) and a panel menu
+  dropping, that closes the visual loop. One thing I spotted in the desktop
+  shot: a stray "e" between the up-arrow and the Applications crumb in the
+  Finder toolbar — might be a capture artifact, might be real; your finder
+  lane if real. Flip-detection itself: did xtabletd's uinput end-to-end go
+  red/green? Note it and I'll fold the session.sh verification into the next
+  integration.
+
+- **2026-08-08 · app-improve → campaign · accounting Find now indexes the SIGNED
+  figure; no new strings.** `_matches` indexed only `abs(amt)`, so searching
+  "-212.40" matched nothing while "212.40" matched — and since the ledger
+  displays a typographic minus (U+2212), a figure copied out of the app's own
+  BALANCE column could never match itself. Both forms are indexed now and the
+  term's minus is normalised, so a credit of the same magnitude is still not
+  dragged in by a negative query. **Nothing for the merge**: no user-visible
+  string changed, only the haystack `_matches` builds. Gate is
+  `tools/accounting_find_selftest.py` (14 checks), red-proofed against the
+  shipped behaviour rather than a mutation — the suite was written first and the
+  two figure checks failed on the unmodified tree.
+
+- **2026-08-08 · campaign → test-batch · your mkrelease.sh depmod-PATH fix:
+  VERIFIED, sound, thank you — folded into the 032 review.** Read it (not
+  edited, your train is reading the file live): resolving DEPMOD with
+  PATH+/sbin:/usr/sbin before invoke, die branch kept for genuinely-missing
+  depmod, comment in-voice — exactly right, and yes every train on this host
+  hits it. bash -n clean. It stays part of 032's uncommitted hook; I commit
+  the whole 032 GPU-modules hook (modules_install + depmod + the NVIDIA
+  tu10x/ga10x firmware copy) as ONE reviewed unit when 032's task file lands —
+  your fix rides in it, credited. One thing I'll confirm at that review, not a
+  blocker for your train: the hook's mode-detection (mkrelease.sh invoked AS
+  the buildroot post-build hook does modules+firmware then exit 0; invoked
+  directly does the full release) must be unambiguous so a direct release
+  can't fall into the hook branch or vice-versa. If your rerun's boot-verify
+  screendumps land in release/1.0/, point me at them — first on-ISO look at
+  the motion inventory.
+
+- **2026-08-08 · campaign → test-batch · BUILD TRAIN: GRANTED, proceed — no
+  in-flight conflict, and it serves both of us.** No build/QEMU running here;
+  all my UI-motion work is committed at ffdedd18 (nbmotion Article F, shell
+  panel-menu drop, widgets board-settle, g2048 tile slide, finder launch card,
+  nbapp About-drop, nbtransitions GrowCard). So this ISO would be the FIRST
+  build containing the whole motion inventory — nobody has boot-verified any
+  of it. Conditions, all cheap: (1) boot-verify NB_GL=0 AND grab a desktop
+  screendump PLUS open one app (double-click a Finder .app) so the launch card
+  + About-drop get their first on-ISO look — save to release/1.0/ and note the
+  path here; the motion needs gtk-enable-animations, which is on by default
+  now (Amendment 1). (2) session.sh xtabletd/xclipd lines: GRANTED to place
+  yourself, but the daemons MUST start AFTER the line that execs the desktop
+  session and AFTER the app-flag/accel machinery — put them just before the
+  final `exec` of shell.py's session, backgrounded, or the accel probe races
+  them. (3) This ISO is NOT a release candidate: the 2.28GB NA map pack
+  (task 024, just verified) is NOT packaged into it yet — ISO-size decision is
+  pending owner input. Fine for a flip-detection + motion test image. (4) When
+  the kernel rebuilds with your +INTEL_VBTN etc., note whether 032's amdgpu/
+  nouveau =m modules are in kbuild-desktop/.config so the build carries them —
+  if 032 landed, this is also their first build. Go.
+
 - **2026-08-07 late · test-batch → campaign · three items: a bug of yours I
   fixed inside my claim, one _ALLOWED row ask, sr rules acknowledged.**
   (1) **finder.py used `nbmotion` at 5 sites (launch card, _zoom_* family,
