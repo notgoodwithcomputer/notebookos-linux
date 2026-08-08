@@ -120,9 +120,27 @@ def _decode_to_png(path):
     os.close(fd)
     try:
         if ext == ".svg" and shutil.which("rsvg-convert"):
-            cmd = ["rsvg-convert", "-o", out, path]
+            cmd = ["rsvg-convert"]
+            try:
+                _fmt, width, height = GdkPixbuf.Pixbuf.get_file_info(path)
+            except Exception:
+                width = height = 0
+            if width > 0 and height > 0 and max(width, height) > MAX_PIX:
+                scale = MAX_PIX / float(max(width, height))
+                cmd += ["--keep-aspect-ratio",
+                        "--width", str(max(1, int(width * scale))),
+                        "--height", str(max(1, int(height * scale)))]
+            cmd += ["-o", out, path]
         elif shutil.which("ffmpeg"):
-            cmd = ["ffmpeg", "-y", "-v", "error", "-i", path, "-frames:v", "1", out]
+            # Bound the fallback's output before it becomes a PNG and before
+            # GdkPixbuf allocates it.  MAX_PIX is the same real-pixel ceiling
+            # used by the renderer; force_original_aspect_ratio=decrease also
+            # prevents a small image from being enlarged.
+            cmd = ["ffmpeg", "-y", "-v", "error", "-i", path,
+                   "-frames:v", "1", "-vf",
+                   "scale='min(%d,iw)':'min(%d,ih)':"
+                   "force_original_aspect_ratio=decrease"
+                   % (MAX_PIX, MAX_PIX), out]
         else:
             os.unlink(out)
             return None
@@ -139,18 +157,39 @@ def _decode_to_png(path):
     return None
 
 
+def _oriented(pixbuf):
+    """Apply file orientation on every decoder path, once decoding is done."""
+    try:
+        return pixbuf.apply_embedded_orientation()
+    except Exception:
+        return pixbuf
+
+
+def _bounded_pixbuf(path):
+    """Decode without allocating an unbounded source-sized pixbuf."""
+    try:
+        _fmt, width, height = GdkPixbuf.Pixbuf.get_file_info(path)
+    except Exception:
+        width = height = 0
+    if width > 0 and height > 0 and max(width, height) > MAX_PIX:
+        scale = MAX_PIX / float(max(width, height))
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(
+            path, max(1, int(width * scale)), max(1, int(height * scale)), True)
+    return GdkPixbuf.Pixbuf.new_from_file(path)
+
+
 def _pixbuf_any(path):
     """A GdkPixbuf for `path`. GdkPixbuf's own loaders (PNG/JPEG/GIF/TIFF/BMP/...)
     are tried first; formats it lacks a loader for (WebP, SVG) fall
     back to an ffmpeg/rsvg transcode. Raises if nothing can decode it."""
     try:
-        return GdkPixbuf.Pixbuf.new_from_file(path)
+        return _oriented(_bounded_pixbuf(path))
     except Exception:
         tmp = _decode_to_png(path)
         if tmp is None:
             raise
         try:
-            return GdkPixbuf.Pixbuf.new_from_file(tmp)
+            return _oriented(_bounded_pixbuf(tmp))
         finally:
             try:
                 os.unlink(tmp)

@@ -147,23 +147,30 @@ class Journal(nbapp.AppWindow):
         here that cannot be re-derived from anything. So a malformed record now
         costs ITSELF and nothing else, and anything that still plausibly holds
         entries is read as entries."""
+        self._store_load_ok = True
         try:
             with open(JOURNAL_FILE) as fh:
                 data = json.load(fh)
-        except Exception:
+        except FileNotFoundError:
             return [], -1        # missing / unreadable file -> empty journal
+        except Exception:
+            # Do not turn a read failure into a write.  The destroy-time flush
+            # is unconditional, so without this gate merely opening a damaged
+            # diary replaces its bytes with an empty journal.  A sidecar copy
+            # is useful recovery evidence, but it is not permission to destroy
+            # the source of truth at its original path.
+            self._store_load_ok = False
+            return [], -1
         entries, active = self._parse_entries(data)
         # Nothing came back, and the file was not our own empty journal: the
-        # diary is in there in a shape this loader does not read. Move the
-        # original aside BEFORE the close-time flush replaces it. nbapp's one
-        # .bak cannot cover this — an empty journal writes {"entries": [],
-        # "active": -1}, which _payload_weight scores the SAME as a store holding
-        # one long entry under an unexpected key, and equal is not "shrinking",
-        # so the second open overwrites the only remaining copy. See
-        # nbapp.quarantine_unrecognized.
+        # diary may be in a shape this loader does not read. Keep the original
+        # at its path and suppress this session's writes. Moving it to a
+        # recovery name and then writing an empty replacement still violates
+        # the open+close law and makes the next launch look authoritatively
+        # empty.
         if not entries and not (isinstance(data, dict)
                                 and data.get("entries") == []):
-            nbapp.quarantine_unrecognized(JOURNAL_FILE)
+            self._store_load_ok = False
         return entries, active
 
     def _parse_entries(self, data):
@@ -215,6 +222,8 @@ class Journal(nbapp.AppWindow):
         """Write the full entries model + active index to disk. Swallows I/O
         errors so a bad write never crashes the app; returns True only when the
         write actually succeeded (used to gate the 'Saved' indicator)."""
+        if not getattr(self, "_store_load_ok", True):
+            return False
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
             _atomic_write_json(
@@ -1256,22 +1265,16 @@ class Journal(nbapp.AppWindow):
         """Insert a three-item bullet-list scaffold at the cursor."""
         self._insert_at_cursor("\n• \n• \n• \n", "Insert Bullet List")
 
-    # ---------------- delete (confirmed) ----------------
+    # ---------------- delete (undoable) ----------------
     def _delete_active(self):
-        """Ask before removing the current entry. Only reachable when an entry
-        is open (the menu item disables otherwise). It is undoable now
-        (_remove_active takes a checkpoint), so the confirm no longer claims
-        otherwise — the old wording ("This cannot be undone") would send a
-        writer looking for a backup that does not exist."""
+        """Remove the current entry immediately and leave an Undo step.
+
+        Destruction gets undo rather than a confirmation detour: the operation
+        is reversible, and the menu item is disabled when no entry is open.
+        """
         if not (0 <= self.active < len(self.entries)):
             return
-        title = (self.entries[self.active].get("title")
-                 or _t("Untitled entry"))
-        self._confirm(
-            "Delete Entry",
-            _t("Delete “%s”?")
-            % self._short_title(title),
-            "Delete", self._remove_active)
+        self._remove_active()
 
     def _short_title(self, title, limit=44):
         """Shorten a long entry title for the confirm sentence. The stored
@@ -1293,7 +1296,7 @@ class Journal(nbapp.AppWindow):
         immediately since this is a structural change."""
         if not (0 <= self.active < len(self.entries)):
             return
-        self.undo.checkpoint("Delete Entry…")
+        self.undo.checkpoint("Delete Entry")
         del self.entries[self.active]
         if not self.entries:
             self.active = -1
@@ -1360,7 +1363,7 @@ class Journal(nbapp.AppWindow):
             have = 0 <= self.active < len(self.entries)
             return [
                 ("New Entry", self.new_entry),
-                ("Delete Entry…", self._delete_active if have else None),
+                ("Delete Entry", self._delete_active if have else None),
                 nbapp.SEP,
                 ("Export to PDF", self._export_pdf),
                 ("Print…", self._print),
