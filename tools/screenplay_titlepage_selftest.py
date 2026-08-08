@@ -141,6 +141,28 @@ def main():
     p2 = page_text(pdf, 2)
     check("the script itself still reaches page 2", "FADE IN" in p2.upper())
 
+    # A title is user text, not a filename-limited label. It must remain on the
+    # half-letter sheet even when it is longer than one physical line.
+    long_title = ("THE EXTRAORDINARILY LONG JOURNEY THROUGH WINTER "
+                  "AND HOME AGAIN")
+    app.scripttitle.set_text(long_title)
+    app.scriptsubtitle.set_text("Écrit par Zoë Álvarez")
+    pump()
+    pdf3, _ = render(app, "long-title.pdf")
+    p1c = page_text(pdf3, 1)
+    title_lines = [line.strip() for line in p1c.splitlines()
+                   if any(word in line for word in ("EXTRAORDINARILY",
+                                                     "WINTER", "HOME"))]
+    check("a very long title wraps to multiple title-page lines",
+          len(title_lines) >= 2)
+    check("a byline with diacritics survives the title page",
+          "Écrit par Zoë Álvarez" in p1c)
+    check("MUTANT: drawing the long title on one line DOES exceed the page",
+          screenplay._pdf_w(__import__("cairo").Context(
+              __import__("cairo").ImageSurface(
+                  __import__("cairo").FORMAT_ARGB32, 10, 10)),
+              long_title, 13.0) > nbprint.HALF_W_PT)
+
     try:
         app.destroy()
     except Exception:

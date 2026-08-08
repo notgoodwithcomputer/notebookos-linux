@@ -632,6 +632,7 @@ class Screenplay(nbapp.AppWindow):
         discard confirm) and flashes the 'Saving…' chip. Crash-safe."""
         if self._loading:
             return
+        self._prepare_recovery_write()
         self._file_dirty = True
         # One undo step per burst of typing; _touch is the single entry point
         # for every content change, element retag included. Only re-arms a
@@ -668,6 +669,7 @@ class Screenplay(nbapp.AppWindow):
         """Load the session-recovery snapshot (title + body text + element spans
         + current file path), or fall back to the blank page. Malformed/foreign
         data is ignored (→ blank) and never crashes the app."""
+        self._recovery_store_writable = not os.path.exists(DOC_FILE)
         try:
             with open(DOC_FILE) as fh:
                 data = json.load(fh)
@@ -683,8 +685,10 @@ class Screenplay(nbapp.AppWindow):
             if not (isinstance(data, dict)
                     and isinstance(data.get("body"), str)
                     and isinstance(data.get("body_tags"), list)):
-                nbapp.quarantine_unrecognized(DOC_FILE)
+                return {"body": "", "body_tags": [],
+                        "title": DEFAULT_TITLE, "subtitle": "", "path": None}
             if isinstance(data, dict):
+                self._recovery_store_writable = True
                 doc = {"body": str(data.get("body", ""))}
                 tags = data.get("body_tags")
                 doc["body_tags"] = tags if isinstance(tags, list) else []
@@ -700,6 +704,13 @@ class Screenplay(nbapp.AppWindow):
             pass
         return {"body": "", "body_tags": [], "title": DEFAULT_TITLE,
                 "subtitle": "", "path": None}
+
+    def _prepare_recovery_write(self):
+        """Allow recovery writes after a real edit replaces unreadable bytes."""
+        if getattr(self, "_recovery_store_writable", True):
+            return
+        nbapp.quarantine_unrecognized(DOC_FILE)
+        self._recovery_store_writable = True
 
     def _collect_doc(self):
         """Snapshot the script (title + body + per-line element formatting + the
@@ -792,6 +803,8 @@ class Screenplay(nbapp.AppWindow):
 
     def _save_doc(self):
         """Write the script to disk. Returns True on success (crash-safe)."""
+        if not getattr(self, "_recovery_store_writable", True):
+            return False
         try:
             nbapp.atomic_write_json(DOC_FILE, self._collect_doc())
             return True
@@ -862,6 +875,7 @@ class Screenplay(nbapp.AppWindow):
             self._loading = False
         self._file_dirty = False            # fresh script matches its file / blank
         self._update_status()
+        self._prepare_recovery_write()
         self._save_doc()                    # snapshot recovery (incl. new path)
         self._set_saved()
 
@@ -1287,15 +1301,21 @@ class Screenplay(nbapp.AppWindow):
             cr.rectangle(0, 0, w, h); cr.fill()
             cr.set_source_rgb(0.102, 0.098, 0.086)    # #1A1916 ink
             if page_no <= 1:
-                _pdf_show(cr, (w - _pdf_w(cr, title, 13.0)) / 2.0,
-                          h * 0.44, title, 13.0)
+                title_cw = _pdf_w(cr, "M", 13.0) or 7.8
+                title_cols = max(1, int((w - PDF_ML - PDF_MR) // title_cw))
+                title_lines = self._wrap_text(title, title_cols)
+                first_y = h * 0.44 - (len(title_lines) - 1) * PDF_LEAD / 2
+                for i, line in enumerate(title_lines):
+                    _pdf_show(cr, (w - _pdf_w(cr, line, 13.0)) / 2.0,
+                              first_y + i * PDF_LEAD, line, 13.0)
                 if byline:
                     # 11pt to the title's 13 keeps the printed hierarchy the
                     # same as the on-screen one (15px to 17px). Full ink, not
                     # the muted grey the entry shows: a title page is printed,
                     # and a grey byline reads as a photocopy artefact.
                     _pdf_show(cr, (w - _pdf_w(cr, byline, 11.0)) / 2.0,
-                              h * 0.44 + 3 * PDF_LEAD, byline, 11.0)
+                              first_y + (len(title_lines) + 2) * PDF_LEAD,
+                              byline, 11.0)
                 return
             cw = _pdf_w(cr, "M", PDF_FS) or (PDF_FS * 0.6)
             # body page number, top-right (first body page reads as "1.")

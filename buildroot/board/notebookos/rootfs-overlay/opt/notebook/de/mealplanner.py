@@ -24,6 +24,7 @@ from gi.repository import Gtk, Pango                      # noqa: E402
 import json                                                # noqa: E402
 import os                                                  # noqa: E402
 import time                                                # noqa: E402
+import copy                                                # noqa: E402
 
 import nbapp                                               # noqa: E402
 from nbi18n import _t                                      # noqa: E402
@@ -265,6 +266,8 @@ class MealPlanner(nbapp.AppWindow):
         self._build()
         self._install_css()
         self._refresh()
+        self.undo = nbapp.UndoHistory(self._undo_snapshot, self._undo_restore)
+        self.undo.reset()
 
     # -- store ---------------------------------------------------------------
 
@@ -305,7 +308,20 @@ class MealPlanner(nbapp.AppWindow):
     def _slot(self, day, meal):
         return (self.plan.get(day) or {}).get(meal)
 
+    def _undo_snapshot(self):
+        return copy.deepcopy(self.plan)
+
+    def _undo_restore(self, plan):
+        self.plan = copy.deepcopy(plan)
+        self._save()
+        self._refresh()
+
     def _set_slot(self, day, meal, kind, title):
+        old = self._slot(day, meal)
+        new = ({"kind": kind, "title": title[:80]} if title else None)
+        if old == new:
+            return
+        self.undo.checkpoint("Clear Meal" if not title else "Edit Meal")
         if not title:
             entry = self.plan.get(day)
             if entry:
@@ -317,6 +333,7 @@ class MealPlanner(nbapp.AppWindow):
                                                    "title": title[:80]}
         self._save()
         self._refresh()
+        self.undo.commit()
 
     # -- ui ------------------------------------------------------------------
 
@@ -675,16 +692,12 @@ class MealPlanner(nbapp.AppWindow):
         n = sum(len(self.plan.get(d) or {}) for d in days)
         if not n:
             return
-        if not self._confirm(
-                _t("Clear this week"),
-                _t("Remove %d planned meal%s? Recipes in Cookbook are "
-                   "kept.") % (n, "" if n == 1 else "s"),
-                _t("Clear")):
-            return
+        self.undo.checkpoint("Clear Week")
         for d in days:
             self.plan.pop(d, None)
         self._save()
         self._refresh()
+        self.undo.commit()
 
     def _confirm(self, heading, detail, ok_label):
         dlg = Gtk.Dialog(transient_for=self, modal=True)
@@ -719,6 +732,9 @@ class MealPlanner(nbapp.AppWindow):
         self._refresh_status()
 
     def menu_items(self, name):
+        if name == "Edit":
+            return nbapp.undo_menu_items(self.undo) + [nbapp.SEP] \
+                + super().menu_items(name)
         if name == "File":
             return [("Close    Esc", self.close)]
         if name == "Edit":
