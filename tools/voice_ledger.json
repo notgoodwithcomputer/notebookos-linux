@@ -14,9 +14,6 @@
     ],
     "music.py": [
       "Delete the playlist \"%s\" and its %d track%s? Your music files are not deleted."
-    ],
-    "novel.py": [
-      "Your last changes are not saved"
     ]
   }
 }

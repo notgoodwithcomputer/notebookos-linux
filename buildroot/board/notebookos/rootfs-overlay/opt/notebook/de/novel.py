@@ -1339,7 +1339,7 @@ class Novel(nbapp.AppWindow):
                 and self._closeprompt is getattr(self, "_prompt_layer", None)):
             return True
         self._confirm(
-            _t("Your last changes are not saved"),
+            _t("Not saved"),
             _t(nbapp.save_failure_reason(self._save_error, NOVEL_FILE))
             + " " + _t("Closing now loses the writing since the last save. "
                        "Make room and close again to try once more."),
