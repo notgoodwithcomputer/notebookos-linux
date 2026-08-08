@@ -102,6 +102,26 @@ GOOD = {
         "xp": 250, "streak": 7, "streak_day": "2026-07-28",
         "crowns": {"eo:0:0": 3, "eo:0:1": 1, "eo:1:0": 2},
         "seen": ["eo:saluton", "eo:bonan", "eo:dankon"]}},
+
+ # academics: the gate's own docstring says it was BORN from an academics
+ # defect, and for months it did not exercise academics (coverage gap found
+ # by the app-improve session, 2026-08-09). Classes are referenced by integer
+ # index from lectures/homework, so a class record lost mid-list would shift
+ # every reference after it — the mutation worth having.
+ "academics": {"academics.json": {
+        "classes": [{"label": "Biology", "meets": [], "color": "#4A5E73"},
+                    {"label": "History", "meets": [], "color": "#9A7B4F"},
+                    {"label": "Mathematics", "meets": [], "color": "#6E8B6E"}],
+        "lectures": [{"cls": 0, "num": 1, "title": "Cell structure",
+                      "date": "2026-07-20", "meta": "", "notes": "mitochondria",
+                      "ranges": []},
+                     {"cls": 1, "num": 1, "title": "The Republic",
+                      "date": "2026-07-21", "meta": "", "notes": "",
+                      "ranges": []}],
+        "homework": [{"title": "Lab report", "cls": 0, "due": "2026-07-25",
+                      "done": False, "note": ""},
+                     {"title": "Essay draft", "cls": 1, "due": "2026-07-26",
+                      "done": False, "note": ""}]}},
 }
 
 BUILD = {
@@ -114,6 +134,7 @@ BUILD = {
  "calendar":   lambda m: m.Calendar(),
  "mealplanner": lambda m: m.MealPlanner(),
  "language":   lambda m: m.Language(),
+ "academics":  lambda m: m.Academics(),
 }
 
 
@@ -170,6 +191,17 @@ def count(app, d):
         if not isinstance(p, dict):
             return 0
         return sum(len(v) for v in p.values() if isinstance(v, dict))
+    if app == "academics":
+        a = d.get("academics.json", {})
+        if not isinstance(a, dict):
+            return 0
+        n = 0
+        for sect, field in (("classes", "label"), ("lectures", "title"),
+                            ("homework", "title")):
+            v = a.get(sect)
+            n += sum(1 for x in v if isinstance(x, dict) and x.get(field)) \
+                if isinstance(v, list) else 0
+        return n
     if app == "language":
         # XP and the streak are counters somebody EARNED a day at a time and
         # nothing can hand back; crowns and seen-words are the shape of how far
@@ -212,6 +244,29 @@ CASES = {
   "active out of range":  _mut(lambda f: f["journal.json"].__setitem__("active", 99)),
   "wrapper key renamed":  _mut(lambda f: f["journal.json"].__setitem__(
         "days", f["journal.json"].pop("entries"))),
+  "file is not json":     None,
+ },
+ "academics": {
+  "control":              _mut(lambda f: None),
+  # a class record that is not a dict IN THE MIDDLE of the list — the end
+  # would shift no integer reference, the middle shifts every one after it
+  "class not a dict mid": _mut(lambda f: f["academics.json"]["classes"]
+                               .insert(1, "junk")),
+  # a whole section stored as an object rather than a list — academics reads
+  # a dict-section's VALUES rather than calling it empty (that recovery is the
+  # point), so ALL records are present in the wrong shape and none should be
+  # lost: the damage is the shape, not the data.
+  "lectures is an object": _mut(lambda f: f["academics.json"].__setitem__(
+        "lectures", {"a": f["academics.json"]["lectures"][0],
+                     "b": f["academics.json"]["lectures"][1]})),
+  "classes is an object": _mut(lambda f: f["academics.json"].__setitem__(
+        "classes", {"a": f["academics.json"]["classes"][0],
+                    "b": f["academics.json"]["classes"][1],
+                    "c": f["academics.json"]["classes"][2]})),
+  # a homework record with no title (the unit the count measures) — allowed
+  # to cost that one record, nothing more
+  "homework has no title": _mut(lambda f: f["academics.json"]["homework"][0]
+                                .pop("title"), cost=1),
   "file is not json":     None,
  },
  "accounting": {
@@ -437,9 +492,133 @@ def run_case(app, case):
     return ok
 
 
+# --------------------------------------------------------------------- coverage
+# The gap the app-improve session found 2026-08-09: this OS-wide gate was born
+# from an academics defect (see the module docstring) and for months exercised
+# 9 of the 24 apps that persist a store — and "covered by that app's OWN suite"
+# read identically to "covered" in every summary. The ratchet below names
+# EVERY store-bearing app and refuses to let one be neither exercised here nor
+# explicitly accounted for.
+#
+# It distinguishes debts that a keyword heuristic would flatten together, a
+# distinction that itself cost a round of "no coverage" being misread as
+# "vulnerable":
+#   exercised            — a damage case runs HERE (the only real assurance)
+#   suite:<name>         — a dedicated per-app suite drives a damaged store.
+#                          UNVERIFIED until someone READS it — a suite that
+#                          merely says "damage" is the vacuous pass one level
+#                          up (app-improve's warning). Verification is tracked.
+#   defended-untested    — MEASURED to salvage a damaged store, but no gate
+#                          watches that defence (writer: writer.py:139 scar,
+#                          _sane_page). A coverage debt on a defended app, NOT
+#                          an open wound. Low urgency, still real.
+#   unmeasured           — no test AND nobody has checked the defence. The one
+#                          that could be a wound; must be measured.
+#   small-store-judged   — a light store (a tape, a board, a map view) whose
+#                          loss is a recorded judgement, not an accident.
+# A store-bearing app in NONE of these fails the gate.
+COVERAGE = {
+    # exercised here
+    "journal": "exercised", "accounting": "exercised", "cookbook": "exercised",
+    "contacts": "exercised", "tasks": "exercised", "workout": "exercised",
+    "calendar": "exercised", "mealplanner": "exercised", "language": "exercised",
+    "academics": "exercised",
+    # covered by a dedicated suite — UNVERIFIED until read (app-improve's list)
+    # UNVERIFIED = the suite-name claim has NOT been read to confirm it opens a
+    # damaged store. app-improve's keyword sweep was ~18% wrong (ebook and
+    # novel matched on COMMENTS, not coverage), so no claim here is believed
+    # until read. Verifying these — upgrading to VERIFIED or moving to the
+    # uncovered rows — is the burn-down.
+    "bills": "suite:bills_selftest (UNVERIFIED)",
+    "gbaemu": "suite:gbaemu_selftest (UNVERIFIED)",
+    "gbasdk": "suite:gbasdk_damage_selftest (UNVERIFIED)",
+    "music": "suite:music_adversarial_selftest (UNVERIFIED)",
+    "screenplay": "suite:screenplay_adversarial_selftest (UNVERIFIED)",
+    "sequencer": "suite:sequencer_selftest (UNVERIFIED)",
+    "settings": "suite:settings_selftest (UNVERIFIED)",
+    # defended, measured, but no gate watches it (app-improve probed 11 shapes
+    # against each 2026-08-09: 0 crashes, 0 losses, original kept as .bak).
+    # These are the "no test" debt, NOT the "no defence" wound — a distinction
+    # that got misread twice in an hour, so the status carries it explicitly.
+    "writer": "defended-untested: writer.py _sane_page salvage, 11 shapes "
+              "measured, 0 lost, .bak kept; needs a gate",
+    "video": "defended-untested: 11 shapes measured, 0 lost, .bak kept; "
+             "shape {bin,clips,music,size,version}; needs a gate",
+    "novel": "defended-untested: 10 shapes measured, 0 lost, .bak kept; "
+             "shape {active,author,chapters,doc_path,parts,title}; needs a gate",
+    # no test AND unmeasured — a reader's library metadata + reading position,
+    # genuinely unknown behaviour on a damaged store
+    "ebook": "unmeasured: library metadata + reading position, unchecked",
+    # light stores, loss judged low, recorded rather than accidental
+    "calculator": "small-store-judged: the tape, re-derivable",
+    "g2048": "small-store-judged: a board and a best score",
+    "maps": "small-store-judged: last view/bookmarks",
+    "terminal": "small-store-judged: scrollback/geometry",
+    "finder": "small-store-judged: view mode + removed-apps list, prefs",
+    "illustrator": "small-store-judged: recent-files list (drawings are "
+                   "separate .nb document files, not this store)",
+    "packages": "small-store-judged: the uninstalled-apps list",
+    # not a persistent user store at all
+    "installer": "no-user-store: writes transient install-time config during "
+                 "an install, nothing that outlives the installer",
+}
+
+
+_DE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                   "buildroot", "board", "notebookos", "rootfs-overlay",
+                   "opt", "notebook", "de")
+
+
+def store_bearing_apps():
+    """Apps that persist a JSON store under the notebook config dir — the set
+    the ratchet must fully account for. Computed, not hand-listed, so a new
+    store-bearing app joins the obligation automatically."""
+    import sys as _sys
+    if _DE not in _sys.path:
+        _sys.path.insert(0, _DE)
+    try:
+        import finder
+        mods = sorted(set(finder.APP_MODULES.values()) | {"finder"})
+    except Exception:                                             # noqa: BLE001
+        mods = [f[:-3] for f in os.listdir(_DE) if f.endswith(".py")]
+    bearing = []
+    for m in mods:
+        p = os.path.join(_DE, m + ".py")
+        if not os.path.isfile(p):
+            continue
+        src = open(p, encoding="utf-8", errors="replace").read()
+        if ".json" in src and ("CFG_DIR" in src or "config/notebook" in src
+                               or "notebook" in src) \
+                and ("atomic_write" in src or "json.dump" in src
+                     or "json.load" in src):
+            bearing.append(m)
+    return bearing
+
+
+def coverage_report():
+    """Fail if any store-bearing app is unaccounted for; print the standing
+    debt (defended-untested / unmeasured / suite-unverified) every run so it
+    stays visible instead of decaying into a silent green."""
+    bearing = store_bearing_apps()
+    unaccounted = [a for a in bearing if a not in COVERAGE]
+    exercised = {a for a, v in COVERAGE.items() if v == "exercised"}
+    debts = [(a, COVERAGE[a]) for a in bearing
+             if a in COVERAGE and a not in exercised]
+    print("\nCOVERAGE: %d store-bearing apps, %d exercised here, %d on debt"
+          % (len(bearing), len(exercised & set(bearing)), len(debts)))
+    for a, status in sorted(debts):
+        print("  debt  %-11s %s" % (a, status))
+    for a in sorted(unaccounted):
+        print("  FAIL  %-11s persists a store but is NOT accounted for in "
+              "COVERAGE — add a case here or record its coverage" % a)
+    return not unaccounted
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 3:
         raise SystemExit(0 if run_case(sys.argv[1], sys.argv[2]) else 1)
+    if len(sys.argv) == 2 and sys.argv[1] == "--coverage":
+        raise SystemExit(0 if coverage_report() else 1)
     import subprocess
     apps = [sys.argv[1]] if len(sys.argv) == 2 else list(CASES)
     bad = 0
@@ -454,5 +633,11 @@ if __name__ == "__main__":
             print(line)
             if "PASS" not in line:
                 bad += 1
+    # The coverage ratchet runs as part of the aggregate (not a separate flag
+    # someone has to remember): a store-bearing app that nobody exercises or
+    # accounts for fails the run, and the standing debt prints every time.
+    covered_ok = coverage_report() if len(sys.argv) < 2 else True
+    if not covered_ok:
+        bad += 1
     print("\nRESULT: %s" % ("ALL PASS" if not bad else "%d FAILED" % bad))
     raise SystemExit(0 if not bad else 1)
