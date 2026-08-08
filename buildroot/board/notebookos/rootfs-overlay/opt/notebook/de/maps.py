@@ -355,11 +355,26 @@ class Maps(nbapp.AppWindow):
         return os.path.join(base, "maps.json")
 
     def _load_cfg(self):
+        self._extra = {}
         try:
             with open(self._cfg_path()) as fh:
-                return json.load(fh)
+                data = json.load(fh)
         except (OSError, ValueError):
             return {}
+        if not isinstance(data, dict):
+            # Valid JSON can still be unusable to this app.  The shared
+            # parse-level damage guard cannot recognize a wrong top-level
+            # shape, so move it aside before the next view-state save.
+            nbapp.quarantine_unrecognized(self._cfg_path())
+            return {}
+        known = {"pack", "cx", "cy", "scale", "_extra"}
+        nested = data.get("_extra")
+        if isinstance(nested, dict):
+            self._extra.update(nested)
+        for key, value in data.items():
+            if key not in known:
+                self._extra[key] = value
+        return data
 
     def _save_cfg(self):
         if not self.pack:
@@ -373,9 +388,13 @@ class Maps(nbapp.AppWindow):
             nbapp.atomic_write_json(
                 self._cfg_path(),
                 {"pack": self.pack.path, "cx": self.cx,
-                 "cy": self.cy, "scale": self.scale})
-        except Exception:
-            pass
+                 "cy": self.cy, "scale": self.scale,
+                 "_extra": getattr(self, "_extra", {})})
+        except Exception as exc:
+            # Autosaves have no dialog-owning call site.  Publish the reason
+            # through the shared module attribute, as the other apps do, so a
+            # caller and the durability suite can observe the failed write.
+            nbapp.save_failure_reason = str(exc)
 
     def _scan_maps(self):
         # /opt/notebook/maps ships the bundled default; large add-on packs (a
