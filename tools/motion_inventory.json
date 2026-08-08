@@ -193,8 +193,14 @@
     "PAGE"
    ],
    "transform": false,
-   "status": "unimplemented",
-   "pacing": null
+   "status": "implemented",
+   "pacing": null,
+   "binding": {
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+    "symbol_or_marker": "finder.list-grid"
+   },
+   "note": "Built 2026-08-09: switching list<->grid fades the incoming presentation in (PAGE/arrival) - a crossfade in place, not a transform (Article C); animates only on a deliberate toggle, never on show_all remaps."
   },
   {
    "id": "finder.selection-change",

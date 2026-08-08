@@ -1420,19 +1420,30 @@ class Finder(Gtk.Window):
             ctx = btn.get_style_context()
             (ctx.add_class if on else ctx.remove_class)("active")
             nbicons.set_image(btn._img, name, 16, "#1A1916" if on else "#3A362E")
-        self._apply_view()
+        # A deliberate view toggle animates; the initial layout and show_all
+        # remaps do not (that would flash the view on every app round-trip).
+        self._apply_view(animate=True)
         self._save_prefs()
 
-    def _apply_view(self):
-        # show the active view's scroller, hide the other. Called on every
-        # window show_all too, so a launched-app round trip can't reveal both.
-        if getattr(self, "_view", "list") == "grid":
-            self._list_sw.hide()
-            self._grid_sw.set_no_show_all(False)
-            self._grid_sw.show_all()
-        else:
-            self._grid_sw.hide()
-            self._list_sw.show_all()
+    def _apply_view(self, animate=False):
+        # nbmotion-inventory: finder.list-grid
+        # Show the active view's scroller, hide the other. List and grid are
+        # different PRESENTATIONS of the same rows (Article C: not a
+        # transform), so the incoming one settles IN place (PAGE, arrival)
+        # rather than sliding — the honest "crossfade in place". Called on
+        # every window show_all too (animate=False there), so a launched-app
+        # round trip can't reveal both or animate on a bare remap.
+        grid = getattr(self, "_view", "list") == "grid"
+        incoming = self._grid_sw if grid else self._list_sw
+        outgoing = self._list_sw if grid else self._grid_sw
+        outgoing.hide()
+        incoming.set_no_show_all(False)
+        incoming.show_all()
+        if animate and nbmotion is not None:
+            nbmotion.fade_to(incoming, 0.0, 0)          # start hidden
+            nbmotion.fade_to(incoming, 1.0, nbmotion.PAGE, nbmotion.EASE_OUT)
+        elif nbmotion is not None:
+            nbmotion.fade_to(incoming, 1.0, 0)          # ensure fully opaque
 
     def show_all(self):
         super().show_all()
