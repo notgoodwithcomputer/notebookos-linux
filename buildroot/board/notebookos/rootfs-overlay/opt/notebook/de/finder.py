@@ -3904,6 +3904,90 @@ class Finder(Gtk.Window):
             size_val.set_text(_t("%s  ·  %d items") % (human(total), items))
         return False
 
+    def _selected_row_anchor(self):
+        """The selected row's rectangle in overlay coordinates — the origin a
+        card raised from a row grows out of (Article B). None in grid view or
+        when nothing resolves; the presenter then centre-grows."""
+        try:
+            model, it = self._selected_iter()
+            if it is None or not self.tree.get_visible():
+                return None
+            path = model.get_path(it)
+            col = self.tree.get_column(0)
+            return self._cell_origin_tree(self.tree, path, col)
+        except Exception:                                         # noqa: BLE001
+            return None
+
+    def _present_card_from(self, box, anchor, on_close=None):
+        """Present `box` (a .finderinfobox content column) as an in-window
+        card that GROWS FROM `anchor` (Article B) and retracts to it on close.
+
+        Reuses the About-card mechanism: a paper frame (GrowCard) grows on a
+        pass-through DrawingArea over self._overlay, the real content is
+        revealed on landing, and Esc or a scrim click retracts. Returns the
+        card EventBox — it emits `destroy` when removed, so a caller waiting
+        on an async fill (Get Info's folder walk) can watch it exactly as it
+        watched the old dialog. `nbtransitions` absent → the card just
+        appears, centred, without motion."""
+        alloc = self.get_allocation()
+        W = alloc.width if alloc.width > 1 else 1024
+        H = alloc.height if alloc.height > 1 else 722
+        layer = Gtk.Fixed()
+        scrim = Gtk.EventBox()
+        scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        scrim.set_size_request(W, H)
+        layer.put(scrim, 0, 0)
+        grow_da = Gtk.DrawingArea()
+        grow_da.set_size_request(W, H)
+        layer.put(grow_da, 0, 0)
+        card_win = Gtk.EventBox()
+        card_win.get_style_context().add_class("finderinfo")
+        card_win.add(box)
+        card_win.set_no_show_all(True)
+        layer.put(card_win, 0, 0)
+        self._overlay.add_overlay(layer)
+        scrim.show()
+        grow_da.show()
+        _min, nat = card_win.get_preferred_size()
+        cw = nat.width if nat.width > 1 else 340
+        ch = nat.height if nat.height > 1 else 220
+        tx, ty = max((W - cw) // 2, 0), max((H - ch) // 2, 0)
+        target = (float(tx), float(ty), float(cw), float(ch))
+        layer.put(card_win, tx, ty)
+
+        state = {"grow": None, "closing": False}
+
+        def remove(*_a):
+            if layer.get_parent() is not None:
+                self._overlay.remove(layer)
+            card_win.destroy()          # fires the handle's "destroy"
+            if on_close is not None:
+                on_close()
+
+        def close(*_a):
+            if state["closing"]:
+                return True
+            state["closing"] = True
+            g = state["grow"]
+            if g is not None and getattr(g, "active", False) \
+                    and nbtransitions is not None:
+                g.retract(on_done=lambda _ok: remove())
+            else:
+                remove()
+            return True
+
+        scrim.connect("button-press-event", close)
+        card_win.add_events(Gdk.EventMask.KEY_PRESS_MASK)
+        self._info_close = close
+        if nbtransitions is not None and anchor is not None:
+            g = nbtransitions.GrowCard(grow_da)
+            grow_da.connect_after("draw", lambda _w, cr: g.paint(cr))
+            state["grow"] = g
+            g.grow(anchor, target, on_done=lambda _ok: card_win.show())
+        else:
+            card_win.show()
+        return card_win
+
     def _get_info(self):
         model, it = self._selected_iter()
         if it is None:
@@ -3937,17 +4021,18 @@ class Finder(Gtk.Window):
         except ValueError:
             modified = "—"
         icon = "folder" if is_dir else self._icon_for(name)
+        # nbmotion-inventory: finder.get-info
+        anchor = self._selected_row_anchor()
         dlg, size_val = self._show_info_dialog(
-            name, icon, kind, size_txt, modified, path)
+            name, icon, kind, size_txt, modified, path, anchor)
         if is_dir:
             self._compute_dir_size(dlg, path, items, size_val)
 
-    def _show_info_dialog(self, name, icon, kind, size_txt, modified, path):
-        dlg = Gtk.Dialog(transient_for=self, modal=True)
-        dlg.set_decorated(False)
-        dlg.get_style_context().add_class("finderinfo")
-        area = dlg.get_content_area()
-        area.set_spacing(0)
+    def _show_info_dialog(self, name, icon, kind, size_txt, modified, path,
+                          anchor=None):
+        # The card grows from its row (Article B) via _present_card_from,
+        # rather than a modal dialog appearing from nowhere. The content
+        # column below is unchanged; only the presentation moved.
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         box.get_style_context().add_class("finderinfobox")
         # header: the item's own glyph, its name, and its kind
@@ -4006,12 +4091,15 @@ class Finder(Gtk.Window):
         btnrow.set_halign(Gtk.Align.END)
         done = Gtk.Button(label=_t("Done"))
         done.get_style_context().add_class("finderinfobtn")
-        done.connect("clicked", lambda *_: dlg.destroy())
+        done.connect("clicked", lambda *_: self._info_close())
         btnrow.pack_start(done, False, False, 0)
         box.pack_start(btnrow, False, False, 0)
-        area.add(box)
-        dlg.connect("key-press-event", self._info_key)
-        dlg.show_all()
+        box.show_all()
+        # Present as a card growing from the row; the presenter reveals it on
+        # landing and returns the card handle (emits destroy on close, so
+        # _compute_dir_size's liveness watch is unchanged).
+        card = self._present_card_from(box, anchor)
+        card.connect("key-press-event", self._info_key)
         # The values are selectable so a path can be copied — but that also makes
         # them focusable, and GTK focused the first one on open and selected all
         # of its text, so Get Info appeared with the file's size mysteriously
@@ -4020,11 +4108,14 @@ class Finder(Gtk.Window):
         done.grab_focus()
         for vl in vals:
             vl.select_region(0, 0)
-        return dlg, size_val
+        return card, size_val
 
-    def _info_key(self, dlg, event):
+    def _info_key(self, _w, event):
+        # Esc leaves (never destroys anything but the card) — the OS-wide
+        # contract. Routes through the card's own close so the retract runs.
         if event.keyval == Gdk.KEY_Escape:
-            dlg.destroy()
+            if getattr(self, "_info_close", None) is not None:
+                self._info_close()
             return True
         return False
 

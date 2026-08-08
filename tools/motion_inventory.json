@@ -248,8 +248,14 @@
     "SURFACE_IN"
    ],
    "transform": false,
-   "status": "unimplemented",
-   "pacing": null
+   "status": "implemented",
+   "pacing": null,
+   "binding": {
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+    "symbol_or_marker": "finder.get-info"
+   },
+   "note": "Built 2026-08-08: Get Info grows from the selected row via the reusable _present_card_from (GrowCard), reveals content on landing, retracts to the row on close; the presenter is the pattern the finder confirm cards adopt next."
   },
   {
    "id": "app.page-pane-switch",
