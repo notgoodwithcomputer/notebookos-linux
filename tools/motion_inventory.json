@@ -300,13 +300,13 @@
     "SURFACE_IN"
    ],
    "transform": false,
-   "status": "partial",
+   "status": "implemented",
    "binding": {
-    "binding_kind": "module-behavior",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
-    "symbol_or_marker": "reveal"
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbapp.py",
+    "symbol_or_marker": "app.about"
    },
-   "note": "Primitive available: nbtransitions.GrowCard (44a64b9e) - anchor-carrying, B4 origin discipline enforced. Awaiting per-app call-site adoption.",
+   "note": "Built 2026-08-08 as the reference GrowCard consumer: the shared About card (all apps) drops from the app-name menu title's bottom edge, reveals its real text on landing, retracts to the title on close.",
    "pacing": null
   },
   {

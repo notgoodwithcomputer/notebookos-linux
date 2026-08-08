@@ -26,6 +26,26 @@ import tempfile
 
 from nbi18n import _t  # noqa: E402  (shared translation layer)
 import nbcommands  # noqa: E402  (canonical command labels/shortcuts/grouping)
+# The anchored-card primitive, for the About card's drop-from-title (Article
+# B). Never fatal: nbtransitions degrades to instant with no display, and a
+# None here just means About appears without its origin motion.
+try:
+    import nbtransitions
+except Exception:                                                 # noqa: BLE001
+    nbtransitions = None
+
+
+def _title_anchor(button, relative_to):
+    """A menu-bar title's rectangle for a card to drop FROM — the title's
+    BOTTOM edge, a thin seam the card grows down out of, rather than the whole
+    button (a card that grew from the full title box would start as tall as
+    the panel). None when unresolved (About then appears without motion)."""
+    if nbtransitions is None:
+        return None
+    r = nbtransitions.widget_rect(button, relative_to)
+    if r is None:
+        return None
+    return (r[0], r[1] + r[3] - 1.0, r[2], 2.0)
 
 # Single source of truth for the release version, shared with the ISO
 # builder / installer. /etc/os-release (when present) is authoritative; this
@@ -2080,6 +2100,14 @@ class AppWindow(Gtk.Window):
 
     # -- About overlay --
     def _about(self):
+        # nbmotion-inventory: app.about
+        # The About card DROPS FROM the app-name menu title (PAPER-PHYSICS
+        # Article B origin table) and retracts to it on close. The card grows
+        # from the title's rectangle as a drawn paper frame (GrowCard); the
+        # real text card is revealed at full size only when the growth lands,
+        # and its own CSS paper takes over the identical rectangle — the same
+        # grow-then-reveal handoff the app-launch card uses. Nothing scales a
+        # widget: the growth is paint (F2), the reveal is a position + show.
         self._close_menu()
         alloc = self.get_allocation()
         _sw, _sh = screen_size()
@@ -2091,6 +2119,12 @@ class AppWindow(Gtk.Window):
         scrim.set_size_request(W, H)
         scrim.connect("button-press-event", lambda *a: (self._close_about(), True)[1])
         layer.put(scrim, 0, 0)
+
+        # the frame the card grows as: a pass-through DrawingArea over the layer
+        grow_da = Gtk.DrawingArea()
+        grow_da.set_size_request(W, H)
+        layer.put(grow_da, 0, 0)
+
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         card.get_style_context().add_class("nbabout")
         nm = Gtk.Label(label=_t(self.app_name)); nm.get_style_context().add_class("a-name")
@@ -2102,27 +2136,64 @@ class AppWindow(Gtk.Window):
         card.pack_start(sub, False, False, 0)
         card_win = Gtk.EventBox()   # own GdkWindow so it blits (see _open_menu)
         card_win.add(card)
+        card_win.set_no_show_all(True)
         layer.put(card_win, 0, 0)
         self._overlay.add_overlay(layer)
-        layer.show_all()
+        scrim.show()
+        grow_da.show()
         # Center on the actual window using the card's measured natural size, so
         # a long app name stays centered at any resolution (not a fixed 1920x1080).
         _min, nat = card_win.get_preferred_size()
         cw = nat.width if nat.width > 1 else 340
         ch = nat.height if nat.height > 1 else 140
-        layer.move(card_win, max((W - cw) // 2, 0), max((H - ch) // 2, 0))
+        tx, ty = max((W - cw) // 2, 0), max((H - ch) // 2, 0)
+        target = (float(tx), float(ty), float(cw), float(ch))
+        layer.move(card_win, tx, ty)
         self._about_layer = layer
+        self._about_card = card_win
+        self._about_target = target
+
+        anchor = _title_anchor(self._menu_buttons.get(self.app_name),
+                               self._overlay) or \
+            (target[0] + target[2] / 2, 0.0, 2.0, 2.0)
+        self._about_grow = nbtransitions.GrowCard(grow_da)
+        grow_da.connect_after("draw", lambda _w, cr:
+                              self._about_grow.paint(cr))
+
+        def _landed(_ok):
+            if self._about_card is not None:
+                self._about_card.show()
+
+        self._about_grow.grow(anchor, target, on_done=_landed)
 
     def _close_about(self):
         layer = getattr(self, "_about_layer", None)
-        if layer is not None:
-            try:
-                self._overlay.remove(layer)
-            except Exception:
-                pass
-            self._about_layer = None
+        if layer is None:
+            return False
+        grow = getattr(self, "_about_grow", None)
+        card = getattr(self, "_about_card", None)
+        if card is not None:
+            card.hide()          # the frame retracts; the text does not shrink
+        if grow is not None and getattr(grow, "active", False) \
+                and nbtransitions is not None:
+            self._about_grow = None
+            self._about_card = None
+            grow.retract(on_done=lambda _ok: self._about_remove(layer))
             return True
-        return False
+        self._about_remove(layer)
+        return True
+
+    def _about_remove(self, layer):
+        if getattr(self, "_about_layer", None) is not layer and \
+                self._about_layer is not None:
+            layer = self._about_layer
+        try:
+            self._overlay.remove(layer)
+        except Exception:                                         # noqa: BLE001
+            pass
+        self._about_layer = None
+        self._about_card = None
+        self._about_grow = None
 
     def _on_key(self, _w, ev):
         if ev.keyval == Gdk.KEY_Escape:
