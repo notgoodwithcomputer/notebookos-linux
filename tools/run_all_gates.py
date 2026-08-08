@@ -95,6 +95,12 @@ TIMEOUTS = {"language_course_selftest": 600,
             # spawns every app at two sizes, re-measuring near-budget apps in
             # the width-heavy languages; the honest cost of the sweep
             "minsize_sweep": 900,
+            # ellipsis_sweep spawns one subprocess PER APP to inspect mapped
+            # labels — same shape as minsize_sweep, and it timed out at the
+            # 300s default during a full run under load 6 (four sessions +
+            # Codex). A timeout under contention is not a defect in the suite
+            # (blind-spot #8); give the per-app-subprocess sweeps room.
+            "ellipsis_sweep": 900,
             "data_stress_sweep": 600}
 
 # A suite's own failure vocabulary — NOT "Traceback" or "ERROR". Several suites
