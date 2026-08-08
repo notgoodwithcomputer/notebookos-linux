@@ -714,7 +714,8 @@ class Tasks(nbapp.AppWindow):
             nbapp.atomic_write_json(path, self._doc_dict(),
                                     ensure_ascii=False, indent=2)
             return True
-        except Exception:
+        except Exception as exc:
+            self._last_doc_save_error = exc
             return False
 
     def _open_doc(self, path):
@@ -780,7 +781,11 @@ class Tasks(nbapp.AppWindow):
         if self._write_doc(self._doc_path):
             self._flash("Saved " + os.path.basename(self._doc_path))
         else:
-            self._flash("Save failed")
+            reason = nbapp.save_failure_reason(
+                getattr(self, "_last_doc_save_error", None), self._doc_path)
+            if getattr(getattr(self, "_last_doc_save_error", None), "errno", None) == 28:
+                reason += " " + _t("Free up space and try again.")
+            self._flash(reason)
 
     def _file_save_as(self):
         """Pick a path and write the document there, then adopt it."""
@@ -797,7 +802,11 @@ class Tasks(nbapp.AppWindow):
         if self._write_doc(path):
             self._flash("Saved " + os.path.basename(path))
         else:
-            self._flash("Save failed")
+            reason = nbapp.save_failure_reason(
+                getattr(self, "_last_doc_save_error", None), path)
+            if getattr(getattr(self, "_last_doc_save_error", None), "errno", None) == 28:
+                reason += " " + _t("Free up space and try again.")
+            self._flash(reason)
 
     def _choose_file(self, save):
         """Finder-style in-app picker under Documents; return a path or None."""

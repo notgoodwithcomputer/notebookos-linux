@@ -4791,7 +4791,8 @@ class VideoEditor(nbapp.AppWindow):
             nbapp.atomic_write_json(path, self._serialize(),
                                     ensure_ascii=False, indent=2)
             return True
-        except Exception:
+        except Exception as exc:
+            self._last_save_error = exc
             return False
 
     def _open_file(self, path):
@@ -4853,7 +4854,11 @@ class VideoEditor(nbapp.AppWindow):
         if self._write_file(self._path):
             self._update_project_name()
         else:
-            self._flash(_t("Save failed"))
+            reason = nbapp.save_failure_reason(
+                getattr(self, "_last_save_error", None), self._path)
+            if getattr(getattr(self, "_last_save_error", None), "errno", None) == 28:
+                reason += " " + _t("Free up space and try again.")
+            self._flash(reason)
 
     def _file_save_as(self):
         path = self._choose_file(save=True)

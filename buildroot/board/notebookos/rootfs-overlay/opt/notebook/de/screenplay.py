@@ -1099,7 +1099,8 @@ class Screenplay(nbapp.AppWindow):
                 # old script or the new one, never a ruined one.
                 nbapp.atomic_write_text(path, body)
             return True
-        except Exception:
+        except Exception as exc:
+            self._last_file_save_error = exc
             return False
 
     def _file_save(self):
@@ -1113,7 +1114,11 @@ class Screenplay(nbapp.AppWindow):
             self._update_status()
             self._set_saved()
         else:
-            self._flash("Save failed")
+            reason = nbapp.save_failure_reason(
+                getattr(self, "_last_file_save_error", None), self._path)
+            if getattr(getattr(self, "_last_file_save_error", None), "errno", None) == 28:
+                reason += " " + _t("Free up space and try again.")
+            self._flash(reason)
 
     def _file_save_as(self):
         """Pick a path and write the script there, then adopt it. A bare name
@@ -1144,7 +1149,11 @@ class Screenplay(nbapp.AppWindow):
             self._set_identity(prev_path, prev_title)
             self._file_dirty = prev_dirty
             self._update_status()
-            self._flash("Save failed")
+            reason = nbapp.save_failure_reason(
+                getattr(self, "_last_file_save_error", None), path)
+            if getattr(getattr(self, "_last_file_save_error", None), "errno", None) == 28:
+                reason += " " + _t("Free up space and try again.")
+            self._flash(reason)
             return
         self._file_dirty = False        # in sync with the file on disk now
         self.undo.mark_saved()

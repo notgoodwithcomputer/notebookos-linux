@@ -3307,8 +3307,11 @@ class Calendar(nbapp.AppWindow):
             self._doc_path = path
             self._flash_status("Saved " + os.path.basename(path))
             return True
-        except Exception:
-            self._flash_status("Write failed")
+        except Exception as exc:
+            reason = nbapp.save_failure_reason(exc, path)
+            if getattr(exc, "errno", None) == 28:
+                reason += " " + _t("Free up space and try again.")
+            self._flash_status(reason)
             return False
 
     def _load_document(self, path):
