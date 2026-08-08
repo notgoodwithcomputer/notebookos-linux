@@ -517,6 +517,14 @@ def run_case(app, case):
 #   small-store-judged   — a light store (a tape, a board, a map view) whose
 #                          loss is a recorded judgement, not an accident.
 # A store-bearing app in NONE of these fails the gate.
+#
+# KNOWN LIMITATION (app-improve, 2026-08-09): this ratchet measures only
+# whether the data is DEFENDED — the damaged file survives. It says nothing
+# about whether the app TELLS THE USER what it did, and those are different
+# defects. Accounting defended perfectly and still said "A new ledger was
+# started" with no mention that the original was kept — in a money app a true
+# sentence that reads as "your figures are gone." The messaging axis wants its
+# own gate; until then, an app can be VERIFIED here and still lie by omission.
 COVERAGE = {
     # exercised here
     "journal": "exercised", "accounting": "exercised", "cookbook": "exercised",
@@ -524,18 +532,31 @@ COVERAGE = {
     "calendar": "exercised", "mealplanner": "exercised", "language": "exercised",
     "academics": "exercised",
     # covered by a dedicated suite — UNVERIFIED until read (app-improve's list)
-    # UNVERIFIED = the suite-name claim has NOT been read to confirm it opens a
-    # damaged store. app-improve's keyword sweep was ~18% wrong (ebook and
-    # novel matched on COMMENTS, not coverage), so no claim here is believed
-    # until read. Verifying these — upgrading to VERIFIED or moving to the
-    # uncovered rows — is the burn-down.
-    "bills": "suite:bills_selftest (UNVERIFIED)",
-    "gbaemu": "suite:gbaemu_selftest (UNVERIFIED)",
-    "gbasdk": "suite:gbasdk_damage_selftest (UNVERIFIED)",
-    "music": "suite:music_adversarial_selftest (UNVERIFIED)",
-    "screenplay": "suite:screenplay_adversarial_selftest (UNVERIFIED)",
-    "sequencer": "suite:sequencer_selftest (UNVERIFIED)",
-    "settings": "suite:settings_selftest (UNVERIFIED)",
+    # VERIFIED means READ 2026-08-09 and confirmed it writes corrupt bytes to
+    # the app's store, reopens the app on it, and asserts the original survives
+    # byte-for-byte (not merely that the app doesn't crash). 4 of the 7
+    # keyword-claimed suites held up; 3 did NOT — a higher false-cover rate
+    # than app-improve's ~18%, and exactly the vacuous pass one level up they
+    # warned of. The distinction that caught them: read/render-ROBUSTNESS (the
+    # app survives corrupt INPUT) is not store-file PRESERVATION (the damaged
+    # FILE is kept, not overwritten). Only the latter is the C2 contract.
+    "bills": "suite:bills_selftest VERIFIED — malformed store survives "
+             "repeated autosaves, handles the .bak-rotation subtlety",
+    "gbasdk": "suite:gbasdk_damage_selftest VERIFIED — truncated/not-json/"
+              "empty store, recovery + .bak/.damaged asserted",
+    "music": "suite:music_adversarial_selftest VERIFIED — corrupt CFG_FILE "
+             "survives open+close byte-for-byte, with a sabotage red-proof",
+    "screenplay": "suite:screenplay_adversarial_selftest VERIFIED — two "
+                  "corrupt DOC_FILE shapes survive byte-for-byte + a MUTANT "
+                  "check that the guard's removal DOES rewrite",
+    # keyword-claimed but VERIFICATION FAILED — the suite tests robustness of
+    # the read, never that the store FILE is preserved. Real store, real gap.
+    "gbaemu": "unmeasured: gbaemu_selftest tests ROM/cartridge handling, NOT "
+              "its config store's damage preservation",
+    "sequencer": "unmeasured: sequencer_selftest tests that a damaged SONG "
+                 "renders without crashing, NOT store-file preservation",
+    "settings": "unmeasured: settings_selftest tests resolve_default_app on "
+                "corrupt VALUES, NOT that settings.json itself is preserved",
     # defended, measured, but no gate watches it (app-improve probed 11 shapes
     # against each 2026-08-09: 0 crashes, 0 losses, original kept as .bak).
     # These are the "no test" debt, NOT the "no defence" wound — a distinction
