@@ -1368,8 +1368,14 @@ menuitem.sysmenu-item:selected { background: #EAE3D2; }
 .nbabout { background: #FCFBF8; }
 .nbabout * { font-family: "Nimbus Sans","Helvetica",sans-serif;
              color: #1A1916; }
-.nbabout-name { font-family: "Newsreader","Liberation Serif","Georgia",serif;
-                font-size: 24px; font-weight: 500; letter-spacing: 0.01em; }
+.nbabout-name { font-family: "Nimbus Sans","Helvetica",sans-serif;
+                font-size: 24px; font-weight: bold;
+                letter-spacing: 0.01em; }
+/* ^ The interface face, deliberately. The old serif stack led with
+   Newsreader, which never shipped (usr/share/fonts/notebookos/ carries
+   Nimbus Sans, Liberation Serif, Noto CJK/Devanagari) - so hardware showed
+   Liberation Serif while dev hosts showed whatever they had. The class is
+   shared with the Labels dialog head; one face, both places. */
 .nbabout separator { background-color: #C9C4B6; min-height: 1px; }
 .nbabout-key { font-size: 13px; color: #6E695E; letter-spacing: 0.06em; }
 .nbabout-val { font-size: 13px; color: #2A2620; }

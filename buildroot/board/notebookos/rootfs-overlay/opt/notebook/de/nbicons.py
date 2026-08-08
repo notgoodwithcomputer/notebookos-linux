@@ -82,9 +82,13 @@ ICONS = {
     # with three rules), and NOT a tray, which is "inbox". The flap is drawn as
     # a shallow V rather than as the two full diagonals of the closed envelope,
     # so the stamp in the top-right corner still has clear paper to sit on.
+    # Envelope FRONT, not back: body, the stamp inside the top-right corner,
+    # one address rule. A stamp and a flap-V never coexist on one real face —
+    # the old glyph mixed them and the stamp floated above the body like a
+    # folder tab (test-batch redesign, rendered at 22px and 128px).
     "bills":      [("R", 3, 6, 18, 12),
-                   ("M", 3, 6.6), ("L", 12, 13.4), ("L", 21, 6.6),
-                   ("R", 15.6, 2.6, 5, 4)],
+                   ("R", 15.8, 8.4, 3.6, 3.2),
+                   ("M", 6, 14.6), ("L", 13, 14.6)],
     "contacts":   [("C", 12, 8.5, 3.2), ("M", 5.5, 19), ("L", 5.5, 17), ("L", 18.5, 17), ("L", 18.5, 19)],
     "messages":   [("R", 4, 5, 16, 10), ("M", 9, 15), ("L", 9, 19), ("L", 13, 15), ("C", 9, 10, 0.6), ("C", 12, 10, 0.6), ("C", 15, 10, 0.6)],
     "g2048":      [("R", 4, 4, 7, 7), ("R", 13, 4, 7, 7), ("R", 4, 13, 7, 7), ("R", 13, 13, 7, 7)],

@@ -51,6 +51,69 @@ def canvas_h(screen_h):
     """Vertical layout budget: screen minus the panel strut — 722 on a
     768 panel, not the 740 an older note here claimed."""
     return screen_h - PANEL_H
+
+
+def clamp_to_work(x, y, w, h, work):
+    """Pure clamp of a w×h rectangle's origin into a workarea tuple
+    (wx, wy, ww, wh). A rectangle larger than the area pins to the area's
+    origin — the top-left is the part a menu must never lose."""
+    wx, wy, ww, wh = work
+    return (int(min(max(x, wx), wx + max(0, ww - w))),
+            int(min(max(y, wy), wy + max(0, wh - h))))
+
+
+def popup_at(menu, event=None, widget=None, anchor="pointer"):
+    """Pop a Gtk.Menu that stays on the working screen.
+
+    GTK's own edge flipping is correct on every host probe we have (three
+    popup shapes, scale 1 and 2 — test-batch, 2026-08-07), yet a bottom-row
+    menu still escaped on the guest. Rather than trust the stack, the mapped
+    menu's toplevel is verified one idle after map against its monitor's
+    workarea — the top edge never above the panel strut — and re-moved only
+    if an edge escaped. Defense in depth: on a correct stack the clamp is an
+    identity and nothing moves; on a broken one the menu is corrected before
+    the user can read it. Returns the menu."""
+    if anchor == "widget-sw" and widget is not None:
+        menu.popup_at_widget(widget, Gdk.Gravity.SOUTH_WEST,
+                             Gdk.Gravity.NORTH_WEST, event)
+    else:
+        menu.popup_at_pointer(event)
+
+    state = {}
+
+    def _verify(m):
+        try:
+            win = m.get_toplevel().get_window() or m.get_window()
+            if win is None:
+                return False
+            x, y = win.get_root_origin()
+            w, h = win.get_width(), win.get_height()
+            mon = Gdk.Display.get_default().get_monitor_at_window(win)
+            wa = mon.get_workarea()
+            top = max(wa.y, PANEL_H)
+            cx, cy = clamp_to_work(
+                x, y, w, h,
+                (wa.x, top, wa.width, wa.height - (top - wa.y)))
+            if (cx, cy) != (x, y):
+                win.move(cx, cy)
+        except Exception:                                         # noqa: BLE001
+            pass
+        return False
+
+    def _on_map(m):
+        GLib.idle_add(_verify, m)
+        hid = state.pop("hid", None)
+        if hid is not None:
+            try:
+                m.disconnect(hid)
+            except Exception:                                     # noqa: BLE001
+                pass
+        return False
+
+    state["hid"] = menu.connect_after("map", _on_map)
+    return menu
+
+
 _CSS_DONE = False
 # Decoded-once cache for the brand snail. logo.png is a 796x364 RGBA PNG;
 # new_from_file_at_scale decodes the FULL source before downscaling to the
