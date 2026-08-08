@@ -224,20 +224,27 @@ def test_journal():
           "“hello”" in text_of(buf))
     check("-- became an em dash", "—" in text_of(buf))
 
-    # --- the confirm no longer promises the delete is permanent ---
-    w.entries or w.new_entry()
-    seen = []
-    w._confirm = lambda t, m, o, y: seen.append(m)
+    # --- delete is undo, not a confirm (undo-replaces-confirmation) ---
+    # cc4bda5e retired the delete confirmation entirely: _delete_active removes
+    # the entry immediately and leaves a whole-journal undo checkpoint, per the
+    # OS-wide decision that destruction gets undo rather than a modal. The old
+    # assertion here wrapped _confirm and checked its wording; there is no
+    # confirm to wrap now, so the contract to test is the new one — no confirm
+    # fires, the entry is gone at once, and undo brings it back intact.
+    while len(w.entries) < 2:
+        w.new_entry()
+    w.active = 0
+    confirmed = []
+    w._confirm = lambda *a, **k: confirmed.append(True) or True
+    before = len(w.entries)
+    doomed_title = w.entries[0].get("title")
     w._delete_active()
-    # The wording must not PROMISE permanence, because the delete is undoable
-    # (_remove_active takes an undo checkpoint).  It used to be asserted that
-    # the sentence also advertised Undo; the shipped copy is the bare
-    # "Delete “x”?", which is what all 17 lang_*.json carry, so the claim to
-    # test is only that no sentence tells the user it cannot be undone.
-    check("delete confirm does not call the delete permanent (%r)"
-          % (seen[0] if seen else None),
-          bool(seen) and "undone" not in seen[0].lower()
-          and "permanent" not in seen[0].lower())
+    check("delete removes the entry immediately, with no confirmation modal",
+          len(w.entries) == before - 1 and not confirmed)
+    w.undo.undo()
+    check("undo restores the deleted entry",
+          len(w.entries) == before
+          and any(e.get("title") == doomed_title for e in w.entries))
 
     w.destroy()
     pump()
