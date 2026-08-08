@@ -99,6 +99,10 @@ class Journal(nbapp.AppWindow):
         # still executes, so cancelling the source is not enough on its own --
         # the sinks have to be able to see that their owner is gone.
         self._closed = False
+        # A queued second activation of Delete must not consume the neighbour
+        # that becomes active after the first deletion. Released on the next
+        # main-loop turn so later, intentional deletes remain available.
+        self._delete_pending = False
         self._save_timer = None
         # coalesces the live word recount off the keystroke hot path (see
         # _on_change / _recount_tick); None when no recount is pending
@@ -1300,9 +1304,16 @@ class Journal(nbapp.AppWindow):
         Destruction gets undo rather than a confirmation detour: the operation
         is reversible, and the menu item is disabled when no entry is open.
         """
-        if not (0 <= self.active < len(self.entries)):
+        if (getattr(self, "_delete_pending", False)
+                or not (0 <= self.active < len(self.entries))):
             return
+        self._delete_pending = True
         self._remove_active()
+        GLib.idle_add(self._release_delete_guard)
+
+    def _release_delete_guard(self):
+        self._delete_pending = False
+        return False
 
     def _short_title(self, title, limit=44):
         """Shorten a long entry title for the confirm sentence. The stored

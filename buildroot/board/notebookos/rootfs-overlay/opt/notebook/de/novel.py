@@ -2275,13 +2275,15 @@ class Novel(nbapp.AppWindow):
         idx = self.active
         ch = self.chapters[idx]
         title = ch.get("title", "").strip() or ("Chapter " + str(ch["num"]))
-        self._delete_chapter(idx)
+        self._delete_chapter(idx, ch)
 
-    def _delete_chapter(self, i):
+    def _delete_chapter(self, i, expected_chapter=None):
         """Remove chapter `i`, drop its words from the running total, keep the
         active selection valid, and re-sequence the remaining chapter numbers.
         One chapter is always kept so the editor never holds an empty model."""
-        if len(self.chapters) <= 1 or not (0 <= i < len(self.chapters)):
+        if (len(self.chapters) <= 1 or not (0 <= i < len(self.chapters))
+                or (expected_chapter is not None
+                    and self.chapters[i] is not expected_chapter)):
             return
         self.undo.checkpoint("Delete Chapter…")
         self._total_words -= self.chapters[i].get("wc", 0)

@@ -477,6 +477,7 @@ class Contacts(nbapp.AppWindow):
 
         # Final flush on close so the last add/edit/delete is never lost — File
         # ▸ Close / the logo / Esc all route through "destroy".
+        self._delete_pending = False
         self.connect("destroy", self._on_destroy)
 
     # -------------------------------------------------------- persistence
@@ -1368,7 +1369,16 @@ class Contacts(nbapp.AppWindow):
 
     def _delete_contact(self, *_):
         """Delete immediately. The one-step undo is saved when restored."""
+        if (getattr(self, "_delete_pending", False)
+                or not (0 <= self.active < len(self.people))):
+            return
+        self._delete_pending = True
         self._do_delete()
+        GLib.idle_add(self._release_delete_guard)
+
+    def _release_delete_guard(self):
+        self._delete_pending = False
+        return False
 
     def _do_delete(self):
         if not (0 <= self.active < len(self.people)):

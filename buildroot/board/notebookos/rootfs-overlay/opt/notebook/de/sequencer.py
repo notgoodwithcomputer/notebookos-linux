@@ -2386,6 +2386,9 @@ class Sequencer(nbapp.AppWindow):
         self._install_css()
 
         # ---- state ----
+        # Every deferred sink checks this because source_remove cannot recall a
+        # callback that the main loop has already dispatched during teardown.
+        self._closed = False
         self.transport = "stop"
         self.pos = 0.0
         self.rec_start = None
@@ -2738,12 +2741,14 @@ class Sequencer(nbapp.AppWindow):
         """Coalesce rapid mutations (a slider drag fires value-changed on every
         frame) into one deferred disk write, so we never serialize + write JSON
         on the GTK main loop per frame. Flushed by _save() / stop / close."""
-        if self._save_timer is not None:
+        if self._closed or self._save_timer is not None:
             return
         self._save_timer = GLib.timeout_add(600, self._save_timer_fire)
 
     def _save_timer_fire(self):
         self._save_timer = None
+        if self._closed:
+            return False
         self._save()
         return False
 
@@ -2850,6 +2855,9 @@ class Sequencer(nbapp.AppWindow):
     def _on_destroy(self, *_):
         # never leave an arecord child, a render thread or a pipeline holding
         # the sound device past the window
+        if self._closed:
+            return False
+        self._closed = True
         try:
             self.recorder.stop()
         except Exception:
@@ -3005,6 +3013,8 @@ class Sequencer(nbapp.AppWindow):
         (the write model the other File-Save apps share), then restore the plain
         project path after a moment. Session recovery autosaves continuously;
         this reassures the user the named *project file* was actually written."""
+        if self._closed:
+            return
         try:
             when = GLib.DateTime.new_now_local().format("%H:%M")
             self.proj_lbl.set_markup(
@@ -3020,6 +3030,8 @@ class Sequencer(nbapp.AppWindow):
 
     def _saved_restore(self):
         self._saved_timer = None
+        if self._closed:
+            return False
         self._update_proj()
         return False
 
@@ -4549,7 +4561,7 @@ class Sequencer(nbapp.AppWindow):
         whenever the transport engages play/rec/ff/rew; the tick drops itself
         (returns False, clearing this id) once the transport returns to stop,
         so a quiet/stopped window schedules no idle wakeups."""
-        if self._runner_id is None:
+        if not self._closed and self._runner_id is None:
             self._runner_id = GLib.timeout_add(100, self._runner)
 
     def _toggle_play(self):
@@ -5502,6 +5514,9 @@ class Sequencer(nbapp.AppWindow):
         GLib.timeout_add(250, self._export_tick)
 
     def _export_tick(self):
+        if self._closed:
+            self._export = None
+            return False
         state = self._export
         if state is None:
             return False
@@ -5517,6 +5532,9 @@ class Sequencer(nbapp.AppWindow):
 
     # ================= animation =================
     def _runner(self):
+        if self._closed:
+            self._runner_id = None
+            return False
         t = self.transport
         if t in ("play", "rec"):
             # The PLAYHEAD FOLLOWS THE SOUND. It used to be advanced by this

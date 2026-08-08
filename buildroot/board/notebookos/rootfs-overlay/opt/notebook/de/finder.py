@@ -999,6 +999,8 @@ class Finder(Gtk.Window):
         # Don't force-remap on top of a freshly-launched app: if the app-active
         # flag exists an app owns the screen, so stay hidden (mirrors
         # _poll_app_flag) rather than flashing the Finder over the app's window.
+        if getattr(self, "_closed", False):
+            return False
         try:
             if os.path.exists(nbapp.APP_FLAG):
                 return False
@@ -2002,6 +2004,9 @@ class Finder(Gtk.Window):
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        self._wide_gen += 1
+        self._stop_source("_wide_id")
+        self._stop_source("_typeahead_id")
         self._stop_source("_dev_poll_id")
         self._stop_source("_app_poll_id")
         self._cancel_app_flag_monitor()
@@ -2108,7 +2113,7 @@ class Finder(Gtk.Window):
 
     def _fire_wide_search(self, query, gen):
         self._wide_id = 0
-        if gen != self._wide_gen:
+        if getattr(self, "_closed", False) or gen != self._wide_gen:
             return False
         self._searching = True
         self.status.set_text(self._status_text(len(self.store)))
@@ -2147,7 +2152,8 @@ class Finder(Gtk.Window):
         GLib.idle_add(self._wide_done, query, gen, hits, capped)
 
     def _wide_done(self, query, gen, paths, capped=False):
-        if gen != self._wide_gen or query != self._filter:
+        if (getattr(self, "_closed", False) or gen != self._wide_gen
+                or query != self._filter):
             return False                  # the query moved on: drop these
         self._searching = False
         self._wide_capped = capped
@@ -2156,7 +2162,32 @@ class Finder(Gtk.Window):
         # in-memory filter, so listing it again would double every match.
         self._wide = [p for p in paths if os.path.dirname(p) != here]
         self._populate_store()
+        # nbmotion-inventory: finder.search-results
+        # The whole-Home results arrive a beat AFTER the in-folder matches the
+        # user is already looking at; settle them IN (SURFACE_IN arrival) rather
+        # than letting the list silently grow longer, so "the rest of Home"
+        # visibly lands beneath what was already found. A fade on the active
+        # view's opacity — the same primitive list<->grid uses — and only when
+        # the scan actually added something. Instant-equivalent under policy-
+        # still (software / Reduced Motion), so the software path just shows the
+        # longer list with no flicker.
+        if self._wide:
+            self._settle_search_results()
         return False
+
+    def _settle_search_results(self):
+        """Fade the active view in so async whole-Home results settle beneath
+        the in-folder matches. Opacity only (never a layout property, F2), and
+        it lands at 1.0 synchronously when motion is still, so the list is never
+        left dimmed."""
+        if nbmotion is None:
+            return
+        grid = getattr(self, "_view", "list") == "grid"
+        view = self._grid_sw if grid else self._list_sw
+        if view is None:
+            return
+        nbmotion.fade_to(view, 0.0, 0)
+        nbmotion.fade_to(view, 1.0, nbmotion.SURFACE_IN, nbmotion.EASE_OUT)
 
     def _status_text(self, n):
         if self._filter:
@@ -2181,14 +2212,29 @@ class Finder(Gtk.Window):
         return txt if self._free == "—" else "%s · %s" % (txt, self._free)
 
     def _update_empty_state(self, count):
+        # nbmotion-inventory: finder.empty-populated
         # Show a friendly centered message when the view has nothing in it,
         # distinguishing an empty folder from a search that matched nothing —
-        # a blank list otherwise reads as "the app broke" to a novice.
+        # a blank list otherwise reads as "the app broke" to a novice. The
+        # message SETTLES in when the view empties and DEPARTS when it populates
+        # -- a fade on the label's opacity (the same nbmotion.fade_to primitive
+        # list<->grid and search-results use) rather than blinking. Only on the
+        # empty<->populated BOUNDARY: a populate that stays empty (a search
+        # narrowing to nothing) just rewrites the text, it never re-fades.
         lbl = getattr(self, "_empty_label", None)
         if lbl is None:
             return
+        was_empty = lbl.get_visible()
         if count:
-            lbl.hide()
+            if was_empty and nbmotion is not None:
+                # content settles in; the message departs, then hides
+                def _hide(_ok):
+                    lbl.hide()
+                    lbl.set_opacity(1.0)          # reset for the next appearance
+                nbmotion.fade_to(lbl, 0.0, nbmotion.SURFACE_OUT,
+                                 nbmotion.EASE_IN, _hide)
+            else:
+                lbl.hide()
             return
         # Same voice as the shared file picker's empty states (de/nbpicker.py),
         # so the two read as one product rather than two.
@@ -2207,7 +2253,14 @@ class Finder(Gtk.Window):
             lbl.set_text(_t("The Trash is empty."))
         else:
             lbl.set_text(_t("This folder is empty."))
-        lbl.show()
+        if not was_empty and nbmotion is not None:
+            # the message settles IN: start hidden, then fade up to full opacity
+            lbl.set_opacity(0.0)
+            lbl.show()
+            nbmotion.fade_to(lbl, 0.0, 0)
+            nbmotion.fade_to(lbl, 1.0, nbmotion.SURFACE_IN, nbmotion.EASE_OUT)
+        else:
+            lbl.show()
 
     def _update_nav(self):
         self._set_nav(self.back_btn, "back", self._hpos > 0)
@@ -3934,6 +3987,9 @@ class Finder(Gtk.Window):
         self._flash_status(_t("Jump to “%s”") % self._typeahead)
 
     def _clear_typeahead(self):
+        if getattr(self, "_closed", False):
+            self._typeahead_id = 0
+            return False
         self._typeahead = ""
         self._typeahead_id = 0
         return False
@@ -4007,69 +4063,35 @@ class Finder(Gtk.Window):
         for the animated path, immediately for the instant one. A destructive
         confirm uses it to focus its SAFE default only once the card exists,
         so a stray Enter can never reach the danger button before it does."""
-        alloc = self.get_allocation()
-        W = alloc.width if alloc.width > 1 else 1024
-        H = alloc.height if alloc.height > 1 else 722
-        layer = Gtk.Fixed()
-        scrim = Gtk.EventBox()
-        scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        scrim.set_size_request(W, H)
-        layer.put(scrim, 0, 0)
-        grow_da = Gtk.DrawingArea()
-        grow_da.set_size_request(W, H)
-        layer.put(grow_da, 0, 0)
-        card_win = Gtk.EventBox()
-        card_win.get_style_context().add_class("finderinfo")
-        card_win.add(box)
-        card_win.set_no_show_all(True)
-        layer.put(card_win, 0, 0)
-        self._overlay.add_overlay(layer)
-        scrim.show()
-        grow_da.show()
-        _min, nat = card_win.get_preferred_size()
-        cw = nat.width if nat.width > 1 else 340
-        ch = nat.height if nat.height > 1 else 220
-        tx, ty = max((W - cw) // 2, 0), max((H - ch) // 2, 0)
-        target = (float(tx), float(ty), float(cw), float(ch))
-        layer.put(card_win, tx, ty)
+        # The anchored-card presenter now lives in nbtransitions.present_card,
+        # shared with every app (Article B, §B4 origin enforced there). This
+        # wires it to the Finder's overlay, size and Esc handling; the signature
+        # and return are unchanged, so Get Info's async fill and the confirm's
+        # default-focus keep watching the same card EventBox.
+        if nbtransitions is None or not hasattr(nbtransitions, "present_card"):
+            # No shared presenter (a headless import without gi): show the
+            # content directly so Get Info still works; close removes it.
+            card_win = Gtk.EventBox()
+            card_win.get_style_context().add_class("finderinfo")
+            card_win.add(box)
+            self._overlay.add_overlay(card_win)
+            card_win.show_all()
 
-        state = {"grow": None, "closing": False}
+            def _close(*_a):
+                if card_win.get_parent() is not None:
+                    self._overlay.remove(card_win)
+                card_win.destroy()
+                if on_close is not None:
+                    on_close()
 
-        def remove(*_a):
-            if layer.get_parent() is not None:
-                self._overlay.remove(layer)
-            card_win.destroy()          # fires the handle's "destroy"
-            if on_close is not None:
-                on_close()
-
-        def close(*_a):
-            if state["closing"]:
-                return True
-            state["closing"] = True
-            g = state["grow"]
-            if g is not None and getattr(g, "active", False) \
-                    and nbtransitions is not None:
-                g.retract(on_done=lambda _ok: remove())
-            else:
-                remove()
-            return True
-
-        scrim.connect("button-press-event", close)
-        card_win.add_events(Gdk.EventMask.KEY_PRESS_MASK)
-        self._info_close = close
-
-        def reveal(*_a):
-            card_win.show()
+            self._info_close = _close
             if on_shown is not None:
                 on_shown()
-
-        if nbtransitions is not None and anchor is not None:
-            g = nbtransitions.GrowCard(grow_da)
-            grow_da.connect_after("draw", lambda _w, cr: g.paint(cr))
-            state["grow"] = g
-            g.grow(anchor, target, on_done=lambda _ok: reveal())
-        else:
-            reveal()
+            return card_win
+        card_win, close = nbtransitions.present_card(
+            self._overlay, box, anchor, on_close=on_close, on_shown=on_shown,
+            css_class="finderinfo", size_from=self)
+        self._info_close = close
         return card_win
 
     def _get_info(self):
@@ -4371,6 +4393,8 @@ class Finder(Gtk.Window):
         launch meant a blank desktop until the child-watch fired), or the
         deadline passes (an app that runs but never maps: fall back to the
         old hide, which is never worse)."""
+        if getattr(self, "_closed", False):
+            return False
         pid = self._launch_pid
         if pid is None:
             return False
@@ -4489,6 +4513,8 @@ class Finder(Gtk.Window):
         GLib.timeout_add(restore_ms, self._restore_status)
 
     def _restore_status(self):
+        if getattr(self, "_closed", False):
+            return False
         self.status.set_text(self._status_text(len(self.store)))
         return False
 
@@ -4547,6 +4573,8 @@ class Finder(Gtk.Window):
         GLib.timeout_add(1500, self._ensure_mapped)
 
     def _nudge(self):
+        if getattr(self, "_closed", False):
+            return False
         nbapp.nudge_paint()
         return False
 
