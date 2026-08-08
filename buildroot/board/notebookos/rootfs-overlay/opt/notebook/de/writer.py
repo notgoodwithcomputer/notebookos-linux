@@ -2569,8 +2569,9 @@ class Writer(nbapp.AppWindow):
     def _save_autosave(self):
         try:
             nbapp.atomic_write_json(DOC_FILE, self._serialize())
-        except OSError:
-            pass
+        except OSError as exc:
+            self._flash(nbapp.save_failure_reason(exc, DOC_FILE), secs=9)
+            self._set_save_chip(_t("Not saved"), ok=False)
 
     def _mark_dirty(self, *_):
         if self._loading:
@@ -2708,6 +2709,11 @@ class Writer(nbapp.AppWindow):
         if path.endswith(".writer"):
             try:
                 doc = json.loads(raw)
+                if not self._is_writer_store(doc):
+                    # Valid JSON can still be a document shape Writer cannot
+                    # faithfully read. Remember the exact path and move those
+                    # bytes aside only if the user next replaces that file.
+                    self._quarantine_pending = path
                 if not isinstance(doc, dict):
                     # valid JSON but not a document object (a bare list/number/
                     # string from a corrupt or foreign file) — fall through to
@@ -2818,6 +2824,13 @@ class Writer(nbapp.AppWindow):
             return
         try:
             if path.endswith(".writer"):
+                if getattr(self, "_quarantine_pending", None) == path:
+                    nbapp.quarantine_unrecognized(path)
+                    # Never replace the only damaged copy when the move-aside
+                    # itself failed (read-only media, permissions, full dir).
+                    if os.path.exists(path):
+                        raise OSError(errno.EIO, "could not preserve document")
+                    self._quarantine_pending = None
                 doc = self._serialize()
                 doc["path"] = path
                 nbapp.atomic_write_json(path, doc, ensure_ascii=False)
@@ -2834,7 +2847,7 @@ class Writer(nbapp.AppWindow):
                 # one, never a ruined one.
                 nbapp.atomic_write_text(path, text)
         except OSError as e:
-            self._flash(_save_problem(e), secs=9)
+            self._flash(nbapp.save_failure_reason(e, path), secs=9)
             self._set_save_chip(_t("Not saved"), ok=False)
             return
         self._path = path

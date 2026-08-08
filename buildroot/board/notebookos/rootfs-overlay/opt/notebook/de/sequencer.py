@@ -2392,6 +2392,7 @@ class Sequencer(nbapp.AppWindow):
         self._path = None       # current project file (File ▸ Save), or None
         self._loading = False   # guards value-changed handlers during sync
         self._save_timer = None    # pending debounced autosave, or None
+        self._extra = {}           # forward-compatible top-level project keys
         self._saved_timer = None   # transient 'Saved HH:MM' restore, or None
         self._prompt_layer = None  # open confirm-card overlay, if any
         self._runner_id = None     # 100ms transport tick source, when engaged
@@ -2446,6 +2447,7 @@ class Sequencer(nbapp.AppWindow):
         # app ships stopped, so nothing is scheduled until the user presses go.
         self._update_length_btn()
         self._update_proj()
+        self._flash_take_damage()
         self._set_tool(self.tool)
         self._update_snap_btn()
         self._update_zoom_btn()
@@ -2502,11 +2504,14 @@ class Sequencer(nbapp.AppWindow):
             c = clip_norm(raw_clip)
             if c is None:
                 continue
-            # a captured clip carries its WAV; drop the reference if the file
-            # has gone so the clip degrades to a silent region rather than a
-            # take that never sounds with no explanation.
-            if c["wav"] and not os.path.exists(c["wav"]):
-                c["wav"] = None
+            # Keep the reference even when the recording is unavailable. A
+            # removable drive may return, and erasing the path on autosave
+            # makes that recording impossible to reconnect. The clip remains
+            # visible and silent while a status warning tells the truth.
+            if c["wav"]:
+                info = nbsynth.wav_info(c["wav"])
+                if info is None or info[0] <= 0.0:
+                    self._take_damage.append(c["wav"])
             c["s"] = max(0.0, min(self.length, c["s"]))
             c["e"] = max(0.0, min(self.length, c["e"]))
             if c["e"] - c["s"] <= 0.001:
@@ -2535,6 +2540,12 @@ class Sequencer(nbapp.AppWindow):
         an empty dict yields a fresh, empty project."""
         if not isinstance(data, dict):
             data = {}
+        known = {"version", "bpm", "capture_device", "metronome", "countin",
+                 "length", "master", "monitor", "snap", "loop_on", "loop_s",
+                 "loop_e", "rev_size", "rev_mix", "dly_time", "dly_fb",
+                 "dly_mix", "tape", "fx", "tracks"}
+        self._extra = {k: v for k, v in data.items() if k not in known}
+        self._take_damage = []
         self.length = _clampf(data.get("length"), 10.0, 600.0, DEFAULT_LEN)
         self.bpm = _clampi(data.get("bpm"), BPM_MIN, BPM_MAX, 120)
         cd = data.get("capture_device")
@@ -2654,7 +2665,8 @@ class Sequencer(nbapp.AppWindow):
 
     def _serialize(self):
         """The full project as a plain dict (autosave and File ▸ Save share it)."""
-        return {
+        out = dict(getattr(self, "_extra", {}))
+        out.update({
             "version": 3,
             "bpm": self.bpm,
             "capture_device": self._cap_device,
@@ -2685,7 +2697,8 @@ class Sequencer(nbapp.AppWindow):
                  "clips": [_clip_json(c) for c in tk["clips"]]}
                 for tk in self.tracks
             ],
-        }
+        })
+        return out
 
     def _song(self):
         """The arrangement in the shape nbsynth renders (see its docstring).
@@ -2744,8 +2757,8 @@ class Sequencer(nbapp.AppWindow):
             self._save_timer = None
         try:
             nbapp.atomic_write_json(CFG_FILE, self._serialize())
-        except Exception:
-            pass
+        except Exception as exc:
+            self._flash(nbapp.save_failure_reason(exc, CFG_FILE))
 
     # ================= undo / redo =================
     # A take costs the user real time at the microphone, and until now one click
@@ -2859,8 +2872,10 @@ class Sequencer(nbapp.AppWindow):
         try:
             nbapp.atomic_write_json(path, self._serialize(),
                                     ensure_ascii=False, indent=2)
+            self._last_save_failure = None
             return True
-        except Exception:
+        except Exception as exc:
+            self._last_save_failure = nbapp.save_failure_reason(exc, path)
             return False
 
     def _open_file(self, path):
@@ -2891,6 +2906,7 @@ class Sequencer(nbapp.AppWindow):
         self._path = path
         self._sync_controls()
         self._update_proj()
+        self._flash_take_damage()
         self._save()            # snapshot recovery adopts the opened project
         return True
 
@@ -2940,7 +2956,8 @@ class Sequencer(nbapp.AppWindow):
             self._update_proj()
             self._flash_saved()
         else:
-            self._flash(_t("Couldn't save the project"))
+            self._flash(getattr(self, "_last_save_failure", None)
+                        or _t("Couldn't save the project"))
 
     def _file_save_as(self):
         path = self._choose_file(save=True)
@@ -2948,8 +2965,15 @@ class Sequencer(nbapp.AppWindow):
             return
         if not os.path.splitext(path)[1]:
             path += ".json"
+        old_path = self._path
         self._path = path
-        self._file_save()
+        if self._write_file(path):
+            self._update_proj()
+            self._flash_saved()
+        else:
+            self._path = old_path
+            self._flash(getattr(self, "_last_save_failure", None)
+                        or _t("Couldn't save the project"))
 
     def _choose_file(self, save):
         """Finder-style in-app picker under Documents; return a path or None."""
@@ -2976,6 +3000,15 @@ class Sequencer(nbapp.AppWindow):
                 % GLib.markup_escape_text(text))
         except Exception:
             pass
+
+    def _flash_take_damage(self):
+        """Tell the user when saved clip geometry outlives its take files."""
+        n = len(getattr(self, "_take_damage", []))
+        if n:
+            self._flash(_t("%d take file is unavailable; its clip remains in place")
+                        % n if n == 1 else
+                        _t("%d take files are unavailable; their clips remain in place")
+                        % n)
 
     def _flash_saved(self):
         """Confirm an explicit File ▸ Save with a green-dot 'Saved HH:MM' chip
@@ -5154,7 +5187,8 @@ class Sequencer(nbapp.AppWindow):
         back to the shortest after the longest so the control is fully cyclable
         (never stuck at 04:00 with no way to shorten again). If wrapping to a
         shorter length would trim or drop recorded takes past the new end,
-        confirm first (destructive, no undo); an empty tape just cycles."""
+        confirm first; Undo restores the prior clip geometry. An empty tape
+        just cycles."""
         cur_bars = self.bars_total()
         nxt_bars = next((b for b in BAR_CHOICES if b > cur_bars), BAR_CHOICES[0])
         nxt = nxt_bars * self.sec_per_bar()
@@ -5228,7 +5262,7 @@ class Sequencer(nbapp.AppWindow):
         self.refresh()
 
     def _clear_takes_confirm(self):
-        """Confirm before wiping every recorded take (destructive, no undo)."""
+        """Confirm before wiping every recorded take; Undo restores clips."""
         n = sum(len(tk["clips"]) for tk in self.tracks)
         if n == 0:
             return
