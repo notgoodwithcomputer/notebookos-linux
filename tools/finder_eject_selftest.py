@@ -143,8 +143,15 @@ def main():
         else WIN.calls.append(argv[0]) or FakeCompleted())
     WIN._eject(MOUNT)
     pump(1.0)
-    check(WIN.status_text == "The drive could not be removed safely.",
-          "raw umount stderr stays out of the UI: %r" % WIN.status_text)
+    # A busy volume is the COMMON, actionable failure: the message says what to
+    # do, and — the point of this check — the raw "/media/usbstick: target is
+    # busy" stderr never reaches the UI either way.
+    raw_out = ("/media/usbstick" in (WIN.status_text or "")
+               or "umount" in (WIN.status_text or ""))
+    check(not raw_out and "in use" in (WIN.status_text or "")
+          and "eject" in (WIN.status_text or ""),
+          "busy eject is actionable and leaks no raw stderr: %r"
+          % WIN.status_text)
 
     print()
     if FAILURES:

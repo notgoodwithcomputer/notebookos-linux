@@ -70,10 +70,19 @@ def test_print_missing_lp_novel_real_handler():
 
 
 def test_device_vanish_finder_real_completion_handler():
-    s = Sink(); s._ejecting={"/tmp/secret-usb"}; s._fill_sidebar=lambda:None
     fn = method("finder.py", "Finder", "_eject_done", {"_t": lambda x:x})
+    # A non-busy failure: honest generic message, and NEVER the raw stderr.
+    s = Sink(); s._ejecting={"/tmp/secret-usb"}; s._fill_sidebar=lambda:None
     assert fn(s, "/tmp/secret-usb", False, "umount: /tmp/secret-usb: No such device") is False
     clean(s.messages); assert s.messages == ["The drive could not be removed safely."]
+    # The busy case is the common, ACTIONABLE one: the message must say what to
+    # do, not collapse into the generic sentence (the messaging-honesty axis —
+    # an honest sentence that omits the action still fails the person).
+    s2 = Sink(); s2._ejecting={"/tmp/secret-usb"}; s2._fill_sidebar=lambda:None
+    fn(s2, "/tmp/secret-usb", False, "umount: /tmp/secret-usb: target is busy")
+    clean(s2.messages)
+    assert "in use" in s2.messages[0] and "eject" in s2.messages[0], s2.messages
+    assert s2.messages != ["The drive could not be removed safely."]
 
 
 def test_missing_media_fallback_and_nonzero_are_not_defects():
