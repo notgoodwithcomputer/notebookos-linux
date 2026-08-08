@@ -443,7 +443,8 @@ class Contacts(nbapp.AppWindow):
         # callback (search debounce, status clear) reads this to decide whether
         # the window it belongs to is still there.
         self._closed = False
-        self._store_damaged = False
+        self._quarantine_pending = False
+        self._extra = {}
         self._deleted = None
 
         # Load the saved address book (empty on a fresh device — nothing is
@@ -491,10 +492,19 @@ class Contacts(nbapp.AppWindow):
         except FileNotFoundError:
             return []
         except Exception:
-            # Preserve an unreadable store byte-for-byte. _save remains gated
-            # for the whole session, including the final destroy handler.
-            self._store_damaged = True
+            # Unreadable bytes. nbapp.atomic_write_json moves the original
+            # aside (preserve_damaged) immediately before its next replacing
+            # write, so the address book's bytes land in
+            # contacts.json.damaged-* and persistence KEEPS WORKING. Gating
+            # every later save kept the file but silently killed saving for
+            # the session — journal shipped that cure and the save-failure
+            # gate caught it.
             return []
+        # Top-level keys a NEWER build may have added ride through the save
+        # untouched (accounting's _extra idiom): rebuilding the file from only
+        # the keys this build knows silently deletes the rest.
+        self._extra = ({k: v for k, v in data.items() if k != "people"}
+                       if isinstance(data, dict) else {})
         raw = data.get("people") if isinstance(data, dict) else data
         if raw is None and isinstance(data, dict):
             # The wrapper key is gone or was written under another name. The
@@ -512,7 +522,14 @@ class Contacts(nbapp.AppWindow):
         if isinstance(raw, dict):
             raw = list(raw.values())
         if not isinstance(raw, list):
-            self._store_damaged = True
+            if data and data != {"people": []}:
+                # Parsed fine, but nothing in it reads as an address book — a
+                # shape only this app can judge. _save moves the file aside
+                # immediately before its first replacing write, so there is
+                # never a window with no store and the bytes end up where the
+                # OS contract says. An empty dict or empty people list is OUR
+                # OWN empty book, not somebody's data in a foreign shape.
+                self._quarantine_pending = True
             return []
         return [self._normalize_person(p, i)
                 for i, p in enumerate(raw) if isinstance(p, dict)]
@@ -523,13 +540,34 @@ class Contacts(nbapp.AppWindow):
         key is present (as a string) and a palette colour is guaranteed."""
         return normalize_person(p, i)
 
+    def _quarantine(self):
+        """Move a contacts file this app could not read AS AN ADDRESS BOOK
+        aside, under the same <name>.damaged-<stamp> name
+        nbapp.preserve_damaged uses. nbapp quarantines a store that fails to
+        PARSE on every write; it deliberately cannot cover this case — valid
+        JSON of the wrong shape parses perfectly, and only this app knows the
+        shape is not an address book."""
+        try:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            dest = "%s.damaged-%s" % (CONTACTS_FILE, stamp)
+            n = 2
+            while os.path.exists(dest):
+                dest = "%s.damaged-%s-%d" % (CONTACTS_FILE, stamp, n)
+                n += 1
+            os.replace(CONTACTS_FILE, dest)
+        except OSError:
+            pass
+
     def _save(self):
         """Persist the full address book. Never raises, so a bad write cannot
         crash the app — but it does SAY when the write failed."""
-        if self._store_damaged:
-            return
         try:
-            nbapp.atomic_write_json(CONTACTS_FILE, {"people": self.people})
+            if getattr(self, "_quarantine_pending", False):
+                self._quarantine()
+                self._quarantine_pending = False
+            payload = dict(getattr(self, "_extra", None) or {})
+            payload["people"] = self.people
+            nbapp.atomic_write_json(CONTACTS_FILE, payload)
             self._save_warned = False
         except Exception as exc:
             # See academics._save_to_disk. This used to be a bare `pass`, and a

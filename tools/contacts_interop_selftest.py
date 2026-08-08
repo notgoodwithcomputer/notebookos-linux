@@ -41,13 +41,21 @@ with open(damaged_path, "wb") as fh:
     fh.write(damaged_bytes)
 old_path = c.CONTACTS_FILE
 c.CONTACTS_FILE = damaged_path
-holder = types.SimpleNamespace(_store_damaged=False)
+holder = types.SimpleNamespace(_quarantine_pending=False, _extra={},
+                               _save_warned=False)
 loaded = c.Contacts._load_people(holder)
 holder.people = []
 c.Contacts._save(holder)
 c.CONTACTS_FILE = old_path
-check("damaged store loads empty", loaded == [] and holder._store_damaged)
-check("damaged store is never overwritten", open(damaged_path, "rb").read() == damaged_bytes)
+check("damaged store loads empty", loaded == [])
+# THE OS CONTRACT (store_damage gate): unreadable bytes are MOVED ASIDE by
+# the shared writer at the next flush — never overwritten, never the only
+# thing standing between the user and a store that silently stopped saving.
+_recovered = any(
+    open(os.path.join(damaged_dir, f), "rb").read() == damaged_bytes
+    for f in os.listdir(damaged_dir) if ".damaged-" in f)
+check("damaged bytes survive the flush (moved aside, store works again)",
+      _recovered and json.load(open(damaged_path)).get("people") == [])
 
 p.update({"organization": "Café, Inc.; R&D",
           "phones": [{"label": "mobile", "value": "+1 (212) 555-0199"},

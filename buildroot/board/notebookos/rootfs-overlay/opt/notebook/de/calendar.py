@@ -28,6 +28,7 @@ import os
 import re
 import sys
 import json
+import copy
 import subprocess
 from datetime import date, timedelta
 
@@ -79,6 +80,26 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 EVENTS_FILE = os.path.join(CFG_DIR, "calendar.json")
 CALENDARS_FILE = os.path.join(CFG_DIR, "calendars.json")
+
+
+def _quarantine_store(path):
+    """Move a store this app could not read AS ITS OWN aside, under the same
+    <name>.damaged-<stamp> name nbapp.preserve_damaged uses. nbapp quarantines
+    a store that fails to PARSE on every write; it deliberately cannot cover
+    this case — valid JSON of the wrong shape parses perfectly, and only this
+    app knows the shape is not a calendar. Without this, the next flush would
+    write a fresh store straight over whatever the file really held."""
+    import time
+    try:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = "%s.damaged-%s" % (path, stamp)
+        n = 2
+        while os.path.exists(dest):
+            dest = "%s.damaged-%s-%d" % (path, stamp, n)
+            n += 1
+        os.replace(path, dest)
+    except OSError:
+        pass
 # The Academics app's store. Class meetings are MIRRORED onto this calendar,
 # never copied into it: Academics owns them, so they are rebuilt from that file
 # on every load and are deliberately absent from calendar.json. That keeps one
@@ -170,6 +191,14 @@ WEEKDAYS_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
                  "Saturday", "Sunday"]
 MONTHS = ["January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
+# This app's filename shadows Python's stdlib calendar module whenever the app
+# directory is on sys.path.  _strptime imports these four public tables from
+# ``calendar`` lazily, so provide the compatible English data it expects rather
+# than making an unrelated ``time.strptime`` call crash inside the process.
+day_name = tuple(WEEKDAYS_FULL)
+day_abbr = tuple(name[:3] for name in WEEKDAYS_FULL)
+month_name = ("",) + tuple(MONTHS)
+month_abbr = ("",) + tuple(name[:3] for name in MONTHS)
 HOURS = list(range(8, 21))  # 08:00 .. 20:00
 
 # How often an event comes round again. Stored on every occurrence as "repeat"
@@ -577,6 +606,8 @@ class Calendar(nbapp.AppWindow):
         self._seen = set()
         for e in self.events:
             self._mark_seen(e)
+        self.undo = nbapp.UndoHistory(self._undo_snapshot, self._undo_restore)
+        self.undo.reset()
         # Keep every repeating series running past today (see _extend_series).
         # Done on open, before anything is drawn, so a weekly event that reached
         # the end of its written run is already back on the grid rather than
@@ -635,6 +666,27 @@ class Calendar(nbapp.AppWindow):
             return arg
         return Calendar._iso_to_date(arg)
 
+    def _undo_snapshot(self):
+        """The user-owned calendar state needed to reverse a destructive edit."""
+        visible = {c["name"]: self.cals_on.get(c["name"], True)
+                   for c in self.calendars}
+        return (copy.deepcopy(self.events), copy.deepcopy(self.calendars),
+                visible, copy.deepcopy(getattr(self, "_orphans", [])),
+                set(getattr(self, "_seen", set())))
+
+    def _undo_restore(self, state):
+        events, calendars, visible, orphans, seen = copy.deepcopy(state)
+        self.events = events
+        self.calendars = calendars
+        self._orphans = orphans
+        self._seen = seen
+        self.cals_on = {c["name"]: visible.get(c["name"], True)
+                        for c in calendars}
+        self._save_calendars()
+        self._save_events()
+        self._populate_cal_list()
+        self._refresh()
+
     # ------------------------------------------------------------------ menus
     def menu_items(self, name):
         """File carries the calendar's create actions; View carries the view
@@ -674,6 +726,8 @@ class Calendar(nbapp.AppWindow):
             # New Calendar… lives in File with the app's other create actions;
             # repeating it here would put the same item twice in one menu bar.
             return items
+        if name == "Edit":
+            return nbapp.undo_menu_items(self.undo)
         if name == "Go":
             unit = {"month": "Month", "week": "Week", "day": "Day"}.get(
                 self.view, "Month")
@@ -706,6 +760,8 @@ class Calendar(nbapp.AppWindow):
         try:
             if ev.state & Gdk.ModifierType.CONTROL_MASK:
                 shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
+                if ev.keyval in (Gdk.KEY_z, Gdk.KEY_Z):
+                    return nbapp.undo_keys(self.undo, ev)
                 if ev.keyval in (Gdk.KEY_n, Gdk.KEY_N) and not shift:
                     self._open_new_event()
                     return True
@@ -753,13 +809,25 @@ class Calendar(nbapp.AppWindow):
     def _load_calendars(self):
         """Restore named calendars from calendars.json, or the single default
         on a fresh / unreadable / empty store. Never raises."""
+        self._calendars_quarantine = False
         try:
             with open(CALENDARS_FILE) as fh:
                 data = json.load(fh)
+        except FileNotFoundError:
+            return [dict(DEFAULT_CAL)]
         except Exception:
+            # Unreadable bytes: nbapp's writer asides them at the next write;
+            # saving must keep working (see _load_events).
             return [dict(DEFAULT_CAL)]
         cals = self._norm_calendars(data)
-        return cals if cals else [dict(DEFAULT_CAL)]
+        if not cals:
+            if data and data != {"calendars": []}:
+                # Parsed, non-empty, and not a calendar list in any shape the
+                # normaliser reads: only this app can see that. Aside at the
+                # next write, never overwrite.
+                self._calendars_quarantine = True
+            return [dict(DEFAULT_CAL)]
+        return cals
 
     def _norm_calendars(self, data):
         """Coerce raw calendar records into [{name,color}], dropping blanks and
@@ -798,6 +866,9 @@ class Calendar(nbapp.AppWindow):
 
     def _save_calendars(self):
         """Persist named calendars to calendars.json. Never raises."""
+        if getattr(self, "_calendars_quarantine", False):
+            _quarantine_store(CALENDARS_FILE)
+            self._calendars_quarantine = False
         try:
             nbapp.atomic_write_json(
                 CALENDARS_FILE,
@@ -928,9 +999,10 @@ class Calendar(nbapp.AppWindow):
             return
         title, day, hour, cal = got
         h = int(hour)
-        stamp = "%s  ·  %s %d %s  ·  %02d:%02d" % (
+        stamp = _t("%s  ·  %s %d %s  ·  %02d:%02d") % (
             title,
-            WEEKDAYS_FULL[day.weekday()][:3], day.day, MONTHS[day.month - 1][:3],
+            _t(WEEKDAYS_FULL[day.weekday()])[:3], day.day,
+            _t(MONTHS[day.month - 1])[:3],
             h, int(round((hour - h) * 60)))
         if cal:
             stamp += "  ·  " + cal
@@ -974,7 +1046,8 @@ class Calendar(nbapp.AppWindow):
         for c in self.mini_box.get_children():
             self.mini_box.remove(c)
 
-        title = Gtk.Label(label="%s %d" % (MONTHS[self.cur_m - 1], self.cur_y),
+        title = Gtk.Label(label=_t("%s %d") % (
+                              _t(MONTHS[self.cur_m - 1]), self.cur_y),
                           xalign=0)
         title.get_style_context().add_class("minititle")
         title.set_margin_bottom(12)
@@ -1218,17 +1291,11 @@ class Calendar(nbapp.AppWindow):
                 da.queue_draw()
 
     def _on_delete_cal(self, _btn, name):
-        """Delete a named calendar and every event filed under it (confirmed).
+        """Delete a named calendar and every event filed under it (undoable).
         Blocked when it is the only calendar left."""
         if len(self.calendars) <= 1:
             return
-        n = sum(1 for e in self.events if e["cal"] == name)
-        body = "Delete calendar “%s”?" % name
-        if n:
-            body += "\nThis also removes %d event%s filed under it." % (
-                n, "" if n == 1 else "s")
-        if not self._confirm("Delete Calendar", body, "Delete"):
-            return
+        self.undo.checkpoint("Delete Calendar")
         self.calendars = [c for c in self.calendars if c["name"] != name]
         self.events = [e for e in self.events if e["cal"] != name]
         self.cals_on.pop(name, None)
@@ -1237,6 +1304,7 @@ class Calendar(nbapp.AppWindow):
         self._save_events()
         self._populate_cal_list()
         self._refresh()
+        self.undo.commit()
 
     def _confirm(self, title, body, ok_label):
         """A small modal Cancel / <ok_label> confirmation. Returns True on the
@@ -1642,8 +1710,9 @@ class Calendar(nbapp.AppWindow):
         corner = Gtk.Box(); corner.set_size_request(56, -1)
         grid.attach(corner, 0, 0, 1, 1)
         dayhead = Gtk.Label(
-            label="%s %d" % (WEEKDAYS_FULL[self.sel.weekday()].upper(),
-                             self.sel.day), xalign=0)
+            label=_t("%s %d") % (
+                _upper(_t(WEEKDAYS_FULL[self.sel.weekday()])), self.sel.day),
+            xalign=0)
         dayhead.set_hexpand(True)
         dhc = dayhead.get_style_context(); dhc.add_class("weekdaycell")
         if self.sel == self.today:
@@ -1711,7 +1780,8 @@ class Calendar(nbapp.AppWindow):
         corner = Gtk.Box(); corner.set_size_request(56, -1)
         grid.attach(corner, 0, 0, 1, 1)
         for i, d in enumerate(days):
-            lbl = Gtk.Label(label="%s %d" % (WEEKDAYS[i], d.day), xalign=0)
+            lbl = Gtk.Label(label=_t("%s %d") % (_t(WEEKDAYS[i]), d.day),
+                            xalign=0)
             lbl.set_hexpand(True)
             cc = lbl.get_style_context(); cc.add_class("weekdaycell")
             if d == self.today:
@@ -1959,21 +2029,30 @@ class Calendar(nbapp.AppWindow):
         carried through the round trip instead of being quietly deleted on
         close."""
         self._orphans = []
-        self._events_readable = True
+        self._events_quarantine = False
         try:
             with open(EVENTS_FILE) as fh:
                 data = json.load(fh)
         except FileNotFoundError:
             return []
         except Exception:
-            # Data-safety law: a malformed or unreadable existing store is not
-            # an empty calendar.  Refuse later automatic writes so close can
-            # never replace the only copy with [].
-            self._events_readable = False
+            # Unreadable bytes. nbapp.atomic_write_json moves the original
+            # aside (preserve_damaged) immediately before its next replacing
+            # write, so the appointments' bytes land in calendar.json.damaged-*
+            # and persistence KEEPS WORKING. Refusing every later write kept
+            # the file but silently killed saving for the whole session —
+            # journal shipped that cure and the save-failure gate caught it.
             return []
         items = self._event_list(data)
+        if items is None and data:
+            # Parsed fine, but not a shape this loader reads as events — the
+            # case only the app can judge (valid JSON sails through nbapp's
+            # parse check). _save_events moves the file aside immediately
+            # before its replacing write, so there is never a window with no
+            # store, and recovery bytes end up where the OS contract says.
+            self._events_quarantine = True
+            return []
         if items is None:
-            self._events_readable = False
             return []
         out = []
         for item in items:
@@ -2147,17 +2226,23 @@ class Calendar(nbapp.AppWindow):
         clobbered by this wholesale rewrite. merge=False writes authoritatively —
         used only by New / Open, which intentionally replace the whole store.
         Never crashes the app on an I/O error."""
-        if merge and not getattr(self, "_events_readable", True):
-            return
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
         except Exception:
             pass
-        if merge:
+        pending = getattr(self, "_events_quarantine", False)
+        if merge and not pending:
             try:
                 self._merge_disk_events()
             except Exception:
                 pass   # a merge hiccup must never cost us the in-memory events
+        if pending:
+            # The store parsed but was not a calendar (see _load_events):
+            # move it aside NOW, immediately before the replacing write — the
+            # same moment nbapp picks for files it can detect — and skip the
+            # merge, which could only re-read the shape we already refused.
+            _quarantine_store(EVENTS_FILE)
+            self._events_quarantine = False
         try:
             data = [self._event_record(e) for e in self.events]
             # Records this session could not read (see _load_events) ride along
@@ -2414,8 +2499,9 @@ class Calendar(nbapp.AppWindow):
 
         def _fmt_day(*_):
             d = dayval[0]
-            sub.set_text("%s, %d %s %d" % (WEEKDAYS_FULL[d.weekday()], d.day,
-                                           MONTHS[d.month - 1], d.year))
+            sub.set_text(_t("%s, %d %s %d") % (
+                _t(WEEKDAYS_FULL[d.weekday()]), d.day,
+                _t(MONTHS[d.month - 1]), d.year))
         _fmt_day()
         daterow.pack_start(sub, True, True, 0)
 
@@ -2778,9 +2864,9 @@ class Calendar(nbapp.AppWindow):
 
         def _fmt(*_):
             d = dayval[0]
-            sub.set_text("%s, %d %s %d" % (_t(WEEKDAYS_FULL[d.weekday()]),
-                                           d.day, _t(MONTHS[d.month - 1]),
-                                           d.year))
+            sub.set_text(_t("%s, %d %s %d") % (
+                _t(WEEKDAYS_FULL[d.weekday()]), d.day,
+                _t(MONTHS[d.month - 1]), d.year))
         _fmt()
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row.pack_start(sub, True, True, 0)
@@ -3003,29 +3089,27 @@ class Calendar(nbapp.AppWindow):
         self._extend_series()
 
     def _delete_event(self, existing):
-        """Confirm and remove an event. One of a series asks whether to drop
+        """Remove an event with undo. One of a series asks whether to drop
         just that occurrence or the whole run — cancelling a single week's class
         must not clear the term. Returns True when something was deleted."""
-        title = existing.get("title") or _t("this event")
         members = self._series_members(existing)
         if len(members) > 1:
             choice = self._choose_series_scope(_t("Delete Repeating Event"))
             if choice is None:
                 return False
-            self._delete_series_scope(existing, choice)
-            doomed = []
         else:
-            if not self._confirm("Delete Event", "Delete “%s”?" % title,
-                                 "Delete"):
-                return False
-            doomed = [existing]
-        for e in doomed:
+            choice = "one"
+        self.undo.checkpoint("Delete Event")
+        if len(members) > 1:
+            self._delete_series_scope(existing, choice)
+        else:
             try:
-                self.events.remove(e)
+                self.events.remove(existing)
             except ValueError:
                 pass
         self._save_events()
         self._refresh()
+        self.undo.commit()
         return True
 
     def _choose_series_scope(self, title):
@@ -3295,24 +3379,26 @@ class Calendar(nbapp.AppWindow):
     def _refresh(self):
         # title
         if self.view == "month":
-            self.title_lbl.set_text("%s %d" % (MONTHS[self.cur_m - 1], self.cur_y))
+            self.title_lbl.set_text(_t("%s %d") % (
+                _t(MONTHS[self.cur_m - 1]), self.cur_y))
         elif self.view == "week":
             days = self._week_dates()
             a, b = days[0], days[6]
             if a.month == b.month:
-                self.title_lbl.set_text("%s %d–%d, %d" % (
-                    MONTHS[a.month - 1], a.day, b.day, b.year))
+                self.title_lbl.set_text(_t("%s %d–%d, %d") % (
+                    _t(MONTHS[a.month - 1]), a.day, b.day, b.year))
             else:
-                self.title_lbl.set_text("%s %d – %s %d" % (
-                    MONTHS[a.month - 1], a.day, MONTHS[b.month - 1], b.day))
+                self.title_lbl.set_text(_t("%s %d – %s %d") % (
+                    _t(MONTHS[a.month - 1]), a.day,
+                    _t(MONTHS[b.month - 1]), b.day))
         else:
             # No weekday name here: the day column header right below already
             # reads "FRIDAY 24", and spelling out "Wednesday, 30 September
             # 2026" overran the header bar on a 1024-wide screen and came out
             # as "Wednesday, 30 Septem...". This also matches the shape of the
             # month and week titles.
-            self.title_lbl.set_text("%d %s %d" % (
-                self.sel.day, MONTHS[self.sel.month - 1], self.sel.year))
+            self.title_lbl.set_text(_t("%d %s %d") % (
+                self.sel.day, _t(MONTHS[self.sel.month - 1]), self.sel.year))
 
         # segmented state
         for key, btn in self.seg_btns.items():
