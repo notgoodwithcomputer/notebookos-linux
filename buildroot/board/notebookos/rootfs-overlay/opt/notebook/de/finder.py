@@ -2466,7 +2466,8 @@ class Finder(Gtk.Window):
             _t("Permanently erase “%s”? This cannot be undone.")
             % display_name(name),
             _t("Delete"),
-            lambda: self._delete_forever(path, name, identity))
+            lambda: self._delete_forever(path, name, identity),
+            anchor=self._selected_row_anchor())
 
     @staticmethod
     def _path_identity(path):
@@ -2726,18 +2727,21 @@ class Finder(Gtk.Window):
                 _t("Permanently erase %d item%s from the Trash? This cannot "
                    "be undone.") % (n, "" if n == 1 else "s"),
                 listed),
-            _t("Empty Trash"), lambda: self._empty_trash(captured))
+            _t("Empty Trash"), lambda: self._empty_trash(captured),
+            anchor=nbtransitions.widget_rect(self.empty_btn, self._overlay)
+            if nbtransitions is not None else None)
 
-    def _confirm(self, title, message, ok_label, on_yes):
-        # House-style modal confirmation for a destructive action. Reuses the
-        # Get Info dialog chrome; the primary button is signage-red — an alert,
-        # which is one of the two states (that and selection) the design language
-        # reserves red for.
-        dlg = Gtk.Dialog(transient_for=self, modal=True)
-        dlg.set_decorated(False)
-        dlg.get_style_context().add_class("finderinfo")
-        area = dlg.get_content_area()
-        area.set_spacing(0)
+    def _confirm(self, title, message, ok_label, on_yes, anchor=None):
+        # nbmotion-inventory: app.confirm
+        # A destructive confirmation that GROWS FROM the control that raised
+        # it (Article B) via the shared _present_card_from, rather than a
+        # modal dialog from nowhere. The primary button is signage-red — an
+        # alert, one of the two states the design language reserves red for.
+        # SAFETY is unchanged and, if anything, firmer: the safe default
+        # (Cancel) takes focus only once the card is on screen (on_shown), so
+        # a stray Enter cannot reach the danger button before Cancel exists;
+        # Esc and a scrim click both cancel; the danger action fires the
+        # SINGLE-SHOT _once guard.
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         box.get_style_context().add_class("finderinfobox")
         hd = Gtk.Label(label=title, xalign=0)
@@ -2746,7 +2750,7 @@ class Finder(Gtk.Window):
         msg = Gtk.Label(label=message, xalign=0)
         msg.get_style_context().add_class("finderinfoval")
         msg.set_line_wrap(True); msg.set_max_width_chars(38)
-        # START so max_width_chars can hold the dialog to a readable column: a
+        # START so max_width_chars can hold the card to a readable column: a
         # message quoting a long file name would otherwise stretch it (see
         # _show_info_dialog), and WORD_CHAR so that name can break.
         msg.set_halign(Gtk.Align.START)
@@ -2757,25 +2761,29 @@ class Finder(Gtk.Window):
         btnrow.set_halign(Gtk.Align.END)
         cancel = Gtk.Button(label=_t("Cancel"))
         cancel.get_style_context().add_class("finderinfocancel")
-        cancel.connect("clicked", lambda *_: dlg.destroy())
+        cancel.connect("clicked", lambda *_: self._info_close())
         ok = Gtk.Button(label=ok_label)
         ok.get_style_context().add_class("finderinfodanger")
 
         def accepted(*_args):
             cancel.set_sensitive(False)
             ok.set_sensitive(False)
-            dlg.destroy()
+            close = self._info_close      # capture before on_yes can reassign
+            if close is not None:
+                close()                   # retract the card
             on_yes()
 
         ok.connect("clicked", self._once(accepted))
         btnrow.pack_start(cancel, False, False, 0)
         btnrow.pack_start(ok, False, False, 0)
         box.pack_start(btnrow, False, False, 0)
-        area.add(box)
-        dlg.connect("key-press-event", self._info_key)     # Esc cancels
-        dlg.show_all()
-        # A stray Enter/Space must choose safety, never irreversible action.
-        cancel.grab_focus()
+        box.show_all()
+        card = self._present_card_from(
+            box, anchor,
+            # A stray Enter/Space must choose safety, never irreversible
+            # action — and only once the card is actually up.
+            on_shown=cancel.grab_focus)
+        card.connect("key-press-event", self._info_key)     # Esc cancels
 
     @staticmethod
     def _once(callback):
@@ -3918,7 +3926,7 @@ class Finder(Gtk.Window):
         except Exception:                                         # noqa: BLE001
             return None
 
-    def _present_card_from(self, box, anchor, on_close=None):
+    def _present_card_from(self, box, anchor, on_close=None, on_shown=None):
         """Present `box` (a .finderinfobox content column) as an in-window
         card that GROWS FROM `anchor` (Article B) and retracts to it on close.
 
@@ -3928,7 +3936,12 @@ class Finder(Gtk.Window):
         card EventBox — it emits `destroy` when removed, so a caller waiting
         on an async fill (Get Info's folder walk) can watch it exactly as it
         watched the old dialog. `nbtransitions` absent → the card just
-        appears, centred, without motion."""
+        appears, centred, without motion.
+
+        `on_shown` fires the moment the real content is revealed — on landing
+        for the animated path, immediately for the instant one. A destructive
+        confirm uses it to focus its SAFE default only once the card exists,
+        so a stray Enter can never reach the danger button before it does."""
         alloc = self.get_allocation()
         W = alloc.width if alloc.width > 1 else 1024
         H = alloc.height if alloc.height > 1 else 722
@@ -3979,13 +3992,19 @@ class Finder(Gtk.Window):
         scrim.connect("button-press-event", close)
         card_win.add_events(Gdk.EventMask.KEY_PRESS_MASK)
         self._info_close = close
+
+        def reveal(*_a):
+            card_win.show()
+            if on_shown is not None:
+                on_shown()
+
         if nbtransitions is not None and anchor is not None:
             g = nbtransitions.GrowCard(grow_da)
             grow_da.connect_after("draw", lambda _w, cr: g.paint(cr))
             state["grow"] = g
-            g.grow(anchor, target, on_done=lambda _ok: card_win.show())
+            g.grow(anchor, target, on_done=lambda _ok: reveal())
         else:
-            card_win.show()
+            reveal()
         return card_win
 
     def _get_info(self):

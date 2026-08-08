@@ -294,9 +294,14 @@
     "SURFACE_IN"
    ],
    "transform": false,
-   "status": "unimplemented",
-   "note": "Primitive available: nbtransitions.GrowCard (44a64b9e) - anchor-carrying, B4 origin discipline enforced. Awaiting per-app call-site adoption.",
-   "pacing": null
+   "status": "implemented",
+   "note": "Built 2026-08-08 on _present_card_from: the finder destructive confirms grow from the control that raised them (Empty Trash from its toolbar button, Delete from the selected row); safety firmer than the old modal - Cancel focuses on-shown so a stray Enter can't reach the danger button before Cancel exists.",
+   "pacing": null,
+   "binding": {
+    "binding_kind": "comment-marker",
+    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+    "symbol_or_marker": "app.confirm"
+   }
   },
   {
    "id": "app.about",
