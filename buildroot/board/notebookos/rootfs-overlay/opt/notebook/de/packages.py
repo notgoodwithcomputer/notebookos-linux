@@ -1003,6 +1003,8 @@ class Packages(nbapp.AppWindow):
         # python3 running its module, with the desktop's own directory on
         # PYTHONPATH so its sibling modules import. Best-effort — a failure
         # says so in the inspector rather than doing nothing.
+        if not isinstance(self.sel, int) or not (0 <= self.sel < len(PACKAGES)):
+            return
         try:
             p = PACKAGES[self.sel]
         except (IndexError, TypeError):
@@ -1017,6 +1019,8 @@ class Packages(nbapp.AppWindow):
                     else _t("Could not open %s") % p[NAME], not ok)
 
     def _on_verify(self, _b=None):
+        if not isinstance(self.sel, int) or not (0 <= self.sel < len(PACKAGES)):
+            return
         try:
             p = PACKAGES[self.sel]
         except (IndexError, TypeError):

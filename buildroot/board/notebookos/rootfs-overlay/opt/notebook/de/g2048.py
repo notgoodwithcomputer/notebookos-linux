@@ -719,6 +719,8 @@ class Game2048(nbapp.AppWindow):
         return super().menu_items(name)
 
     def _reset_best(self):
+        if self.best <= 0:
+            return
         self._do_reset_best()
 
     def _do_reset_best(self):

@@ -2685,7 +2685,7 @@ class Illustrator(nbapp.AppWindow):
     def _delete_layer(self):
         # Deleting a layer is a history frame like any other edit, so it takes
         # one press of Ctrl+Z to get the layer and its artwork back.
-        if self.active == 0:
+        if not (0 < self.active < len(self.layers)):
             return
         self._push(self._struct_frame(), "Delete Layer")
         name = self.layers[self.active].name
