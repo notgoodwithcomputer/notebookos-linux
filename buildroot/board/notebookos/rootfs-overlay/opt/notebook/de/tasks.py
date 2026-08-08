@@ -1304,6 +1304,17 @@ class Tasks(nbapp.AppWindow):
         # minimum past 1600px and put the right-hand third of the app off a
         # 1024- or 1366-wide panel, where GTK cannot shrink the window to fit.
         self.title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        # The Today title is a DATE, and an ellipsized date amputates real
+        # information mid-word: Greek's full weekday phrase needs ~370px
+        # against the 331 the centre column has on a 1024 panel, so the
+        # sweep caught 'Παρασκευή, 7 Αυγο…'. When the full phrase cannot
+        # fit, the title degrades WHOLE to the day-and-month phrase (both
+        # forms translate as one reorderable unit); the weekday survives on
+        # the mini calendar. A user list name has no shorter truth, so it
+        # keeps the plain ellipsis above.
+        self._title_full = ""
+        self._title_short = None
+        self.title_lbl.connect("size-allocate", self._fit_title)
         titlerow.pack_start(self.title_lbl, True, True, 0)
         head.pack_start(titlerow, False, False, 0)
         col.pack_start(head, False, False, 0)
@@ -2282,11 +2293,25 @@ class Tasks(nbapp.AppWindow):
         for vid, (btn, clabel) in self._side_rows.items():
             clabel.set_text(str(counts.get(vid, 0)))
 
+    def _fit_title(self, lbl, alloc):
+        """Show the full date phrase when it fits the column, the whole
+        day-and-month phrase when it does not. Measured against the FULL
+        text every time, so growing the window restores the full form."""
+        full, short = self._title_full, self._title_short
+        if not full or not short:
+            return
+        layout = lbl.create_pango_layout(full)
+        want = full if layout.get_pixel_size()[0] <= alloc.width else short
+        if lbl.get_text() != want:
+            lbl.set_text(want)
+
     def _refresh(self):
         now = time.localtime()
         # header
+        ti_short = None
         if self.view == "view:today":
             eb, ti = "Today", _display_date(now)
+            ti_short = _t("%d %s" % (now[2], MONTHS[now[1] - 1]))
         elif self.view == "view:upcoming":
             # Matches what this view actually holds — the Tomorrow and This
             # Week groups. "The next two weeks" promised a range the view has
@@ -2297,7 +2322,8 @@ class Tasks(nbapp.AppWindow):
         else:
             eb, ti = "List", self.view[5:]
         self.eyebrow.set_text(eb.upper())
-        self.title_lbl.set_text(ti)
+        self._title_full, self._title_short = ti, ti_short
+        self.title_lbl.set_text(ti)   # _fit_title corrects on allocation
 
         scoped = self._scoped()
         # Header 'N remaining' + sidebar per-list counts (shared with the

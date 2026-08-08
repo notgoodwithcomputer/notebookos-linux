@@ -207,6 +207,40 @@ except AttributeError as exc:
           False)
     print("[not reached: %s]" % exc)
 
+# case 5: the Today title never truncates a date — it degrades WHOLE.
+# Greek's full weekday phrase outgrows the 1024 centre column (the sweep
+# caught 'Παρασκευή, 7 Αυγο…'); when the full phrase cannot fit, the label
+# must switch to the whole day-and-month phrase, and switch back when room
+# returns. Language-independent mechanism test through the real _fit_title
+# against measured pixel widths; the Greek case is one instance of it.
+try:
+    from gi.repository import Gdk, Gtk
+    p6 = tasks.Tasks.__new__(tasks.Tasks)
+    lbl = Gtk.Label(label="")
+    p6.title_lbl = lbl
+    p6._title_full = "Friday, 7 August in its very longest form"
+    p6._title_short = "7 August"
+    full_w = lbl.create_pango_layout(p6._title_full).get_pixel_size()[0]
+    tight = Gdk.Rectangle()
+    tight.width, tight.height = max(10, full_w - 10), 35
+    roomy = Gdk.Rectangle()
+    roomy.width, roomy.height = full_w + 10, 35
+    p6._fit_title(lbl, tight)
+    check("case 5: a date too wide for its column degrades whole, not cut",
+          lbl.get_text() == p6._title_short)
+    p6._fit_title(lbl, roomy)
+    check("case 5: the full date returns when the room does",
+          lbl.get_text() == p6._title_full)
+    p6._title_short = None
+    lbl.set_text("Kitchen renovation and general household repairs")
+    p6._fit_title(lbl, tight)
+    check("case 5: a list name keeps the plain ellipsis (no shorter truth)",
+          lbl.get_text().startswith("Kitchen"))
+except AttributeError as exc:
+    check("case 5: a date too wide for its column degrades whole, not cut",
+          False)
+    print("[not reached: %s]" % exc)
+
 shutil.rmtree(HOME, ignore_errors=True)
 print("OK" if ok else "FAILURES")
 sys.exit(0 if ok else 1)
