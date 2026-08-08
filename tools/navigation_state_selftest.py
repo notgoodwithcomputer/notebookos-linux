@@ -97,7 +97,7 @@ def wiring_contract():
           "Ebook guards delayed scrolls and invalidates them on destroy")
     check("nbstate.identity_index(self._playlists, name)" in music and
           "with self._restoring:" in music and
-          "if self._restoring.active:" in music,
+          "if self._restoring.active" in music,
           "Music restores by identity without saving the restoration")
 
 
