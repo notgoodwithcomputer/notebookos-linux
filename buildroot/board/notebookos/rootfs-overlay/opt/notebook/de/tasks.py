@@ -879,7 +879,7 @@ class Tasks(nbapp.AppWindow):
             nm = self.view[5:] if on_list else ""
             items.append(
                 ("Remove List…",
-                 (lambda n=nm: self._open_removelist(n)) if on_list else None))
+                 (lambda n=nm: self._remove_list(n)) if on_list else None))
             if PROJECTS:
                 items.append(nbapp.SEP)
                 for pname, _color in PROJECTS:
@@ -1061,6 +1061,7 @@ class Tasks(nbapp.AppWindow):
         list's tasks are NOT deleted — they are reassigned to Inbox (no list)."""
         if name not in PROJ_COLOR:
             return
+        self.undo.checkpoint("Remove List")
         try:
             self._close_menu()
         except Exception:
@@ -1149,6 +1150,7 @@ class Tasks(nbapp.AppWindow):
             self.view = "view:today"
         self._rebuild_sidebar()   # rebuilds the sidebar and refreshes the list
         self._save_tasks()
+        self.undo.commit()
 
     def _swatch(self, color, idx):
         button = Gtk.Button(); button.set_relief(Gtk.ReliefStyle.NONE)
@@ -1760,72 +1762,8 @@ class Tasks(nbapp.AppWindow):
 
     # --------------------------------------------------------- clear completed
     def _open_clearcard(self):
-        """Confirm removing every finished task (a batch delete, so it confirms
-        first — unlike the single right-click ▸ Delete). Reuses the New List
-        overlay approach. Does nothing if nothing is completed."""
-        try:
-            self._close_menu()
-        except Exception:
-            pass
-        self._close_task_menu()
-        self._close_rename()
-        self._close_newlist()
-        self._close_removelist()
-        self._close_clearcard()
-        n = sum(1 for t in self.tasks if t.get("done"))
-        if n == 0:
-            return
-
-        W, H = self._surface_size()
-        layer = Gtk.Fixed()
-        scrim = Gtk.EventBox()
-        scrim.get_style_context().add_class("scrim")
-        scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        scrim.set_size_request(W, H)
-        scrim.connect("button-press-event",
-                      lambda *a: (self._close_clearcard(), True)[1])
-        layer.put(scrim, 0, 0)
-
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        card.get_style_context().add_class("nlcard")
-        title = Gtk.Label(label=_t("Clear Completed"), xalign=0)
-        title.get_style_context().add_class("nltitle")
-        card.pack_start(title, False, False, 0)
-
-        # ASK, don't announce. Every other confirm in this app opens with a
-        # question ("Remove the list “%s”? …"), and a card that states what is
-        # about to happen reads as a notification of something already decided
-        # — next to a Cancel button that says otherwise.
-        msg = ("Remove %d completed task%s? This cannot be undone."
-               % (n, "" if n == 1 else "s"))
-        body = Gtk.Label(label=msg, xalign=0)
-        body.get_style_context().add_class("nlbody")
-        body.set_line_wrap(True)
-        body.set_max_width_chars(30)
-        card.pack_start(body, False, False, 0)
-
-        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        btns.set_margin_top(6); btns.set_halign(Gtk.Align.END)
-        cancel = Gtk.Button(label=_t("Cancel"))
-        cancel.set_relief(Gtk.ReliefStyle.NONE)
-        cancel.get_style_context().add_class("nlbtn")
-        cancel.connect("clicked", lambda *a: self._close_clearcard())
-        btns.pack_start(cancel, False, False, 0)
-        remove = Gtk.Button(label=_t("Remove"))
-        remove.set_relief(Gtk.ReliefStyle.NONE)
-        remove.get_style_context().add_class("nlbtn")
-        remove.get_style_context().add_class("nlremove")
-        remove.connect("clicked", lambda *a: self._clear_completed())
-        btns.pack_start(remove, False, False, 0)
-        card.pack_start(btns, False, False, 0)
-
-        holder = Gtk.EventBox()   # own GdkWindow so it blits over the app body
-        holder.add(card)
-        layer.put(holder, 0, 0)
-        self._overlay.add_overlay(layer)
-        layer.show_all()
-        self._centre_card(layer, holder, W, H)
-        self._cc_layer = layer
+        """Clear completed tasks immediately; history makes it reversible."""
+        self._clear_completed()
 
     def _close_clearcard(self):
         layer = getattr(self, "_cc_layer", None)

@@ -887,8 +887,6 @@ class Screenplay(nbapp.AppWindow):
         when that would discard real work — an unsaved no-file script (recovery
         is its only copy), or a file-bound script with edits since its last Save
         — and if the user cancels, change nothing (no blank, no overwrite)."""
-        if not self._confirm_replace("New Script"):
-            return
         # Undoable: the confirm only fires when the guard judges there is work
         # to lose, and blanking overwrites the recovery snapshot as well.
         self.undo.checkpoint("New Script")
@@ -1171,8 +1169,6 @@ class Screenplay(nbapp.AppWindow):
             return
         # Open replaces the script and overwrites session recovery — guard the
         # same unsaved-work case New does before touching any state.
-        if not self._confirm_replace("Open Script"):
-            return
         self._open_file(path)
 
     def _choose_file(self, save):

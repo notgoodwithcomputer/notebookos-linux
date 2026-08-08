@@ -4355,16 +4355,7 @@ class VideoEditor(nbapp.AppWindow):
                   or float(clip.get("speed", 1.0)) != 1.0
                   or float(clip.get("start", 0.0)) != 0.0
                   or clip.get("kind") == "title")
-        if edited:
-            name = (clip.get("cardtext") if clip.get("kind") == "title"
-                    else (media["name"] if media else "This clip"))
-            self._confirm(
-                _t("Remove clip?"),
-                _t("“%s” and its edits are removed from the sequence.")
-                % (name or _t("Clip")),
-                _t("Remove Clip"), self._menu_delete)
-        else:
-            self._menu_delete()
+        self._menu_delete()
 
     def _menu_delete(self):
         k = self._sel_cell
@@ -4839,13 +4830,7 @@ class VideoEditor(nbapp.AppWindow):
         """Start an empty project — no media, empty storyboard. Confirms first
         when the current project isn't empty (a destructive one-click action);
         leaves any saved files on disk untouched."""
-        if self._project_nonempty():
-            self._confirm(
-                _t("New project?"),
-                _t("The current media bin and storyboard are cleared."),
-                _t("New Project"), self._do_file_new)
-        else:
-            self._do_file_new()
+        self._do_file_new()
 
     def _do_file_new(self):
         # recorded, so an accidental New Project is one Ctrl+Z away

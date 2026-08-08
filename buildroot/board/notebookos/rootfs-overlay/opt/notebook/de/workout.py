@@ -940,10 +940,6 @@ class Workout(nbapp.AppWindow):
         ex = self._active()
         if not ex:
             return
-        if not _confirm(self, _t("Delete exercise"),
-                        _t("Delete \"%s\"? Sets already logged for it are "
-                           "removed too.") % ex["name"], _t("Delete")):
-            return
         self.undo.checkpoint("Delete Exercise")
         eid = ex["id"]
         del self.data["exercises"][self.sel]
@@ -957,9 +953,6 @@ class Workout(nbapp.AppWindow):
 
     def _clear_today(self):
         if not self.data["log"].get(today_key()):
-            return
-        if not _confirm(self, _t("Clear today"),
-                        _t("Remove every set logged today?"), _t("Clear")):
             return
         self.undo.checkpoint("Clear Today")
         self.data["log"].pop(today_key(), None)

@@ -945,10 +945,7 @@ class MediaViewer(nbapp.AppWindow):
         if not (path and os.path.isfile(path)):
             return
         self._stop_slideshow()      # taking manual control ends a slideshow
-        self._confirm(
-            _t("Move to Trash"),
-            _t("Move “%s” to the Trash?") % os.path.basename(path),
-            _t("Move to Trash"), lambda: self._do_trash(path))
+        self._do_trash(path)
 
     def _do_trash(self, path):
         import shutil

@@ -2914,13 +2914,6 @@ class Sequencer(nbapp.AppWindow):
         """Blank project (empty tape, defaults). Confirms first when there are
         recorded takes a new project would discard; the file on disk is left
         alone either way."""
-        if any(tk["clips"] for tk in self.tracks):
-            self._confirm(
-                _t("New project?"),
-                _t("This clears the current tracks and takes for a blank "
-                   "project. Save first if you want to keep them."),
-                _t("New Project"), self._do_file_new)
-            return
         self._do_file_new()
 
     def _do_file_new(self):
@@ -2939,13 +2932,6 @@ class Sequencer(nbapp.AppWindow):
             return
         # opening replaces the in-memory project; confirm when live takes would
         # be discarded (a project already written to a file is safe on disk).
-        if any(tk["clips"] for tk in self.tracks):
-            self._confirm(
-                _t("Open this project?"),
-                _t("Opening replaces the current tracks and takes. Save first "
-                   "if you want to keep them."),
-                _t("Open"), lambda: self._open_file(path))
-            return
         self._open_file(path)
 
     def _file_save(self):
@@ -5032,12 +5018,7 @@ class Sequencer(nbapp.AppWindow):
         n = len(self.tracks[i]["clips"])
         if n == 0:
             return
-        self._confirm(
-            _t("Remove this track's clips?"),
-            _t("Removes all %d clip%s from %s. "
-               "Undo (Ctrl+Z) puts them back.")
-            % (n, "" if n == 1 else "s", self.tracks[i]["name"]),
-            _t("Remove Clips"), lambda: self._do_clear_track(i))
+        self._do_clear_track(i)
 
     def _do_clear_track(self, i):
         """Wipe one track's takes — runs only after the confirm is accepted."""
@@ -5197,12 +5178,7 @@ class Sequencer(nbapp.AppWindow):
                        for (s, e, _w) in map(clip_parts, tk["clips"])
                        if e > nxt + 0.001)
             if lost:
-                self._confirm(
-                    _t("Shorten to %s?") % _fmt_len(nxt),
-                    _t("Trims or removes %d clip%s past the new end. "
-                       "Undo (Ctrl+Z) puts them back.")
-                    % (lost, "" if lost == 1 else "s"),
-                    _t("Shorten"), lambda: self._set_length(nxt))
+                self._set_length(nxt)
                 return
         self._set_length(nxt)
 
@@ -5266,12 +5242,7 @@ class Sequencer(nbapp.AppWindow):
         n = sum(len(tk["clips"]) for tk in self.tracks)
         if n == 0:
             return
-        self._confirm(
-            _t("Remove every clip?"),
-            _t("Removes all %d clip%s from every track, and the takes in "
-               "them. Undo (Ctrl+Z) puts them back.")
-            % (n, "" if n == 1 else "s"),
-            _t("Remove All"), self._clear_takes)
+        self._clear_takes()
 
     def _clear_takes(self):
         if self.transport == "rec":

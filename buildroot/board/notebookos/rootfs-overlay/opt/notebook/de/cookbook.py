@@ -1734,21 +1734,14 @@ class Cookbook(nbapp.AppWindow):
             return
         name = self.cats[ci]
         n = len([r for r in self.recipes if r.get("cat") == name])
-        if n:
-            msg = ("Delete the category “%s”? Its %d recipe%s move%s to "
-                   "No category."
-                   % (name, n, "" if n == 1 else "s", "s" if n == 1 else ""))
-        else:
-            msg = ("Delete the category “%s”? No recipes are filed under it."
-                   % name)
-        self._confirm("Delete Category", msg, "Delete",
-                      lambda: self._remove_category(ci))
+        self._remove_category(ci)
 
     def _remove_category(self, ci):
         """Delete category index `ci`, reassigning its recipes to No category
         (cat=None) so nothing is lost, then fix up the active filter."""
         if not (0 <= ci < len(self.cats)):
             return
+        self.undo.checkpoint("Delete Category")
         name = self.cats[ci]
         for r in self.recipes:
             if r.get("cat") == name:
@@ -1764,6 +1757,7 @@ class Cookbook(nbapp.AppWindow):
         self.rebuild_list()
         self._refresh_editor()
         self._touch()
+        self.undo.commit()
 
     def _confirm(self, title, message, ok_label, on_yes):
         """Modal confirmation for a destructive action (mirrors the New Category

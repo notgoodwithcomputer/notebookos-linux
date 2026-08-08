@@ -3255,12 +3255,7 @@ class Calendar(nbapp.AppWindow):
     def _file_new(self):
         """File ▸ New — start a blank calendar file: no events and the single
         default calendar. Confirms first when there is data to discard."""
-        has_data = bool(self.events) or self._cal_names() != [DEFAULT_CAL["name"]]
-        if has_data and not self._confirm(
-                "New Calendar File",
-                "Discard all events and calendars and start a blank file?",
-                "Discard"):
-            return
+        self.undo.checkpoint("New Calendar File")
         self.events = []
         self._seen = set()
         self.calendars = [dict(DEFAULT_CAL)]
@@ -3272,6 +3267,7 @@ class Calendar(nbapp.AppWindow):
         self._populate_cal_list()
         self._refresh()
         self._flash_status("New calendar file")
+        self.undo.commit()
 
     def _file_open(self):
         """File ▸ Open — pick a JSON document under $NB_HOME/Documents and load
@@ -3321,15 +3317,10 @@ class Calendar(nbapp.AppWindow):
         # same store the Tasks app and desktop widget read from. Guard it exactly
         # as File ▸ New does, and as the other document apps guard their Open, so
         # a stray file pick can never destroy built-up data without consent.
-        has_data = bool(self.events) or self._cal_names() != [DEFAULT_CAL["name"]]
-        if has_data and not self._confirm(
-                "Open Calendar File",
-                "Discard the current events and calendars and open this file?",
-                "Discard"):
-            return
         if not self._apply_document(data):
             self._flash_status("Unrecognized file")
             return
+        self.undo.checkpoint("Open Calendar File")
         self._doc_path = path
         # Authoritative write: Open replaces the whole store with this document,
         # so do NOT merge back the events it is replacing.
@@ -3337,6 +3328,7 @@ class Calendar(nbapp.AppWindow):
         self._populate_cal_list()
         self._refresh()
         self._flash_status("Opened " + os.path.basename(path))
+        self.undo.commit()
 
     def _file_dialog(self, title, action_label, default_name, on_pick):
         """Finder-style file picker over $NB_HOME/Documents, unified with the

@@ -1387,13 +1387,6 @@ class Novel(nbapp.AppWindow):
         file, is discarded without prompting."""
         self._close_style()
         self._close_prompt()
-        if self.doc_path is None and self._has_content():
-            self._confirm(
-                "Discard this manuscript?",
-                "This manuscript has not been saved to a file. Starting a new "
-                "one will discard it.",
-                "Discard", self._do_file_new)
-            return
         self._do_file_new()
 
     def _do_file_new(self):
@@ -1464,13 +1457,6 @@ class Novel(nbapp.AppWindow):
         """Load a manuscript JSON file, confirming first when doing so would
         discard an unsaved, unbound manuscript (whose only copy is the
         session-recovery file that opening overwrites)."""
-        if self.doc_path is None and self._has_content():
-            self._confirm(
-                "Discard this manuscript?",
-                "This manuscript has not been saved to a file. Opening another "
-                "will discard it.",
-                "Discard", lambda: self._do_open_path(path))
-            return
         self._do_open_path(path)
 
     def _do_open_path(self, path):
@@ -2289,12 +2275,7 @@ class Novel(nbapp.AppWindow):
         idx = self.active
         ch = self.chapters[idx]
         title = ch.get("title", "").strip() or ("Chapter " + str(ch["num"]))
-        self._confirm(
-            "Delete chapter?",
-            # Undoable now, and the confirm says so — the old wording sent a
-            # writer looking for a backup that does not exist.
-            _t("Delete “%s”? Its text will be removed.") % title,
-            "Delete", lambda: self._delete_chapter(idx))
+        self._delete_chapter(idx)
 
     def _delete_chapter(self, i):
         """Remove chapter `i`, drop its words from the running total, keep the
@@ -2375,11 +2356,7 @@ class Novel(nbapp.AppWindow):
             return
         n = sum(1 for c in self.chapters if c.get("part", 0) == pi)
         target = pi - 1 if pi > 0 else 1
-        msg = ("Delete %s? Its %d chapter%s will move to %s; no chapters are "
-               "deleted." % (self._part_label(pi), n, "" if n == 1 else "s",
-                             self._part_label(target)))
-        self._confirm("Delete part?", msg, "Delete",
-                      lambda: self._remove_part(pi))
+        self._remove_part(pi)
 
     def _remove_part(self, pi):
         """Delete part index `pi`, reassigning its chapters to the neighbouring
