@@ -49,7 +49,8 @@ class Probe(object):
     bare object. Only the display-side collaborators are stubbed."""
     for _m in ("_read_meta", "_read_flat", "_load_tasks", "_norm_task",
                "_overlay_flat", "_from_flat", "_adopt_orphan_lists",
-               "_load_state", "_save_tasks", "_open_doc"):
+               "_load_state", "_save_tasks", "_open_doc", "_delete_task",
+               "_toggle"):
         locals()[_m] = getattr(tasks.Tasks, _m)
     del _m
 
@@ -63,6 +64,15 @@ class Probe(object):
         pass
 
     def _flash(self, _text):
+        pass
+
+    def _close_task_menu(self):
+        pass
+
+    def _refresh(self):
+        pass
+
+    def _update_counts(self):
         pass
 
 
@@ -156,6 +166,46 @@ check("case 3: document opened", p4._open_doc(doc) is True)
 check("case 3: 'Garden' list recreated from the task", "Garden" in tasks.PROJ_COLOR)
 check("case 3: task still on its list",
       p4.tasks[0]["project"] == "Garden")
+
+try:
+    real_t = tasks._t
+    tasks._t = lambda s: "translated<%s>" % s
+    shown = tasks._display_date((2026, 8, 7, 0, 0, 0, 4, 0, -1))
+    check("dates are translated as one reorderable phrase",
+          shown == "translated<Friday, 7 August>")
+except AttributeError as exc:
+    check("dates are translated as one reorderable phrase", False)
+    print("[not reached: %s]" % exc)
+finally:
+    tasks._t = real_t
+
+# --- case 4: destructive task actions participate in OS undo ---------------
+p5 = Probe()
+p5.tasks = [dict(T_HOME), dict(T_WORK)]
+p5._flat_base = []
+p5._save_warned = False
+try:
+    import nbapp
+    p5._undo_snapshot = tasks.Tasks._undo_snapshot.__get__(p5, Probe)
+    p5._restore_undo_snapshot = tasks.Tasks._restore_undo_snapshot.__get__(p5, Probe)
+    p5.undo = nbapp.UndoHistory(p5._undo_snapshot, p5._restore_undo_snapshot)
+    p5.undo.reset()
+    p5._delete_task(0)
+    reached = p5.undo.undo()
+    restored = [t["title"] for t in p5.tasks]
+    check("case 4: undo restores a deleted task in its original order",
+          reached and restored == [T_HOME["title"], T_WORK["title"]])
+    p5._rows = {}
+    p5._toggle(None, 0)
+    completed = p5.tasks[0]["done"]
+    p5.undo.undo()
+    check("case 4: undo reverses completion without dropping the row",
+          completed is True and p5.tasks[0]["done"] is False
+          and len(p5.tasks) == 2)
+except AttributeError as exc:
+    check("case 4: undo restores a deleted task in its original order",
+          False)
+    print("[not reached: %s]" % exc)
 
 shutil.rmtree(HOME, ignore_errors=True)
 print("OK" if ok else "FAILURES")

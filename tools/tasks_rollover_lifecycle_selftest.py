@@ -69,6 +69,26 @@ try:
 finally:
     tasks.time.localtime = real_localtime
 
+# Date grouping is recomputed from the real civil date, including month ends;
+# completion does not mutate the due date, so a midnight crossing cannot file
+# a finished task under a false day.
+real_today = tasks._today
+try:
+    tasks._today = lambda: tasks.date(2026, 2, 28)
+    probe = tasks.Tasks.__new__(tasks.Tasks)
+    month_end = {"date": "2026-03-01", "due": "tomorrow"}
+    check(probe._due_of(month_end) == "tomorrow",
+          "month-end tomorrow is grouped by its calendar date")
+    tasks._today = lambda: tasks.date(2026, 3, 1)
+    check(probe._due_of(month_end) == "today",
+          "month-end due date rolls into today at midnight")
+    tasks._today = lambda: tasks.date(2026, 3, 2)
+    month_end["done"] = True
+    check(probe._due_of(month_end) == "overdue",
+          "completion across midnight does not falsify the due date")
+finally:
+    tasks._today = real_today
+
 
 win = tasks.Tasks.__new__(tasks.Tasks)
 win._closed = False

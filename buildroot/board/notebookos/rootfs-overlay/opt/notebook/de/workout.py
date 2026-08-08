@@ -22,6 +22,7 @@ meaning if the goal changes later. widgets.py reads this same file.
 """
 import os
 import time
+import copy
 
 import gi
 
@@ -62,6 +63,11 @@ MAX_REPS = 999
 def today_key(when=None):
     t = time.localtime(when) if when is not None else time.localtime()
     return "%04d-%02d-%02d" % (t.tm_year, t.tm_mon, t.tm_mday)
+
+
+def _display_date(lt):
+    """Translate the complete phrase so locales may reorder day/month fields."""
+    return _t("%s %d %s" % (DAY_NAMES[lt[6]], lt[2], MONTHS[lt[1] - 1]))
 
 
 # Consecutive-day arithmetic, shared with the desktop card so both count a
@@ -230,12 +236,15 @@ class Ring(Gtk.DrawingArea):
 
 class Workout(nbapp.AppWindow):
     app_name = "Workout"
-    menus = ("File", "Workout", "View")
+    menus = ("File", "Edit", "Workout", "View")
 
     def __init__(self):
         super().__init__()
         self.data = self._load()
         self.sel = 0 if self.data["exercises"] else -1
+        self.undo = nbapp.UndoHistory(self._undo_snapshot,
+                                      self._restore_undo_snapshot)
+        self.undo.reset()
         self._build()
         self._install_css()
         self._refresh()
@@ -322,6 +331,16 @@ class Workout(nbapp.AppWindow):
             # until a save succeeds, because the status strip is rewritten on
             # every refresh and a one-shot message would be wiped immediately.
             self._save_error = nbapp.save_failure_reason(exc, STORE)
+
+    def _undo_snapshot(self):
+        return {"data": copy.deepcopy(self.data), "sel": self.sel}
+
+    def _restore_undo_snapshot(self, state):
+        self.data = copy.deepcopy(state.get("data", {}))
+        self.sel = state.get("sel", -1)
+        self._save()
+        if hasattr(self, "list_box"):
+            self._refresh()
 
     def _stamp_today_goal(self):
         """Record what the goal IS today, so that once today is in the past it
@@ -667,8 +686,7 @@ class Workout(nbapp.AppWindow):
             self.list_box.remove(ch)
 
         lt = time.localtime()
-        self.datelbl.set_text("%s %d %s" % (_t(DAY_NAMES[lt.tm_wday]),
-                                            lt.tm_mday, _t(MONTHS[lt.tm_mon - 1])))
+        self.datelbl.set_text(_display_date(lt))
         done, goal = self._day_totals(today_key())
         self.score.set_text("%d/%d" % (done, goal) if goal else "0")
 
@@ -926,6 +944,7 @@ class Workout(nbapp.AppWindow):
                         _t("Delete \"%s\"? Sets already logged for it are "
                            "removed too.") % ex["name"], _t("Delete")):
             return
+        self.undo.checkpoint("Delete Exercise")
         eid = ex["id"]
         del self.data["exercises"][self.sel]
         for entry in self.data["log"].values():
@@ -933,6 +952,7 @@ class Workout(nbapp.AppWindow):
         self.data["log"] = {d: e for d, e in self.data["log"].items() if e}
         self.sel = min(self.sel, len(self.data["exercises"]) - 1)
         self._save()
+        self.undo.commit()
         self._refresh()
 
     def _clear_today(self):
@@ -941,9 +961,16 @@ class Workout(nbapp.AppWindow):
         if not _confirm(self, _t("Clear today"),
                         _t("Remove every set logged today?"), _t("Clear")):
             return
+        self.undo.checkpoint("Clear Today")
         self.data["log"].pop(today_key(), None)
         self._save()
+        self.undo.commit()
         self._refresh()
+
+    def _on_key(self, w, ev):
+        if hasattr(self, "undo") and nbapp.undo_keys(self.undo, ev):
+            return True
+        return super()._on_key(w, ev)
 
     def _toggle_widget(self):
         self.data["show_widget"] = not self.data.get("show_widget")
@@ -967,6 +994,8 @@ class Workout(nbapp.AppWindow):
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]
+        if name == "Edit":
+            return nbapp.undo_menu_items(self.undo)
         if name == "Workout":
             sets = self._sets_for(self._active()["id"]) if have else []
             return [

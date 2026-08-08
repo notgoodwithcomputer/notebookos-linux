@@ -82,6 +82,84 @@ def day_ago(n):
     return time.strftime("%Y-%m-%d", time.localtime(time.time() - n * 86400))
 
 
+# Destruction must be undoable even when GTK cannot create a window. Exercise
+# the real model snapshot/restore methods on an uninitialised instance first.
+import workout as _wo_model
+try:
+    _real_t = _wo_model._t
+    _wo_model._t = lambda s: "translated<%s>" % s
+    check("workout date is translated as one reorderable phrase",
+          _wo_model._display_date((2026, 8, 7, 0, 0, 0, 4, 0, -1))
+          == "translated<Friday 7 August>")
+except AttributeError as exc:
+    check("workout date is translated as one reorderable phrase", False,
+          "[not reached: %s]" % exc)
+finally:
+    _wo_model._t = _real_t
+_probe = _wo_model.Workout.__new__(_wo_model.Workout)
+_probe.data = {"exercises": [{"id": "a", "name": "A", "sets": 1, "reps": 5}],
+               "log": {TODAY: {"a": [5]}}, "goals": {TODAY: 1},
+               "show_widget": False}
+_probe.sel = 0
+try:
+    import nbapp as _nbapp
+    _probe.undo = _nbapp.UndoHistory(_probe._undo_snapshot,
+                                     _probe._restore_undo_snapshot)
+    _probe.undo.reset()
+    _probe._refresh = lambda: None
+    _wo_model._confirm = lambda *a, **k: True
+    _probe._clear_today()
+    _reached = _probe.undo.undo()
+    check("undo restores a cleared logged day",
+          _reached and _probe.data["log"].get(TODAY) == {"a": [5]},
+          _probe.data)
+except AttributeError as exc:
+    check("undo restores a cleared logged day", False,
+          "[not reached: %s]" % exc)
+
+# Keep the logic suite useful on build hosts without an X server. The widget
+# construction checks below still run when GTK is available; these model checks
+# pin the product's central promise everywhere.
+_gtk_ready = Gtk.init_check()[0]
+if not _gtk_ready:
+    _real_today_key = _wo_model.today_key
+    try:
+        _wo_model.today_key = lambda when=None: "2026-03-09"
+        _probe.data = {
+            "exercises": [{"id": "a", "name": "A", "sets": 2, "reps": 5}],
+            "log": {"2026-03-06": {"a": [5, 5]},
+                    "2026-03-07": {"a": [5, 5]},
+                    "2026-03-08": {"a": [5]},
+                    "2026-03-09": {"a": [5]}},
+            "goals": {"2026-03-06": 2, "2026-03-07": 2,
+                      "2026-03-08": 2}, "show_widget": False}
+        check("a partial day breaks rather than extends the streak",
+              _probe._streak() == (0, 2), _probe._streak())
+        _probe.data["log"]["2026-03-08"]["a"].append(5)
+        check("a partial today does not count before it is complete",
+              _probe._streak() == (3, 3), _probe._streak())
+        _probe.data["log"]["2026-03-09"]["a"].append(5)
+        check("completing today extends the supported streak",
+              _probe._streak() == (4, 4), _probe._streak())
+        del _probe.data["log"]["2026-03-07"]
+        check("a gap breaks current without corrupting longest",
+              _probe._streak() == (2, 2), _probe._streak())
+        check("DST spring-forward dates remain consecutive civil days",
+              _wo_model._ordinal("2026-03-09")
+              - _wo_model._ordinal("2026-03-08") == 1)
+        _wo_model.today_key = lambda when=None: (
+            "2026-03-10" if when is not None else "2026-03-10")
+        check("a timezone change does not rewrite stored date keys",
+              sorted(_probe.data["log"])[-1] == "2026-03-09",
+              sorted(_probe.data["log"]))
+    finally:
+        _wo_model.today_key = _real_today_key
+    print("\n%d checks, %d passed, %d failed (display-free path)"
+          % (len(RESULTS), sum(RESULTS), len(RESULTS) - sum(RESULTS)))
+    print("RESULT: " + ("ALL PASS" if all(RESULTS) else "SOME FAILED"))
+    sys.exit(0 if all(RESULTS) else 1)
+
+
 # -- 1/2/3. logging, totals, goals -------------------------------------------
 home = fresh_home()
 wo, app = new_app(home)

@@ -17,6 +17,7 @@ from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
 import os
 import re
 import json
+import copy
 import time
 from datetime import date, timedelta
 
@@ -126,6 +127,11 @@ DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
         "Saturday", "Sunday"]
 
 
+def _display_date(lt):
+    """A whole local date phrase, so nbi18n may reorder it for CJK locales."""
+    return _t("%s, %d %s" % (DAYS[lt[6]], lt[2], MONTHS[lt[1] - 1]))
+
+
 def _build_when_tokens():
     """The words the quick-add's '>' token accepts, in English AND in the
     language the app is running in — the tooltip promises '>friday' in English
@@ -175,6 +181,9 @@ class Tasks(nbapp.AppWindow):
         # lists into PROJECTS. Nothing is seeded — a fresh install loads to an
         # empty model; falls back cleanly on a missing/foreign/legacy file.
         self._load_state()
+        self.undo = nbapp.UndoHistory(self._undo_snapshot,
+                                      self._restore_undo_snapshot)
+        self.undo.reset()
 
         self._body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self._body.set_hexpand(True); self._body.set_vexpand(True)
@@ -369,8 +378,8 @@ class Tasks(nbapp.AppWindow):
         if d == now:
             return ""
         note = "%s %d %s" % (DAYS[d.weekday()][:3], d.day,
-                             MONTHS[d.month - 1][:3])
-        return note if d.year == now.year else "%s %d" % (note, d.year)
+                              MONTHS[d.month - 1][:3])
+        return _t(note if d.year == now.year else "%s %d" % (note, d.year))
 
     def _overlay_flat(self, tasks, flat):
         """Reflect the shared flat file onto the rich model: the widget can tick
@@ -623,6 +632,25 @@ class Tasks(nbapp.AppWindow):
                 except Exception:
                     pass
 
+    def _undo_snapshot(self):
+        return {"tasks": copy.deepcopy(self.tasks),
+                "projects": copy.deepcopy(PROJECTS),
+                "view": self.view}
+
+    def _restore_undo_snapshot(self, state):
+        self.tasks = copy.deepcopy(state.get("tasks", []))
+        PROJECTS[:] = copy.deepcopy(state.get("projects", []))
+        PROJ_COLOR.clear()
+        PROJ_COLOR.update(PROJECTS)
+        self.view = state.get("view", "view:today")
+        if self.view.startswith("proj:") and self.view[5:] not in PROJ_COLOR:
+            self.view = "view:today"
+        self._save_tasks()
+        if hasattr(self, "_body"):
+            self._rebuild_sidebar()
+        elif hasattr(self, "listbox"):
+            self._refresh()
+
     def _on_destroy(self, *_):
         # Idempotent: GTK can emit "destroy" more than once through nested
         # teardown paths, and a second pass must not remove a source id that has
@@ -655,6 +683,8 @@ class Tasks(nbapp.AppWindow):
                                             or self._close_clearcard()
                                             or self._close_newlist()
                                             or self._close_removelist()):
+            return True
+        if hasattr(self, "undo") and nbapp.undo_keys(self.undo, ev):
             return True
         return super()._on_key(w, ev)
 
@@ -818,6 +848,8 @@ class Tasks(nbapp.AppWindow):
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]
+        if name == "Edit":
+            return nbapp.undo_menu_items(self.undo)
         if name == "View":
             def mk(vid, label):
                 mark = "•  " if self.view == vid else "    "
@@ -1448,9 +1480,12 @@ class Tasks(nbapp.AppWindow):
         # model, persist, then update just this row's widgets in place plus the
         # running counts. Structural ops (add/delete/quick-add/view switch) keep
         # using _refresh().
+        self.undo.checkpoint("Complete Task" if not self.tasks[idx]["done"]
+                             else "Reopen Task")
         done = not self.tasks[idx]["done"]
         self.tasks[idx]["done"] = done
         self._save_tasks()
+        self.undo.commit()
         handles = getattr(self, "_rows", {}).get(idx)
         if handles is None:
             # No cached widgets for this idx (shouldn't happen — the clicked row
@@ -1612,8 +1647,10 @@ class Tasks(nbapp.AppWindow):
         self._close_task_menu()
         if not (0 <= idx < len(self.tasks)):
             return
+        self.undo.checkpoint("Delete Task")
         del self.tasks[idx]
         self._save_tasks()
+        self.undo.commit()
         self._refresh()
 
     def _open_rename(self, idx):
@@ -1794,8 +1831,10 @@ class Tasks(nbapp.AppWindow):
         """Drop every done task (kept non-done ones untouched), persist, refresh.
         Reached only through the confirm card above."""
         self._close_clearcard()
+        self.undo.checkpoint("Clear Completed")
         self.tasks = [t for t in self.tasks if not t.get("done")]
         self._save_tasks()
+        self.undo.commit()
         self._refresh()
 
     def _do_refresh(self):
@@ -2147,7 +2186,7 @@ class Tasks(nbapp.AppWindow):
         box.set_margin_top(20); box.set_margin_bottom(26)
         box.set_margin_start(32); box.set_margin_end(32)
 
-        title = Gtk.Label(label="%s %d" % (MONTHS[now.tm_mon - 1], now.tm_year),
+        title = Gtk.Label(label=_t("%s %d" % (MONTHS[now.tm_mon - 1], now.tm_year)),
                           xalign=0)
         title.get_style_context().add_class("minititle")
         title.set_margin_bottom(12)
@@ -2247,8 +2286,7 @@ class Tasks(nbapp.AppWindow):
         now = time.localtime()
         # header
         if self.view == "view:today":
-            eb, ti = "Today", "%s, %d %s" % (
-                DAYS[now.tm_wday], now.tm_mday, MONTHS[now.tm_mon - 1])
+            eb, ti = "Today", _display_date(now)
         elif self.view == "view:upcoming":
             # Matches what this view actually holds — the Tomorrow and This
             # Week groups. "The next two weeks" promised a range the view has
