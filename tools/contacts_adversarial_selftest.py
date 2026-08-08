@@ -161,8 +161,86 @@ def damaged_store_and_undo_checks():
           deleted and app.people == [person])
 
 
+def debounce_window_checks():
+    """Drive the 130ms two-answers window without needing a display."""
+    class Entry:
+        def __init__(self, text):
+            self.text = text
+
+        def get_text(self):
+            return self.text
+
+    next_id = [40]
+    old_add, old_remove = contacts.GLib.timeout_add, contacts.GLib.source_remove
+    contacts.GLib.timeout_add = lambda _ms, _cb: next_id.__setitem__(0, next_id[0] + 1) or next_id[0]
+    contacts.GLib.source_remove = lambda _source_id: True
+    try:
+        app = contacts.Contacts.__new__(contacts.Contacts)
+        app._closed = False
+        app._search_timer = 0
+        app.people = [contacts.normalize_person({"name": "Alice"}),
+                      contacts.normalize_person({"name": "Bob"})]
+        app.active = 0
+        app.search_text = ""
+        rendered = []
+        selected = []
+        app._rebuild_list = lambda: rendered.__setitem__(
+            slice(None), [i for i, _p in app._visible_order_pairs()])
+        app._select = lambda i: (selected.append(i), setattr(app, "active", i))
+
+        # Apply "Alice", then clear the raw entry and act before its timer fires.
+        entry = Entry("Alice")
+        app._on_search(entry)
+        app._search_timeout()
+        entry.text = ""
+        app._on_search(entry)
+        app._step(1)
+        check("contacts debounce: keyboard step flushes cleared search before selecting",
+              rendered == [0, 1] and selected == [1],
+              "guarded reads rendered=%r selected=%r timer=%r query=%r"
+              % (rendered, selected, app._search_timer, app.search_text))
+
+        # Enter is the other filter-derived selection operation.  Change from
+        # the full list to Bob and activate before the timer: Bob must be drawn
+        # before activation selects him.
+        rendered[:] = [0, 1]
+        selected[:] = []
+        entry.text = "Bob"
+        app._on_search(entry)
+        app._on_search_activate()
+        check("contacts debounce: search activate flushes changed search before selecting",
+              rendered == [1] and selected == [1],
+              "guarded reads rendered=%r selected=%r timer=%r query=%r"
+              % (rendered, selected, app._search_timer, app.search_text))
+
+        # PASS-MUTANT: the former shortcut consults parsed state while the rows
+        # still answer the previous filter, selecting an invisible card.
+        rendered[:] = [0]
+        selected[:] = []
+        app.active = 0
+        app.search_text = ""
+        app._search_timer = 99
+        order = [i for i, _p in app._visible_order_pairs()]
+        app._select(order[(order.index(app.active) + 1) % len(order)])
+        check("PASS-MUTANT contacts debounce guard catches parsed-only keyboard step",
+              rendered == [0] and selected == [1])
+
+        rendered[:] = [0, 1]
+        selected[:] = []
+        app.search_text = "Bob"
+        app._search_timer = 100
+        order = app._visible_order_pairs()
+        app._select(order[0][0])
+        check("PASS-MUTANT contacts debounce guard catches parsed-only search activate",
+              rendered == [0, 1] and selected == [1])
+    finally:
+        contacts.GLib.timeout_add = old_add
+        contacts.GLib.source_remove = old_remove
+
+
 birthday_checks()
 record_checks()
 damaged_store_and_undo_checks()
+debounce_window_checks()
 print("\n%d/%d checks passed" % (passed, passed + failed))
 raise SystemExit(1 if failed else 0)

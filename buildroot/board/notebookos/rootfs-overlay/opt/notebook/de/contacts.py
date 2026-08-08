@@ -1133,6 +1133,20 @@ class Contacts(nbapp.AppWindow):
         self._rebuild_list()
         return False   # one-shot
 
+    def _flush_pending_search(self):
+        """Make the rendered rows answer the current entry before an action
+        derives a target from the filter.  During the typing debounce,
+        search_text is already current but the list still answers the previous
+        query; navigation must never select a row the user cannot yet see."""
+        if not self._search_timer:
+            return False
+        GLib.source_remove(self._search_timer)
+        self._search_timer = 0
+        if self._closed:
+            return False
+        self._rebuild_list()
+        return True
+
     def _focus_search(self):
         """Ctrl+F / View ▸ Find — put the caret in the search field, wherever
         focus happens to be. The same command Journal and Academics bind."""
@@ -1168,6 +1182,7 @@ class Contacts(nbapp.AppWindow):
     def _on_search_activate(self, *_):
         """Enter in the search box jumps to the first matching card, using the
         same filter/sort order as the visible list. No-op when nothing matches."""
+        self._flush_pending_search()
         order = self._visible_order_pairs()
         if order:
             self._select(order[0][0])
@@ -1588,6 +1603,7 @@ class Contacts(nbapp.AppWindow):
     def _step(self, delta):
         """Select the next/previous card in the visible (filtered, sorted)
         order. Safe when the list is empty."""
+        self._flush_pending_search()
         order = [i for i, _ in self._visible_order_pairs()]
         if not order:
             return
