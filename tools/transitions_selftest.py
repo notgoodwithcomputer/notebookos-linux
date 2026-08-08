@@ -653,6 +653,68 @@ def test_settings_uses_the_primitive():
           "setpane" in src and src.count(".setpane {") == 1)
 
 
+def test_grow_card(m, t, clock):
+    """The anchored card (Article B): geometry is pure and exact, the origin
+    discipline is enforced, and instant/animated both land on the target."""
+    def run(host, seconds=0.30, steps=30):
+        for _ in range(steps):
+            clock.advance(seconds / steps)
+            host.tick()
+    # pure geometry
+    a, b = (10.0, 20.0, 4.0, 3.0), (0.0, 0.0, 100.0, 80.0)
+    check("interp_rect starts at the anchor", t.interp_rect(a, b, 0.0) == a)
+    check("interp_rect ends at the target", t.interp_rect(a, b, 1.0) == b)
+    mid = t.interp_rect(a, b, 0.5)
+    check("interp_rect is the midpoint at 0.5",
+          mid == (5.0, 10.0, 52.0, 41.5), str(mid))
+    areas = [t.interp_rect(a, b, x)[2] * t.interp_rect(a, b, x)[3]
+             for x in (0.0, 0.5, 1.0)]
+    check("the card only grows", areas[0] < areas[1] < areas[2])
+
+    # §B4 origin discipline: no anchor is a hard error, not a silent default
+    raised = False
+    try:
+        t.GrowCard(FakeWidget()).grow(None, b)
+    except ValueError:
+        raised = True
+    check("grow() refuses to present without an anchor", raised)
+
+    # instant path (Reduced Motion): lands on the target, fires once
+    set_policy(m, True, True)
+    host = FakeWidget()
+    fired = []
+    card = t.GrowCard(host)
+    card.grow(a, b, on_done=lambda ok: fired.append(ok))
+    check("instant grow lands at the target and fires",
+          card.rect() == b and fired == [True] and card.active)
+
+    # animated path: damage is a bounded rectangle, never the whole host
+    set_policy(m, False, True)
+    host = FakeWidget()
+    host.damage = []
+    host.queue_draw_area = lambda x, y, w, h: host.damage.append((x, y, w, h))
+    done = []
+    card = t.GrowCard(host)
+    card.grow(a, b, on_done=lambda ok: done.append(ok))
+    run(host)
+    check("animated grow completes at the target",
+          done == [True] and card.rect() == b)
+    biggest = max((w * h for (_x, _y, w, h) in host.damage), default=0)
+    check("grow damage is bounded, never the whole host",
+          0 < biggest <= 110 * 90, str(biggest))
+
+    # retract collapses back toward the anchor and deactivates
+    back = []
+    card.retract(on_done=lambda ok: back.append(ok))
+    run(host)
+    check("retract returns to the anchor and deactivates",
+          back == [True] and not card.active and card.rect() == a)
+
+    # paint is inert while inactive (safe to leave connected)
+    idle = t.GrowCard(FakeWidget())
+    check("paint draws nothing when inactive", idle.paint(object()) is False)
+
+
 def test_imports_without_gi():
     """The module must import and degrade to instant with no gi at all: tools/
     runs it headless and an app must never fail to import over a frame clock."""
@@ -721,6 +783,7 @@ def main():
     test_replace_instant(m, t)
     test_replace_animated(m, t, clock)
     test_highlight(t, sched)
+    test_grow_card(m, t, clock)
     test_no_per_frame_timer()
     test_no_layout_or_spring_animation()
     test_settings_uses_the_primitive()

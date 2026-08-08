@@ -668,3 +668,171 @@ def _remove_class(widget, css_class):
         ctx.remove_class(css_class)
     except Exception:                                             # noqa: BLE001
         pass
+
+
+# --------------------------------------------------------------------------
+# The anchored card (PAPER-PHYSICS Article B: nothing appears from nowhere)
+# --------------------------------------------------------------------------
+# A confirm card grows from the control that raised it; an About card drops
+# from its menu title; a picker grows from its menu item. All three are one
+# motion — a surface travelling between its ANCHOR's rectangle and its final
+# rectangle — and all three are the same shape as the app-launch card the
+# Finder already draws. This is that pattern, extracted so every app gets it
+# from one tested place instead of hand-rolling a fifth copy.
+#
+# It is PAINT, never allocation (F2): the card is drawn over the host by a
+# draw-after hook, growing from anchor to target and back, while the real
+# surface it introduces is built at full size beneath and revealed when the
+# growth lands. Damage follows the card's rectangle (F1). The origin
+# discipline of §B4 is enforced in code: grow() with no anchor raises, so a
+# call site that forgets where its surface came from cannot compile away the
+# question.
+
+
+def interp_rect(a, b, t):
+    """A rectangle t of the way from a to b, each (x, y, w, h). Pure."""
+    return tuple(a[i] + (b[i] - a[i]) * t for i in range(4))
+
+
+def widget_rect(widget, relative_to):
+    """`widget`'s allocation as (x, y, w, h) in `relative_to`'s coordinates,
+    or None if either is unrealized. The anchor-resolution both the confirm
+    and About call sites need, in one place."""
+    if Gtk is None or widget is None or relative_to is None:
+        return None
+    try:
+        at = widget.translate_coordinates(relative_to, 0, 0)
+        if at is None:
+            return None
+        alloc = widget.get_allocation()
+        return (float(at[0]), float(at[1]),
+                float(max(1, alloc.width)), float(max(1, alloc.height)))
+    except Exception:                                             # noqa: BLE001
+        return None
+
+
+class GrowCard:
+    """A card that grows from an anchor rectangle to a target and retracts.
+
+    `host` is the widget the card is painted over — it must emit `draw` and
+    accept `queue_draw_area`; the caller connects `host`'s draw-after signal
+    to `paint`. `on_paint(cr, rect, t)` draws the card's content for the
+    current rectangle and progress; a caller that only wants the default
+    paper-and-hairline card omits it.
+
+    The lifecycle mirrors nbmotion's own guarantees: instant when policy says
+    still (the card lands at the target and `on_done(True)` runs before grow()
+    returns), one animation retargets the next, nothing fires after the host
+    dies.
+    """
+
+    def __init__(self, host, on_paint=None):
+        self.host = host
+        self.on_paint = on_paint
+        self.active = False
+        self._t = 0.0
+        self._anchor = self._target = (0.0, 0.0, 1.0, 1.0)
+        self._scalar = None
+
+    def _damage(self, t):
+        # the union of anchor and target always covers the current rect, so a
+        # single fixed damage rectangle per grow suffices and never repaints
+        # the whole host
+        a, b = self._anchor, self._target
+        x = min(a[0], b[0]) - 2
+        y = min(a[1], b[1]) - 2
+        w = max(a[0] + a[2], b[0] + b[2]) - x + 4
+        h = max(a[1] + a[3], b[1] + b[3]) - y + 4
+        return (x, y, w, h)
+
+    def _frame(self, t):
+        self._t = t
+        if self.host is None:
+            return
+        try:
+            x, y, w, h = self._damage(t)
+            self.host.queue_draw_area(int(x), int(y), int(w), int(h))
+        except Exception:                                         # noqa: BLE001
+            pass
+
+    def rect(self):
+        return interp_rect(self._anchor, self._target, self._t)
+
+    def grow(self, anchor, target, on_done=None):
+        """Grow a card from `anchor` to `target`, each (x, y, w, h) in host
+        coordinates. `anchor` is REQUIRED — §B4: a surface must name where it
+        came from."""
+        if anchor is None:
+            raise ValueError("GrowCard.grow needs an anchor (Article B): a "
+                             "surface may not appear from nowhere")
+        self._anchor = tuple(float(v) for v in anchor)
+        self._target = tuple(float(v) for v in target)
+        self.active = True
+        if nbmotion is None:
+            self._t = 1.0
+            self._fire(on_done, True)
+            return self
+        if self._scalar is None:
+            self._scalar = nbmotion.Scalar(
+                widget=self.host, value=0.0, on_frame=self._frame,
+                duration=nbmotion.PAGE, easing=nbmotion.EASE_OUT)
+        self._t = 0.0
+        self._scalar.jump_to(0.0)
+        self._scalar.animate_to(1.0, duration=nbmotion.PAGE,
+                                easing=nbmotion.EASE_OUT, on_done=on_done)
+        return self
+
+    def retract(self, on_done=None):
+        """Collapse back into the anchor (§B3: departure retraces arrival)."""
+        if not self.active:
+            self._fire(on_done, True)
+            return self
+        if nbmotion is None or self._scalar is None:
+            self._t = 0.0
+            self.active = False
+            self._fire(on_done, True)
+            return self
+
+        def _done(ok):
+            self.active = False
+            self._frame(0.0)
+            self._fire(on_done, ok)
+
+        self._scalar.animate_to(0.0, duration=nbmotion.SURFACE_OUT,
+                                easing=nbmotion.EASE_IN, on_done=_done)
+        return self
+
+    def clear(self):
+        if self._scalar is not None:
+            self._scalar.cancel()
+        self.active = False
+
+    def paint(self, cr):
+        """Call from the host's draw-after handler. Draws nothing when the
+        card is not active, so it is safe to leave connected."""
+        if not self.active:
+            return False
+        rect = self.rect()
+        if self.on_paint is not None:
+            self.on_paint(cr, rect, self._t)
+            return False
+        x, y, w, h = rect
+        try:
+            cr.set_source_rgb(0.988, 0.984, 0.973)      # paper
+            cr.rectangle(x, y, w, h)
+            cr.fill()
+            cr.set_source_rgb(0.788, 0.769, 0.714)      # hairline
+            cr.set_line_width(1)
+            cr.rectangle(x + 0.5, y + 0.5, w - 1, h - 1)
+            cr.stroke()
+        except Exception:                                         # noqa: BLE001
+            pass
+        return False
+
+    @staticmethod
+    def _fire(on_done, completed):
+        if on_done is not None:
+            try:
+                on_done(bool(completed))
+            except Exception:                                     # noqa: BLE001
+                pass
