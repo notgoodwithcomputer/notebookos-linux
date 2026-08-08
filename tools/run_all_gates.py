@@ -75,7 +75,7 @@ CHECK_GATES = [
     "frame_pacing_check", "grid_check", "image_capability_check",
     "jargon_sweep",
     "language_content_check", "menu_conformance_check", "minsize_sweep",
-    "motion_inventory_check", "picom_conf_check",
+    "motion_inventory_check", "picom_conf_check", "rtl_check",
     "self_attr_audit", "term_consistency_check", "voice_check",
 ]
 PER_TEST_TIMEOUT = 300

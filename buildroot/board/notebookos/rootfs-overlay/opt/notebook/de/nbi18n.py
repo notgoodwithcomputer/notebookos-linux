@@ -38,6 +38,39 @@ LANG_NAMES = {"en": "English", "de": "Deutsch", "eo": "Esperanto",
 # is why apps ask nbi18n rather than hard-coding it (see nbapp.apply_direction).
 RTL = {"yi"}
 
+
+def ltr(s):
+    """Keep a SIGNED or unit-prefixed figure together in an RTL interface.
+
+    A leading "+"/"−"/"$"/"%"/"(" is a bidi-WEAK character; the digits after it
+    are a run of European numerals, so the Unicode bidi algorithm resolves the
+    weak char to the paragraph direction and lays it on the far side. Measured
+    under yi (the one RTL language, RTL above): a label holding "+$1,105.00"
+    has Pango draw "$1,105.00+", and a debit "−$950.00" draws "$950.00−". In a
+    ledger the sign is the only thing on the row that says which way the money
+    went, so this is correctness, not cosmetics — and it was invisible for
+    months because GTK mirrors the CONTAINERS correctly (the screenshot looks
+    right) and the UNSIGNED figures are unaffected.
+
+    U+2066 LEFT-TO-RIGHT ISOLATE .. U+2069 POP DIRECTIONAL ISOLATE keeps the
+    whole thing one left-to-right run with the weak char attached, and unlike
+    an LRM it cannot leak its direction into the surrounding text. Gated on the
+    direction ACTUALLY IN FORCE (what Pango lays out against), not the language
+    name — so in the other sixteen languages it returns the string byte for
+    byte, which is what makes it safe to apply everywhere. Escapes, not literal
+    invisibles: a U+2066 sitting in source is a hazard to the next reader and
+    to grep. (Promoted from accounting's _ltr, 2026-08-09; app-improve's find.)
+    """
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk
+        if Gtk.Widget.get_default_direction() != Gtk.TextDirection.RTL:
+            return s
+    except Exception:                                             # noqa: BLE001
+        return s
+    return "\u2066" + s + "\u2069"
+
 # X keyboard layouts (setxkbmap). A layout string may name TWO layouts, e.g.
 # "ru,us" — the first is active at login and Alt+Shift switches (see
 # apply_keyboard). That matters for any script whose keyboard cannot type ASCII:
