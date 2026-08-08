@@ -143,8 +143,8 @@ def main():
         else WIN.calls.append(argv[0]) or FakeCompleted())
     WIN._eject(MOUNT)
     pump(1.0)
-    check(WIN.status_text and "busy" in WIN.status_text,
-          "the drive's own reason reaches the user: %r" % WIN.status_text)
+    check(WIN.status_text == "The drive could not be removed safely.",
+          "raw umount stderr stays out of the UI: %r" % WIN.status_text)
 
     print()
     if FAILURES:

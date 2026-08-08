@@ -1585,8 +1585,8 @@ class Finder(Gtk.Window):
             r = subprocess.run(["umount", mnt], capture_output=True, timeout=15)
             ok = (r.returncode == 0)
             err = (r.stderr or b"").decode(errors="replace").strip()
-        except Exception as e:
-            ok, err = False, str(e)
+        except Exception:
+            ok, err = False, ""
         GLib.idle_add(self._eject_done, mnt, ok, err)
 
     def _eject_done(self, mnt, ok, err):
@@ -1594,8 +1594,9 @@ class Finder(Gtk.Window):
         if ok:
             self._flash_status(_t("Safe to remove the drive"))
         else:
-            self._flash_status(_t("Could not eject: %s")
-                               % (err or _t("the drive is in use")))
+            # umount's stderr can contain errno jargon and absolute device or
+            # mount paths.  It is diagnostic output, not safe interface text.
+            self._flash_status(_t("The drive could not be removed safely."))
         self._fill_sidebar()
         return False
 

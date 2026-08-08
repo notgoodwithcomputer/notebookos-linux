@@ -1338,9 +1338,12 @@ class Screenplay(nbapp.AppWindow):
         except Exception:
             self._flash("Print failed")
             return
-        nbprint.print_document(
-            self, lambda p: nbprint.simple_pdf(p, page_count, draw),
-            job_name="Screenplay")
+        try:
+            nbprint.print_document(
+                self, lambda p: nbprint.simple_pdf(p, page_count, draw),
+                job_name="Screenplay")
+        except Exception:
+            self._flash("Print failed")
 
     def _zine_print(self):
         """Impose the script as a 5.5x8.5 saddle-stitch booklet and print it."""
@@ -1349,9 +1352,12 @@ class Screenplay(nbapp.AppWindow):
         except Exception:
             self._flash("Print failed")
             return
-        nbprint.print_booklet(
-            self, lambda p: nbprint.booklet_pdf(p, page_count, draw),
-            job_name="Screenplay")
+        try:
+            nbprint.print_booklet(
+                self, lambda p: nbprint.booklet_pdf(p, page_count, draw),
+                job_name="Screenplay")
+        except Exception:
+            self._flash("Print failed")
 
     def _export_pdf(self):
         """Write the script to a PDF the user picks (default under Documents)."""

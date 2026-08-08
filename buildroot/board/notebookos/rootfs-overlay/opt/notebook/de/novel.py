@@ -2043,7 +2043,10 @@ class Novel(nbapp.AppWindow):
         def make_pdf(path):
             return nbprint.booklet_pdf(path, count, self._draw_page,
                                         fold_line=True)
-        nbprint.print_booklet(self, make_pdf, "Novel")
+        try:
+            nbprint.print_booklet(self, make_pdf, "Novel")
+        except Exception:
+            self._set_save_error("Print failed")
 
     # ============================ FORMATTING ============================
     def _on_fmt(self, _btn, cmd):
