@@ -25,6 +25,7 @@ import tempfile
 import nbicons
 import nbapp  # for nudge_paint (swrast first-paint flush)
 import nbstate  # navigation generations + stable-identity restoration
+import nbmotion       # the frame-clock driver + policy for the navigation slide
 import nbtransitions  # direction vocabulary shared with the rest of the OS
 try:
     import nbmotion  # launch-card motion; None means instant (headless/stripped)
@@ -904,6 +905,28 @@ class Finder(Gtk.Window):
             overlay.set_overlay_pass_through(self._empty_label, True)
         except (AttributeError, TypeError):
             pass
+        # nbmotion-inventory: finder.navigate-back
+        # nbmotion-inventory: finder.navigate-forward
+        # A Back/Forward navigation SLIDES the outgoing listing off in the
+        # direction of travel, revealing the freshly-loaded listing beneath it
+        # (paper moving along the grid). It is PAINT on a pass-through
+        # DrawingArea over the content, never an allocation (F2): the real views
+        # are repopulated instantly underneath and the OUTGOING snapshot is drawn
+        # sliding out. Under policy-still the slide is skipped and the new
+        # listing simply appears -- instant-equivalent (nbmotion.Scalar's own
+        # contract), and any capture/draw failure falls back to that same swap.
+        self._content_overlay = overlay
+        self._nav_da = Gtk.DrawingArea()
+        self._nav_da.set_no_show_all(True)
+        self._nav_da.connect("draw", self._nav_draw)
+        overlay.add_overlay(self._nav_da)
+        try:
+            overlay.set_overlay_pass_through(self._nav_da, True)
+        except (AttributeError, TypeError):
+            pass
+        self._nav_slide = None       # (surface, w, h, sign) while a slide runs
+        self._nav_v = 0.0            # 0..1 progress of the outgoing slide
+        self._nav_gen = 0            # drops the frames of a superseded slide
         main.pack_start(overlay, True, True, 0)
         self.status = Gtk.Label(xalign=0)
         self.status.get_style_context().add_class("statusbar")
@@ -1791,6 +1814,87 @@ class Finder(Gtk.Window):
             return os.path.normpath(rel)
         return os.path.normpath(os.path.join(HOME, rel))
 
+    # ---- Back/Forward slide (finder.navigate-back / finder.navigate-forward) --
+    def _snapshot_content(self):
+        """The content area as an ImageSurface for the OUTGOING half of a
+        navigation slide, or None if it cannot be captured (not mapped yet, no
+        cairo, zero size). Captured BEFORE the store is repopulated, so it holds
+        the listing being navigated away from. Any failure returns None, which
+        the caller reads as 'no slide' -- the current instant swap still runs."""
+        w = getattr(self, "_content_overlay", None)
+        if w is None:
+            return None
+        try:
+            if not w.get_mapped():
+                return None
+            aw = int(w.get_allocated_width())
+            ah = int(w.get_allocated_height())
+            if aw <= 0 or ah <= 0:
+                return None
+            import cairo
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, aw, ah)
+            w.draw(cairo.Context(surface))
+            return surface, aw, ah
+        except Exception:                                             # noqa: BLE001
+            return None
+
+    def _nav_draw(self, _da, cr):
+        """Paint the outgoing snapshot at its current slide offset, over the new
+        content the overlay has already drawn beneath it."""
+        # getattr, not self._nav_slide: a draw can in principle reach the layer
+        # before __init__ finished setting the slide state (finder deliberately
+        # tolerates a teardown mid-construction), and a crash in a draw handler
+        # is a defect, not a glitch.
+        s = getattr(self, "_nav_slide", None)
+        if not s:
+            return False
+        surface, w, _h, sign = s
+        try:
+            cr.set_source_surface(surface, sign * self._nav_v * w, 0)
+            cr.paint()
+        except Exception:                                             # noqa: BLE001
+            pass
+        return False
+
+    def _start_nav_slide(self, snap, sign):
+        """Slide the captured snapshot off by `sign` (+1 = right, for Back;
+        -1 = left, for Forward), revealing the new listing beneath. A newer
+        navigation supersedes this one through the generation counter. Instant-
+        equivalent: policy-still lands nav_v at 1 and hides the layer at once."""
+        surface, w, h = snap
+        self._nav_gen += 1
+        gen = self._nav_gen
+        self._nav_slide = (surface, w, h, float(sign))
+        self._nav_v = 0.0
+        try:
+            self._nav_da.show()
+        except Exception:                                             # noqa: BLE001
+            pass
+
+        def _frame(v):
+            if gen != self._nav_gen:
+                return                # a newer navigation owns the slide now
+            self._nav_v = v
+            try:
+                if self._nav_da.get_mapped():
+                    self._nav_da.queue_draw()
+            except Exception:                                         # noqa: BLE001
+                pass
+
+        def _done(_ok):
+            if gen != self._nav_gen:
+                return                # superseded; the newer slide owns cleanup
+            self._nav_slide = None
+            self._nav_v = 0.0
+            try:
+                self._nav_da.hide()
+            except Exception:                                         # noqa: BLE001
+                pass
+
+        nbmotion.animate(self._nav_da, _frame, 0.0, 1.0,
+                         duration=nbtransitions.PAGE, easing=nbmotion.MOVE,
+                         on_done=_done)
+
     def load(self, rel, record=True, keep_filter=False):
         # Where the person was in the folder they are leaving, so a Back — or a
         # refresh of this same folder — can put them back on the item they had
@@ -1806,6 +1910,17 @@ class Finder(Gtk.Window):
         if direction == nbtransitions.NONE and rel == getattr(self, "rel", None):
             direction = nbtransitions.CROSSFADE
         self._nav_dir = nbtransitions.NONE     # consumed; the next move sets it
+        # Capture the outgoing listing BEFORE anything changes it, so a
+        # Back/Forward move can slide it off (finder.navigate-*). Only real
+        # directional moves slide, and only when motion is live -- otherwise the
+        # snapshot render would be wasted on an instant swap.
+        pending_slide = None
+        if (direction in (nbtransitions.BACK, nbtransitions.FORWARD)
+                and nbmotion.policy(nbtransitions.PAGE) > 0):
+            _snap = self._snapshot_content()
+            if _snap is not None:
+                pending_slide = (_snap,
+                                 1.0 if direction == nbtransitions.BACK else -1.0)
         # a real navigation clears any active search; a search-driven reload
         # keeps it (keep_filter=True).
         if not keep_filter and self._filter:
@@ -1900,6 +2015,9 @@ class Finder(Gtk.Window):
         except OSError:
             pass
         self._populate_store()
+        # The new listing is in the store now; slide the captured old one off it.
+        if pending_slide is not None:
+            self._start_nav_slide(*pending_slide)
 
         if restores_place(direction):
             token = self._dirgen.token()
@@ -2009,17 +2127,26 @@ class Finder(Gtk.Window):
         # this is idempotent, and _closed is set FIRST: a repeating callback
         # that fires between here and the last source_remove must drop out
         # rather than touch widgets that are being torn down.
+        #
+        # Gtk also fires destroy on a window whose __init__ RAISED partway
+        # through, so any attribute this touches may never have been set. The
+        # source-id helpers already read through getattr; _wide_gen, _dirgen and
+        # _dir_reload_id are guarded the same way, so a teardown-mid-construction
+        # closes cleanly instead of raising AttributeError over a half-built
+        # window (finder_lifecycle / finder_poll_lifecycle).
         if getattr(self, "_closed", False):
             return
         self._closed = True
-        self._wide_gen += 1
+        self._wide_gen = getattr(self, "_wide_gen", 0) + 1
         self._stop_source("_wide_id")
         self._stop_source("_typeahead_id")
         self._stop_source("_dev_poll_id")
         self._stop_source("_app_poll_id")
         self._cancel_app_flag_monitor()
-        self._dirgen.close()
-        if self._dir_reload_id:
+        dirgen = getattr(self, "_dirgen", None)
+        if dirgen is not None:
+            dirgen.close()
+        if getattr(self, "_dir_reload_id", 0):
             try:
                 GLib.source_remove(self._dir_reload_id)
             except Exception:
