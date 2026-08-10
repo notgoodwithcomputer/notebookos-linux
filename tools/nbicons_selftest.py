@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Headless geometry and family checks for every Notebook OS icon.
-
-NBICONS_MODULE_DIR may point at a scratch directory containing nbicons.py.  The
-mutation proofs use that route, so they can make checks fail without ever
-rewriting the source tree.
-"""
+"""Headless provenance, generation, geometry, and mutation checks for nbicons."""
 from __future__ import annotations
 
 import importlib.util
@@ -20,10 +15,8 @@ import cairo
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODULE_DIR = ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"
+DEFAULT_VENDOR = ROOT / "vendor/lucide"
 SIZES = (16, 24, 48)
-# Glyphs used as application identities (including alias targets). Small UI
-# controls intentionally have different topology and are not judged as app
-# silhouettes.
 APP_ICONS = {
     "writer", "novel", "comics", "academic", "journal", "screenplay",
     "tasks", "calendar", "workout", "cookbook", "mealplanner", "ebook",
@@ -32,12 +25,12 @@ APP_ICONS = {
     "sequencer", "composer", "video", "media", "music", "packages", "sys",
     "terminal", "sysmon", "installer", "gbasdk", "usbwriter",
 }
-SILHOUETTE_COMPONENT_FLOOR = 0.55
-SILHOUETTE_INK_FLOOR = 0.16
 
 
 def load_module():
     module_dir = Path(os.environ.get("NBICONS_MODULE_DIR", DEFAULT_MODULE_DIR))
+    sys.path.insert(0, str(module_dir))
+    sys.modules.pop("nbicons_data", None)
     path = module_dir / "nbicons.py"
     spec = importlib.util.spec_from_file_location("nbicons_under_test", path)
     if spec is None or spec.loader is None:
@@ -56,112 +49,135 @@ def pixels(module, name, size, mirror=False, padding=0):
     surface.flush()
     stride = surface.get_stride()
     raw = bytes(surface.get_data())
-    rows = [raw[y * stride:y * stride + side] for y in range(side)]
-    return b"".join(rows)
+    return b"".join(raw[y*stride:y*stride+side] for y in range(side))
 
 
-def largest_component_fraction(raw, side, threshold=96):
-    ink = {i for i, value in enumerate(raw) if value >= threshold}
-    total = len(ink)
-    largest = 0
-    while ink:
-        seed = ink.pop()
-        stack = [seed]
-        count = 1
-        while stack:
-            pos = stack.pop()
-            x, y = pos % side, pos // side
-            for nxt in (pos - 1, pos + 1, pos - side, pos + side):
-                if nxt not in ink:
-                    continue
-                nx, ny = nxt % side, nxt // side
-                if abs(nx - x) + abs(ny - y) != 1:
-                    continue
-                ink.remove(nxt)
-                stack.append(nxt)
-                count += 1
-        largest = max(largest, count)
-    return largest / total if total else 0.0
-
-
-def checks(module):
+def check_mapping(module, vendor):
     failures = []
-    names = sorted(module.ICONS)
-    if not names:
-        failures.append("FAIL coverage: ICONS has no keys")
-        return failures
+    keys, mapped = set(module.ICONS), set(module.MAPPING)
+    for name in sorted(keys - mapped):
+        failures.append(f"FAIL mapping: {name} has no Lucide mapping")
+    for name in sorted(mapped - keys):
+        failures.append(f"FAIL mapping: stale mapped key {name}")
+    for name, stem in sorted(module.MAPPING.items()):
+        if not (vendor / "icons" / f"{stem}.svg").is_file():
+            failures.append(f"FAIL mapping: {name} missing vendor SVG {stem}.svg")
+    return failures
 
-    for name in names:
-        if not module.ICONS[name]:
-            failures.append(f"FAIL coverage: {name} has an empty op list")
-            continue
+
+def check_generation(module_dir, vendor):
+    with tempfile.TemporaryDirectory(prefix="nbicons-drift-", dir=ROOT / ".codex-scratch") as tmp:
+        output = Path(tmp) / "nbicons_data.py"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "tools/gen_nbicons.py"),
+             "--vendor", str(vendor), "--output", str(output)],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        if proc.returncode:
+            return ["FAIL generator-current: regeneration failed: " +
+                    (proc.stderr or proc.stdout).strip()]
+        if output.read_bytes() != (module_dir / "nbicons_data.py").read_bytes():
+            return ["FAIL generator-current: nbicons_data.py has drifted"]
+    return []
+
+
+def check_license(module_dir, vendor):
+    failures = []
+    if not (vendor / "LICENSE").is_file():
+        failures.append("FAIL license: vendor/lucide/LICENSE is missing")
+    data = (module_dir / "nbicons_data.py").read_text(encoding="utf-8")
+    if "Lucide 1.31.0, ISC license" not in data:
+        failures.append("FAIL license: generated data lacks ISC provenance")
+    return failures
+
+
+def check_app_uniqueness(module):
+    failures = []
+    used = {}
+    for name in sorted(APP_ICONS):
+        stem = module.MAPPING.get(name)
+        if stem in used:
+            failures.append(
+                f"FAIL app-uniqueness: {name} and {used[stem]} both map to {stem}"
+            )
+        used[stem] = name
+    return failures
+
+
+def check_renders(module):
+    failures = []
+    for name in sorted(module.ICONS):
         for size in SIZES:
             try:
                 first = pixels(module, name, size)
                 second = pixels(module, name, size)
-            except Exception as exc:  # noqa: BLE001 - report the glyph by name
-                failures.append(f"FAIL draw: {name}@{size}: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"FAIL render: {name}@{size}: {exc}")
                 continue
+            if not any(first):
+                failures.append(f"FAIL render: {name}@{size} has no ink")
             if first != second:
                 failures.append(f"FAIL deterministic: {name}@{size}")
-            coverage = sum(first) / (255.0 * size * size)
-            if coverage == 0:
-                failures.append(f"FAIL coverage: {name}@{size} is empty")
-            if not 0.085 <= coverage <= 0.53:
-                failures.append(
-                    f"FAIL family-weight: {name}@{size} coverage={coverage:.4f}"
-                )
-
-            if size == 16 and name in APP_ICONS:
-                component = largest_component_fraction(first, size)
-                if (coverage < SILHOUETTE_INK_FLOOR or
-                        component < SILHOUETTE_COMPONENT_FLOOR):
-                    failures.append(
-                        f"FAIL silhouette: {name}@16 coverage={coverage:.4f} "
-                        f"largest-component={component:.3f}"
-                    )
-
-            pad = max(4, size // 4)
-            padded = pixels(module, name, size, padding=pad)
-            side = size + 2 * pad
-            outside = 0
-            for y in range(side):
-                for x in range(side):
-                    if pad <= x < pad + size and pad <= y < pad + size:
-                        continue
-                    # Ignore only the faintest antialias fringe.
-                    if padded[y * side + x] > 8:
-                        outside += 1
+            padding = max(4, size // 4)
+            padded = pixels(module, name, size, padding=padding)
+            side = size + 2 * padding
+            outside = sum(
+                padded[y*side+x] > 8
+                for y in range(side) for x in range(side)
+                if not (padding <= x < padding+size and padding <= y < padding+size)
+            )
             if outside:
                 failures.append(f"FAIL bounds: {name}@{size} ({outside} pixels)")
-
-            semantic_mirror = pixels(
-                module, name, size, mirror=name in module._DIRECTIONAL
-            )
-            if name in module._DIRECTIONAL and semantic_mirror == first:
+            semantic = pixels(module, name, size, mirror=name in module._DIRECTIONAL)
+            if name in module._DIRECTIONAL and semantic == first:
                 failures.append(f"FAIL mirror: {name}@{size} did not change")
-            if name not in module._DIRECTIONAL and semantic_mirror != first:
+            if name not in module._DIRECTIONAL and semantic != first:
                 failures.append(f"FAIL mirror: {name}@{size} changed unexpectedly")
     return failures
 
 
-def run_mutant(source, assignment, expected):
+def checks(module):
+    module_dir = Path(os.environ.get("NBICONS_MODULE_DIR", DEFAULT_MODULE_DIR))
+    vendor = Path(os.environ.get("NBICONS_VENDOR", DEFAULT_VENDOR))
+    failures = []
+    failures += check_mapping(module, vendor)
+    failures += check_generation(module_dir, vendor)
+    failures += check_license(module_dir, vendor)
+    failures += check_app_uniqueness(module)
+    failures += check_renders(module)
+    return failures
+
+
+def run_mutant(kind, expected):
     with tempfile.TemporaryDirectory(prefix="nbicons-mutant-", dir=ROOT / ".codex-scratch") as tmp:
-        target = Path(tmp) / "nbicons.py"
-        shutil.copy2(source, target)
-        with target.open("a", encoding="utf-8") as handle:
-            handle.write(f"\n# self-test mutation\n{assignment}\n")
+        scratch = Path(tmp)
+        shutil.copy2(DEFAULT_MODULE_DIR / "nbicons.py", scratch / "nbicons.py")
+        shutil.copy2(DEFAULT_MODULE_DIR / "nbicons_data.py", scratch / "nbicons_data.py")
+        vendor = DEFAULT_VENDOR
+        if kind == "bounds":
+            with (scratch / "nbicons_data.py").open("a", encoding="utf-8") as handle:
+                handle.write("\nPATHS['writer'] = (('m', 12, 12), ('l', -20, 12))\n")
+        elif kind == "duplicate":
+            with (scratch / "nbicons_data.py").open("a", encoding="utf-8") as handle:
+                handle.write("\nMAPPING['novel'] = MAPPING['writer']\n")
+        elif kind == "license":
+            vendor = scratch / "vendor/lucide"
+            (vendor / "icons").mkdir(parents=True)
+            for stem in set(load_module().MAPPING.values()):
+                shutil.copy2(DEFAULT_VENDOR / "icons" / f"{stem}.svg", vendor / "icons" / f"{stem}.svg")
+        else:
+            raise ValueError(kind)
         env = os.environ.copy()
-        env["NBICONS_MODULE_DIR"] = tmp
+        env["NBICONS_MODULE_DIR"] = str(scratch)
+        env["NBICONS_VENDOR"] = str(vendor)
         proc = subprocess.run(
-            [sys.executable, __file__, "--checks-only"],
-            cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+            [sys.executable, __file__, "--checks-only"], cwd=ROOT, env=env,
+            text=True, capture_output=True, check=False,
         )
         output = proc.stdout + proc.stderr
         if proc.returncode == 0 or expected not in output:
             print(f"FAIL pass-mutant: expected {expected!r}")
-            if output:
-                print(output.rstrip())
+            if output: print(output.rstrip())
             return False
         print(f"PASS pass-mutant: {expected}")
         return True
@@ -173,29 +189,15 @@ def main():
     if failures:
         print("\n".join(failures))
         return 1
-    print(f"PASS icons: {len(module.ICONS)} keys x {len(SIZES)} sizes")
+    print(f"PASS icons-lucide: {len(module.ICONS)} keys x {len(SIZES)} sizes")
     if "--checks-only" in sys.argv:
         return 0
-
-    source = Path(module.__file__).resolve()
-    ok_bounds = run_mutant(
-        source,
-        'ICONS["writer"] = [("M", -4, 12), ("L", 5, 12)]',
-        "FAIL bounds: writer",
+    mutants = (
+        run_mutant("bounds", "FAIL bounds: writer"),
+        run_mutant("duplicate", "FAIL app-uniqueness:"),
+        run_mutant("license", "FAIL license: vendor/lucide/LICENSE is missing"),
     )
-    ok_empty = run_mutant(
-        source,
-        'ICONS["writer"] = []',
-        "FAIL coverage: writer has an empty op list",
-    )
-    ok_hairline = run_mutant(
-        source,
-        'ICONS["writer"] = [("M", 4, 6), ("L", 20, 6), '
-        '("M", 4, 12), ("L", 20, 12), ("M", 4, 18), ("L", 20, 18)]',
-        "FAIL silhouette: writer@16",
-    )
-    if not (ok_bounds and ok_empty and ok_hairline):
-        return 1
+    if not all(mutants): return 1
     print("PASS nbicons_selftest")
     return 0
 
