@@ -1,0 +1,11 @@
+{
+  "Whole": "全音符",
+  "Half": "二分音符",
+  "Quarter": "四分音符",
+  "Eighth": "八分音符",
+  "Sixteenth": "十六分音符",
+  "Dotted": "附点",
+  "Sharp": "升号",
+  "Click a staff line or space to add a note.": "点击五线谱的线或间以添加音符。",
+  "Return to beginning": "返回开头"
+}

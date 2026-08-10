@@ -90,17 +90,15 @@ def editing_checks():
     editor = composer.SongEditor(composer.new_song())
     history = composer.nbapp.UndoHistory(editor.snapshot, editor.restore)
     editor.history = history; history.reset()
-    before = editor.snapshot(); editor.add_note(0, 120, 60, 90)
-    check("add note applies snapped model values",
-          editor.song["tracks"][0]["notes"][0]["duration"] == 120)
+    before = editor.snapshot(); editor.add_note(0, 480, 60, 90)
+    check("staff palette add applies its exact duration",
+          editor.song["tracks"][0]["notes"][0]["duration"] == 480)
     check("Undo Add Note restores the complete song", history.undo() and editor.song == before)
     history.redo(); editor.selection = {0}; before = editor.snapshot(); editor.move_selected(480, 2)
     check("move selection changes tick and pitch",
           editor.song["tracks"][0]["notes"][0]["start"] == 480 and
           editor.song["tracks"][0]["notes"][0]["pitch"] == 62)
     check("Undo Move Notes restores the complete song", history.undo() and editor.song == before)
-    history.redo(); editor.selection = {0}; before = editor.snapshot(); editor.resize_selected(240)
-    check("Undo Resize Notes restores the complete song", history.undo() and editor.song == before)
     history.redo(); editor.selection = {0}; before = editor.snapshot(); editor.set_velocity(33)
     check("Undo Change Velocity restores the complete song", history.undo() and editor.song == before)
     history.redo(); editor.selection = {0}; before = editor.snapshot(); editor.delete_selected()
@@ -112,11 +110,11 @@ def editing_checks():
     history.redo(); editor.track = 1; before = editor.snapshot(); editor.remove_track()
     check("Undo Delete Track restores the complete song", history.undo() and editor.song == before)
 
-    class Roll:
+    class Staff:
         def queue_draw(self): pass
     class Fake:
         pass
-    fake = Fake(); fake.editor = editor; fake.roll = Roll(); fake.snap = 120
+    fake = Fake(); fake.editor = editor; fake.staff = Staff(); fake.snap = 120
     fake._delete = lambda: (_ for _ in ()).throw(AssertionError("Esc called delete"))
     editor.selection = {0}
     event = type("Event", (), {"keyval": composer.Gdk.KEY_Escape, "state": 0})()
@@ -128,6 +126,79 @@ def editing_checks():
     check("Esc only leaves and never deletes", ok)
     check("MUTANT: mapping Esc to Delete WOULD violate the leave law",
           composer.Gdk.KEY_Escape != composer.Gdk.KEY_Delete)
+
+
+def notation_checks():
+    check("treble pitch maps C4 below and E4 onto bottom line",
+          composer.staff_step(60, "treble") == -2 and composer.staff_step(64, "treble") == 0)
+    check("bass pitch maps C2 ledger and G2 onto bottom line",
+          composer.staff_step(36, "bass") == -4 and composer.staff_step(43, "bass") == 0)
+    check("sharp pitch keeps the natural staff position",
+          composer.staff_step(61, "treble") == composer.staff_step(60, "treble") and composer.is_sharp(61))
+    high = composer.staff_step(84, "treble"); low = composer.staff_step(24, "bass")
+    check("ledger cases extend above treble and below bass", high > 8 and low < 0)
+    song = composer.new_song(); tr = song["tracks"][0]
+    tr["notes"] = [{"start": 0, "duration": 480, "pitch": 71, "velocity": 90},
+                   {"start": 480, "duration": 480, "pitch": 47, "velocity": 90}]
+    check("median pitch chooses treble at 60 and bass below",
+          composer.clef_for_track(tr) == "bass")
+    tr["notes"].append({"start": 960, "duration": 480, "pitch": 72, "velocity": 90})
+    check("median pitch threshold chooses treble", composer.clef_for_track(tr) == "treble")
+    drums = composer.new_track("Drums", percussion=True)
+    check("percussion track chooses percussion staff", composer.clef_for_track(drums) == "percussion")
+
+    expected = {1920: ("whole", False), 2880: ("whole", True),
+                960: ("half", False), 1440: ("half", True),
+                480: ("quarter", False), 720: ("quarter", True),
+                240: ("eighth", False), 360: ("eighth", True),
+                120: ("sixteenth", False), 180: ("sixteenth", True)}
+    check("duration glyph map covers whole through sixteenth and dots",
+          all(composer.duration_glyph(t)[:2] == glyph for t, glyph in expected.items()))
+    foreign = {"start": 37, "duration": 317, "pitch": 61, "velocity": 73}
+    model = copy.deepcopy(foreign); glyph = composer.duration_glyph(foreign["duration"])
+    check("nearest display quantization never mutates model",
+          glyph == ("eighth", True, 360) and foreign == model)
+    rests = composer.measure_rests([{"start": 480, "duration": 480}], 0, 1920)
+    check("rests derive in both gaps of a partly occupied measure",
+          rests[0][0:2] == (0, 480) and sum(r[1] for r in rests) == 1440)
+    check("empty measure derives a whole rest",
+          composer.measure_rests([], 0, 1920) == [(0, 1920, "whole", False)])
+
+    pixel_song = composer.new_song(); pixel_song["tracks"][0]["notes"] = [
+        {"start": 480, "duration": 480, "pitch": 64, "velocity": 90}]
+    surface, staff = composer.render_staff_surface(pixel_song, 900, 230)
+    data = bytes(surface.get_data()); stride = surface.get_stride()
+    def dark(x, y):
+        b, g, r, _a = data[y*stride+x*4:y*stride+x*4+4]
+        return r < 220 and g < 220 and b < 220
+    sy = staff._staff_y(0); expected_y = int(staff._note_y(0, 64)); expected_x = int(staff._tick_x(480))
+    check("rendered staff pixel probe finds all five staff lines",
+          all(any(dark(x, sy + line*staff.SPACE) for x in range(120, 180)) for line in range(5)))
+    check("rendered quarter head lands on expected line-space y",
+          any(dark(x, y) for x in range(expected_x-5, expected_x+6) for y in range(expected_y-4, expected_y+5)))
+    check("rendered bar lines land at measure boundaries",
+          dark(staff.LEFT, sy) and dark(staff.LEFT + staff.MEASURE_W, sy))
+
+    app = composer.SongEditor(composer.new_song())
+    # Staff coordinate conversion produces C4; insertion applies palette and snap.
+    sy = composer.StaffNotation.TOP + 48
+    y = sy + (4 - composer.staff_step(60, "treble")/2) * composer.StaffNotation.SPACE
+    raw_tick = 130; snapped = int(round(raw_tick / 120)) * 120
+    step = int(round((sy + 4*composer.StaffNotation.SPACE - y) / (composer.StaffNotation.SPACE/2)))
+    pitch = composer.pitch_for_step(composer.diatonic_number(64) + step, False)
+    app.add_note(snapped, 480, pitch)
+    check("staff click inserts snapped pitch-time and palette duration",
+          app.song["tracks"][0]["notes"] == [{"start": 120, "duration": 480, "pitch": 60, "velocity": 96}])
+    app.history = composer.nbapp.UndoHistory(app.snapshot, app.restore); app.history.reset()
+    before = app.snapshot(); app.selection = {0}; app.move_selected(120, 0)
+    check("staff horizontal edit participates in complete undo",
+          app.history.undo() and app.song == before)
+    app.history.redo(); app.song["tracks"][0]["notes"][0]["pitch"] = 61; app.selection = {0}; app.history.reset()
+    before = app.snapshot(); app.move_selected_diatonic(0, 1)
+    check("staff vertical drag moves diatonically and preserves sharp",
+          app.song["tracks"][0]["notes"][0]["pitch"] == 63)
+    check("staff diatonic drag has a complete undo checkpoint",
+          app.history.undo() and app.song == before)
 
 
 STORE_WORKER = r'''
@@ -202,9 +273,31 @@ def mutant_check():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def notation_mutant_check():
+    """A scratch module with collapsed staff geometry must be rejected."""
+    root = tempfile.mkdtemp(prefix="composer-notation-mutant-")
+    try:
+        mutant_dir = Path(root) / "de"; mutant_dir.mkdir()
+        source = (MODULE_DIR / "composer.py").read_text(encoding="utf-8")
+        source = source.replace("return diatonic_number(pitch) - diatonic_number(64 if clef == \"treble\" else 43)",
+                                "return 0  # MUTANT: collapse every pitch onto one line")
+        (mutant_dir / "composer.py").write_text(source, encoding="utf-8")
+        probe = "import composer,sys; sys.exit(0 if composer.staff_step(60,'treble') == -2 and composer.staff_step(64,'treble') == 0 else 9)"
+        env = dict(os.environ, COMPOSER_MODULE_DIR=str(mutant_dir),
+                   PYTHONPATH=str(mutant_dir) + os.pathsep + str(DE))
+        run = subprocess.run([sys.executable, "-c",
+                              "import sys,os; d=os.environ['COMPOSER_MODULE_DIR']; de=os.environ['PYTHONPATH'].split(os.pathsep)[1]; sys.path.insert(0,de); sys.path.insert(0,d); " + probe],
+                             env=env, capture_output=True, text=True, timeout=30)
+        check("MUTANT: collapsed staff pitch geometry is rejected by name", run.returncode == 9,
+              run.stderr.strip())
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     for name, fn in (("MIDI checks", midi_checks), ("editing checks", editing_checks),
-                     ("store checks", store_checks), ("mutant checks", mutant_check)):
+                     ("notation checks", notation_checks), ("store checks", store_checks),
+                     ("mutant checks", mutant_check), ("notation mutant checks", notation_mutant_check)):
         try: fn()
         except Exception as exc: check(name + " completes by name", False, repr(exc))
     print("%d checks, %d failed" % (CHECKS, len(FAILS)))

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Composer -- a compact piano-roll MIDI editor for Notebook OS.
+"""Composer -- a compact staff-notation MIDI editor for Notebook OS.
 
 The song/model, MIDI codec and edit operations deliberately do not depend on a
 realised GTK window.  Besides making them straightforward to test, this keeps
 the model ready for a later notation or tracker view without teaching those
-views about the piano-roll's pixels.
+views about notation pixels.
 """
 import array
 import copy
@@ -22,6 +22,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
+import cairo
 
 import nbapp
 import nbpicker
@@ -293,7 +294,7 @@ def midi_import(raw):
 
 
 class SongEditor:
-    """Pixel-free editing operations shared by the piano roll and tests."""
+    """Pixel-free editing operations shared by the staff and tests."""
     def __init__(self, song=None, history=None):
         self.song = normalize_song(song or new_song())
         self.track = 0
@@ -337,6 +338,21 @@ class SongEditor:
             chosen = [notes[i] for i in sorted(self.selection)]
             for n in chosen: n["start"] += actual_t; n["pitch"] += actual_p
             notes.sort(key=lambda n: (n["start"], n["pitch"])); self.selection = {notes.index(n) for n in chosen}
+        self._change("Move Notes", op); return True
+
+    def move_selected_diatonic(self, dt, steps):
+        """Staff move: horizontal ticks plus vertical scale steps, preserving ♯."""
+        if not self.selection: return False
+        def op():
+            notes = self.song["tracks"][self.track]["notes"]
+            actual_t = max(-min(notes[i]["start"] for i in self.selection), int(dt))
+            chosen = [notes[i] for i in sorted(self.selection)]
+            for n in chosen:
+                n["start"] += actual_t
+                n["pitch"] = pitch_for_step(diatonic_number(n["pitch"]) + int(steps),
+                                              is_sharp(n["pitch"]))
+            notes.sort(key=lambda n: (n["start"], n["pitch"]))
+            self.selection = {notes.index(n) for n in chosen}
         self._change("Move Notes", op); return True
 
     def resize_selected(self, delta):
@@ -389,34 +405,138 @@ def render_preview(song, path, rate=24000):
     return frames / float(rate)
 
 
-class PianoRoll(Gtk.DrawingArea):
-    ROW, BEAT = 18, 72
+_WHITE_PCS = (0, 2, 4, 5, 7, 9, 11)
+_DURATIONS = (
+    ("whole", PPQ * 4), ("half", PPQ * 2), ("quarter", PPQ),
+    ("eighth", PPQ // 2), ("sixteenth", PPQ // 4),
+)
+
+
+def is_sharp(pitch):
+    return int(pitch) % 12 not in _WHITE_PCS
+
+
+def diatonic_number(pitch):
+    """Diatonic step number; accidentals occupy their natural note's step."""
+    pitch = max(0, min(127, int(pitch)))
+    octave, pc = divmod(pitch, 12)
+    natural = max(i for i, value in enumerate(_WHITE_PCS) if value <= pc)
+    return octave * 7 + natural
+
+
+def pitch_for_step(step, sharp=False):
+    octave, degree = divmod(int(step), 7)
+    pitch = octave * 12 + _WHITE_PCS[degree] + (1 if sharp else 0)
+    return max(0, min(127, pitch))
+
+
+def clef_for_track(track):
+    if track.get("percussion"): return "percussion"
+    pitches = sorted(n["pitch"] for n in track["notes"])
+    if not pitches: median = 60
+    elif len(pitches) % 2: median = pitches[len(pitches) // 2]
+    else: median = (pitches[len(pitches)//2 - 1] + pitches[len(pitches)//2]) / 2.0
+    return "treble" if median >= 60 else "bass"
+
+
+def staff_step(pitch, clef):
+    # bottom line: E4 in treble, G2 in bass
+    return diatonic_number(pitch) - diatonic_number(64 if clef == "treble" else 43)
+
+
+def duration_glyph(ticks):
+    """Nearest display glyph only; callers never write it back to the model."""
+    choices = []
+    for name, base in _DURATIONS:
+        choices.extend(((abs(ticks - base), name, False, base),
+                        (abs(ticks - base * 3 // 2), name, True, base * 3 // 2)))
+    _distance, name, dotted, shown = min(choices, key=lambda x: (x[0], -x[3]))
+    return name, dotted, shown
+
+
+def measure_ticks(song):
+    num, den = song["time_signature"]
+    return PPQ * 4 * num // den
+
+
+def measure_rests(notes, start, end):
+    """Return uncovered (start, duration, glyph, dotted) spans in a measure."""
+    covered = sorted((max(start, n["start"]), min(end, n["start"] + n["duration"]))
+                     for n in notes if n["start"] < end and n["start"] + n["duration"] > start)
+    merged = []
+    for a, b in covered:
+        if merged and a <= merged[-1][1]: merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
+        else: merged.append((a, b))
+    gaps, cursor = [], start
+    for a, b in merged + [(end, end)]:
+        if a > cursor:
+            left = a - cursor
+            while left:
+                name, dotted, shown = duration_glyph(left)
+                shown = min(shown, left)
+                if shown <= 0: break
+                gaps.append((cursor, shown, name, dotted)); cursor += shown; left -= shown
+        cursor = max(cursor, b)
+    return gaps
+
+
+class NoteGlyphButton(Gtk.DrawingArea):
+    def __init__(self, name, callback):
+        super().__init__(); self.name = name; self.active = False
+        self.set_size_request(34, 30); self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("draw", self._draw); self.connect("button-press-event", lambda *_: callback(name))
+        self.set_tooltip_text(_t(name.capitalize()))
+    def _draw(self, _w, cr):
+        cr.set_source_rgb(.82, .28, .18) if self.active else cr.set_source_rgb(.18, .22, .24)
+        hollow = self.name in ("whole", "half")
+        _draw_note(cr, 14, 19, self.name, hollow, False, False, 1)
+        return False
+
+
+class StaffNotation(Gtk.DrawingArea):
+    SPACE, MEASURE_W, LEFT, TOP, TRACK_H = 12, 360, 88, 42, 150
     def __init__(self, app):
         super().__init__(); self.app = app; self.set_can_focus(True)
         self.playhead_tick = None
-        self.set_size_request(64 * self.BEAT, 128 * self.ROW)
+        self._resize()
         self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
                         Gdk.EventMask.POINTER_MOTION_MASK)
         self.connect("draw", self._draw); self.connect("button-press-event", self._press)
         self.connect("button-release-event", self._release); self.connect("motion-notify-event", self._motion)
         self.drag = None
 
+    def _resize(self):
+        song = self.app.editor.song; end = max([n["start"] + n["duration"] for t in song["tracks"] for n in t["notes"]] or [measure_ticks(song) * 4])
+        measures = max(4, int(math.ceil(end / measure_ticks(song))))
+        self.set_size_request(self.LEFT + measures * self.MEASURE_W + 60,
+                              self.TOP + len(song["tracks"]) * self.TRACK_H + 30)
+
+    def _staff_y(self, track): return self.TOP + track * self.TRACK_H + 48
+    def _tick_x(self, tick): return self.LEFT + tick / measure_ticks(self.app.editor.song) * self.MEASURE_W
     def _xy(self, event):
-        snap = self.app.snap
-        tick = max(0, int(event.x / self.BEAT * PPQ)); tick = int(round(tick / snap)) * snap
-        pitch = max(0, min(127, 127 - int(event.y / self.ROW)))
-        return tick, pitch
+        track = max(0, min(len(self.app.editor.song["tracks"]) - 1,
+                           int((event.y - self.TOP) // self.TRACK_H)))
+        raw = max(0, (event.x - self.LEFT) / self.MEASURE_W * measure_ticks(self.app.editor.song))
+        tick = int(round(raw / self.app.snap)) * self.app.snap
+        tr = self.app.editor.song["tracks"][track]; clef = clef_for_track(tr)
+        if clef == "percussion": pitch = 36
+        else:
+            step = int(round((self._staff_y(track) + 4 * self.SPACE - event.y) / (self.SPACE / 2)))
+            pitch = pitch_for_step(diatonic_number(64 if clef == "treble" else 43) + step,
+                                   self.app.sharp)
+        return track, tick, pitch
 
     def _hit(self, x, y):
-        tick, pitch = int(x / self.BEAT * PPQ), 127 - int(y / self.ROW)
-        for i, n in reversed(list(enumerate(self.app.editor.song["tracks"][self.app.editor.track]["notes"]))):
-            if n["pitch"] == pitch and n["start"] <= tick <= n["start"] + n["duration"]:
-                edge = abs(tick - (n["start"] + n["duration"])) < self.app.snap // 2
-                return i, edge
-        return None, False
+        track, tick, pitch = self._xy(type("Point", (), {"x": x, "y": y})())
+        notes = self.app.editor.song["tracks"][track]["notes"]
+        for i, n in reversed(list(enumerate(notes))):
+            if abs(self._tick_x(n["start"]) - x) <= 12 and abs(self._note_y(track, n["pitch"]) - y) <= 9:
+                return track, i
+        return track, None
 
     def _press(self, _w, event):
-        self.grab_focus(); idx, edge = self._hit(event.x, event.y); tick, pitch = self._xy(event)
+        self.grab_focus(); track, idx = self._hit(event.x, event.y); _track, tick, pitch = self._xy(event)
+        if track != self.app.editor.track: self.app.editor.track = track; self.app.editor.selection.clear(); self.app._refresh_tracks()
         if idx is None:
             if not event.state & Gdk.ModifierType.SHIFT_MASK: self.app.editor.selection.clear()
             self.drag = ("rubber", event.x, event.y, event.x, event.y); self.queue_draw(); return True
@@ -424,54 +544,149 @@ class PianoRoll(Gtk.DrawingArea):
             if idx in self.app.editor.selection: self.app.editor.selection.remove(idx)
             else: self.app.editor.selection.add(idx)
         elif idx not in self.app.editor.selection: self.app.editor.selection = {idx}
-        self.drag = ("resize" if edge else "move", tick, pitch, tick, pitch); self.queue_draw(); return True
+        self.drag = ("move", tick, diatonic_number(pitch), tick, diatonic_number(pitch)); self.queue_draw(); return True
 
     def _motion(self, _w, event):
         if self.drag:
             kind, x, y, _a, _b = self.drag
-            a, b = self._xy(event) if kind != "rubber" else (event.x, event.y)
+            if kind != "rubber":
+                _track, a, pitch = self._xy(event); b = diatonic_number(pitch)
+            else: a, b = event.x, event.y
             self.drag = (kind, x, y, a, b); self.queue_draw()
         return True
 
     def _release(self, _w, event):
         if not self.drag: return True
         kind, x, y, a, b = self.drag; self.drag = None
-        if kind == "move": self.app.editor.move_selected(a - x, b - y)
-        elif kind == "resize": self.app.editor.resize_selected(a - x)
+        if kind == "move":
+            self.app.editor.move_selected_diatonic(a - x, b - y)
         else:
             x0, x1 = sorted((x, a)); y0, y1 = sorted((y, b)); selected = set()
             notes = self.app.editor.song["tracks"][self.app.editor.track]["notes"]
             for i, n in enumerate(notes):
-                nx = n["start"] / PPQ * self.BEAT; ny = (127 - n["pitch"]) * self.ROW
+                nx = self._tick_x(n["start"]); ny = self._note_y(self.app.editor.track, n["pitch"])
                 if x0 == x1 and y0 == y1: continue
-                if nx + n["duration"] / PPQ * self.BEAT >= x0 and nx <= x1 and ny + self.ROW >= y0 and ny <= y1: selected.add(i)
+                if nx + 12 >= x0 and nx - 12 <= x1 and ny + 9 >= y0 and ny - 9 <= y1: selected.add(i)
             if selected: self.app.editor.selection |= selected
             elif abs(a - x) < 4 and abs(b - y) < 4:
-                tick, pitch = self._xy(event); self.app.editor.add_note(tick, self.app.snap, pitch)
+                _track, tick, pitch = self._xy(event); self.app.editor.add_note(tick, self.app.note_duration, pitch)
         self.app.changed(); return True
 
+    def _note_y(self, track, pitch):
+        tr = self.app.editor.song["tracks"][track]; clef = clef_for_track(tr)
+        return self._staff_y(track) + (2 * self.SPACE if clef == "percussion" else (4 - staff_step(pitch, clef) / 2) * self.SPACE)
+
     def _draw(self, _w, cr):
-        w = self.get_allocated_width(); h = self.get_allocated_height()
+        self._resize(); w = self.get_allocated_width(); h = self.get_allocated_height()
         cr.set_source_rgb(.988, .984, .973); cr.paint()
-        for p in range(128):
-            y = (127 - p) * self.ROW
-            if p % 12 in (1, 3, 6, 8, 10): cr.set_source_rgb(.945, .933, .902); cr.rectangle(0, y, w, self.ROW); cr.fill()
-            cr.set_source_rgb(.84, .82, .77); cr.set_line_width(.5); cr.move_to(0, y); cr.line_to(w, y); cr.stroke()
-        for beat in range(65):
-            x = beat * self.BEAT; cr.set_source_rgb(.75, .72, .66) if beat % self.app.editor.song["time_signature"][0] == 0 else cr.set_source_rgb(.86, .84, .79)
-            cr.set_line_width(1 if beat % self.app.editor.song["time_signature"][0] == 0 else .5); cr.move_to(x, 0); cr.line_to(x, h); cr.stroke()
-        notes = self.app.editor.song["tracks"][self.app.editor.track]["notes"]
-        for i, n in enumerate(notes):
-            x = n["start"] / PPQ * self.BEAT; y = (127 - n["pitch"]) * self.ROW; nw = max(3, n["duration"] / PPQ * self.BEAT)
-            cr.set_source_rgb(.78, .20, .12) if i in self.app.editor.selection else cr.set_source_rgb(.18, .32, .38)
-            cr.rectangle(x + 1, y + 2, nw - 2, self.ROW - 4); cr.fill()
+        mt = measure_ticks(self.app.editor.song)
+        for ti, tr in enumerate(self.app.editor.song["tracks"]):
+            sy = self._staff_y(ti); perc = tr["percussion"]
+            cr.set_source_rgb(.14, .14, .13); cr.set_line_width(1)
+            for line in ((2,) if perc else range(5)):
+                y = sy + line * self.SPACE; cr.move_to(self.LEFT, y); cr.line_to(w - 30, y); cr.stroke()
+            _draw_clef(cr, 34, sy + 2 * self.SPACE, clef_for_track(tr))
+            measures = int(math.ceil((w - self.LEFT) / self.MEASURE_W))
+            for m in range(measures + 1):
+                x = self.LEFT + m * self.MEASURE_W; cr.move_to(x, sy); cr.line_to(x, sy + 4 * self.SPACE); cr.stroke()
+                cr.set_font_size(10); cr.move_to(x + 5, sy - 10); cr.show_text(str(m + 1))
+            for start in range(0, measures * mt, mt):
+                for rs, _rd, name, dotted in measure_rests(tr["notes"], start, start + mt):
+                    _draw_rest(cr, self._tick_x(rs) + 5, sy + 2 * self.SPACE, name, dotted)
+            for i, n in enumerate(tr["notes"]):
+                x, y = self._tick_x(n["start"]), self._note_y(ti, n["pitch"])
+                name, dotted, _shown = duration_glyph(n["duration"])
+                cr.set_source_rgb(.78, .20, .12) if ti == self.app.editor.track and i in self.app.editor.selection else cr.set_source_rgb(.12, .16, .17)
+                _draw_ledger(cr, x, y, sy, self.SPACE)
+                _draw_note(cr, x, y, name, name in ("whole", "half"), dotted,
+                           is_sharp(n["pitch"]), staff_step(n["pitch"], clef_for_track(tr)), perc)
         if self.playhead_tick is not None:
-            x = self.playhead_tick / PPQ * self.BEAT
+            x = self._tick_x(self.playhead_tick)
             cr.set_source_rgb(.78, .20, .12); cr.set_line_width(2)
             cr.move_to(x, 0); cr.line_to(x, h); cr.stroke()
         if self.drag and self.drag[0] == "rubber":
             _, x0, y0, x1, y1 = self.drag; cr.set_source_rgba(.78, .20, .12, .2); cr.rectangle(x0, y0, x1-x0, y1-y0); cr.fill()
         return False
+
+
+def _draw_note(cr, x, y, name, hollow, dotted, sharp, step, percussion=False):
+    if sharp:
+        cr.set_line_width(1.4)
+        for dx in (-10, -6): cr.move_to(x + dx, y - 7); cr.line_to(x + dx - 1, y + 7); cr.stroke()
+        for dy in (-3, 3): cr.move_to(x - 13, y + dy + 1); cr.line_to(x - 3, y + dy - 1); cr.stroke()
+    if percussion:
+        cr.set_line_width(2); cr.move_to(x-5,y-4); cr.line_to(x+5,y+4); cr.move_to(x-5,y+4); cr.line_to(x+5,y-4); cr.stroke()
+    else:
+        cr.save(); cr.translate(x, y); cr.rotate(-.25); cr.scale(1.35, .9); cr.arc(0, 0, 5, 0, 2*math.pi); cr.restore()
+        if hollow: cr.set_line_width(1.8); cr.stroke()
+        else: cr.fill()
+    if name != "whole":
+        up = step < 4; sx = x + (5 if up else -5); end = y - 30 if up else y + 30
+        cr.set_line_width(1.5); cr.move_to(sx, y); cr.line_to(sx, end); cr.stroke()
+        flags = 2 if name == "sixteenth" else 1 if name == "eighth" else 0
+        for f in range(flags):
+            fy = end + (f * 7 if up else -f * 7); cr.move_to(sx, fy); cr.curve_to(sx + (10 if up else -10), fy + (6 if up else -6), sx + (8 if up else -8), fy + (14 if up else -14), sx + (3 if up else -3), fy + (18 if up else -18)); cr.stroke()
+    if dotted: cr.arc(x + 11, y, 1.7, 0, 2*math.pi); cr.fill()
+
+
+def _draw_ledger(cr, x, y, sy, space):
+    top, bottom = sy, sy + 4*space
+    yy = bottom + space
+    while yy <= y + 2: cr.move_to(x-9, yy); cr.line_to(x+9, yy); cr.stroke(); yy += space
+    yy = top - space
+    while yy >= y - 2: cr.move_to(x-9, yy); cr.line_to(x+9, yy); cr.stroke(); yy -= space
+
+
+def _draw_rest(cr, x, y, name, dotted):
+    cr.set_source_rgb(.28, .28, .26)
+    if name in ("whole", "half"):
+        cr.rectangle(x-5, y + (0 if name == "whole" else -4), 10, 4); cr.fill()
+    elif name == "quarter":
+        cr.set_line_width(2.5); cr.move_to(x+3,y-12); cr.line_to(x-3,y-3); cr.line_to(x+3,y+3); cr.line_to(x-3,y+13); cr.stroke()
+    else:
+        cr.arc(x, y-6, 3, 0, 2*math.pi); cr.fill(); cr.set_line_width(1.8); cr.move_to(x+2,y-5); cr.curve_to(x+8,y, x-2,y+8, x-2,y+14); cr.stroke()
+    if dotted: cr.arc(x+10,y,1.5,0,2*math.pi); cr.fill()
+
+
+def _draw_clef(cr, x, y, clef):
+    cr.save(); cr.translate(x, y); cr.set_source_rgb(.12,.12,.11); cr.set_line_width(3)
+    if clef == "treble":
+        cr.move_to(10,-31); cr.curve_to(-3,-22,2,3,11,19); cr.curve_to(18,33,-5,39,-11,22); cr.curve_to(-17,5,5,-9,16,2); cr.curve_to(26,15,8,25,-4,17); cr.stroke(); cr.arc(8,28,4,0,2*math.pi); cr.fill()
+    elif clef == "bass":
+        cr.move_to(-8,-4); cr.curve_to(4,-18,22,-8,14,9); cr.curve_to(10,18,1,23,-8,26); cr.stroke()
+        for yy in (-5,7): cr.arc(22,yy,2.3,0,2*math.pi); cr.fill()
+    else:
+        cr.move_to(-8,-8); cr.line_to(8,8); cr.move_to(-8,8); cr.line_to(8,-8); cr.stroke(); cr.move_to(0,-18); cr.line_to(0,18); cr.stroke()
+    cr.restore()
+
+
+class _SurfaceStaff:
+    """Small non-GTK layout adapter used for headless pixel proofs."""
+    SPACE, MEASURE_W, LEFT, TOP, TRACK_H = (StaffNotation.SPACE, StaffNotation.MEASURE_W,
+                                            StaffNotation.LEFT, StaffNotation.TOP, StaffNotation.TRACK_H)
+    _staff_y = StaffNotation._staff_y
+    _tick_x = StaffNotation._tick_x
+    _note_y = StaffNotation._note_y
+    _draw = StaffNotation._draw
+    def __init__(self, song, width, height, track=0, selection=None, playhead=None):
+        class Editor: pass
+        class App: pass
+        self.app = App(); self.app.editor = Editor(); self.app.editor.song = normalize_song(song)
+        self.app.editor.track = track; self.app.editor.selection = set(selection or ())
+        self.width, self.height = width, height; self.playhead_tick = playhead; self.drag = None
+    def _resize(self): pass
+    def get_allocated_width(self): return self.width
+    def get_allocated_height(self): return self.height
+
+
+def render_staff_surface(song, width=900, height=None, track=0, selection=None, playhead=None):
+    """Render notation to a Cairo ImageSurface without a display server."""
+    height = height or (StaffNotation.TOP + len(song["tracks"]) * StaffNotation.TRACK_H + 30)
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    layout = _SurfaceStaff(song, width, height, track, selection, playhead)
+    layout._draw(layout, cairo.Context(surface))
+    surface.flush()
+    return surface, layout
 
 
 class Composer(nbapp.AppWindow):
@@ -484,6 +699,7 @@ class Composer(nbapp.AppWindow):
         self.song = self._load_session(); self.editor = SongEditor(self.song)
         self.undo = nbapp.UndoHistory(self.editor.snapshot, self._restore)
         self.editor.history = self.undo; self.undo.reset(); self.snap = PPQ // 4
+        self.note_duration = PPQ; self.sharp = False; self.dotted = False
         self.connect("destroy", self._destroy); self.connect("key-press-event", self._key)
         self._build(); self._refresh_tracks()
 
@@ -519,6 +735,12 @@ class Composer(nbapp.AppWindow):
         self.snap_combo = Gtk.ComboBoxText()
         for label in (_t("Beat"), _t("1/2 beat"), _t("1/4 beat"), _t("1/8 beat")): self.snap_combo.append_text(label)
         self.snap_combo.set_active(2); self.snap_combo.connect("changed", self._snap); bar.pack_start(self.snap_combo, False, False, 0)
+        self.duration_box = Gtk.Box(spacing=2); self.duration_buttons = []
+        for name, _ticks in _DURATIONS:
+            button = NoteGlyphButton(name, self._duration); self.duration_buttons.append(button); self.duration_box.pack_start(button, False, False, 0)
+        self.dot = Gtk.ToggleButton(label="·"); self.dot.set_tooltip_text(_t("Dotted")); self.dot.connect("toggled", self._dot); self.duration_box.pack_start(self.dot, False, False, 0)
+        self.accidental = Gtk.ToggleButton(label="♯"); self.accidental.set_tooltip_text(_t("Sharp")); self.accidental.connect("toggled", self._sharp); self.duration_box.pack_start(self.accidental, False, False, 0)
+        self._duration("quarter")
         self.play = Gtk.Button(label=_t("Play")); self.play.connect("clicked", self._play); bar.pack_end(self.play, False, False, 0)
         root.pack_start(bar, False, False, 0)
         sub = Gtk.Box(spacing=8); sub.pack_start(Gtk.Label(label=_t("Instrument")), False, False, 0)
@@ -528,19 +750,18 @@ class Composer(nbapp.AppWindow):
         _cap_combo_cells(self.instrument, 14)
         sub.pack_start(Gtk.Label(label=_t("Velocity")), False, False, 0)
         self.velocity = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 127, 1); self.velocity.set_value(96); self.velocity.set_size_request(180, -1); self.velocity.connect("value-changed", self._velocity); sub.pack_start(self.velocity, False, False, 0)
-        self.status = Gtk.Label(label=_t("Click or drag to add and edit notes."), xalign=1); self.status.set_ellipsize(Pango.EllipsizeMode.END); sub.pack_end(self.status, True, True, 0); root.pack_start(sub, False, False, 0)
-        self.roll = PianoRoll(self); scroll = Gtk.ScrolledWindow(); scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC); scroll.add(self.roll); root.pack_start(scroll, True, True, 0)
-        # Start near middle C instead of at the top of the MIDI range.
-        GLib.idle_add(lambda: (scroll.get_vadjustment().set_value((127-72)*PianoRoll.ROW), False)[1])
+        sub.pack_start(self.duration_box, False, False, 0)
+        self.status = Gtk.Label(label=_t("Click a staff line or space to add a note."), xalign=1); self.status.set_ellipsize(Pango.EllipsizeMode.END); sub.pack_end(self.status, True, True, 0); root.pack_start(sub, False, False, 0)
+        self.staff = StaffNotation(self); scroll = Gtk.ScrolledWindow(); scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC); scroll.add(self.staff); root.pack_start(scroll, True, True, 0)
 
     def menu_items(self, name):
         if name == "File": return [(_t("New    Ctrl+N"), self._new), (_t("Open…    Ctrl+O"), self._open), ("-", None), (_t("Save    Ctrl+S"), self._save), (_t("Save As…    Ctrl+Shift+S"), self._save_as), ("-", None), (_t("Export MIDI…"), self._export), ("-", None), (_t("Close    Esc"), self.close)]
         if name == "Edit": return [(_t("Undo    Ctrl+Z"), self._undo), (_t("Redo    Ctrl+Shift+Z"), self._redo), ("-", None), (_t("Select All    Ctrl+A"), self._select_all), (_t("Delete Notes    Delete"), self._delete)]
-        if name == "View": return [(_t("Center on Middle C"), self._center)]
+        if name == "View": return [(_t("Return to beginning"), self._center)]
         if name == "Track": return [(_t("Add Track"), self._add_track), (_t("Remove Track"), self._remove_track), (_t("Rename Track…"), self._rename_track), (_t("Mute Track"), self._toggle_mute)]
         return [(_t("Play    Space"), self._play), (_t("Stop"), self._stop)]
 
-    def changed(self): self.roll.queue_draw(); self._save_session()
+    def changed(self): self.staff.queue_draw(); self._save_session()
     def _refresh_tracks(self):
         self.track_combo.remove_all()
         for tr in self.editor.song["tracks"]: self.track_combo.append_text(tr["name"])
@@ -551,7 +772,7 @@ class Composer(nbapp.AppWindow):
         # acting only on a REAL change breaks the feedback loop (construct-time
         # RecursionError, caught on the dispatcher's display re-verify).
         if w.get_active() >= 0 and w.get_active() != self.editor.track:
-            self.editor.track = w.get_active(); self.editor.selection.clear(); self._refresh_tracks(); self.roll.queue_draw()
+            self.editor.track = w.get_active(); self.editor.selection.clear(); self._refresh_tracks(); self.staff.queue_draw()
     def _add_track(self, *_): self.editor.add_track(_t("New Track")); self._refresh_tracks(); self.changed()
     def _remove_track(self, *_): self.editor.remove_track(); self._refresh_tracks(); self.changed()
     def _rename_track(self, *_):
@@ -568,6 +789,12 @@ class Composer(nbapp.AppWindow):
         value = w.get_value_as_int()
         if self.editor.song["tempo"] != value: self.undo.checkpoint("Change Tempo"); self.editor.song["tempo"] = value; self.undo.commit(); self.changed()
     def _snap(self, w): self.snap = (PPQ, PPQ//2, PPQ//4, PPQ//8)[max(0, w.get_active())]
+    def _duration(self, name):
+        base = dict(_DURATIONS)[name]; self.note_duration = base * (3 if self.dotted else 2) // 2
+        for button in self.duration_buttons: button.active = button.name == name; button.queue_draw()
+        self.duration_name = name
+    def _dot(self, w): self.dotted = w.get_active(); self._duration(self.duration_name)
+    def _sharp(self, w): self.sharp = w.get_active()
     def _instrument(self, w):
         if w.get_active() < 0: return
         name, program, _fam = INSTRUMENTS[w.get_active()]; tr = self.editor.song["tracks"][self.editor.track]
@@ -575,7 +802,7 @@ class Composer(nbapp.AppWindow):
             self.undo.checkpoint("Change Instrument"); tr.update(instrument=name, program=program, percussion=name == "Noise / Drums"); self.undo.commit(); self.changed()
     def _velocity(self, w): self.editor.set_velocity(w.get_value_as_int()) and self.changed()
     def _delete(self, *_): self.editor.delete_selected() and self.changed()
-    def _select_all(self, *_): self.editor.selection = set(range(len(self.editor.song["tracks"][self.editor.track]["notes"]))); self.roll.queue_draw()
+    def _select_all(self, *_): self.editor.selection = set(range(len(self.editor.song["tracks"][self.editor.track]["notes"]))); self.staff.queue_draw()
     def _undo(self, *_): self.undo.undo(); self._refresh_tracks()
     def _redo(self, *_): self.undo.redo(); self._refresh_tracks()
     def _new(self, *_): self.undo.checkpoint("New Song"); self.editor.song = new_song(); self.editor.track = 0; self.editor.selection.clear(); self.undo.commit(); self._path = None; self._refresh_tracks(); self.changed()
@@ -618,8 +845,8 @@ class Composer(nbapp.AppWindow):
     def _play_tick(self):
         if not self._player: return False
         elapsed = time.monotonic() - self._play_started
-        self.roll.playhead_tick = int(elapsed * self.editor.song["tempo"] / 60 * PPQ)
-        self.roll.queue_draw()
+        self.staff.playhead_tick = int(elapsed * self.editor.song["tempo"] / 60 * PPQ)
+        self.staff.queue_draw()
         self.status.set_text(_t("Playing at beat %d") % int(elapsed * self.editor.song["tempo"] / 60 + 1))
         if elapsed >= self._play_duration: self._stop(); return False
         return True
@@ -628,17 +855,17 @@ class Composer(nbapp.AppWindow):
         elif self._player:
             try: self._player.terminate()
             except Exception: pass
-        self._player = None; self.roll.playhead_tick = None; self.roll.queue_draw()
+        self._player = None; self.staff.playhead_tick = None; self.staff.queue_draw()
         self.play.set_label(_t("Play")); self.status.set_text(_t("Playback stopped."))
         try: os.unlink(self._preview_path)
         except Exception: pass
     def _center(self, *_):
-        p = self.roll.get_parent()
+        p = self.staff.get_parent()
         while p and not isinstance(p, Gtk.ScrolledWindow): p = p.get_parent()
-        if p: p.get_vadjustment().set_value((127-72)*PianoRoll.ROW)
+        if p: p.get_hadjustment().set_value(0)
     def _key(self, _w, e):
         ctrl = bool(e.state & Gdk.ModifierType.CONTROL_MASK); shift = bool(e.state & Gdk.ModifierType.SHIFT_MASK)
-        if e.keyval == Gdk.KEY_Escape: self.editor.selection.clear(); self.roll.queue_draw(); return True
+        if e.keyval == Gdk.KEY_Escape: self.editor.selection.clear(); self.staff.queue_draw(); return True
         if e.keyval == Gdk.KEY_Delete: self._delete(); return True
         if e.keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
             dt = -self.snap if e.keyval == Gdk.KEY_Left else self.snap if e.keyval == Gdk.KEY_Right else 0; dp = 1 if e.keyval == Gdk.KEY_Up else -1 if e.keyval == Gdk.KEY_Down else 0; self.editor.move_selected(dt, dp) and self.changed(); return True

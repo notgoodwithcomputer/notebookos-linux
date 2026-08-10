@@ -1,0 +1,11 @@
+{
+  "Whole": "Semibreve",
+  "Half": "Minima",
+  "Quarter": "Semiminima",
+  "Eighth": "Croma",
+  "Sixteenth": "Semicroma",
+  "Dotted": "Puntata",
+  "Sharp": "Diesis",
+  "Click a staff line or space to add a note.": "Fai clic su una linea o uno spazio del pentagramma per aggiungere una nota.",
+  "Return to beginning": "Torna all'inizio"
+}
