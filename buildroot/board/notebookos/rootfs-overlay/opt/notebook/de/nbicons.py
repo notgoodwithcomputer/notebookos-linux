@@ -22,8 +22,10 @@ def _hex(c):
     return (int(c[0:2], 16) / 255, int(c[2:4], 16) / 255, int(c[4:6], 16) / 255)
 
 
-# op forms: ("M",x,y) move, ("L",x,y) line, ("C",cx,cy,r) circle,
-#           ("R",x,y,w,h) rect, ("P", "svg-ish path") — we keep it to M/L/C/R/A
+# Op table (all coordinates live on the 24x24 authoring grid):
+# M move, L line, R rectangle, RR rounded rectangle, C stroked circle,
+# A filled circle, Q quadratic-like curve, B cubic Bezier, AR arc segment,
+# F fill the current path.  The small vocabulary keeps glyph data readable.
 ICONS = {
     # A sheet of paper with a dog-eared corner and three text lines. The plain
     # framed page it used to be was a near-copy of "ebook" (same rectangle, same
@@ -33,15 +35,15 @@ ICONS = {
     "writer":     [("M", 5.5, 3), ("L", 14, 3), ("L", 18.5, 7.5), ("L", 18.5, 21), ("L", 5.5, 21), ("L", 5.5, 3),
                    ("M", 14, 3), ("L", 14, 7.5), ("L", 18.5, 7.5),
                    ("M", 8.5, 11.5), ("L", 15.5, 11.5), ("M", 8.5, 15), ("L", 15.5, 15), ("M", 8.5, 18.5), ("L", 12.5, 18.5)],
-    "novel":      [("M", 12, 6), ("L", 12, 19), ("R", 4, 5, 8, 14), ("R", 12, 5, 8, 14)],
+    "novel":      [("M", 12, 6), ("L", 12, 19.5), ("B", 9, 4.2, 6.5, 4.5, 4.5, 5.5), ("L", 4.5, 19), ("B", 7, 18.2, 9.5, 18.4, 12, 19.5), ("B", 14.5, 18.4, 17, 18.2, 19.5, 19), ("L", 19.5, 5.5), ("B", 17.5, 4.5, 15, 4.2, 12, 6)],
     # A mortarboard. Authored on 2.5-21.5 it was the widest glyph in the set and
     # rendered ~20% larger and heavier than everything beside it in the
     # Applications grid; the same shape now sits in the 4-20 optical box the
     # other app icons share.
     "academic":   [("M", 4, 9.6), ("L", 12, 5.5), ("L", 20, 9.6), ("L", 12, 13.7), ("L", 4, 9.6), ("M", 7.4, 11.3), ("L", 7.4, 16.4), ("M", 16.6, 11.3), ("L", 16.6, 16.4)],
-    "journal":    [("R", 5, 3.5, 14, 17), ("M", 9, 3.5), ("L", 9, 20.5)],
-    "screenplay": [("R", 3.5, 8.5, 17, 11.5), ("M", 8, 8.5), ("L", 9.2, 5.3), ("M", 13, 8.5), ("L", 14.2, 5.8)],
-    "tasks":      [("R", 4, 4, 16, 16), ("M", 8, 12.2), ("L", 10.8, 15), ("L", 16, 9)],
+    "journal":    [("RR", 5, 3.5, 14, 17, 1.5), ("M", 8.5, 3.5), ("L", 8.5, 20.5), ("M", 6.5, 7), ("L", 8.5, 7), ("M", 6.5, 11), ("L", 8.5, 11), ("M", 6.5, 15), ("L", 8.5, 15)],
+    "screenplay": [("RR", 3.5, 7.5, 17, 12.5, 1.5), ("M", 3.8, 11), ("L", 20.2, 11), ("M", 6, 7.5), ("L", 7.2, 4.5), ("M", 11, 7.5), ("L", 12.2, 4.5), ("M", 16, 7.5), ("L", 17.2, 4.5)],
+    "tasks":      [("M", 5, 4.5), ("L", 5, 19.5), ("M", 8.5, 6.5), ("L", 19, 6.5), ("M", 8.5, 12), ("L", 19, 12), ("M", 8.5, 17.5), ("L", 15, 17.5), ("M", 3.5, 11.8), ("L", 5.2, 13.5), ("L", 8, 10.2)],
     "calendar":   [("R", 4, 5, 16, 15), ("M", 4, 9.2), ("L", 20, 9.2), ("M", 8, 3.5), ("L", 8, 6.5), ("M", 16, 3.5), ("L", 16, 6.5)],
     # A dumbbell: the bar runs the full width and the four plates sit across
     # it, so the shape still reads at 16px in the Finder list where the plates
@@ -73,8 +75,8 @@ ICONS = {
     "ebook":      [("R", 4.5, 3, 15, 18),
                    ("M", 8, 7), ("L", 16, 7), ("M", 8, 10.5), ("L", 16, 10.5), ("M", 8, 14), ("L", 12.5, 14),
                    ("C", 12, 18.2, 1.0)],
-    "calculator": [("R", 5, 3, 14, 18), ("R", 8, 6, 8, 3), ("C", 9, 13, 0.6), ("C", 12, 13, 0.6), ("C", 15, 13, 0.6), ("C", 9, 16, 0.6), ("C", 12, 16, 0.6), ("C", 15, 16, 0.6)],
-    "accounting": [("R", 3, 7, 18, 10), ("C", 12, 12, 2.4), ("C", 6, 12, 0.6), ("C", 18, 12, 0.6)],
+    "calculator": [("RR", 5, 3, 14, 18, 1.8), ("RR", 7.5, 5.5, 9, 3.5, 0.7), ("M", 8, 12.5), ("L", 10, 12.5), ("M", 14, 12.5), ("L", 16, 12.5), ("M", 9, 11.5), ("L", 9, 13.5), ("M", 15, 11.5), ("L", 15, 13.5), ("M", 8, 17), ("L", 10, 17), ("M", 14, 17), ("L", 16, 17)],
+    "accounting": [("RR", 3, 7, 18, 10, 1.5), ("M", 3.5, 9.5), ("B", 7, 8.5, 8.5, 10, 12, 10), ("B", 15.5, 10, 17, 8.5, 20.5, 9.5), ("M", 3.5, 14.5), ("B", 7, 15.5, 8.5, 14, 12, 14), ("B", 15.5, 14, 17, 15.5, 20.5, 14.5), ("C", 12, 12, 1.5)],
     # A stamped envelope. The Bill Tracker is the app for paying a bill by post
     # or by phone, and the envelope is what a person actually holds while doing
     # the first of those. Deliberately NOT a document with a total on it: at
@@ -91,8 +93,8 @@ ICONS = {
                    ("M", 6, 14.6), ("L", 13, 14.6)],
     "contacts":   [("C", 12, 8.5, 3.2), ("M", 5.5, 19), ("L", 5.5, 17), ("L", 18.5, 17), ("L", 18.5, 19)],
     "messages":   [("R", 4, 5, 16, 10), ("M", 9, 15), ("L", 9, 19), ("L", 13, 15), ("C", 9, 10, 0.6), ("C", 12, 10, 0.6), ("C", 15, 10, 0.6)],
-    "g2048":      [("R", 4, 4, 7, 7), ("R", 13, 4, 7, 7), ("R", 4, 13, 7, 7), ("R", 13, 13, 7, 7)],
-    "tetris":     [("R", 4, 4, 5.3, 5.3), ("R", 9.3, 4, 5.3, 5.3), ("R", 14.6, 4, 5.3, 5.3), ("R", 9.3, 9.3, 5.3, 5.3)],
+    "g2048":      [("RR", 4, 4, 7, 7, 1.3), ("RR", 13, 4, 7, 7, 1.3), ("RR", 4, 13, 7, 7, 1.3), ("RR", 13, 13, 7, 7, 1.3), ("M", 7.5, 6), ("L", 7.5, 9), ("M", 15, 7.5), ("L", 18, 7.5), ("M", 7.5, 15), ("L", 7.5, 18), ("M", 15, 16.5), ("L", 18, 16.5)],
+    "tetris":     [("RR", 4, 5, 5, 5, 0.8), ("RR", 9.5, 5, 5, 5, 0.8), ("RR", 15, 5, 5, 5, 0.8), ("RR", 9.5, 10.5, 5, 5, 0.8)],
     # A game controller: rounded body, a d-pad cross on the left, two action
     # buttons on the right. Used by the GBA Emulator.
     "gamepad":    [("R", 3.5, 8, 17, 8.5), ("M", 8, 10.2), ("L", 8, 14.2), ("M", 6, 12.2), ("L", 10, 12.2), ("C", 15.7, 11, 1), ("C", 18, 13.2, 1)],
@@ -104,10 +106,11 @@ ICONS = {
     # bottom edge. Used by the GBA SDK.
     "cartridge":  [("M", 6, 3.5), ("L", 18, 3.5), ("L", 18, 20.5), ("L", 6, 20.5), ("L", 6, 3.5), ("R", 8.5, 6, 7, 5), ("M", 9, 20.5), ("L", 9, 17.5), ("M", 15, 20.5), ("L", 15, 17.5)],
     "illustrator":[("M", 5, 19), ("L", 12, 4), ("L", 19, 19), ("M", 8.2, 13), ("L", 15.8, 13)],
-    "sequencer":  [("M", 4, 12), ("L", 4, 16), ("M", 8, 8), ("L", 8, 18), ("M", 12, 5), ("L", 12, 19), ("M", 16, 9), ("L", 16, 17), ("M", 20, 11), ("L", 20, 15)],
-    "video":      [("R", 3, 6, 12, 12), ("M", 15, 10), ("L", 21, 7), ("L", 21, 17), ("L", 15, 14)],
-    "media":      [("R", 3, 5, 18, 14), ("C", 9, 10, 1.6), ("M", 4, 17), ("L", 9, 13), ("L", 13, 16), ("L", 16, 13.5), ("L", 20, 17)],
-    "music":      [("M", 9, 17), ("L", 9, 6), ("L", 19, 4), ("L", 19, 15), ("C", 6.5, 17.5, 2.5), ("C", 16.5, 15.5, 2.5)],
+    "sequencer":  [("M", 4, 7), ("L", 20, 7), ("M", 4, 12), ("L", 20, 12), ("M", 4, 17), ("L", 20, 17), ("M", 7.5, 5), ("L", 7.5, 9), ("M", 13, 10), ("L", 13, 14), ("M", 17.5, 15), ("L", 17.5, 19)],
+    "composer":   [("M", 4, 7), ("L", 20, 7), ("M", 4, 12), ("L", 20, 12), ("M", 4, 17), ("L", 20, 17), ("RR", 6.5, 5, 5.5, 4, 1), ("RR", 12.5, 10, 6, 4, 1), ("RR", 5, 15, 5, 4, 1)],
+    "video":      [("RR", 3.5, 6.5, 12.5, 11, 1.8), ("M", 16, 10), ("L", 20.5, 7.8), ("L", 20.5, 16.2), ("L", 16, 14)],
+    "media":      [("RR", 3, 5, 18, 14, 1.8), ("C", 9, 10, 1.5), ("M", 4.5, 17.5), ("L", 9, 13), ("L", 12, 15.5), ("L", 15.5, 12.5), ("L", 20, 17)],
+    "music":      [("M", 8.5, 17.5), ("L", 8.5, 7), ("L", 18.5, 4.5), ("L", 18.5, 15.5), ("M", 8.5, 9.5), ("L", 18.5, 7), ("C", 6, 18, 2.5), ("C", 16, 16, 2.5)],
     "packages":   [("M", 12, 3), ("L", 20, 7), ("L", 20, 17), ("L", 12, 21), ("L", 4, 17), ("L", 4, 7), ("L", 12, 3), ("M", 4, 7), ("L", 12, 11), ("L", 20, 7), ("M", 12, 11), ("L", 12, 21)],
     "signal":     [("A", 12, 18.6, 0.7), ("M", 9, 16.4), ("Q", 12, 14.4, 15, 16.4), ("M", 5.5, 14), ("Q", 12, 9, 18.5, 14)],
     "play":       [("M", 8, 5), ("L", 19, 12), ("L", 8, 19), ("L", 8, 5)],
@@ -334,6 +337,17 @@ ICONS = {
                    ("A", 9, 9.8, 0.9), ("A", 12, 9.8, 0.9), ("A", 15, 9.8, 0.9)],
 }
 
+# Physical objects in this family share a modest radius.  Keeping legacy R as
+# a supported primitive matters to callers and scratch tests; normalizing the
+# authored table here makes the visible set consistent without changing R's
+# established square-corner semantics in draw().  Tight boxes are capped so a
+# pause bar or tiny game tile never turns into a capsule.
+for _icon_name, _icon_ops in tuple(ICONS.items()):
+    ICONS[_icon_name] = [
+        ("RR", *op[1:], min(1.2, op[3] / 4, op[4] / 4)) if op[0] == "R" else op
+        for op in _icon_ops
+    ]
+
 # Five apps' glyphs are not named after their module, because the glyph names a
 # THING ("gamepad") and the module names the app ("gbaemu"), or because the app
 # was renamed after its glyph was drawn ("academics" -> "academic"). Anything
@@ -403,6 +417,17 @@ def draw(ctx, name, size, color="#1A1916", width=1.6, mirror=None):
             if started:
                 ctx.stroke()
             ctx.rectangle(op[1], op[2], op[3], op[4]); ctx.stroke(); started = False
+        elif k == "RR":
+            if started:
+                ctx.stroke()
+            x, y, w, h, rad = op[1:]
+            rad = min(rad, w / 2, h / 2)
+            ctx.new_sub_path()
+            ctx.arc(x + w - rad, y + rad, rad, -math.pi / 2, 0)
+            ctx.arc(x + w - rad, y + h - rad, rad, 0, math.pi / 2)
+            ctx.arc(x + rad, y + h - rad, rad, math.pi / 2, math.pi)
+            ctx.arc(x + rad, y + rad, rad, math.pi, 3 * math.pi / 2)
+            ctx.close_path(); ctx.stroke(); started = False
         elif k == "C":
             if started:
                 ctx.stroke(); started = False
@@ -414,6 +439,15 @@ def draw(ctx, name, size, color="#1A1916", width=1.6, mirror=None):
         elif k == "Q":
             # quadratic-ish via arc approximation: treat as an arc through 3 pts
             ctx.curve_to(op[1], op[2], op[1], op[2], op[3], op[4])
+        elif k == "B":
+            ctx.curve_to(*op[1:])
+        elif k == "AR":
+            if started:
+                ctx.stroke()
+            ctx.new_sub_path()
+            ctx.arc(op[1], op[2], op[3], op[4], op[5]); ctx.stroke(); started = False
+        elif k == "F":
+            ctx.fill(); started = False
     if started:
         ctx.stroke()
     ctx.restore()
