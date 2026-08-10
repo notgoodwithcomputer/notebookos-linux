@@ -21,6 +21,19 @@ import cairo
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODULE_DIR = ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"
 SIZES = (16, 24, 48)
+# Glyphs used as application identities (including alias targets). Small UI
+# controls intentionally have different topology and are not judged as app
+# silhouettes.
+APP_ICONS = {
+    "writer", "novel", "comics", "academic", "journal", "screenplay",
+    "tasks", "calendar", "workout", "cookbook", "mealplanner", "ebook",
+    "calculator", "accounting", "bills", "contacts", "messages", "g2048",
+    "tetris", "gamepad", "mappin", "globe", "cartridge", "illustrator",
+    "sequencer", "composer", "video", "media", "music", "packages", "sys",
+    "terminal", "sysmon", "installer", "gbasdk", "usbwriter",
+}
+SILHOUETTE_COMPONENT_FLOOR = 0.55
+SILHOUETTE_INK_FLOOR = 0.16
 
 
 def load_module():
@@ -47,6 +60,30 @@ def pixels(module, name, size, mirror=False, padding=0):
     return b"".join(rows)
 
 
+def largest_component_fraction(raw, side, threshold=96):
+    ink = {i for i, value in enumerate(raw) if value >= threshold}
+    total = len(ink)
+    largest = 0
+    while ink:
+        seed = ink.pop()
+        stack = [seed]
+        count = 1
+        while stack:
+            pos = stack.pop()
+            x, y = pos % side, pos // side
+            for nxt in (pos - 1, pos + 1, pos - side, pos + side):
+                if nxt not in ink:
+                    continue
+                nx, ny = nxt % side, nxt // side
+                if abs(nx - x) + abs(ny - y) != 1:
+                    continue
+                ink.remove(nxt)
+                stack.append(nxt)
+                count += 1
+        largest = max(largest, count)
+    return largest / total if total else 0.0
+
+
 def checks(module):
     failures = []
     names = sorted(module.ICONS)
@@ -70,10 +107,19 @@ def checks(module):
             coverage = sum(first) / (255.0 * size * size)
             if coverage == 0:
                 failures.append(f"FAIL coverage: {name}@{size} is empty")
-            if not 0.012 <= coverage <= 0.42:
+            if not 0.085 <= coverage <= 0.53:
                 failures.append(
                     f"FAIL family-weight: {name}@{size} coverage={coverage:.4f}"
                 )
+
+            if size == 16 and name in APP_ICONS:
+                component = largest_component_fraction(first, size)
+                if (coverage < SILHOUETTE_INK_FLOOR or
+                        component < SILHOUETTE_COMPONENT_FLOOR):
+                    failures.append(
+                        f"FAIL silhouette: {name}@16 coverage={coverage:.4f} "
+                        f"largest-component={component:.3f}"
+                    )
 
             pad = max(4, size // 4)
             padded = pixels(module, name, size, padding=pad)
@@ -142,7 +188,13 @@ def main():
         'ICONS["writer"] = []',
         "FAIL coverage: writer has an empty op list",
     )
-    if not (ok_bounds and ok_empty):
+    ok_hairline = run_mutant(
+        source,
+        'ICONS["writer"] = [("M", 4, 6), ("L", 20, 6), '
+        '("M", 4, 12), ("L", 20, 12), ("M", 4, 18), ("L", 20, 18)]',
+        "FAIL silhouette: writer@16",
+    )
+    if not (ok_bounds and ok_empty and ok_hairline):
         return 1
     print("PASS nbicons_selftest")
     return 0

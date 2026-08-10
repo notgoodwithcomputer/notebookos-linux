@@ -1,6 +1,7 @@
 """
-Notebook OS icon set — 24x24 line icons drawn directly with cairo, matching
-the design language (1.6 px stroke, round caps, ink #1A1916). Rendering natively
+Notebook OS icon set — bold 24x24 mid-century pictograms drawn with cairo.
+Filled ink silhouettes and paper-coloured cutouts replace the former line set.
+Rendering natively
 keeps them crisp at any size and needs no icon-theme package.
 
 Each icon is a list of drawing ops in a 24x24 coordinate space. `render(name,
@@ -25,7 +26,9 @@ def _hex(c):
 # Op table (all coordinates live on the 24x24 authoring grid):
 # M move, L line, R rectangle, RR rounded rectangle, C stroked circle,
 # A filled circle, Q quadratic-like curve, B cubic Bezier, AR arc segment,
-# F fill the current path.  The small vocabulary keeps glyph data readable.
+# F fill current path. PF fills a polygon; RF/RRF fill a rectangle/rounded
+# rectangle; E fills an ellipse. KPF/KRF/KE carve transparent paper from a
+# silhouette. Existing operations retain their semantics.
 ICONS = {
     # A sheet of paper with a dog-eared corner and three text lines. The plain
     # framed page it used to be was a near-copy of "ebook" (same rectangle, same
@@ -36,6 +39,11 @@ ICONS = {
                    ("M", 14, 3), ("L", 14, 7.5), ("L", 18.5, 7.5),
                    ("M", 8.5, 11.5), ("L", 15.5, 11.5), ("M", 8.5, 15), ("L", 15.5, 15), ("M", 8.5, 18.5), ("L", 12.5, 18.5)],
     "novel":      [("M", 12, 6), ("L", 12, 19.5), ("B", 9, 4.2, 6.5, 4.5, 4.5, 5.5), ("L", 4.5, 19), ("B", 7, 18.2, 9.5, 18.4, 12, 19.5), ("B", 14.5, 18.4, 17, 18.2, 19.5, 19), ("L", 19.5, 5.5), ("B", 17.5, 4.5, 15, 4.2, 12, 6)],
+    # A zine page divided into unequal panels. The internal rules make this a
+    # comic page, not Writer's dog-eared sheet or Novel's open book.
+    "comics":     [("R", 5, 3, 14, 18),
+                   ("M", 5, 11), ("L", 19, 11),
+                   ("M", 12.5, 3), ("L", 12.5, 11)],
     # A mortarboard. Authored on 2.5-21.5 it was the widest glyph in the set and
     # rendered ~20% larger and heavier than everything beside it in the
     # Applications grid; the same shape now sits in the 4-20 optical box the
@@ -337,14 +345,86 @@ ICONS = {
                    ("A", 9, 9.8, 0.9), ("A", 12, 9.8, 0.9), ("A", 15, 9.8, 0.9)],
 }
 
-# Physical objects in this family share a modest radius.  Keeping legacy R as
-# a supported primitive matters to callers and scratch tests; normalizing the
-# authored table here makes the visible set consistent without changing R's
-# established square-corner semantics in draw().  Tight boxes are capped so a
-# pause bar or tiny game tile never turns into a capsule.
+# Mid-century replacement layer.  Closed legacy outlines become solid poster
+# shapes, framed circles become substantial discs, and open gestures receive a
+# heavier print-pictogram rule in draw().  Named overrides are purpose-built
+# silhouettes where an automatic closure would lose the object's identity.
+_MC = {
+    "trash": [("RRF", 6, 7.5, 12, 13, 1.2), ("RF", 4.5, 4.5, 15, 2.2),
+              ("RRF", 9, 2.8, 6, 2.2, 1), ("KRF", 8, 9.2, 8, 1.6)],
+    "music": [("PF", 7.5, 6.5, 19, 3.8, 19, 7, 7.5, 9.7),
+              ("RF", 7.5, 7, 2.8, 10.5), ("RF", 16.2, 5, 2.8, 10.5),
+              ("E", 4.2, 15.2, 6.6, 4.5, -0.35),
+              ("E", 12.9, 13.2, 6.6, 4.5, -0.35)],
+    "folder": [("PF", 3, 7, 8.5, 7, 10.5, 9, 21, 9, 20, 20, 3, 20),
+               ("PF", 3, 10.5, 21, 9.5, 20, 19, 3, 20),
+               ("KPF", 3.5, 10.3, 20.5, 9.4, 20.4, 10.6, 3.5, 11.4)],
+    "writer": [("PF", 5, 3, 14, 3, 19, 8, 19, 21, 5, 21),
+               ("PF", 14, 3, 19, 8, 14, 8),
+               ("KRF", 8, 11, 8, 1.8), ("KRF", 8, 15, 7, 1.8)],
+    "contacts": [("A", 12, 8, 4), ("PF", 4, 20, 5.5, 15, 9, 12, 15, 12, 18.5, 15, 20, 20)],
+    "terminal": [("RRF", 3, 5, 18, 14, 2),
+                 ("KPF", 7, 9, 11, 12, 7, 15, 5.5, 13.5, 8, 12, 5.5, 10.5),
+                 ("KRF", 12, 14, 5, 1.8)],
+    "calculator": [("RRF", 5, 3, 14, 18, 2), ("KRF", 7.5, 5.5, 9, 3.5),
+                   ("KRF", 8, 12, 3, 2), ("KRF", 13, 12, 3, 2),
+                   ("KRF", 8, 16, 3, 2), ("KRF", 13, 16, 3, 2)],
+    "calendar": [("RRF", 4, 5, 16, 15, 2), ("KRF", 6, 10, 12, 7),
+                 ("RF", 4, 8, 16, 2), ("RRF", 7, 3, 3, 5, 1), ("RRF", 14, 3, 3, 5, 1)],
+    "bills": [("RRF", 3, 6, 18, 12, 2), ("KPF", 4, 8, 12, 14, 20, 8, 20, 10, 12, 16, 4, 10)],
+    "ebook": [("RRF", 5, 3, 14, 18, 2), ("KRF", 8, 7, 8, 1.6),
+              ("KRF", 8, 11, 8, 1.6), ("KRF", 8, 15, 5, 1.6), ("KA", 12, 19, 1)],
+    "journal": [("RRF", 5, 3, 14, 18, 2), ("KRF", 8, 3, 1.7, 18),
+                ("KRF", 11, 7, 5, 1.5), ("KRF", 11, 11, 5, 1.5)],
+    "screenplay": [("RRF", 3, 7, 18, 13, 2), ("KRF", 5, 12, 14, 5),
+                   ("PF", 3, 7, 21, 7, 21, 10, 3, 12)],
+    "media": [("RRF", 3, 5, 18, 14, 2), ("KPF", 5, 16, 9, 11, 12, 14, 15, 10, 19, 16),
+              ("KA", 8, 9, 1.5)],
+    "mealplanner": [("RRF", 3, 5, 18, 15, 2), ("KRF", 5, 10, 14, 7),
+                    ("A", 12, 13.5, 2.5), ("RF", 7, 11, 1.5, 5), ("RF", 16, 11, 1.5, 5)],
+    "g2048": [("RRF", 3, 3, 18, 18, 2), ("KRF", 11, 3, 2, 18),
+              ("KRF", 3, 11, 18, 2), ("RF", 11, 10, 2, 4), ("RF", 10, 11, 4, 2)],
+    "composer": [("RRF", 3, 5, 18, 14, 2), ("KRF", 5, 8, 14, 1.5),
+                 ("KRF", 5, 12, 14, 1.5), ("KRF", 5, 16, 14, 1.5),
+                 ("RRF", 6, 6.5, 5, 4, 1), ("RRF", 13, 10.5, 5, 4, 1),
+                 ("RRF", 8, 14.5, 5, 4, 1)],
+    "pause": [("RRF", 6.5, 4, 4.5, 16, 1), ("RRF", 13, 4, 4.5, 16, 1)],
+    "stopsq": [("RRF", 5, 5, 14, 14, 1.8)],
+    "play": [("PF", 7, 4, 20, 12, 7, 20)],
+    "rew": [("PF", 3, 12, 11.5, 4, 11.5, 20), ("PF", 11.5, 12, 20, 4, 20, 20)],
+    "ff": [("PF", 4, 4, 12.5, 12, 4, 20), ("PF", 12.5, 4, 21, 12, 12.5, 20)],
+    "wshade": [("RRF", 5, 8, 14, 8, 2), ("RF", 8, 11.2, 8, 1.6)],
+    "line": [("PF", 4, 17.5, 17.5, 4, 20, 6.5, 6.5, 20), ("A", 5.2, 18.8, 1.8)],
+    "rect": [("RRF", 4, 5, 16, 14, 2), ("KRF", 7, 8, 10, 8)],
+    "ellipse": [("E", 3, 6, 18, 12, -0.15), ("KE", 6.5, 8.5, 11, 7, -0.15)],
+    "fill": [("PF", 8, 3, 18, 12, 10, 20, 3, 13), ("A", 19, 17, 2.3),
+             ("PF", 5, 13, 10, 18, 16, 12, 11, 7)],
+    "disk": [("RRF", 3, 6, 18, 12, 3), ("RRF", 6, 9, 9, 3, 1), ("A", 17.5, 14, 1.4)],
+    "inbox": [("PF", 4, 6, 20, 6, 22, 19, 2, 19),
+              ("PF", 2, 13, 8, 13, 10, 16, 14, 16, 16, 13, 22, 13, 22, 20, 2, 20)],
+    "cartridge": [("RRF", 5, 3, 14, 18, 2), ("KRF", 8, 6, 8, 6),
+                  ("PF", 8, 21, 8, 17, 10, 17, 10, 21), ("PF", 14, 21, 14, 17, 16, 17, 16, 21)],
+    "sources": [("RRF", 3, 4, 18, 7, 2), ("RRF", 3, 13, 18, 7, 2),
+                ("A", 6.5, 7.5, 1.2), ("A", 6.5, 16.5, 1.2)],
+    "toc": [("RRF", 3, 4, 18, 3, 1), ("RRF", 3, 10.5, 18, 3, 1),
+            ("RRF", 3, 17, 12, 3, 1), ("A", 19, 18.5, 1.5)],
+    "trfade": [("RRF", 3, 5, 8, 14, 2), ("PF", 12, 5, 21, 8, 21, 16, 12, 19)],
+    "trdissolve": [("RRF", 3, 5, 18, 14, 2), ("A", 8, 9, 1.3), ("A", 13, 12, 1.3), ("A", 17, 16, 1.3)],
+    "trwipe": [("RRF", 3, 5, 18, 14, 2), ("RF", 11, 5, 2, 14)],
+    "trslide": [("RRF", 3, 5, 18, 14, 2), ("PF", 8, 10, 15, 10, 15, 7, 20, 12, 15, 17, 15, 14, 8, 14)],
+    "triris": [("RRF", 3, 5, 18, 14, 2), ("A", 12, 12, 4)],
+    "trblack": [("RRF", 3, 5, 18, 14, 2), ("PF", 3, 5, 8, 5, 21, 19, 16, 19)],
+    "cloud": [("A", 7, 14, 5), ("A", 12, 10, 6), ("A", 17, 14, 5),
+              ("RRF", 4, 13, 16, 6, 3)],
+}
+ICONS.update(_MC)
+
+# Physical objects share the same 1.2-unit softened slab corner. Legacy R/RR
+# remain supported primitives; this conversion only affects authored glyphs.
 for _icon_name, _icon_ops in tuple(ICONS.items()):
     ICONS[_icon_name] = [
-        ("RR", *op[1:], min(1.2, op[3] / 4, op[4] / 4)) if op[0] == "R" else op
+        ("RRF", *op[1:], min(1.2, op[3] / 4, op[4] / 4)) if op[0] == "R" else
+        ("RRF", *op[1:]) if op[0] == "RR" else op
         for op in _icon_ops
     ]
 
@@ -403,7 +483,8 @@ def draw(ctx, name, size, color="#1A1916", width=1.6, mirror=None):
         ctx.scale(-1, 1)
     r, g, b = _hex(color)
     ctx.set_source_rgb(r, g, b)
-    ctx.set_line_width(width)
+    # Open accents are screen-print rules, never hairline bodies.
+    ctx.set_line_width(max(width, 2.6))
     ctx.set_line_cap(cairo.LINE_CAP_ROUND)
     ctx.set_line_join(cairo.LINE_JOIN_ROUND)
     started = False
@@ -428,6 +509,53 @@ def draw(ctx, name, size, color="#1A1916", width=1.6, mirror=None):
             ctx.arc(x + rad, y + h - rad, rad, math.pi / 2, math.pi)
             ctx.arc(x + rad, y + rad, rad, math.pi, 3 * math.pi / 2)
             ctx.close_path(); ctx.stroke(); started = False
+        elif k == "RF":
+            if started:
+                ctx.stroke()
+            ctx.rectangle(op[1], op[2], op[3], op[4]); ctx.fill(); started = False
+        elif k == "RRF":
+            if started:
+                ctx.stroke()
+            x, y, w, h, rad = op[1:]
+            rad = min(rad, w / 2, h / 2)
+            ctx.new_sub_path()
+            ctx.arc(x + w - rad, y + rad, rad, -math.pi / 2, 0)
+            ctx.arc(x + w - rad, y + h - rad, rad, 0, math.pi / 2)
+            ctx.arc(x + rad, y + h - rad, rad, math.pi / 2, math.pi)
+            ctx.arc(x + rad, y + rad, rad, math.pi, 3 * math.pi / 2)
+            ctx.close_path(); ctx.fill(); started = False
+        elif k == "PF":
+            if started:
+                ctx.stroke()
+            pts = op[1:]
+            ctx.move_to(pts[0], pts[1])
+            for i in range(2, len(pts), 2):
+                ctx.line_to(pts[i], pts[i + 1])
+            ctx.close_path(); ctx.fill(); started = False
+        elif k in ("KPF", "KRF", "KE"):
+            if started:
+                ctx.stroke()
+            ctx.save(); ctx.set_operator(cairo.OPERATOR_CLEAR)
+            if k == "KPF":
+                pts = op[1:]
+                ctx.move_to(pts[0], pts[1])
+                for i in range(2, len(pts), 2):
+                    ctx.line_to(pts[i], pts[i + 1])
+                ctx.close_path(); ctx.fill()
+            elif k == "KRF":
+                ctx.rectangle(op[1], op[2], op[3], op[4]); ctx.fill()
+            else:
+                x, y, w, h, angle = op[1:]
+                ctx.translate(x + w / 2, y + h / 2); ctx.rotate(angle)
+                ctx.scale(w / 2, h / 2); ctx.arc(0, 0, 1, 0, 2 * math.pi); ctx.fill()
+            ctx.restore(); started = False
+        elif k == "E":
+            if started:
+                ctx.stroke()
+            x, y, w, h, angle = op[1:]
+            ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.rotate(angle)
+            ctx.scale(w / 2, h / 2); ctx.arc(0, 0, 1, 0, 2 * math.pi); ctx.fill()
+            ctx.restore(); started = False
         elif k == "C":
             if started:
                 ctx.stroke(); started = False
@@ -436,6 +564,12 @@ def draw(ctx, name, size, color="#1A1916", width=1.6, mirror=None):
             if started:
                 ctx.stroke(); started = False
             ctx.arc(op[1], op[2], op[3], 0, 2 * math.pi); ctx.fill()
+        elif k == "KA":
+            if started:
+                ctx.stroke(); started = False
+            ctx.save(); ctx.set_operator(cairo.OPERATOR_CLEAR)
+            ctx.arc(op[1], op[2], op[3], 0, 2 * math.pi); ctx.fill()
+            ctx.restore()
         elif k == "Q":
             # quadratic-ish via arc approximation: treat as an arc through 3 pts
             ctx.curve_to(op[1], op[2], op[1], op[2], op[3], op[4])
