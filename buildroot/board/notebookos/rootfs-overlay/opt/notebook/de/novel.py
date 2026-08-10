@@ -111,6 +111,22 @@ DOCS_DIR = os.path.join(HOME, "Documents")
 # comparisons, so a manuscript saved on an English install is still recognised
 # as untitled when it is opened on a translated one.)
 UNTITLED_EN = "Untitled Novel"
+NOVEL_FORMAT_VERSION = 2
+
+
+def _count_body_words(text):
+    """Count prose only. Chapter titles live outside the body in format 2."""
+    return len(text.split())
+
+
+def placeholder_offsets(left_margin, top_margin, body_ascent, ghost_ascent):
+    """Return the ghost label origin which shares the body's first baseline.
+
+    Inputs are integer Pango pixel metrics, which keeps the layout equation
+    headless-testable while the widget adapter below supplies the real fonts.
+    """
+    return (int(left_margin),
+            int(top_margin) + int(body_ascent) - int(ghost_ascent))
 
 
 def roman(n):
@@ -171,6 +187,9 @@ class Novel(nbapp.AppWindow):
         # final flush honours what the button promised and the guard does not
         # ask twice.
         self._discarded = False
+        # A damaged/unrecognized recovery store is moved aside intact and this
+        # session may inspect a blank model, but must never replace those bytes.
+        self._store_read_only = False
         # The confirm card the close guard is currently showing, if any. Held
         # so a second close attempt re-uses the open card instead of stacking
         # another one on top of it.
@@ -232,7 +251,7 @@ class Novel(nbapp.AppWindow):
         # is still refused by the disk (see _on_delete).
         self.connect("delete-event", self._on_delete)
         self.connect("destroy", self._on_destroy)
-        if not saved:
+        if not saved and not self._store_read_only:
             # First run: persist the seed so the "Saved" state is truthful and
             # the empty manuscript reopens instead of being silently re-seeded.
             self._save_state()
@@ -528,6 +547,16 @@ class Novel(nbapp.AppWindow):
         self.eyebrow.set_max_width_chars(52)
         page.pack_start(self.eyebrow, False, False, 0)
 
+        # The title is manuscript content in its own control, rather than a
+        # specially-tagged first body line. It occupies the old opening-heading
+        # position and uses the same 32pt medium serif letterpress treatment.
+        self.chapter_title = Gtk.Entry()
+        self.chapter_title.get_style_context().add_class("nvchaptertitle")
+        self.chapter_title.set_has_frame(False)
+        self.chapter_title.set_placeholder_text(_t("Chapter title"))
+        self.chapter_title.connect("changed", self._on_title_change)
+        page.pack_start(self.chapter_title, False, False, 0)
+
         self.view = Gtk.TextView()
         # WORD_CHAR, not WORD: a word longer than the writing column (a pasted
         # URL, a long compound) cannot break under WORD, so it runs off the
@@ -536,6 +565,9 @@ class Novel(nbapp.AppWindow):
         # panel, putting the save state out of reach.
         self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self.view.get_style_context().add_class("nvbody")
+        self.view.set_left_margin(2)
+        self.view.set_right_margin(2)
+        self.view.set_top_margin(0)
         self.view.set_pixels_below_lines(14)
         self.view.set_pixels_inside_wrap(10)
         # Portrait page proportion (5.5:8.5) as a minimum height hint.
@@ -550,8 +582,7 @@ class Novel(nbapp.AppWindow):
         self.placeholder.get_style_context().add_class("nvplaceholder")
         self.placeholder.set_halign(Gtk.Align.START)
         self.placeholder.set_valign(Gtk.Align.START)
-        self.placeholder.set_margin_top(62)
-        self.placeholder.set_margin_start(2)
+        self._sync_placeholder_position()
         self.placeholder.set_no_show_all(True)
         overlay.add_overlay(self.placeholder)
         if hasattr(overlay, "set_overlay_pass_through"):
@@ -566,6 +597,23 @@ class Novel(nbapp.AppWindow):
             vp.connect("size-allocate", self._fit_page)
         col.pack_start(scroll, True, True, 0)
         return col
+
+    def _sync_placeholder_position(self):
+        """Align the ghost prompt's baseline with the first body character."""
+        context = self.view.get_pango_context()
+        body_font = self.view.get_style_context().get_property(
+            "font", Gtk.StateFlags.NORMAL)
+        ghost_font = self.placeholder.get_style_context().get_property(
+            "font", Gtk.StateFlags.NORMAL)
+        body = context.get_metrics(body_font, None)
+        ghost = context.get_metrics(ghost_font, None)
+        scale = Pango.SCALE
+        left, top = placeholder_offsets(
+            self.view.get_left_margin(), self.view.get_top_margin(),
+            (body.get_ascent() + scale - 1) // scale,
+            (ghost.get_ascent() + scale - 1) // scale)
+        self.placeholder.set_margin_start(left)
+        self.placeholder.set_margin_top(top)
 
     # ============================ FIND ============================
     # A novel is the one document you genuinely cannot read through to find
@@ -704,10 +752,8 @@ class Novel(nbapp.AppWindow):
     def _make_buffer(self, num, body=None, ranges=None):
         buf = Gtk.TextBuffer()
         tt = buf.get_tag_table()
-        # The heading inherits the editor's serif font from CSS (Newsreader →
-        # "Liberation Serif" → serif); it must NOT pin family="Newsreader",
-        # which isn't installed and would make Pango substitute a sans face for
-        # every chapter heading. Only size/weight/spacing are set here.
+        # Body paragraphs may still use the editor's Heading style; this tag is
+        # no longer special-cased onto line one.
         h = Gtk.TextTag(name="heading")
         h.set_property("size-points", 32)
         h.set_property("weight", Pango.Weight.MEDIUM)
@@ -726,23 +772,13 @@ class Novel(nbapp.AppWindow):
             t = Gtk.TextTag(name=name)
             t.set_property(prop, val)
             tt.add(t)
-        # Seed the buffer body: a fresh chapter starts with just its "Chapter N"
-        # heading line; a restored chapter is rebuilt from its saved text. This
+        # Seed the prose buffer. The chapter title is a separate field. This
         # insert runs BEFORE connecting "changed" so creating/loading a chapter
         # never triggers a spurious autosave.
         if body is None:
-            body = "Chapter %s\n" % num
+            body = ""
         buf.insert(buf.get_start_iter(), body)
-        if ranges is None:
-            # Brand-new chapter with no saved spans: seed just the "Chapter N"
-            # first line as the 32pt heading.
-            line1 = buf.get_iter_at_line(0)
-            line1_end = buf.get_iter_at_line(1)
-            buf.apply_tag_by_name("heading", line1, line1_end)
-        else:
-            # Restored chapter: reinstate exactly the spans (B/I/U + heading)
-            # the writer saved. Never force line 1 to a heading — prose that
-            # replaced the seeded "Chapter N" line must stay prose.
+        if ranges is not None:
             self._apply_ranges(buf, ranges)
         buf.connect("changed", self._on_change)
         # Connected here, AFTER the body above has been seeded, so restoring a
@@ -790,8 +826,28 @@ class Novel(nbapp.AppWindow):
         self._total_words += ch["wc"]
         if select:
             self.active = len(self.chapters) - 1
+            self._show_chapter_title(ch["title"])
             self._show_buffer(buf)
             self._place_cursor_body(buf)
+
+    def _show_chapter_title(self, text):
+        self._suppress_title_change = True
+        try:
+            nbi18n.set_verbatim(self.chapter_title, text)
+        finally:
+            self._suppress_title_change = False
+
+    def _on_title_change(self, entry):
+        """Bind the dedicated title field directly to the active chapter."""
+        if getattr(self, "_suppress_title_change", False) or not self.chapters:
+            return
+        ch = self.chapters[self.active]
+        ch["title"] = entry.get_text()
+        label = ch.get("_row_title")
+        if label is not None:
+            nbi18n.set_verbatim(label, ch["title"])
+        # Same debounced UndoHistory checkpoint used by prose typing.
+        self._trigger_save()
 
     def _on_new_chapter(self):
         self.undo.checkpoint("New Chapter")
@@ -804,6 +860,7 @@ class Novel(nbapp.AppWindow):
         if i == self.active:
             return
         self.active = i
+        self._show_chapter_title(self.chapters[i]["title"])
         self._show_buffer(self.chapters[i]["buffer"])
         self._place_cursor_body(self.chapters[i]["buffer"])
         self._refresh_chapter_list()
@@ -920,10 +977,7 @@ class Novel(nbapp.AppWindow):
     # ============================ COUNTING ============================
     def _count_buffer(self, buf):
         txt = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
-        # drop the leading "Chapter N" heading line from the count
-        parts = txt.split("\n", 1)
-        rest = parts[1] if len(parts) > 1 else ""
-        return len(rest.split())
+        return _count_body_words(txt)
 
     def _wordstr(self, n):
         # Pluralize the word-count label so a single word reads "1 word",
@@ -983,23 +1037,15 @@ class Novel(nbapp.AppWindow):
         # whichever chapter happens to be active.
         if self._suppress_change:
             return
-        # Track the sidebar row name against the edited serif heading: the
-        # chapter's first line IS its heading, so mirror it into ch["title"]
-        # (falling back to "Chapter N" when the writer clears it).
         ch = self.chapters[self.active]
-        first = self._buffer_text(buf).split("\n", 1)[0].strip()
-        ch["title"] = first if first else "Chapter " + str(ch["num"])
         # Recount ONLY the active chapter and adjust the running total by the
         # delta — no re-summing of every chapter on each keystroke.
         new = self._count_buffer(buf)
         self._total_words += new - ch.get("wc", 0)
         ch["wc"] = new
-        # Update THIS chapter's sidebar row in place (title + word count) rather
+        # Update THIS chapter's sidebar word count in place rather
         # than tearing down and rebuilding the whole chapter list. Structural
         # ops (new/select/part changes) still go through _refresh_chapter_list.
-        tlbl = ch.get("_row_title")
-        if tlbl is not None:
-            tlbl.set_text(ch["title"])
         wlbl = ch.get("_row_words")
         if wlbl is not None:
             wlbl.set_text(self._wordstr(new))
@@ -1068,7 +1114,7 @@ class Novel(nbapp.AppWindow):
 
     # ============================ PERSISTENCE ============================
     def _buffer_text(self, buf):
-        """Full plain text of a chapter buffer (heading line included)."""
+        """Full prose text of a chapter buffer; the title is stored apart."""
         return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
 
     # Formatting is persisted per chapter as {tag_name: [[start_off, end_off]]}
@@ -1136,6 +1182,10 @@ class Novel(nbapp.AppWindow):
         which OUTWEIGHS a store holding a whole book under an unexpected key, so
         _bak_would_shrink sees no regression and the second open overwrites the
         only remaining copy. See nbapp.quarantine_unrecognized."""
+        damaged = nbapp.preserve_damaged(NOVEL_FILE)
+        if damaged:
+            self._store_read_only = True
+            return None
         try:
             with open(NOVEL_FILE) as fh:
                 data = json.load(fh)
@@ -1144,6 +1194,7 @@ class Novel(nbapp.AppWindow):
         state = self._parse_state(data)
         if state is None:
             nbapp.quarantine_unrecognized(NOVEL_FILE)
+            self._store_read_only = True
         return state
 
     def _parse_state(self, data):
@@ -1153,6 +1204,10 @@ class Novel(nbapp.AppWindow):
         session-recovery loader and the File ▸ Open path."""
         if not isinstance(data, dict):
             return None
+        version = data.get("format_version")
+        if version is not None and version != NOVEL_FORMAT_VERSION:
+            return None
+        legacy = version is None
         raw = data.get("chapters")
         if not isinstance(raw, list) or not raw:
             return None
@@ -1175,11 +1230,16 @@ class Novel(nbapp.AppWindow):
             pt = ch.get("part", 0)
             if not isinstance(pt, int) or not (0 <= pt < len(parts)):
                 pt = 0
+            title = str(ch.get("title", "Chapter " + n))
+            body = str(ch.get("body", ""))
+            ranges = raw_ranges if isinstance(raw_ranges, dict) else {}
+            if legacy:
+                body, ranges = Novel._migrate_legacy_body(title, body, ranges)
             chapters.append({
                 "num": str(ch.get("num", n)),
-                "title": str(ch.get("title", "Chapter " + n)),
-                "body": str(ch.get("body", "")),
-                "ranges": raw_ranges if isinstance(raw_ranges, dict) else {},
+                "title": title,
+                "body": body,
+                "ranges": ranges,
                 "part": pt,
             })
         if not chapters:
@@ -1201,12 +1261,37 @@ class Novel(nbapp.AppWindow):
         return {"title": str(data.get("title", _untitled())),
                 "author": au if isinstance(au, str) else "",
                 "parts": parts, "chapters": chapters, "active": active,
-                "doc_path": dp}
+                "doc_path": dp, "format_version": NOVEL_FORMAT_VERSION}
+
+    @staticmethod
+    def _migrate_legacy_body(title, body, ranges):
+        """Lift an old mirrored first line into the dedicated title field."""
+        first, sep, _rest = body.partition("\n")
+        if first != title:
+            return body, dict(ranges)
+        cut = len(first) + (1 if sep else 0)
+        shifted = {}
+        for name, spans in ranges.items():
+            if not isinstance(spans, list):
+                continue
+            out = []
+            for span in spans:
+                try:
+                    start, end = int(span[0]), int(span[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                start, end = max(start, cut) - cut, end - cut
+                if end > start:
+                    out.append([start, end])
+            if out:
+                shifted[name] = out
+        return body[cut:], shifted
 
     def _serialize(self):
         """The full editable model as a JSON-serializable dict. Shared by the
         session-recovery writer and the File ▸ Save / Save As writers."""
         return {
+            "format_version": NOVEL_FORMAT_VERSION,
             "title": self._title,
             "author": self._author,
             "active": self.active,
@@ -1227,6 +1312,8 @@ class Novel(nbapp.AppWindow):
         actually returns, the manuscript exists nowhere but this window, and
         _recovery_dirty is the only record of that. It is cleared HERE, on the
         write that reached the disk, and nowhere else."""
+        if getattr(self, "_store_read_only", False):
+            return False
         try:
             nbapp.atomic_write_json(NOVEL_FILE, self._serialize())
         except Exception as exc:
@@ -1289,6 +1376,7 @@ class Novel(nbapp.AppWindow):
         self.active = (state["active"]
                        if state["active"] < len(self.chapters) else 0)
         self._show_buffer(self.chapters[self.active]["buffer"])
+        self._show_chapter_title(self.chapters[self.active]["title"])
         self._place_cursor_body(self.chapters[self.active]["buffer"])
         del outgoing
 
@@ -1427,11 +1515,9 @@ class Novel(nbapp.AppWindow):
         if self._title.strip() not in ("", UNTITLED_EN,
                                                      _untitled()):
             return True
-        # The heading line IS the chapter title and is excluded from the word
-        # count, so a typed-but-bodyless heading still counts as content.
         for ch in self.chapters:
-            first = self._buffer_text(ch["buffer"]).split("\n", 1)[0].strip()
-            if first and first != "Chapter " + str(ch["num"]):
+            title = ch.get("title", "").strip()
+            if title and title != "Chapter " + str(ch["num"]):
                 return True
         return False
 
@@ -2141,12 +2227,10 @@ class Novel(nbapp.AppWindow):
         self._update_style_pill()
 
     def _place_cursor_body(self, buf):
-        """Drop the caret at the start of the body (line 1) when a chapter is
+        """Drop the caret at the start of the body when a chapter is
         activated, so the pill reads 'Body' and the writer can start typing."""
         try:
-            it = (buf.get_iter_at_line(1) if buf.get_line_count() > 1
-                  else buf.get_end_iter())
-            buf.place_cursor(it)
+            buf.place_cursor(buf.get_start_iter())
         except Exception:
             pass
 
@@ -2326,28 +2410,10 @@ class Novel(nbapp.AppWindow):
                 self._rewrite_heading(ch, "Chapter " + new)
 
     def _rewrite_heading(self, ch, text):
-        """Replace a chapter buffer's first (heading) line with `text`, keeping
-        the heading tag and the body below it intact. The 'changed' handler is
-        suppressed so this rewrite of a possibly NON-active buffer is never
-        mis-attributed to the active chapter (see _on_change)."""
-        buf = ch["buffer"]
-        self._suppress_change = True
-        try:
-            s = buf.get_iter_at_line(0)
-            e = s.copy()
-            e.forward_to_line_end()
-            buf.delete(s, e)
-            s = buf.get_iter_at_line(0)
-            buf.insert(s, text)
-            hs = buf.get_iter_at_line(0)
-            he = (buf.get_iter_at_line(1) if buf.get_line_count() > 1
-                  else buf.get_end_iter())
-            buf.apply_tag_by_name("heading", hs, he)
-        finally:
-            self._suppress_change = False
+        """Rename an untouched default title without modifying body prose."""
         ch["title"] = text
-        # A default heading carries no body words, so wc / the running total are
-        # unchanged; only the title/badge move (reflected by _refresh_chapter_list).
+        if ch is self.chapters[self.active]:
+            self._show_chapter_title(text)
 
     def _on_delete_part(self):
         """Delete the part that contains the active chapter after a confirm.
@@ -2738,6 +2804,11 @@ class Novel(nbapp.AppWindow):
         .nvpage { padding: 80px 24px 160px; }
         .nvcaneyebrow { font-size: 12px; letter-spacing: 2px; color: #9A9484;
                         font-weight: 700; margin-bottom: 24px; }
+        .nvchaptertitle { font-family: "Newsreader","Liberation Serif",serif;
+                          font-size: 32pt; font-weight: 500; color: #2A2620;
+                          background: transparent; border: none;
+                          border-bottom: 2px solid #1A1916; border-radius: 0;
+                          box-shadow: none; padding: 0 0 12px; margin: 0 0 22px; }
         .nvbody { font-family: "Newsreader","Liberation Serif",serif;
                   font-size: 20px; color: #2A2620; background: #FCFBF8;
                   caret-color: #C8341E; }
