@@ -1227,6 +1227,13 @@ class Writer(nbapp.AppWindow):
         self.buf.create_tag("pagebreak")
         self.buf.create_tag("list:bullet", left_margin=136)
         self.buf.create_tag("list:number", left_margin=142)
+        # Paragraph styles are created after the ordinary B/I/U tags and thus
+        # outrank them.  These explicit OFF tags are deliberately created last:
+        # they are the only way to unbold a heading or unitalicise a quote while
+        # keeping its other paragraph-style properties.
+        self.buf.create_tag("bold:off", weight=Pango.Weight.NORMAL)
+        self.buf.create_tag("italic:off", style=Pango.Style.NORMAL)
+        self.buf.create_tag("underline:off", underline=Pango.Underline.NONE)
 
     def _tag(self, key):
         """Look up or lazily create a value-carrying tag (font/size/fg/hl/link)."""
@@ -1274,11 +1281,39 @@ class Writer(nbapp.AppWindow):
     # broken rather than as a conflict.
     SCRIPT_PAIR = {"super": "sub", "sub": "super"}
 
+    def _char_active_at(self, it, cmd):
+        """Effective B/I/U state, including the paragraph style and overrides."""
+        off = self.buf.get_tag_table().lookup(cmd + ":off")
+        if off is not None and it.has_tag(off):
+            return False
+        tag = self.buf.get_tag_table().lookup(cmd)
+        if tag is not None and it.has_tag(tag):
+            return True
+        if cmd not in ("bold", "italic"):
+            return False
+        for name, (_sz, bold, italic, _a, _b, _q) in STYLES.items():
+            style = self.buf.get_tag_table().lookup("style:" + name)
+            if style is not None and it.has_tag(style):
+                return bold if cmd == "bold" else italic
+        return False
+
     def _toggle_char(self, cmd):
         other = self.SCRIPT_PAIR.get(cmd)
         if not self.buf.get_has_selection():
             # queue for the next typed run (standard word-processor behaviour)
-            if cmd in self._pending:
+            off = cmd + ":off"
+            if cmd in ("bold", "italic", "underline"):
+                if cmd in self._pending:
+                    self._pending.discard(cmd)
+                elif off in self._pending:
+                    self._pending.discard(off)
+                else:
+                    probe = self.buf.get_iter_at_mark(self.buf.get_insert())
+                    if not probe.starts_line():
+                        probe.backward_char()
+                    self._pending.add(
+                        off if self._char_active_at(probe, cmd) else cmd)
+            elif cmd in self._pending:
                 self._pending.discard(cmd)
             else:
                 if other:
@@ -1287,13 +1322,21 @@ class Writer(nbapp.AppWindow):
             self._sync_toolbar()
             return
         s, e = self.buf.get_selection_bounds()
-        on = self._range_has_tag(s, e, cmd)
+        # The toolbar represents the state at the leading edge of a selection.
+        # Toggle that state across the entire range.  Testing whether the WHOLE
+        # range has the tag instead made an ON-looking mixed selection turn ON.
+        on = self._char_active_at(s, cmd) if cmd in (
+            "bold", "italic", "underline") else self._range_has_tag(s, e, cmd)
         self._checkpoint()
         if on:
             self.buf.remove_tag_by_name(cmd, s, e)
+            if cmd in ("bold", "italic", "underline"):
+                self.buf.apply_tag_by_name(cmd + ":off", s, e)
         else:
             if other:
                 self.buf.remove_tag_by_name(other, s, e)
+            if cmd in ("bold", "italic", "underline"):
+                self.buf.remove_tag_by_name(cmd + ":off", s, e)
             self.buf.apply_tag_by_name(cmd, s, e)
         self._mark_dirty()
         self._sync_toolbar()
@@ -1479,6 +1522,12 @@ class Writer(nbapp.AppWindow):
                 probe.backward_char()
 
             def active(name):
+                if name in ("bold", "italic", "underline"):
+                    if name + ":off" in self._pending:
+                        return False
+                    if name in self._pending:
+                        return True
+                    return self._char_active_at(probe, name)
                 tag = self.buf.get_tag_table().lookup(name)
                 return bool(tag and probe.has_tag(tag)) or name in self._pending
 
@@ -2122,7 +2171,8 @@ class Writer(nbapp.AppWindow):
     SERIAL_TAGS = None   # computed lazily
 
     def _serial_tag_names(self):
-        names = ["bold", "italic", "underline", "strike", "super", "sub"]
+        names = ["bold", "italic", "underline", "strike", "super", "sub",
+                 "bold:off", "italic:off", "underline:off"]
         names += ["align:" + j for j in ("left", "center", "right", "fill")]
         names += ["style:" + s for s in STYLES]
         names += ["indent:%d" % lv for lv in range(1, 9)]
@@ -2998,10 +3048,16 @@ class Writer(nbapp.AppWindow):
             for nm in names:
                 if nm == "bold":
                     b_on = True
+                elif nm == "bold:off":
+                    b_on = False
                 elif nm == "italic":
                     i_on = True
+                elif nm == "italic:off":
+                    i_on = False
                 elif nm == "underline":
                     u_on = True
+                elif nm == "underline:off":
+                    u_on = False
                 elif nm == "strike":
                     st_on = True
                 elif nm == "super":
