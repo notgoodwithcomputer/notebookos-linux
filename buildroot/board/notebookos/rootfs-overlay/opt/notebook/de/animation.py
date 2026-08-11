@@ -1,0 +1,3251 @@
+"""Animation - Notebook OS's exposure-sheet 2D animation studio.
+
+The model and raster helpers are deliberately usable without a display.  Gst
+and ffmpeg are discovered only when playback/export is requested.
+"""
+import array, base64, collections, copy, io, json, math, os, random
+import shutil, struct, subprocess, sys, tempfile, threading, time, wave, zlib
+import cairo
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gtk, Gdk, GLib, GdkPixbuf, Pango
+import nbapp
+import nbicons
+import nbpicker
+from nbi18n import _t
+SELFTEST_MARKER = 'animation-062-real'
+FORMAT = 1
+SPF = {6: 8000, 8: 6000, 10: 4800, 12: 4000, 15: 3200, 24: 2000}
+FPS_VALUES = tuple(SPF)
+CANVAS_PRESETS = ((160, 120), (240, 240), (320, 180), (320, 240), (480, 270), (640, 360), (640, 480))
+CONFORM_FPS = {6: 24, 8: 24, 10: 30, 12: 24, 15: 30, 24: 24}
+CEL_MAX, SCENE_MAX, LAYER_MAX = (768, 64, 6)
+SCENE_FRAME_MAX, PROJECT_FRAME_MAX = (4800, 43200)
+TAKE_MAX, SOUND_ROWS = (5, 2)
+UNDO_DEPTH, HISTORY_BYTES = (200, 96 * 1024 * 1024)
+ZOOM_STEPS = (1 / 8, 1 / 6, 1 / 4, 1 / 3, 1 / 2, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32)
+PATTERNS = ('solid', 'checker', 'sparse')
+NB_HOME = os.environ.get('NB_HOME', os.path.expanduser('~'))
+DOCS_DIR = os.path.join(NB_HOME, 'Documents')
+MUSIC_DIR = os.path.join(NB_HOME, 'Music')
+VIDEOS_DIR = os.path.join(NB_HOME, 'Videos')
+PICTURES_DIR = os.path.join(NB_HOME, 'Pictures')
+STORE_FILE = os.path.join(NB_HOME, '.config', 'notebook', 'animation.json')
+TOOLS = (('select', 'Select', 'V'), ('pencil', 'Pencil', 'P'), ('brush', 'Brush', 'B'), ('eraser', 'Eraser', 'E'), ('fill', 'Fill', 'F'), ('line', 'Line', 'L'), ('rect', 'Rectangle', 'R'), ('ellipse', 'Ellipse', 'O'), ('picker', 'Eyedropper', 'I'))
+TOOL_HINTS = {
+    'select': 'Click artwork to select its exposure. Drag to move it.',
+    'pencil': 'Drag to draw. Square tip, hard edges.',
+    'brush': 'Drag to draw. Round tip, hard edges.',
+    'eraser': 'Drag to erase to transparent.',
+    'fill': 'Click an area to flood it with the colour.',
+    'line': 'Drag end to end. Hold Shift for 45° steps.',
+    'rect': 'Drag corner to corner. Hold Shift for a square.',
+    'ellipse': 'Drag corner to corner. Hold Shift for a circle.',
+    'picker': 'Click the artwork to take that colour.',
+}
+_HUES = (('Red', 0), ('Coral', 14), ('Orange', 30), ('Amber', 44), ('Yellow', 56), ('Lime', 82), ('Green', 122), ('Emerald', 150), ('Teal', 172), ('Cyan', 188), ('Azure', 205), ('Blue', 222), ('Indigo', 244), ('Purple', 276), ('Magenta', 305), ('Pink', 332))
+_VALUES = (('Darkest %s', 0.7, 0.28, 250, 10), ('Dark %s', 0.85, 0.48, 250, 5), (None, 0.9, 0.72, None, 0), ('Bright %s', 0.85, 0.95, 50, 5), ('Pale %s', 0.35, 1.0, 50, 4))
+_MUTED = ('Muted %s', 0.3, 0.62)
+_NEUTRALS = (('Black', 0), ('Ink', 36), ('Slate', 72), ('Grey', 112), ('Silver', 153), ('Ash', 187), ('Paper', 221), ('White', 255))
+_STAPLES = (('Brown', '#6B4A2F'), ('Tan', '#C9A26A'), ('Cream', '#F2E4C4'), ('Olive', '#6E7B3F'), ('Navy', '#20325C'), ('Maroon', '#5E1F28'), ('Gold', '#D9A21B'), ('Peach', '#F2B79A'))
+
+def _hsv_hex(h, s, v):
+    h %= 360.0
+    c = v * s
+    x = c * (1 - abs(h / 60.0 % 2 - 1))
+    m = v - c
+    r, g, b = ((c, x, 0), (x, c, 0), (0, c, x), (0, x, c), (x, 0, c), (c, 0, x))[int(h // 60) % 6]
+    return '#%02X%02X%02X' % (round((r + m) * 255), round((g + m) * 255), round((b + m) * 255))
+
+def _toward(h, t, a):
+    d = (t - h + 180) % 360 - 180
+    return float(t) if abs(d) <= a else (h + (a if d > 0 else -a)) % 360
+
+def _build_palette():
+    out = []
+    for _, s, v, t, a in _VALUES:
+        out += [_hsv_hex(_toward(h, t, a) if t is not None else h, s, v) for _, h in _HUES]
+    out += [_hsv_hex(h, _MUTED[1], _MUTED[2]) for _, h in _HUES]
+    out += ['#%02X%02X%02X' % (g, g, g) for _, g in _NEUTRALS]
+    out += [c for _, c in _STAPLES]
+    return out
+PALETTE = _build_palette()
+
+# One ASCII-only application sheet.  Every colour is a design token named by
+# ANIMATION-SPEC section 12; square corners are part of the paper vocabulary.
+CSS = b"""
+.animation { background: #FCFBF8; color: #1A1916; }
+.animation * { border-radius: 0; }
+.animation-dock, .animation-side { background: #FCFBF8; }
+.animation-mat { background: #DED4C2; }
+.animation-group { color: #6E695E; }
+.animation-muted { color: #9A9484; }
+.animation-row { border-bottom: 1px solid #C9C4B6; }
+.animation-row:checked, .animation-selected { background: #EAE3D2; }
+.animation-prompt { background: #FCFBF8; border: 1px solid #C9C4B6; padding: 24px; }
+.animation-focus { border: 1px solid #C8341E; }
+.animation-saved { color: #7FA98C; }
+.animation-unsaved { color: #C8341E; }
+"""
+
+def _rgb255(h):
+    h = h.lstrip('#')
+    return tuple((int(h[i:i + 2], 16) for i in (0, 2, 4)))
+
+def px4(h):
+    """Return an opaque cairo ARGB32 pixel in native little-endian order.
+
+    Copied behaviour-for-behaviour from illustrator.py, the source of truth
+    for Notebook OS's byte-exact pixel engine.
+    """
+    r, g, b = _rgb255(h)
+    return bytes((b, g, r, 255))
+CLEAR4 = b'\x00\x00\x00\x00'
+_RUNS = {}
+
+def brush_runs(size, shape):
+    """Build Illustrator's square or hard round brush as horizontal runs."""
+    key = (int(size), shape)
+    if key in _RUNS:
+        return _RUNS[key]
+    n = max(1, min(192, int(size)))
+    o = n // 2
+    out = []
+    if shape == 'round' and n > 2:
+        c = (n - 1) / 2.0
+        rr = (n / 2.0 - 0.15) ** 2
+        for j in range(n):
+            row = [i for i in range(n) if (i - c) ** 2 + (j - c) ** 2 <= rr]
+            if row:
+                out.append((j - o, row[0] - o, row[-1] - o))
+    else:
+        out = [(j - o, -o, n - 1 - o) for j in range(n)]
+    _RUNS[key] = tuple(out)
+    return _RUNS[key]
+
+def _line_points(x0, y0, x1, y1):
+    """Illustrator's inclusive integer Bresenham line."""
+    x0, y0, x1, y1 = map(int, (x0, y0, x1, y1))
+    dx, dy = (abs(x1 - x0), abs(y1 - y0))
+    sx = 1 if x1 > x0 else -1
+    sy = 1 if y1 > y0 else -1
+    err = dx - dy
+    out = []
+    while True:
+        out.append((x0, y0))
+        if (x0, y0) == (x1, y1):
+            return out
+        e = 2 * err
+        if e > -dy:
+            err -= dy
+            x0 += sx
+        if e < dx:
+            err += dx
+            y0 += sy
+
+def _ellipse_spans(x0, y0, x1, y1):
+    x0, x1 = sorted((int(x0), int(x1)))
+    y0, y1 = sorted((int(y0), int(y1)))
+    cx, cy = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    rx, ry = ((x1 - x0 + 1) / 2.0, (y1 - y0 + 1) / 2.0)
+    out = []
+    for y in range(y0, y1 + 1):
+        v = 1 - ((y - cy) / ry) ** 2
+        if v < 0:
+            continue
+        d = math.sqrt(v) * rx
+        a = int(math.ceil(cx - d - 0.5))
+        b = int(math.floor(cx + d + 0.5)) - 1
+        if b < a:
+            a = b = int(round(cx))
+        out.append((y, max(x0, a), min(x1, b)))
+    return out
+
+def _ellipse_outline(spans):
+    out = []
+    prev = None
+    for i, (y, a, b) in enumerate(spans):
+        if prev is None or i == len(spans) - 1:
+            out += [(x, y) for x in range(a, b + 1)]
+        else:
+            pa, pb = prev
+            out += [(x, y) for x in range(min(a, pa), max(a, pa) + 1)]
+            out += [(x, y) for x in range(min(b, pb), max(b, pb) + 1)]
+        prev = (a, b)
+    return out
+
+def _snap45(a, b):
+    dx, dy = (b[0] - a[0], b[1] - a[1])
+    if not dx and (not dy):
+        return b
+    ax, ay = (abs(dx), abs(dy))
+    if ax > 2 * ay:
+        return (b[0], a[1])
+    if ay > 2 * ax:
+        return (a[0], b[1])
+    n = max(ax, ay)
+    return (a[0] + (n if dx >= 0 else -n), a[1] + (n if dy >= 0 else -n))
+
+def _square(a, b):
+    dx, dy = (b[0] - a[0], b[1] - a[1])
+    n = max(abs(dx), abs(dy))
+    return (a[0] + (n if dx >= 0 else -n), a[1] + (n if dy >= 0 else -n))
+
+def pattern_allows(pattern, x, y):
+    return pattern == 'solid' or (pattern == 'checker' and (not x + y & 1)) or (pattern == 'sparse' and (not x & 1) and (not y & 1))
+
+def surface(w, h, white=False):
+    s = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+    if white:
+        c = cairo.Context(s)
+        c.set_source_rgb(1, 1, 1)
+        c.paint()
+    return s
+
+def write_pixel(s, x, y, value, pattern='solid', symx=False, symy=False):
+    w, h = (s.get_width(), s.get_height())
+    value = px4(value) if isinstance(value, str) else value
+    pts = {(int(x), int(y))}
+    if symx:
+        pts |= {(w - 1 - a, b) for a, b in tuple(pts)}
+    if symy:
+        pts |= {(a, h - 1 - b) for a, b in tuple(pts)}
+    s.flush()
+    d = s.get_data()
+    stride = s.get_stride()
+    for a, b in pts:
+        if 0 <= a < w and 0 <= b < h and pattern_allows(pattern, a, b):
+            d[b * stride + a * 4:b * stride + a * 4 + 4] = value
+    s.mark_dirty()
+
+def write_span(s, y, x0, x1, value, pattern='solid', symx=False, symy=False):
+    for x in range(int(x0), int(x1) + 1):
+        write_pixel(s, x, y, value, pattern, symx, symy)
+
+
+def pix_at(image, x, y):
+    """Read one native ARGB32 pixel, returning transparent outside bounds."""
+    if not 0 <= x < image.get_width() or not 0 <= y < image.get_height():
+        return CLEAR4
+    image.flush()
+    offset = int(y) * image.get_stride() + int(x) * 4
+    return bytes(image.get_data()[offset:offset + 4])
+
+def stamp(s, x, y, size, shape, value, pattern='solid', symx=False, symy=False):
+    for dy, a, b in brush_runs(size, shape):
+        write_span(s, y + dy, x + a, x + b, value, pattern, symx, symy)
+
+def surface_png(s):
+    out = io.BytesIO()
+    s.write_to_png(out)
+    return out.getvalue()
+
+def png_surface(raw, w=None, h=None):
+    try:
+        return cairo.ImageSurface.create_from_png(io.BytesIO(raw))
+    except Exception:
+        return surface(w or 1, h or 1)
+
+def png_b64(s):
+    return base64.b64encode(surface_png(s)).decode('ascii')
+
+def decode_b64(s, w, h):
+    return png_surface(base64.b64decode(s), w, h)
+
+def normalize_runs(runs, length):
+    out = []
+    for r in sorted((copy.deepcopy(x) for x in runs), key=lambda x: x['start']):
+        r['start'] = max(0, int(r['start']))
+        r['len'] = min(int(r['len']), length - r['start'])
+        if r['len'] <= 0:
+            continue
+        if out and r['start'] < out[-1]['start'] + out[-1]['len']:
+            raise ValueError('overlapping exposures')
+        out.append(r)
+    return out
+
+def run_at(runs, frame):
+    return next((r for r in runs if r['start'] <= frame < r['start'] + r['len']), None)
+
+def take_index(run, frame, ntakes, boil_every):
+    if run.get('take', 0) > 0:
+        return min(ntakes - 1, run['take'] - 1)
+    return (frame - run['start']) // boil_every % ntakes
+
+def make_run(cel, start, length, dx=0, dy=0, take=0):
+    return {'cel': int(cel), 'start': int(start), 'len': int(length), 'dx': int(dx), 'dy': int(dy), 'take': int(take)}
+
+class Cel:
+
+    def __init__(self, id_, name, takes, w, h, extra=None):
+        self.id = id_
+        self.name = name
+        self.takes = takes
+        self.w = w
+        self.h = h
+        self.version = 0
+        self._extra = extra or {}
+
+    def decoded(self, i=0):
+        t = self.takes[i]
+        if isinstance(t, cairo.ImageSurface):
+            return t
+        s = decode_b64(t, self.w, self.h) if isinstance(t, str) else png_surface(t, self.w, self.h)
+        self.takes[i] = s
+        return s
+
+    def serial(self):
+        d = dict(self._extra, id=self.id, name=self.name, takes=[png_b64(x) if isinstance(x, cairo.ImageSurface) else base64.b64encode(x).decode('ascii') if isinstance(x, bytes) else x for x in self.takes])
+        return d
+
+def new_layer(name='Layer 1'):
+    return {'name': name, 'visible': True, 'mouth_slots': None, 'runs': []}
+
+def new_scene(name='Scene 1', length=96):
+    return {'name': name, 'length': length, 'layers': [new_layer()], 'sounds': [None, None], 'markers': []}
+
+class AnimationDocument:
+
+    def __init__(self, canvas=(320, 240), fps=12, boil_every=2, palette=None, palette_only=False, cels=None, scenes=None, extra=None):
+        self.canvas = tuple(canvas)
+        self.fps = fps
+        self.boil_every = boil_every
+        self.palette = list(palette or [])
+        self.palette_only = bool(palette_only)
+        self.cels = list(cels or [])
+        self.scenes = list(scenes or [new_scene()])
+        self._extra = extra or {}
+        self.next_cel = max([c.id for c in self.cels] + [0]) + 1
+
+    def add_cel(self, name=None, source=None):
+        if len(self.cels) >= CEL_MAX:
+            return None
+        s = surface(*self.canvas)
+        c = Cel(self.next_cel, name or _t('Drawing %d') % self.next_cel, [s], *self.canvas)
+        self.next_cel += 1
+        if source is not None:
+            ctx = cairo.Context(s)
+            ctx.set_operator(cairo.OPERATOR_SOURCE)
+            ctx.set_source_surface(source)
+            ctx.paint()
+        self.cels.append(c)
+        return c
+
+    def cel(self, id_):
+        return next((c for c in self.cels if c.id == id_), None)
+
+    def serial(self):
+        return dict(self._extra, format=FORMAT, app='animation', canvas=list(self.canvas), fps=self.fps, boil_every=self.boil_every, palette=self.palette, palette_only=self.palette_only, cels=[c.serial() for c in self.cels], scenes=copy.deepcopy(self.scenes))
+
+    def bytes(self):
+        return json.dumps(self.serial(), sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+
+    @classmethod
+    def parse(cls, raw):
+        if not isinstance(raw, dict) or raw.get('format') != FORMAT or raw.get('app') != 'animation':
+            raise ValueError('unrecognized Animation document')
+        canvas = tuple(raw.get('canvas', (320, 240)))
+        fps = int(raw.get('fps', 12))
+        if canvas not in CANVAS_PRESETS or fps not in SPF:
+            raise ValueError('unrecognized Animation settings')
+        reports = []
+        cels = []
+        for item in raw.get('cels', [])[:CEL_MAX]:
+            try:
+                takes = []
+                hurt = False
+                for encoded in item['takes'][:TAKE_MAX]:
+                    # Strict decode: png_surface swallows a bad PNG into a
+                    # blank, which read as silent acceptance of a corrupt
+                    # take. A take that will not decode becomes a blank
+                    # placeholder AND the load says so — the drawing stays,
+                    # the project opens, nothing is dropped silently.
+                    try:
+                        decoded = base64.b64decode(encoded, validate=True)
+                        cairo.ImageSurface.create_from_png(io.BytesIO(decoded))
+                        takes.append(encoded)
+                    except Exception:
+                        hurt = True
+                        takes.append(png_b64(surface(*canvas)))
+                if not takes:
+                    hurt = True
+                    takes = [png_b64(surface(*canvas))]
+                if hurt:
+                    reports.append(_t('One damaged drawing was replaced.'))
+                cels.append(Cel(int(item['id']), str(item.get('name', _t('Drawing'))), takes, *canvas, {k: v for k, v in item.items() if k not in {'id', 'name', 'takes'}}))
+            except Exception:
+                reports.append(_t('One damaged drawing was replaced.'))
+        scenes = []
+        for s in raw.get('scenes', [])[:SCENE_MAX]:
+            try:
+                length = max(1, min(SCENE_FRAME_MAX, int(s['length'])))
+                layers = []
+                for l in s.get('layers', [])[:LAYER_MAX]:
+                    layers.append(dict(l, runs=normalize_runs(l.get('runs', []), length)))
+                sounds = list(s.get('sounds', []))[:2] + [None, None]
+                sounds = sounds[:2]
+                for snd in sounds:
+                    if snd and (not os.path.exists(snd.get('path', ''))):
+                        reports.append(_t('A sound file is missing: %s') % snd.get('path', ''))
+                scenes.append(dict(s, name=str(s.get('name', _t('Scene'))), length=length, layers=layers or [new_layer()], sounds=sounds, markers=list(s.get('markers', []))))
+            except Exception:
+                reports.append(_t('One damaged scene was replaced.'))
+        known = {'format', 'app', 'canvas', 'fps', 'boil_every', 'palette', 'palette_only', 'cels', 'scenes'}
+        return (cls(canvas, fps, max(1, int(raw.get('boil_every', 2))), raw.get('palette', [])[:16], raw.get('palette_only', False), cels, scenes or [new_scene()], {k: v for k, v in raw.items() if k not in known}), reports)
+
+def save_document(doc, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    nbapp.atomic_write_json(path, doc.serial())
+
+def load_store(path):
+    """Load the owned recovery store, preserving damaged/foreign bytes."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return (AnimationDocument(), False, [])
+    except Exception:
+        nbapp.preserve_damaged(path)
+        return (AnimationDocument(), True, [_t('The damaged Animation store was preserved.')])
+    try:
+        doc, reports = AnimationDocument.parse(raw)
+        return (doc, False, reports)
+    except Exception:
+        nbapp.quarantine_unrecognized(path)
+        return (AnimationDocument(), True, [_t('This was not an Animation store, so it was set aside.')])
+
+
+def open_document(path):
+    """Read a user document without ever moving, rewriting, or quarantining it."""
+    try:
+        with open(path, 'r', encoding='utf-8') as source:
+            raw = json.load(source)
+        document, reports = AnimationDocument.parse(raw)
+    except Exception:
+        return (None, [_t('This file could not be read as an Animation project. It was left untouched.')])
+    return (document, reports)
+
+class Sheet:
+
+    def __init__(self, doc, scene=0):
+        self.doc = doc
+        self.scene_i = scene
+        self.clipboard = None
+
+    @property
+    def scene(self):
+        return self.doc.scenes[self.scene_i]
+
+    def stamp(self, layer, run, replace=False):
+        runs = self.scene['layers'][layer]['runs']
+        kept = runs
+        if replace:
+            kept = [r for r in runs if r['start'] + r['len'] <= run['start'] or r['start'] >= run['start'] + run['len']]
+        # Validate on a candidate list FIRST: normalize_runs raises on overlap,
+        # and an append-then-normalize left the overlapping run behind when it
+        # did (the suite's F2 property sweep caught the corrupt sheet).
+        candidate = normalize_runs(kept + [run], self.scene['length'])
+        runs[:] = candidate
+
+    def extend(self, layer, frame):
+        r = run_at(self.scene['layers'][layer]['runs'], frame)
+        if not r:
+            return False
+        end = r['start'] + r['len']
+        if end >= self.scene['length'] or run_at(self.scene['layers'][layer]['runs'], end):
+            return False
+        r['len'] += 1
+        return True
+
+    def shorten(self, layer, frame):
+        r = run_at(self.scene['layers'][layer]['runs'], frame)
+        if not r:
+            return False
+        if r['len'] == 1:
+            self.scene['layers'][layer]['runs'].remove(r)
+        else:
+            r['len'] -= 1
+        return True
+
+    def split(self, layer, frame):
+        runs = self.scene['layers'][layer]['runs']
+        r = run_at(runs, frame)
+        if not r or frame == r['start']:
+            return False
+        right = copy.deepcopy(r)
+        right['start'] = frame
+        right['len'] = r['start'] + r['len'] - frame
+        r['len'] = frame - r['start']
+        runs.append(right)
+        runs.sort(key=lambda x: x['start'])
+        return True
+
+    def clear(self, layer, start, end):
+        runs = self.scene['layers'][layer]['runs']
+        out = []
+        for r in runs:
+            a, b = (r['start'], r['start'] + r['len'])
+            if b <= start or a >= end:
+                out.append(r)
+                continue
+            if a < start:
+                q = copy.deepcopy(r)
+                q['len'] = start - a
+                out.append(q)
+            if b > end:
+                q = copy.deepcopy(r)
+                q['start'] = end
+                q['len'] = b - end
+                out.append(q)
+        runs[:] = out
+
+    def copy_block(self, layers, start, end):
+        block = []
+        for li in layers:
+            for r in self.scene['layers'][li]['runs']:
+                if r['start'] >= start and r['start'] + r['len'] <= end:
+                    block.append((li, r['start'] - start, copy.deepcopy(r)))
+        self.clipboard = (end - start, block)
+        return self.clipboard
+
+    def paste(self, at, repeats=1):
+        if not self.clipboard:
+            return False
+        width, block = self.clipboard
+        candidate = []
+        for n in range(repeats):
+            for li, off, r in block:
+                q = copy.deepcopy(r)
+                q['start'] = at + n * width + off
+                candidate.append((li, q))
+        for li, r in candidate:
+            if r['start'] < 0 or r['start'] + r['len'] > self.scene['length'] or any((not (x['start'] + x['len'] <= r['start'] or x['start'] >= r['start'] + r['len']) for x in self.scene['layers'][li]['runs'])):
+                return False
+        for li, r in candidate:
+            self.scene['layers'][li]['runs'].append(r)
+            self.scene['layers'][li]['runs'].sort(key=lambda x: x['start'])
+        return True
+
+    def insert(self, at, count):
+        if self.scene['length'] + count > SCENE_FRAME_MAX:
+            return False
+        for l in self.scene['layers']:
+            for r in l['runs']:
+                if r['start'] >= at:
+                    r['start'] += count
+                elif r['start'] + r['len'] > at:
+                    r['len'] += count
+        self.scene['length'] += count
+        return True
+
+    def remove(self, at, count):
+        end = min(self.scene['length'], at + count)
+        for li in range(len(self.scene['layers'])):
+            self.clear(li, at, end)
+        delta = end - at
+        for l in self.scene['layers']:
+            for r in l['runs']:
+                if r['start'] >= end:
+                    r['start'] -= delta
+        self.scene['length'] -= delta
+        return delta > 0
+
+    def slide(self, layer, left, right):
+        runs = self.scene['layers'][layer]['runs']
+        a = run_at(runs, left)
+        b = run_at(runs, right)
+        if not a or not b or a is b or (a['cel'] != b['cel']):
+            return False
+        start = a['start'] + a['len']
+        gap = b['start'] - start
+        if gap <= 0:
+            return False
+        # Every frame of the gap must be uncovered BEFORE the first stamp, or
+        # a run sitting between the two ends would make a mid-slide stamp
+        # raise and leave the fill half-done.
+        if any(run_at(runs, start + i) for i in range(gap)):
+            return False
+        for i in range(gap):
+            t = (i + 1) / (gap + 1)
+            self.stamp(layer, make_run(a['cel'], start + i, 1, round(a['dx'] + (b['dx'] - a['dx']) * t), round(a['dy'] + (b['dy'] - a['dy']) * t), a.get('take', 0)))
+        return True
+
+    def ensure_drawing(self, layer, frame, duplicate=False, force_new=False):
+        runs = self.scene['layers'][layer]['runs']
+        r = run_at(runs, frame)
+        if r and not duplicate and not force_new:
+            return (self.doc.cel(r['cel']), r)
+        src = self.doc.cel(r['cel']).decoded(0) if duplicate and r else None
+        held_end = r['start'] + r['len'] if r else None
+        if r:
+            self.split(layer, frame)
+            self.clear(layer, frame, held_end)
+        next_start = held_end if held_end is not None else min([x['start'] for x in runs if x['start'] > frame] + [self.scene['length']])
+        c = self.doc.add_cel(source=src)
+        if c:
+            self.stamp(layer, make_run(c.id, frame, next_start - frame))
+        return (c, run_at(runs, frame))
+
+def wobble_take(source, cel_id, take_no, strength):
+    """Deterministic coherent 6-pixel-grid value-noise nearest remap."""
+    w, h = (source.get_width(), source.get_height())
+    src = bytes(source.get_data())
+    stride = source.get_stride()
+    out = surface(w, h)
+    dst = out.get_data()
+    seed = '%d:%d:%.3f' % (cel_id, take_no, strength)
+
+    def noise(gx, gy, axis):
+        return random.Random(seed + ':%d:%d:%d' % (gx, gy, axis)).uniform(-strength, strength)
+
+    def field(x, y, axis):
+        gx, gy = (x // 6, y // 6)
+        tx, ty = (x % 6 / 6.0, y % 6 / 6.0)
+        a = noise(gx, gy, axis) * (1 - tx) + noise(gx + 1, gy, axis) * tx
+        b = noise(gx, gy + 1, axis) * (1 - tx) + noise(gx + 1, gy + 1, axis) * tx
+        return a * (1 - ty) + b * ty
+    for y in range(h):
+        for x in range(w):
+            sx = max(0, min(w - 1, round(x - field(x, y, 0))))
+            sy = max(0, min(h - 1, round(y - field(x, y, 1))))
+            dst[y * out.get_stride() + x * 4:y * out.get_stride() + x * 4 + 4] = src[sy * stride + sx * 4:sy * stride + sx * 4 + 4]
+    out.mark_dirty()
+    return out
+
+def wav_samples(path):
+    with wave.open(path, 'rb') as w:
+        channels, width, rate = (w.getnchannels(), w.getsampwidth(), w.getframerate())
+        raw = w.readframes(w.getnframes())
+    if width != 2:
+        raise ValueError('16-bit WAV required')
+    a = array.array('h')
+    a.frombytes(raw)
+    if channels > 1:
+        a = array.array('h', (sum(a[i:i + channels]) // channels for i in range(0, len(a), channels)))
+    if rate != 48000:
+        a = array.array('h', (a[min(len(a) - 1, int(i * rate / 48000))] for i in range(round(len(a) * 48000 / rate))))
+    return a
+
+
+_AUDIO_CACHE = collections.OrderedDict()
+AUDIO_CACHE_MAX = 8
+
+
+def decode_samples(path, sig=None):
+    """Decode a sound to 48 kHz mono s16, with a bounded signature cache."""
+    key = (path, tuple(sig or ()))
+    cached = _AUDIO_CACHE.get(key)
+    if cached is not None:
+        _AUDIO_CACHE.move_to_end(key)
+        return cached
+    if path.lower().endswith('.wav'):
+        samples = wav_samples(path)
+    else:
+        ffmpeg = ffmpeg_path()
+        if not ffmpeg:
+            raise RuntimeError(_t('This sound cannot be played on this system.'))
+        process = subprocess.run(
+            [ffmpeg, '-v', 'error', '-i', path, '-f', 's16le', '-ac', '1',
+             '-ar', '48000', '-'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        if process.returncode:
+            raise RuntimeError(process.stderr.decode('utf-8', 'replace')[-300:])
+        samples = array.array('h')
+        samples.frombytes(process.stdout)
+    _AUDIO_CACHE[key] = samples
+    while len(_AUDIO_CACHE) > AUDIO_CACHE_MAX:
+        _AUDIO_CACHE.popitem(last=False)
+    return samples
+
+
+class AudioOut:
+    """Lazy Gst appsrc output copied from Sequencer's pipeline discipline.
+
+    Gst is imported and initialized only in start(), keeping module import and
+    host construction safe on systems without multimedia packages.
+    """
+
+    def __init__(self):
+        self.available = False
+        self.samples_delivered = 0
+        self._pipe = None
+        self._src = None
+        self._thread = None
+        self._stop = threading.Event()
+
+    def start(self, pull):
+        self.stop()
+        try:
+            gi.require_version('Gst', '1.0')
+            from gi.repository import Gst
+            Gst.init(None)
+            pipeline = Gst.parse_launch(
+                'appsrc name=src is-live=true format=time block=true '
+                '! audioconvert ! audioresample ! alsasink')
+            source = pipeline.get_by_name('src')
+            source.set_property('caps', Gst.Caps.from_string(
+                'audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=1'))
+            pipeline.set_state(Gst.State.PLAYING)
+        except Exception:
+            self.available = False
+            return False
+        self._pipe = pipeline
+        self._src = source
+        self._stop.clear()
+        self.samples_delivered = 0
+
+        def pump():
+            while not self._stop.is_set():
+                block = pull(1024)
+                if not block:
+                    break
+                raw = block.tobytes()
+                buffer = Gst.Buffer.new_allocate(None, len(raw), None)
+                buffer.fill(0, raw)
+                result = source.emit('push-buffer', buffer)
+                if result != Gst.FlowReturn.OK:
+                    break
+                self.samples_delivered += len(block)
+            source.emit('end-of-stream')
+
+        self._thread = threading.Thread(target=pump, daemon=True)
+        self._thread.start()
+        self.available = True
+        return True
+
+    def play_once(self, samples):
+        position = 0
+
+        def pull(count):
+            nonlocal position
+            block = samples[position:position + count]
+            position += len(block)
+            return block
+
+        return self.start(pull)
+
+    def stop(self):
+        self._stop.set()
+        if self._pipe is not None:
+            try:
+                from gi.repository import Gst
+                self._pipe.set_state(Gst.State.NULL)
+            except Exception:
+                pass
+        self._pipe = None
+        self._src = None
+        self.available = False
+
+def wav_peak(path, columns=256):
+    a = wav_samples(path)
+    step = max(1, len(a) // columns)
+    out = []
+    for i in range(0, len(a), step):
+        q = a[i:i + step]
+        out.extend((min(q), max(q)))
+    return array.array('h', out)
+
+def mix_s16(clips, start, count):
+    out = [0] * count
+    for samples, offset in clips:
+        for i in range(count):
+            j = start + i - offset
+            if 0 <= j < len(samples):
+                out[i] = max(-32768, min(32767, out[i] + samples[j]))
+    return array.array('h', out)
+
+def loudness_slots(samples, spf, quiet=0.1, loud=0.45):
+    rms = []
+    for i in range(0, len(samples), spf):
+        q = samples[i:i + spf]
+        rms.append(math.sqrt(sum((x * x for x in q)) / max(1, len(q))))
+    peak = max(rms or [1]) or 1
+    slots = [1 if r / peak < quiet else 2 if r / peak < loud else 3 for r in rms]
+    for i in range(len(slots) - 1):
+        if (i == 0 or slots[i] != slots[i - 1]) and slots[i] != slots[i + 1]:
+            slots[i] = slots[i + 1]
+    return slots
+
+def slots_to_runs(slots, cel_ids):
+    out = []
+    for f, slot in enumerate(slots):
+        cel = cel_ids[min(slot - 1, len(cel_ids) - 1)]
+        if out and out[-1]['cel'] == cel:
+            out[-1]['len'] += 1
+        else:
+            out.append(make_run(cel, f, 1))
+    return out
+
+class FrameLRU:
+
+    def __init__(self, limit=64):
+        self.limit = limit
+        self.cache = collections.OrderedDict()
+
+    def get(self, key, builder):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+            return self.cache[key]
+        value = builder()
+        self.cache[key] = value
+        while len(self.cache) > self.limit:
+            self.cache.popitem(False)
+        return value
+
+    def clear(self):
+        self.cache.clear()
+
+def frame_key(doc, scene, frame):
+    key = []
+    for l in scene['layers']:
+        if not l.get('visible', True):
+            continue
+        r = run_at(l['runs'], frame)
+        if r:
+            c = doc.cel(r['cel'])
+            key.append((c.id, take_index(r, frame, len(c.takes), doc.boil_every), r['dx'], r['dy'], c.version))
+    return tuple(key)
+
+def composite(doc, scene, frame):
+    out = surface(*doc.canvas, white=True)
+    ctx = cairo.Context(out)
+    ctx.set_antialias(cairo.ANTIALIAS_NONE)
+    for l in scene['layers']:
+        if not l.get('visible', True):
+            continue
+        r = run_at(l['runs'], frame)
+        if r:
+            c = doc.cel(r['cel'])
+            if c:
+                ctx.set_source_surface(c.decoded(take_index(r, frame, len(c.takes), doc.boil_every)), r['dx'], r['dy'])
+                ctx.paint()
+    return out
+
+def _encoder_probe(ffmpeg):
+    try:
+        out = subprocess.run([ffmpeg, '-hide_banner', '-encoders'], capture_output=True, timeout=8).stdout.decode('utf-8', 'replace')
+    except Exception:
+        out = ''
+    names = {p[1] for line in out.splitlines() if len((p := line.split())) > 1}
+    return 'libx264' if 'libx264' in names else 'libopenh264' if 'libopenh264' in names else 'mpeg4'
+_ENCODERS = {}
+
+def video_encoder(ffmpeg, w, h):
+    codec = _ENCODERS.setdefault(ffmpeg, _encoder_probe(ffmpeg))
+    mb = max(1.2, 3 * w * h / (1280 * 720))
+    args = ['-c:v', codec]
+    args += ['-preset', 'veryfast', '-crf', '21'] if codec == 'libx264' else ['-b:v', '%.1fM' % (mb if codec == 'libopenh264' else mb * 1.6)]
+    return args + ['-pix_fmt', 'yuv420p']
+
+def ffmpeg_path():
+    return shutil.which('ffmpeg')
+
+def export_png_frames(doc, frames, directory, cancel=None, progress=None):
+    os.makedirs(directory, exist_ok=True)
+    for i, (scene, frame) in enumerate(frames):
+        if cancel and cancel.is_set():
+            break
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix='.frame-',
+                                   suffix='.png')
+        os.close(fd)
+        composite(doc, scene, frame).write_to_png(tmp)
+        os.replace(tmp, os.path.join(directory, 'frame-%04d.png' % (i + 1)))
+        if progress:
+            progress((i + 1) / len(frames))
+
+def _rgb24(image):
+    image.flush()
+    source = image.get_data()
+    stride = image.get_stride()
+    output = bytearray(image.get_width() * image.get_height() * 3)
+    target = 0
+    for y in range(image.get_height()):
+        for x in range(image.get_width()):
+            offset = y * stride + x * 4
+            output[target:target + 3] = bytes((source[offset + 2],
+                                               source[offset + 1],
+                                               source[offset]))
+            target += 3
+    return output
+
+
+def export_video(doc, frames, path, width, height, native=False, cancel=None,
+                 progress=None, audio_specs=None):
+    ff = ffmpeg_path()
+    if not ff:
+        raise RuntimeError(_t('Movies cannot be exported on this system.'))
+    fps = doc.fps if native else CONFORM_FPS[doc.fps]
+    k = max(1, min(width // doc.canvas[0], height // doc.canvas[1]))
+    partial = path + '.partial.mp4'
+    progress_file = tempfile.NamedTemporaryFile(
+        prefix='animation-progress-', suffix='.txt', delete=False)
+    progress_path = progress_file.name
+    progress_file.close()
+    stderr_file = tempfile.NamedTemporaryFile(
+        prefix='animation-stderr-', suffix='.txt', delete=False)
+    stderr_path = stderr_file.name
+    vf = 'scale=iw*%d:ih*%d:flags=neighbor,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%d' % (k, k, width, height, fps)
+    args = [ff, '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s',
+            '%dx%d' % doc.canvas, '-r', str(doc.fps), '-i', '-']
+    for spec in audio_specs or []:
+        args += ['-i', spec['path']]
+    args += ['-vf', vf]
+    if audio_specs:
+        filters = []
+        labels = []
+        for index, spec in enumerate(audio_specs, 1):
+            label = 'a%d' % index
+            trim = 'atrim=start_sample=%d' % spec['in_smp']
+            if spec['out_smp']:
+                trim += ':end_sample=%d' % spec['out_smp']
+            filters.append('[%d:a]%s,adelay=%dS[%s]' %
+                           (index, trim, spec['delay_smp'], label))
+            labels.append('[%s]' % label)
+        filters.append('%samix=inputs=%d:normalize=0[aout]' %
+                       (''.join(labels), len(labels)))
+        args += ['-filter_complex', ';'.join(filters), '-map', '0:v',
+                 '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k']
+    args += video_encoder(ff, width, height) + ['-progress', progress_path,
+                                                partial]
+    stderr_handle = stderr_file
+    proc = subprocess.Popen(args, stdin=subprocess.PIPE, stderr=stderr_handle)
+    try:
+        for i, (scene, frame) in enumerate(frames):
+            if cancel and cancel.is_set():
+                raise InterruptedError()
+            proc.stdin.write(_rgb24(composite(doc, scene, frame)))
+            if progress:
+                progress((i + 1) / len(frames))
+        proc.stdin.close()
+        rc = proc.wait()
+        stderr_handle.close()
+        with open(stderr_path, 'rb') as error_source:
+            err = error_source.read()
+        if rc:
+            raise RuntimeError(err.decode('utf-8', 'replace')[-500:])
+        os.replace(partial, path)
+    except Exception:
+        proc.kill()
+        stderr_handle.close()
+        try:
+            os.unlink(partial)
+        except OSError:
+            pass
+        raise
+    finally:
+        for scratch in (progress_path, stderr_path):
+            try:
+                os.unlink(scratch)
+            except OSError:
+                pass
+
+
+def export_gif(doc, frames, path, scale, cancel=None, progress=None):
+    """Two-pass bayer GIF export through palettegen and paletteuse."""
+    ffmpeg = ffmpeg_path()
+    if not ffmpeg:
+        raise RuntimeError(_t('Movies cannot be exported on this system.'))
+    scratch = tempfile.mkdtemp(prefix='animation-gif-')
+    palette = os.path.join(scratch, 'palette.png')
+    partial = path + '.partial.gif'
+    try:
+        raw_fd, raw_path = tempfile.mkstemp(dir=scratch, prefix='frames-',
+                                            suffix='.rgb')
+        with os.fdopen(raw_fd, 'wb') as raw:
+            for index, (scene, frame) in enumerate(frames):
+                if cancel and cancel.is_set():
+                    raise InterruptedError()
+                raw.write(_rgb24(composite(doc, scene, frame)))
+                if progress:
+                    progress(.45 * (index + 1) / len(frames))
+        common = ['-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s',
+                  '%dx%d' % doc.canvas, '-r', str(doc.fps), '-i', raw_path]
+        scale_filter = 'scale=iw*%d:ih*%d:flags=neighbor' % (scale, scale)
+        subprocess.run([ffmpeg, '-y'] + common + ['-vf',
+                       scale_filter + ',palettegen=stats_mode=diff', palette],
+                       check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE)
+        subprocess.run([ffmpeg, '-y'] + common + ['-i', palette,
+                       '-lavfi', scale_filter +
+                       '[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=2',
+                       '-loop', '0', partial], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        os.replace(partial, path)
+        if progress:
+            progress(1.0)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+        if os.path.exists(partial):
+            os.unlink(partial)
+
+class StackHistory:
+
+    def __init__(self, app):
+        self.app = app
+
+    def can_undo(self):
+        return bool(self.app._undo)
+
+    def can_redo(self):
+        return bool(self.app._redo)
+
+    def undo_label(self):
+        return self.app._undo[-1][0] if self.app._undo else None
+
+    def redo_label(self):
+        return self.app._redo[-1][0] if self.app._redo else None
+
+    def undo(self):
+        return self.app._history_apply(False)
+
+    def redo(self):
+        return self.app._history_apply(True)
+
+class Animation(nbapp.AppWindow):
+    """GTK shell; the document engine above remains the output authority."""
+    app_name = 'Animation'
+    menus = ('File', 'Edit', 'View', 'Timeline', 'Scene', 'Drawing', 'Layer', 'Sound')
+
+    def __init__(self, path=None):
+        super().__init__()
+        self.set_title(_t('Animation'))
+        self.set_default_size(1024, 722)
+        self.get_style_context().add_class('animation')
+        self.doc_path = path
+        self.doc = AnimationDocument()
+        self.scene_i = 0
+        self.layer_i = 0
+        self.playhead = 0
+        self.zoom = 1
+        self._fitted = False
+        self._undo = []
+        self._redo = []
+        self.history = StackHistory(self)
+        self._dirty = False
+        self._doc_dirty = False
+        self._save_error = None
+        self._guard_bypass = False
+        self._store_read_only = False
+        self._save_timer = 0
+        self._flash_timer = 0
+        self._alive = True
+        self._cache = FrameLRU()
+        self._playing = False
+        self._tick = 0
+        self._reports = []
+        self.tool = 'pencil'
+        self.previous_tool = 'pencil'
+        self.color = '#1A1916'
+        self.size = 3
+        self.shape = 'square'
+        self.pattern = 'solid'
+        self.symx = False
+        self.symy = False
+        self.grid = False
+        self.onion = 0
+        self.loop = False
+        self.stamp_mouths = False
+        self.active_take = {}
+        self.selection = None
+        self._selected_sound = None
+        self.column_width = 6
+        self._prompt_layer = None
+        self._worker_generation = 0
+        self._workers = []
+        self._cancel = threading.Event()
+        self._playing_started = 0.0
+        self._play_origin = 0
+        self.audio = AudioOut()
+        self._audio_clips = []
+        self._audio_position = 0
+        self._mouth_pass_open = False
+        if path:
+            opened, reports = open_document(path)
+            if opened is not None:
+                self.doc = opened
+                self._reports = reports
+            else:
+                self.doc_path = None
+                self._reports = reports
+        elif os.path.exists(STORE_FILE):
+            self.doc, self._store_read_only, self._reports = load_store(STORE_FILE)
+        self.sheet = Sheet(self.doc)
+        self._build()
+        for scene in self.doc.scenes:
+            for sound in scene['sounds']:
+                if sound and os.path.exists(sound.get('path', '')) and \
+                        not sound.get('duration_smp'):
+                    sound.setdefault('_peak_token', 0)
+                    self._start_peak_worker(sound)
+        self.connect('delete-event', self._on_delete)
+        self.connect('destroy', self._on_destroy)
+
+    def _build(self):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        body = Gtk.Box()
+        root.pack_start(body, True, True, 0)
+        dock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        dock.set_size_request(240, -1)
+        dock.pack_start(Gtk.Label(label=_t('Tools'), xalign=0), False, False, 4)
+        tool_grid = Gtk.Grid(column_spacing=4, row_spacing=4)
+        for index, (tool, name, key) in enumerate(TOOLS):
+            button = Gtk.ToggleButton(label=_t(name) + '  ' + key)
+            button.set_active(tool == self.tool)
+            button.connect('clicked', self._choose_tool, tool)
+            button.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+            tool_grid.attach(button, index % 2, index // 2, 1, 1)
+        dock.pack_start(tool_grid, False, False, 0)
+        self._build_brush_group(dock)
+        self._build_mirror_group(dock)
+        self._build_pattern_group(dock)
+        self._build_colour_group(dock)
+        self._build_project_palette(dock)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_size_request(240, -1)
+        scroll.add(dock)
+        body.pack_start(scroll, False, False, 0)
+        self.canvas = Gtk.DrawingArea()
+        self.canvas.set_can_focus(True)
+        self.canvas.get_accessible().set_name(_t('Animation canvas'))
+        self.canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK |
+                               Gdk.EventMask.BUTTON_RELEASE_MASK |
+                               Gdk.EventMask.POINTER_MOTION_MASK)
+        self.canvas.connect('draw', self._draw_canvas)
+        self.canvas.connect('button-press-event', self._canvas_press)
+        self.canvas.connect('motion-notify-event', self._canvas_motion)
+        self.canvas.connect('button-release-event', self._canvas_release)
+        mat = Gtk.EventBox()
+        mat.get_style_context().add_class('animation-mat')
+        mat.add(self.canvas)
+        self.canvas_scroll = Gtk.ScrolledWindow()
+        self.canvas_scroll.set_policy(Gtk.PolicyType.AUTOMATIC,
+                                      Gtk.PolicyType.AUTOMATIC)
+        self.canvas_scroll.add(mat)
+        body.pack_start(self.canvas_scroll, True, True, 0)
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        side.set_size_request(240, -1)
+        side.pack_start(Gtk.Label(label=_t('Drawings'), xalign=0), False, False, 8)
+        self.cel_list = Gtk.ListBox()
+        cel_scroll = Gtk.ScrolledWindow()
+        cel_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        cel_scroll.add(self.cel_list)
+        side.pack_start(cel_scroll, True, True, 0)
+        self.takes_box = Gtk.Box(spacing=2)
+        side.pack_start(self.takes_box, False, False, 6)
+        side.pack_start(Gtk.Label(label=_t('Layers'), xalign=0), False, False, 8)
+        self.layer_list = Gtk.ListBox()
+        side.pack_start(self.layer_list, False, False, 0)
+        layer_actions = Gtk.Box(homogeneous=True)
+        for label, callback in (('+', self._add_layer), ('-', self._delete_layer),
+                                ('↑', self._raise_layer), ('↓', self._lower_layer)):
+            button = Gtk.Button(label=label)
+            button.connect('clicked', callback)
+            layer_actions.pack_start(button, True, True, 0)
+        side.pack_start(layer_actions, False, False, 0)
+        body.pack_start(side, False, False, 0)
+        self.timeline = Gtk.DrawingArea()
+        self.timeline.set_can_focus(True)
+        self.timeline.get_accessible().set_name(_t('Exposure sheet timeline'))
+        self.timeline.set_size_request(-1, 244)
+        self.timeline.connect('draw', self._draw_timeline)
+        self.timeline.add_events(Gdk.EventMask.BUTTON_PRESS_MASK |
+                                 Gdk.EventMask.BUTTON_RELEASE_MASK |
+                                 Gdk.EventMask.POINTER_MOTION_MASK)
+        self.timeline.connect('button-press-event', self._timeline_press)
+        self.timeline.connect('motion-notify-event', self._timeline_motion)
+        self.timeline.connect('button-release-event', self._timeline_release)
+        root.pack_start(self.timeline, False, False, 0)
+        status = Gtk.Box()
+        self.hint = Gtk.Label(label=_t('Drag to draw. Square tip, hard edges.'), xalign=0)
+        self.readout = Gtk.Label(label='0:00+00')
+        self.scene_status = Gtk.Label(label='')
+        self.zoom_label = Gtk.Label(label='100%')
+        self.save_chip = Gtk.Label(label=_t('Saved'))
+        status.pack_start(self.hint, True, True, 8)
+        status.pack_start(self.readout, False, False, 8)
+        status.pack_start(self.scene_status, False, False, 8)
+        zoom_out = Gtk.Button(label='−')
+        zoom_out.connect('clicked', lambda *_: self._zoom_step(-1))
+        zoom_in = Gtk.Button(label='+')
+        zoom_in.connect('clicked', lambda *_: self._zoom_step(1))
+        zoom_fit = Gtk.Button(label=_t('Fit'))
+        zoom_fit.connect('clicked', lambda *_: self._fit_canvas())
+        status.pack_start(zoom_out, False, False, 0)
+        status.pack_start(self.zoom_label, False, False, 4)
+        status.pack_start(zoom_in, False, False, 0)
+        status.pack_start(zoom_fit, False, False, 0)
+        status.pack_start(self.save_chip, False, False, 8)
+        root.pack_start(status, False, False, 4)
+        self.content.pack_start(root, True, True, 0)
+        self._refresh_lists()
+        self._update_playhead()
+
+    def _group_title(self, dock, text):
+        label = Gtk.Label(label=_t(text), xalign=0)
+        label.get_style_context().add_class('animation-group')
+        dock.pack_start(label, False, False, 4)
+
+    def _build_brush_group(self, dock):
+        # Illustrator's group vocabulary, existing catalog keys: one title
+        # over the size grid, one over the tip shapes.
+        self._group_title(dock, 'Brush size')
+        # Three columns keep six size buttons inside the 240 rail; a single
+        # row of six theme buttons demanded 296px and widened the window.
+        sizes = Gtk.Grid(column_spacing=4, row_spacing=4,
+                         column_homogeneous=True)
+        for index, size in enumerate((1, 2, 3, 6, 12, 24)):
+            button = Gtk.Button(label=str(size))
+            button.connect('clicked', self._set_size, size)
+            sizes.attach(button, index % 3, index // 3, 1, 1)
+        dock.pack_start(sizes, False, False, 0)
+        self._group_title(dock, 'Shapes')
+        shapes = Gtk.Box(homogeneous=True)
+        for shape, label in (('square', _t('Square')), ('round', _t('Round'))):
+            button = Gtk.RadioButton.new_with_label_from_widget(
+                shapes.get_children()[0] if shapes.get_children() else None,
+                label)
+            button.connect('toggled', self._set_shape, shape)
+            button.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+            shapes.pack_start(button, True, True, 0)
+        dock.pack_start(shapes, False, False, 0)
+
+    def _build_mirror_group(self, dock):
+        self._group_title(dock, 'Mirror')
+        row = Gtk.Box(homogeneous=True)
+        for attr, label in (('symx', _t('Across')), ('symy', _t('Down'))):
+            button = Gtk.ToggleButton(label=label)
+            button.connect('toggled', self._set_boolean, attr)
+            button.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+            row.pack_start(button, True, True, 0)
+        dock.pack_start(row, False, False, 0)
+
+    def _build_pattern_group(self, dock):
+        self._group_title(dock, 'Pattern')
+        row = Gtk.Box(homogeneous=True)
+        first = None
+        for pattern, label in zip(PATTERNS, ('Solid', 'Checker', 'Sparse')):
+            button = Gtk.RadioButton.new_with_label_from_widget(first, _t(label))
+            if first is None:
+                first = button
+            button.connect('toggled', self._set_pattern, pattern)
+            button.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+            row.pack_start(button, True, True, 0)
+        dock.pack_start(row, False, False, 0)
+
+    def _build_colour_group(self, dock):
+        self._group_title(dock, 'Colour')
+        # One DrawingArea paints all 112 swatches — illustrator.py's palette
+        # mechanism (cell grid, press hit-test, hover names). Per-swatch theme
+        # buttons carry a ~47px CSS minimum each, and 16 of them per row
+        # forced the whole window's minimum to 1087px.
+        sw, gap = 13, 1
+        self._swatch_geom = (sw, gap)
+        cols = 16
+        rows = (len(PALETTE) + cols - 1) // cols
+        self.palette_area = Gtk.DrawingArea()
+        self.palette_area.set_size_request(cols * (sw + gap) - gap,
+                                           rows * (sw + gap) - gap)
+        self.palette_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.palette_area.connect('draw', self._draw_swatches)
+        self.palette_area.connect('button-press-event', self._swatch_press)
+        self.palette_area.set_has_tooltip(True)
+        self.palette_area.connect('query-tooltip', self._swatch_tooltip)
+        self.palette_area.get_accessible().set_name(_t('Colour swatches'))
+        dock.pack_start(self.palette_area, False, False, 0)
+        self.colour_name = Gtk.Label(label=self.color, xalign=0)
+        dock.pack_start(self.colour_name, False, False, 2)
+
+    def _swatch_cell(self, x, y):
+        sw, gap = self._swatch_geom
+        col = int(x) // (sw + gap)
+        row = int(y) // (sw + gap)
+        if col < 0 or col >= 16:
+            return None
+        if int(x) % (sw + gap) >= sw or int(y) % (sw + gap) >= sw:
+            return None
+        index = row * 16 + col
+        return index if 0 <= index < len(PALETTE) else None
+
+    def _draw_swatches(self, _area, cr):
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        sw, gap = self._swatch_geom
+        for index, hex_ in enumerate(PALETTE):
+            row, col = divmod(index, 16)
+            x, y = col * (sw + gap), row * (sw + gap)
+            r, g, b = _rgb255(hex_)
+            cr.set_source_rgb(r / 255, g / 255, b / 255)
+            cr.rectangle(x, y, sw, sw)
+            cr.fill()
+            if hex_.upper() == self.color.upper():
+                cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+                cr.set_line_width(1)
+                cr.rectangle(x + .5, y + .5, sw - 1, sw - 1)
+                cr.stroke()
+        return False
+
+    def _swatch_press(self, _w, ev):
+        index = self._swatch_cell(ev.x, ev.y)
+        if index is not None:
+            self._choose_colour(None, PALETTE[index])
+            self.palette_area.queue_draw()
+        return True
+
+    def _swatch_tooltip(self, _w, x, y, _kb, tip):
+        index = self._swatch_cell(x, y)
+        if index is None:
+            return False
+        tip.set_text(self._palette_name(index))
+        return True
+
+    def _build_project_palette(self, dock):
+        self._group_title(dock, 'Palette')
+        self.project_palette_box = Gtk.Box(spacing=2)
+        dock.pack_start(self.project_palette_box, False, False, 0)
+        # Stacked, not side by side: the pair of labelled buttons demanded
+        # 260px in one row, and translations only grow.
+        add = Gtk.Button(label=_t('Add current colour'))
+        add.connect('clicked', self._palette_add)
+        add.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+        remove = Gtk.Button(label=_t('Remove'))
+        remove.connect('clicked', self._palette_remove)
+        remove.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+        dock.pack_start(add, False, False, 0)
+        dock.pack_start(remove, False, False, 0)
+        lock = Gtk.CheckButton(label=_t('Draw with palette only'))
+        lock.set_active(self.doc.palette_only)
+        lock.connect('toggled', self._palette_lock)
+        dock.pack_start(lock, False, False, 0)
+
+    def _palette_name(self, index):
+        if index < 80:
+            value = index // 16
+            hue = index % 16
+            template = _VALUES[value][0]
+            word = _HUES[hue][0]
+        elif index < 96:
+            template = _MUTED[0]
+            word = _HUES[index - 80][0]
+        elif index < 104:
+            template = None
+            word = _NEUTRALS[index - 96][0]
+        else:
+            template = None
+            word = _STAPLES[index - 104][0]
+        return (_t(template) % _t(word)) if template else _t(word)
+
+    def _choose_tool(self, button, tool):
+        if not button.get_active():
+            return
+        if tool != 'picker':
+            self.previous_tool = tool
+        self.tool = tool
+        self._restore_tool_hint()
+
+    def _set_size(self, _button, size):
+        self.size = size
+
+    def _set_shape(self, button, shape):
+        if button.get_active():
+            self.shape = shape
+
+    def _set_pattern(self, button, pattern):
+        if button.get_active():
+            self.pattern = pattern
+
+    def _set_boolean(self, button, attr):
+        if attr == 'symx':
+            self.symx = button.get_active()
+        else:
+            self.symy = button.get_active()
+
+    def _snap_colour(self, colour):
+        if not self.doc.palette_only or not self.doc.palette:
+            return colour
+        r, g, b = _rgb255(colour)
+        return min(self.doc.palette,
+                   key=lambda item: sum((x - y) ** 2
+                                        for x, y in zip((r, g, b), _rgb255(item))))
+
+    def _choose_colour(self, _button, colour):
+        self.color = self._snap_colour(colour)
+        self.colour_name.set_text(self.color)
+
+    def _palette_add(self, *_):
+        if self.color in self.doc.palette or len(self.doc.palette) >= 16:
+            return
+        self._snapshot(_t('Add Palette Colour'))
+        self.doc.palette.append(self.color)
+        self._refresh_project_palette()
+        self._mark_dirty()
+
+    def _palette_remove(self, *_):
+        if not self.doc.palette:
+            return
+        self._snapshot(_t('Remove Palette Colour'))
+        self.doc.palette.pop()
+        self._refresh_project_palette()
+        self._mark_dirty()
+
+    def _palette_lock(self, button):
+        self._snapshot(_t('Palette Lock'))
+        self.doc.palette_only = button.get_active()
+        self.color = self._snap_colour(self.color)
+        self._mark_dirty()
+
+    def _refresh_project_palette(self):
+        for child in self.project_palette_box.get_children():
+            self.project_palette_box.remove(child)
+        for colour in self.doc.palette:
+            button = Gtk.Button(label=' ')
+            button.set_tooltip_text(colour)
+            button.connect('clicked', self._choose_colour, colour)
+            self.project_palette_box.pack_start(button, False, False, 0)
+        self.project_palette_box.show_all()
+
+    def _refresh_lists(self):
+        for child in self.cel_list.get_children():
+            self.cel_list.remove(child)
+        for cel in self.doc.cels:
+            row = Gtk.ListBoxRow()
+            row.add(Gtk.Label(label=cel.name + '  ' +
+                              (_t('%d takes') % len(cel.takes)), xalign=0))
+            row.cel_id = cel.id
+            self.cel_list.add(row)
+        self._refresh_layers()
+        self._refresh_project_palette()
+        self.cel_list.show_all()
+
+    def _refresh_layers(self):
+        for child in self.layer_list.get_children():
+            self.layer_list.remove(child)
+        layers = self.doc.scenes[self.scene_i]['layers']
+        for index in reversed(range(len(layers))):
+            layer = layers[index]
+            row = Gtk.ListBoxRow()
+            box = Gtk.Box()
+            eye = Gtk.CheckButton()
+            eye.set_tooltip_text(_t('Layer Visibility'))
+            eye.set_active(layer.get('visible', True))
+            eye.connect('toggled', self._toggle_layer, index)
+            box.pack_start(eye, False, False, 2)
+            name = Gtk.Label(label=layer['name'], xalign=0)
+            name.set_ellipsize(Pango.EllipsizeMode.END)
+            box.pack_start(name, True, True, 2)
+            if layer.get('mouth_slots'):
+                mouth = Gtk.Label(label='M')
+                mouth.set_tooltip_text(_t('Mouth Slots'))
+                box.pack_start(mouth, False, False, 2)
+            row.add(box)
+            row.layer_index = index
+            self.layer_list.add(row)
+        self.layer_list.show_all()
+
+    def _toggle_layer(self, button, index):
+        self._snapshot(_t('Layer Visibility'))
+        self.doc.scenes[self.scene_i]['layers'][index]['visible'] = button.get_active()
+        self._commit_change()
+
+    def _add_layer(self, *_):
+        layers = self.doc.scenes[self.scene_i]['layers']
+        if len(layers) >= LAYER_MAX:
+            return
+        self._snapshot(_t('New Layer'))
+        layers.append(new_layer(_t('Layer %d') % (len(layers) + 1)))
+        self.layer_i = len(layers) - 1
+        self._commit_change()
+
+    def _delete_layer(self, *_):
+        layers = self.doc.scenes[self.scene_i]['layers']
+        if len(layers) <= 1:
+            return
+        self._snapshot(_t('Delete Layer'))
+        layers.pop(self.layer_i)
+        self.layer_i = min(self.layer_i, len(layers) - 1)
+        self._commit_change()
+
+    def _raise_layer(self, *_):
+        self._move_layer(1)
+
+    def _lower_layer(self, *_):
+        self._move_layer(-1)
+
+    def _move_layer(self, delta):
+        layers = self.doc.scenes[self.scene_i]['layers']
+        target = self.layer_i + delta
+        if not 0 <= target < len(layers):
+            return
+        self._snapshot(_t('Move Layer'))
+        layers[self.layer_i], layers[target] = layers[target], layers[self.layer_i]
+        self.layer_i = target
+        self._commit_change()
+
+    def _commit_change(self):
+        self._cache.clear()
+        self._mark_dirty()
+        self._refresh_lists()
+        self.canvas.queue_draw()
+        self.timeline.queue_draw()
+
+    def menu_items(self, name):
+        if name == 'File':
+            return [('New…    Ctrl+N', self._new), ('Open…    Ctrl+O', self._open),
+                    nbapp.SEP, ('Save    Ctrl+S', self._save),
+                    ('Save As…    Ctrl+Shift+S', self._save_as), nbapp.SEP,
+                    ('Export Movie…', self._export), nbapp.SEP,
+                    ('Close    Esc', self.close)]
+        if name == 'Edit':
+            return nbapp.undo_menu_items(self.history) + [
+                nbapp.SEP,
+                ('Cut    Ctrl+X', self._cut_selection if self.selection else None),
+                ('Copy    Ctrl+C', self._copy_selection if self.selection else None),
+                ('Paste    Ctrl+V', self._paste_selection if self.sheet.clipboard else None),
+                nbapp.SEP,
+                ('Copy Frame as Image', self._copy_frame_image),
+            ]
+        if name == 'View':
+            onion = ('Onion Skin: Off', 'Onion Skin: One Drawing',
+                     'Onion Skin: Two Drawings')[self.onion]
+            return [
+                (onion + '    Ctrl+E', self._cycle_onion),
+                ('Pixel Grid    G', self._toggle_grid),
+                nbapp.SEP,
+                ('Zoom In    Ctrl+Plus', lambda: self._zoom_step(1)),
+                ('Zoom Out    Ctrl+Minus', lambda: self._zoom_step(-1)),
+                ('Fit    Ctrl+0', self._fit_canvas),
+            ]
+        if name == 'Timeline':
+            return [
+                ('New Drawing    N', self._new_drawing),
+                ('Duplicate Drawing    D', self._duplicate_drawing),
+                nbapp.SEP,
+                ('Extend Hold    =', self._extend_hold),
+                ('Shorten Hold    -', self._shorten_hold),
+                ('Split Hold    /', self._split_hold),
+                ('Clear Exposure    Delete', self._clear_exposure),
+                nbapp.SEP,
+                ('Repeat Selection…    Ctrl+R', self._repeat_prompt),
+                ('Slide Between Exposures', self._slide_selection),
+                ('Insert Frames…', self._insert_prompt),
+                ('Remove Frames…', self._remove_prompt),
+                nbapp.SEP,
+                ('Add Marker    M', self._marker_prompt),
+            ]
+        if name == 'Scene':
+            return [
+                ('New Scene', self._new_scene if len(self.doc.scenes) < SCENE_MAX else None),
+                ('Duplicate Scene', self._duplicate_scene if len(self.doc.scenes) < SCENE_MAX else None),
+                ('Delete Scene', self._delete_scene if len(self.doc.scenes) > 1 else None),
+                nbapp.SEP,
+                ('Move Scene Left', (lambda: self._move_scene(-1)) if self.scene_i else None),
+                ('Move Scene Right', (lambda: self._move_scene(1)) if self.scene_i + 1 < len(self.doc.scenes) else None),
+                ('Rename Scene…', self._rename_scene_prompt),
+                ('Scene Length…', self._scene_length_prompt),
+            ]
+        if name == 'Drawing':
+            return [
+                ('Choose Take…', self._choose_take_prompt),
+                ('Add Wobble Takes…', self._wobble_prompt),
+                ('Recolor Drawing to Palette', self._recolor_cel if self.doc.palette else None),
+                ('Place Image…', self._place_image),
+            ]
+        if name == 'Layer':
+            return [('Mouth Slots…', self._mouth_slots_prompt),
+                    ('Mouth from Loudness…', self._mouth_loudness_prompt)]
+        if name == 'Sound':
+            return [('Add Sound…', self._add_sound),
+                    ('Record Sound…', self._record_prompt),
+                    ('Remove Sound', self._remove_sound if self._selected_sound else None)]
+        return []
+
+    def _canvas_point(self, event):
+        allocation = self.canvas.get_allocation()
+        width, height = self.doc.canvas
+        scale = self.zoom
+        left = (allocation.width - width * scale) / 2
+        top = (allocation.height - height * scale) / 2
+        return (int((event.x - left) // scale), int((event.y - top) // scale))
+
+    def _canvas_press(self, _widget, event):
+        self.canvas.grab_focus()
+        point = self._canvas_point(event)
+        if not (0 <= point[0] < self.doc.canvas[0] and
+                0 <= point[1] < self.doc.canvas[1]):
+            return False
+        if self.tool == 'select':
+            self._select_at_pixel(point)
+            if self.selection:
+                self._snapshot(_t('Move Exposure'))
+                self._drag_anchor = point
+            return True
+        if self.tool == 'picker':
+            frame = composite(self.doc, self.doc.scenes[self.scene_i], self.playhead)
+            pixel = pix_at(frame, *point)
+            self.color = self._snap_colour('#%02X%02X%02X' %
+                                           (pixel[2], pixel[1], pixel[0]))
+            self.tool = self.previous_tool
+            return True
+        self._snapshot(_t('Draw'))
+        cel, run = self.sheet.ensure_drawing(self.layer_i, self.playhead)
+        if cel is None:
+            self._undo.pop()
+            return True
+        self._edit_cel = cel
+        self._edit_take = self.active_take.get(cel.id, 0)
+        self._drawing = True
+        self._draw_anchor = point
+        self._draw_last = point
+        self._paint_point(point)
+        self._flash(_t("Drawing on '%s' - %d frames show this.") %
+                    (cel.name, run['len']))
+        return True
+
+    def _canvas_motion(self, _widget, event):
+        point = self._canvas_point(event)
+        if getattr(self, '_drawing', False):
+            for x, y in _line_points(self._draw_last[0], self._draw_last[1],
+                                     point[0], point[1]):
+                self._paint_point((x, y))
+            self._draw_last = point
+            self.canvas.queue_draw()
+            return True
+        if self.tool == 'select' and self.selection and hasattr(self, '_drag_anchor'):
+            dx = point[0] - self._drag_anchor[0]
+            dy = point[1] - self._drag_anchor[1]
+            run = run_at(self.doc.scenes[self.scene_i]['layers'][self.layer_i]['runs'],
+                         self.playhead)
+            if run:
+                run['dx'] += dx
+                run['dy'] += dy
+                self._drag_anchor = point
+                self._cache.clear()
+                self.canvas.queue_draw()
+            return True
+        return False
+
+    def _canvas_release(self, _widget, _event):
+        if getattr(self, '_drawing', False):
+            self._drawing = False
+            self._edit_cel.version += 1
+            self._commit_change()
+            return True
+        if hasattr(self, '_drag_anchor'):
+            del self._drag_anchor
+            self._mark_dirty()
+            return True
+        return False
+
+    def _paint_point(self, point):
+        cel = self._edit_cel
+        take = cel.decoded(self._edit_take)
+        erase = self.tool == 'eraser'
+        value = CLEAR4 if erase else px4(self.color)
+        pattern = self.pattern if self.tool in ('pencil', 'brush', 'fill') else 'solid'
+        shape = 'round' if self.tool == 'brush' else self.shape
+        stamp(take, point[0], point[1], self.size, shape, value, pattern,
+              self.symx, self.symy)
+
+    def _select_at_pixel(self, point):
+        scene = self.doc.scenes[self.scene_i]
+        for index in reversed(range(len(scene['layers']))):
+            layer = scene['layers'][index]
+            if not layer.get('visible', True):
+                continue
+            run = run_at(layer['runs'], self.playhead)
+            if not run:
+                continue
+            cel = self.doc.cel(run['cel'])
+            take = take_index(run, self.playhead, len(cel.takes), self.doc.boil_every)
+            pixel = pix_at(cel.decoded(take), point[0] - run['dx'], point[1] - run['dy'])
+            if pixel[3]:
+                self.layer_i = index
+                self.selection = (index, run['start'], run['start'] + run['len'])
+                self._refresh_layers()
+                return
+        self.selection = None
+
+    def _timeline_press(self, _widget, event):
+        self.timeline.grab_focus()
+        if event.y < 40 and event.x > self.timeline.get_allocated_width() - 150:
+            self._toggle_stamp_mouths()
+            return True
+        frame = max(0, int((event.x - 20) // self.column_width))
+        scene = self.doc.scenes[self.scene_i]
+        self.playhead = min(scene['length'] - 1, frame)
+        row = int((event.y - 62) // 22)
+        if 0 <= row < len(scene['layers']):
+            self.layer_i = len(scene['layers']) - row - 1
+            run = run_at(scene['layers'][self.layer_i]['runs'], self.playhead)
+            if run:
+                self.selection = (self.layer_i, run['start'],
+                                  run['start'] + run['len'])
+            self._selected_sound = None
+        sound_row = int((event.y - (62 + LAYER_MAX * 22)) // 22)
+        if 0 <= sound_row < SOUND_ROWS:
+            sound = scene['sounds'][sound_row]
+            if sound:
+                start = sound['start']
+                duration = max(0, sound.get('duration_smp', 0) -
+                               sound.get('in_smp', 0) - sound.get('out_smp', 0))
+                frames = max(1, math.ceil(duration / SPF[self.doc.fps]))
+                if start <= frame < start + frames:
+                    self._selected_sound = (self.scene_i, sound_row)
+                    self.selection = None
+                    dot_x = 20 + (start + frames) * self.column_width - 8
+                    if abs(event.x - dot_x) <= 8:
+                        self._snapshot(_t('Mute Sound'))
+                        sound['mute'] = not sound.get('mute', False)
+                        self._commit_change()
+                        return True
+                    self._snapshot(_t('Move Sound'))
+                    edge = 6 / max(1, self.column_width)
+                    if frame - start <= edge:
+                        mode = 'trim-in'
+                    elif start + frames - frame <= edge:
+                        mode = 'trim-out'
+                    else:
+                        mode = 'move'
+                    self._sound_drag = (sound_row, mode, frame,
+                                        copy.deepcopy(sound))
+        self._update_playhead()
+        self._scrub_frame()
+        return True
+
+    def _timeline_motion(self, _widget, event):
+        if not hasattr(self, '_sound_drag'):
+            return False
+        row, mode, anchor, before = self._sound_drag
+        sound = self.doc.scenes[self.scene_i]['sounds'][row]
+        frame = max(0, int((event.x - 20) // self.column_width))
+        delta = frame - anchor
+        spf = SPF[self.doc.fps]
+        if mode == 'move':
+            sound['start'] = max(0, min(self.doc.scenes[self.scene_i]['length'] - 1,
+                                        before['start'] + delta))
+        elif mode == 'trim-in':
+            maximum = max(0, before.get('duration_smp', 0) -
+                          before.get('out_smp', 0) - spf)
+            sound['in_smp'] = max(0, min(maximum,
+                                         before.get('in_smp', 0) + delta * spf))
+        else:
+            maximum = max(0, before.get('duration_smp', 0) -
+                          before.get('in_smp', 0) - spf)
+            sound['out_smp'] = max(0, min(maximum,
+                                          before.get('out_smp', 0) - delta * spf))
+        self.timeline.queue_draw()
+        return True
+
+    def _timeline_release(self, _widget, _event):
+        if hasattr(self, '_sound_drag'):
+            del self._sound_drag
+            self._mark_dirty()
+            return True
+        return False
+
+    def _remove_sound(self, *_):
+        if not self._selected_sound:
+            return
+        scene_index, row = self._selected_sound
+        self._snapshot(_t('Remove Sound'))
+        self.doc.scenes[scene_index]['sounds'][row] = None
+        self._selected_sound = None
+        self._commit_change()
+
+    def _toggle_stamp_mouths(self):
+        if self.stamp_mouths:
+            self.stamp_mouths = False
+            self._mouth_pass_open = False
+            self._mark_dirty()
+        else:
+            slots = self.doc.scenes[self.scene_i]['layers'][self.layer_i].get('mouth_slots')
+            if not slots:
+                self._flash(_t('Assign mouth slots to the active layer first.'))
+                return
+            self._snapshot(_t('Stamp Mouths'))
+            self.stamp_mouths = True
+            self.loop = True
+            self._mouth_pass_open = True
+        self.timeline.queue_draw()
+
+    def _stamp_mouth(self, slot_number):
+        layer = self.doc.scenes[self.scene_i]['layers'][self.layer_i]
+        slots = layer.get('mouth_slots') or []
+        if not slots:
+            self._flash(_t('Assign mouth slots to the active layer first.'))
+            return
+        index = 0 if slot_number == 0 else slot_number - 1
+        if index >= len(slots):
+            self._flash(_t('That mouth slot is empty.'))
+            return
+        self.sheet.clear(self.layer_i, self.playhead, self.playhead + 1)
+        self.sheet.stamp(self.layer_i,
+                         make_run(slots[index], self.playhead, 1),
+                         replace=True)
+        self._cache.clear()
+        self.canvas.queue_draw()
+        self.timeline.queue_draw()
+
+    def _update_playhead(self):
+        seconds, frame = divmod(self.playhead, self.doc.fps)
+        minutes, seconds = divmod(seconds, 60)
+        self.readout.set_text('%d:%02d+%02d' % (minutes, seconds, frame))
+        self.scene_status.set_text(_t('Scene %d of %d') %
+                                   (self.scene_i + 1, len(self.doc.scenes)))
+        self.canvas.queue_draw()
+        self.timeline.queue_draw()
+
+    def _new_drawing(self, *_):
+        self._snapshot(_t('New Drawing'))
+        self.sheet.ensure_drawing(self.layer_i, self.playhead,
+                                  duplicate=False, force_new=True)
+        self._commit_change()
+
+    def _duplicate_drawing(self, *_):
+        self._snapshot(_t('Duplicate Drawing'))
+        self.sheet.ensure_drawing(self.layer_i, self.playhead, True)
+        self._commit_change()
+
+    def _extend_hold(self, *_):
+        self._snapshot(_t('Extend Hold'))
+        if self.sheet.extend(self.layer_i, self.playhead):
+            self._commit_change()
+        else:
+            self._undo.pop()
+
+    def _shorten_hold(self, *_):
+        self._snapshot(_t('Shorten Hold'))
+        if self.sheet.shorten(self.layer_i, self.playhead):
+            self._commit_change()
+        else:
+            self._undo.pop()
+
+    def _split_hold(self, *_):
+        self._snapshot(_t('Split Hold'))
+        if self.sheet.split(self.layer_i, self.playhead):
+            self._commit_change()
+        else:
+            self._undo.pop()
+
+    def _clear_exposure(self, *_):
+        if not self.selection:
+            return
+        layer, start, end = self.selection
+        self._snapshot(_t('Clear Exposure'))
+        self.sheet.clear(layer, start, end)
+        self.selection = None
+        self._commit_change()
+
+    def _copy_selection(self, *_):
+        if self.selection:
+            layer, start, end = self.selection
+            self.sheet.copy_block([layer], start, end)
+
+    def _cut_selection(self, *_):
+        self._copy_selection()
+        self._clear_exposure()
+
+    def _paste_selection(self, *_):
+        self._snapshot(_t('Paste Exposures'))
+        if self.sheet.paste(self.playhead):
+            self._commit_change()
+        else:
+            self._undo.pop()
+            self._flash(_t('The exposures would overlap or run past the scene.'))
+
+    def _overlay_prompt(self, title, rows, apply_label, callback, note=None):
+        """Open the shared in-window card and mirror inputs into plain state.
+
+        This follows Illustrator's overlay-prompt/state-dict mechanism: widget
+        lifetimes never leak into apply callbacks, and Escape only cancels.
+        """
+        if self._prompt_layer is not None:
+            return
+        state = {key: initial for key, _label, initial, _kind in rows}
+        self._prompt_previews = []
+        allocation = self._overlay.get_allocation()
+        screen_width, screen_height = nbapp.screen_size()
+        width = allocation.width if allocation.width > 1 else screen_width
+        height = allocation.height if allocation.height > 1 else screen_height
+        layer = Gtk.Fixed()
+        scrim = Gtk.EventBox()
+        scrim.set_size_request(width, height)
+        scrim.connect('button-press-event',
+                      lambda *_: (self._close_prompt(), True)[1])
+        layer.put(scrim, 0, 0)
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        card.get_style_context().add_class('animation-prompt')
+        card.pack_start(Gtk.Label(label=_t(title), xalign=0), False, False, 0)
+        for key, label, initial, kind in rows:
+            row = Gtk.Box(spacing=8)
+            row.pack_start(Gtk.Label(label=_t(label), xalign=0), True, True, 0)
+            if kind == 'int':
+                widget = Gtk.SpinButton.new_with_range(1, SCENE_FRAME_MAX, 1)
+                widget.set_value(initial)
+                widget.connect('value-changed',
+                               lambda item, k=key: state.__setitem__(k, item.get_value_as_int()))
+            elif kind == 'float':
+                widget = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 2, .01)
+                widget.set_value(initial)
+                widget.connect('value-changed', self._prompt_float_changed,
+                               state, key)
+            elif kind == 'check':
+                widget = Gtk.CheckButton()
+                widget.set_active(initial)
+                widget.connect('toggled',
+                               lambda item, k=key: state.__setitem__(k, item.get_active()))
+            elif kind == 'meter':
+                widget = Gtk.ProgressBar()
+                widget.set_size_request(180, 18)
+                self._record_meter = widget
+            elif isinstance(kind, tuple) and kind[0] == 'choices':
+                widget = Gtk.Box(spacing=4)
+                first = None
+                for value, text in kind[1]:
+                    choice = Gtk.RadioButton.new_with_label_from_widget(first, text)
+                    if first is None:
+                        first = choice
+                    choice.set_active(value == initial)
+                    choice.connect('toggled', self._prompt_choice, state,
+                                   key, value)
+                    widget.pack_start(choice, False, False, 0)
+            elif kind == 'mouth-preview':
+                widget = Gtk.DrawingArea()
+                widget.set_size_request(300, 28)
+                widget.connect('draw', self._draw_mouth_preview, state)
+                self._prompt_previews.append(widget)
+            else:
+                widget = Gtk.Entry(text=str(initial))
+                widget.connect('changed',
+                               lambda item, k=key: state.__setitem__(k, item.get_text()))
+            row.pack_start(widget, False, False, 0)
+            card.pack_start(row, False, False, 0)
+        if note:
+            quiet = Gtk.Label(label=_t(note), xalign=0)
+            quiet.get_style_context().add_class('animation-muted')
+            card.pack_start(quiet, False, False, 0)
+        actions = Gtk.Box(homogeneous=True)
+        cancel = Gtk.Button(label=_t('Cancel'))
+        accept = Gtk.Button(label=_t(apply_label))
+        cancel.connect('clicked', lambda *_: self._close_prompt())
+        accept.connect('clicked', lambda *_: self._apply_prompt(callback, state))
+        actions.pack_start(cancel, True, True, 0)
+        actions.pack_start(accept, True, True, 0)
+        card.pack_start(actions, False, False, 0)
+        card_window = Gtk.EventBox()
+        card_window.add(card)
+        layer.put(card_window, 0, 0)
+        self._overlay.add_overlay(layer)
+        self._prompt_layer = layer
+        self._prompt_callback = callback
+        self._prompt_state = state
+        layer.show_all()
+        _minimum, natural = card_window.get_preferred_size()
+        card_width = natural.width if natural.width > 1 else 420
+        card_height = natural.height if natural.height > 1 else 220
+        layer.move(card_window, max(0, (width - card_width) // 2),
+                   max(0, (height - card_height) // 2))
+
+    def _prompt_choice(self, button, state, key, value):
+        if button.get_active():
+            state[key] = value
+
+    def _prompt_float_changed(self, widget, state, key):
+        state[key] = widget.get_value()
+        for preview in self._prompt_previews:
+            preview.queue_draw()
+
+    def _draw_mouth_preview(self, widget, context, state):
+        slots = self._mouth_preview_slots(state.get('quiet', .10),
+                                          state.get('loud', .45))
+        width = max(1, widget.get_allocated_width())
+        cell = width / max(1, len(slots))
+        colours = ((154 / 255, 148 / 255, 132 / 255),
+                   (127 / 255, 169 / 255, 140 / 255),
+                   (200 / 255, 52 / 255, 30 / 255))
+        for index, slot in enumerate(slots):
+            context.set_source_rgb(*colours[min(2, slot - 1)])
+            context.rectangle(index * cell, 0, math.ceil(cell), 28)
+            context.fill()
+        return False
+
+    def _apply_prompt(self, callback, state):
+        snapshot = copy.deepcopy(state)
+        self._close_prompt()
+        callback(snapshot)
+
+    def _close_prompt(self):
+        if self._prompt_layer is None:
+            return
+        self._overlay.remove(self._prompt_layer)
+        self._prompt_layer = None
+        self._prompt_callback = None
+        self._prompt_state = None
+
+    def _repeat_prompt(self, *_):
+        self._overlay_prompt('Repeat Selection…',
+                             [('count', 'Copies', 2, 'int')],
+                             'Repeat', self._repeat_apply)
+
+    def _repeat_apply(self, state):
+        if not self.sheet.clipboard and self.selection:
+            self._copy_selection()
+        self._snapshot(_t('Repeat Selection'))
+        if self.sheet.paste(self.playhead, max(1, state['count'])):
+            self._commit_change()
+        else:
+            self._undo.pop()
+            self._flash(_t('The exposures would overlap or run past the scene.'))
+
+    def _insert_prompt(self, *_):
+        self._overlay_prompt('Insert Frames…', [('count', 'Frames', 1, 'int')],
+                             'Insert', self._insert_apply,
+                             'Sounds stay where they are.')
+
+    def _insert_apply(self, state):
+        self._snapshot(_t('Insert Frames'))
+        if self.sheet.insert(self.playhead, state['count']):
+            self._commit_change()
+        else:
+            self._undo.pop()
+
+    def _remove_prompt(self, *_):
+        self._overlay_prompt('Remove Frames…', [('count', 'Frames', 1, 'int')],
+                             'Remove', self._remove_apply,
+                             'Sounds stay where they are.')
+
+    def _remove_apply(self, state):
+        self._snapshot(_t('Remove Frames'))
+        self.sheet.remove(self.playhead, state['count'])
+        self._commit_change()
+
+    def _slide_selection(self, *_):
+        if not self.selection:
+            return
+        layer, start, end = self.selection
+        self._snapshot(_t('Slide Between Exposures'))
+        if self.sheet.slide(layer, start, end):
+            self._commit_change()
+        else:
+            self._undo.pop()
+
+    def _marker_prompt(self, *_):
+        self._overlay_prompt('Marker', [('text', 'Name', '', 'text')],
+                             'Add', self._marker_apply)
+
+    def _marker_apply(self, state):
+        self._snapshot(_t('Add Marker'))
+        markers = self.doc.scenes[self.scene_i]['markers']
+        old = next((m for m in markers if m['frame'] == self.playhead), None)
+        if old:
+            old['text'] = state['text']
+        else:
+            markers.append({'frame': self.playhead, 'text': state['text']})
+            markers.sort(key=lambda marker: marker['frame'])
+        self._commit_change()
+
+    def _new_scene(self, *_):
+        if len(self.doc.scenes) >= SCENE_MAX:
+            return
+        self._snapshot(_t('New Scene'))
+        self.doc.scenes.insert(self.scene_i + 1,
+                               new_scene(_t('Scene %d') % (len(self.doc.scenes) + 1)))
+        self._switch_scene(self.scene_i + 1)
+        self._commit_change()
+
+    def _duplicate_scene(self, *_):
+        if len(self.doc.scenes) >= SCENE_MAX:
+            return
+        self._snapshot(_t('Duplicate Scene'))
+        duplicate = copy.deepcopy(self.doc.scenes[self.scene_i])
+        duplicate['name'] = _t('%s copy') % duplicate['name']
+        self.doc.scenes.insert(self.scene_i + 1, duplicate)
+        self._switch_scene(self.scene_i + 1)
+        self._commit_change()
+
+    def _delete_scene(self, *_):
+        if len(self.doc.scenes) <= 1:
+            return
+        self._snapshot(_t('Delete Scene'))
+        self.doc.scenes.pop(self.scene_i)
+        self._switch_scene(min(self.scene_i, len(self.doc.scenes) - 1))
+        self._commit_change()
+
+    def _move_scene(self, delta):
+        target = self.scene_i + delta
+        if not 0 <= target < len(self.doc.scenes):
+            return
+        self._snapshot(_t('Move Scene'))
+        scenes = self.doc.scenes
+        scenes[self.scene_i], scenes[target] = scenes[target], scenes[self.scene_i]
+        self._switch_scene(target)
+        self._commit_change()
+
+    def _switch_scene(self, index):
+        self.scene_i = max(0, min(len(self.doc.scenes) - 1, index))
+        self.sheet = Sheet(self.doc, self.scene_i)
+        self.playhead = 0
+        self.layer_i = 0
+        self.selection = None
+        self._update_playhead()
+
+    def _rename_scene_prompt(self, *_):
+        self._overlay_prompt('Rename Scene…',
+                             [('name', 'Name', self.doc.scenes[self.scene_i]['name'], 'text')],
+                             'Rename', self._rename_scene_apply)
+
+    def _rename_scene_apply(self, state):
+        self._snapshot(_t('Rename Scene'))
+        self.doc.scenes[self.scene_i]['name'] = state['name'] or _t('Scene')
+        self._commit_change()
+
+    def _scene_length_prompt(self, *_):
+        self._overlay_prompt('Scene Length…',
+                             [('length', 'Frames', self.doc.scenes[self.scene_i]['length'], 'int')],
+                             'Set Length', self._scene_length_apply)
+
+    def _scene_length_apply(self, state):
+        scene = self.doc.scenes[self.scene_i]
+        length = min(SCENE_FRAME_MAX, state['length'])
+        orphan_run = any(r['start'] + r['len'] > length
+                         for layer in scene['layers'] for r in layer['runs'])
+        orphan_sound = any(sound and sound['start'] >= length
+                           for sound in scene['sounds'])
+        if orphan_run or orphan_sound:
+            self._flash(_t('Move drawings and sounds inside the new scene length first.'))
+            return
+        self._snapshot(_t('Scene Length'))
+        scene['length'] = length
+        self.playhead = min(self.playhead, length - 1)
+        self._commit_change()
+
+    def _choose_take_prompt(self, *_):
+        cel = self._active_cel()
+        if not cel:
+            return
+        self._overlay_prompt('Choose Take…', [('take', 'Take', 1, 'int')],
+                             'Choose', self._choose_take_apply)
+
+    def _choose_take_apply(self, state):
+        run = run_at(self.doc.scenes[self.scene_i]['layers'][self.layer_i]['runs'],
+                     self.playhead)
+        if not run:
+            return
+        cel = self.doc.cel(run['cel'])
+        self._snapshot(_t('Choose Take'))
+        run['take'] = max(1, min(len(cel.takes), state['take']))
+        self._commit_change()
+
+    def _active_cel(self):
+        run = run_at(self.doc.scenes[self.scene_i]['layers'][self.layer_i]['runs'],
+                     self.playhead)
+        return self.doc.cel(run['cel']) if run else None
+
+    def _wobble_prompt(self, *_):
+        if not self._active_cel():
+            return
+        self._overlay_prompt('Add Wobble Takes…',
+                             [('takes', 'Takes (3 or 5)', 3, 'int'),
+                              ('strength', 'Strength', 1.1, 'float')],
+                             'Add Wobble Takes', self._wobble_apply)
+
+    def _wobble_apply(self, state):
+        cel = self._active_cel()
+        if not cel:
+            return
+        count = 5 if state['takes'] >= 5 else 3
+        strength = min(1.8, max(.7, state['strength']))
+        self._snapshot(_t('Add Wobble Takes'))
+        source = cel.decoded(0)
+        cel.takes = [source] + [wobble_take(source, cel.id, take, strength)
+                               for take in range(2, count + 1)]
+        cel.version += 1
+        self._commit_change()
+
+    def _recolor_cel(self, *_):
+        cel = self._active_cel()
+        if not cel or not self.doc.palette:
+            return
+        self._snapshot(_t('Recolor Drawing to Palette'))
+        palette = [(colour, _rgb255(colour)) for colour in self.doc.palette]
+        for take_index_ in range(len(cel.takes)):
+            image = cel.decoded(take_index_)
+            image.flush()
+            data = image.get_data()
+            for offset in range(0, len(data), 4):
+                if not data[offset + 3]:
+                    continue
+                rgb = (data[offset + 2], data[offset + 1], data[offset])
+                colour, _ = min(palette, key=lambda item: sum(
+                    (left - right) ** 2 for left, right in zip(rgb, item[1])))
+                data[offset:offset + 4] = px4(colour)
+            image.mark_dirty()
+        cel.version += 1
+        self._commit_change()
+
+    def _mouth_slots_prompt(self, *_):
+        slots = self.doc.scenes[self.scene_i]['layers'][self.layer_i].get('mouth_slots')
+        text = ','.join(str(value) for value in (slots or []))
+        self._overlay_prompt('Mouth Slots…', [('slots', 'Drawing numbers', text, 'text')],
+                             'Set Slots', self._mouth_slots_apply,
+                             'Slot 1 plays when quiet.')
+
+    def _mouth_slots_apply(self, state):
+        known = {cel.id for cel in self.doc.cels}
+        try:
+            slots = [int(value.strip()) for value in state['slots'].split(',')
+                     if value.strip()][:8]
+        except ValueError:
+            return
+        if any(value not in known for value in slots):
+            return
+        self._snapshot(_t('Mouth Slots'))
+        self.doc.scenes[self.scene_i]['layers'][self.layer_i]['mouth_slots'] = slots or None
+        self._commit_change()
+
+    def _mouth_loudness_prompt(self, *_):
+        scene = self.doc.scenes[self.scene_i]
+        slots = scene['layers'][self.layer_i].get('mouth_slots') or []
+        sound = next((item for item in scene['sounds']
+                      if item and not item.get('mute')), None)
+        if len(slots) < 3:
+            self._flash(_t('Assign at least three mouth slots to the active layer first.'))
+            return
+        if sound is None:
+            self._flash(_t('Add or unmute a sound before making mouths from loudness.'))
+            return
+        self._overlay_prompt('Mouth from Loudness…',
+                             [('quiet', 'Quiet', .10, 'float'),
+                              ('loud', 'Loud', .45, 'float'),
+                              ('preview', 'Preview', None, 'mouth-preview')],
+                             'Apply', self._mouth_loudness_apply)
+
+    def _mouth_preview_slots(self, quiet, loud):
+        scene = self.doc.scenes[self.scene_i]
+        sound = next((item for item in scene['sounds']
+                      if item and not item.get('mute')), None)
+        if sound is None:
+            return []
+        try:
+            samples = decode_samples(sound['path'], sound.get('sig'))
+        except Exception:
+            return []
+        if self.selection:
+            _layer, range_start, range_end = self.selection
+        else:
+            range_start, range_end = 0, scene['length']
+        spf = SPF[self.doc.fps]
+        rms = []
+        for frame in range(range_start, range_end):
+            source_start = ((frame - sound['start']) * spf +
+                            sound.get('in_smp', 0))
+            if source_start < 0 or source_start >= len(samples):
+                rms.append(0.0)
+                continue
+            block = samples[source_start:min(len(samples), source_start + spf)]
+            rms.append(math.sqrt(sum(value * value for value in block) /
+                                 max(1, len(block))))
+        peak = max(rms or [1]) or 1
+        lane = [1 if value / peak < quiet else
+                2 if value / peak < loud else 3 for value in rms]
+        for index in range(len(lane) - 1):
+            if (index == 0 or lane[index] != lane[index - 1]) and \
+                    lane[index] != lane[index + 1]:
+                lane[index] = lane[index + 1]
+        return lane
+
+    def _mouth_loudness_apply(self, state):
+        scene = self.doc.scenes[self.scene_i]
+        slots = scene['layers'][self.layer_i].get('mouth_slots')
+        sound = next((item for item in scene['sounds'] if item and not item.get('mute')), None)
+        if not slots or len(slots) < 3:
+            self._flash(_t('Assign at least three mouth slots to the active layer first.'))
+            return
+        if not sound or not os.path.exists(sound['path']):
+            self._flash(_t('Add or unmute a sound before making mouths from loudness.'))
+            return
+        try:
+            samples = decode_samples(sound['path'], sound.get('sig'))
+        except Exception:
+            # The reason is a decoder detail; the person needs the outcome.
+            self._flash(_t('This sound could not be read.'))
+            return
+        if self.selection:
+            _layer, range_start, range_end = self.selection
+        else:
+            range_start, range_end = 0, scene['length']
+        lane = self._mouth_preview_slots(state['quiet'], state['loud'])
+        self._snapshot(_t('Mouth from Loudness'))
+        layer = scene['layers'][self.layer_i]
+        self.sheet.clear(self.layer_i, range_start, range_end)
+        for run in slots_to_runs(lane, slots):
+            run['start'] += range_start
+            layer['runs'].append(run)
+        layer['runs'].sort(key=lambda run: run['start'])
+        self._commit_change()
+
+    def _toggle_grid(self, *_):
+        self.grid = not self.grid
+        self.canvas.queue_draw()
+
+    def _cycle_onion(self, *_):
+        self.onion = (self.onion + 1) % 3
+        self.canvas.queue_draw()
+
+    def _set_zoom(self, zoom):
+        self.zoom = zoom
+        self._fitted = True
+        self.canvas.set_size_request(
+            max(1, math.ceil(self.doc.canvas[0] * zoom) + 24),
+            max(1, math.ceil(self.doc.canvas[1] * zoom) + 24))
+        if hasattr(self, 'zoom_label'):
+            self.zoom_label.set_text('%d%%' % round(zoom * 100))
+        self.canvas.queue_draw()
+
+    def _fit_canvas(self, *_):
+        allocation = self.canvas_scroll.get_allocation()
+        width, height = self.doc.canvas
+        limit = min(max(1, allocation.width - 24) / width,
+                    max(1, allocation.height - 24) / height)
+        choices = [step for step in ZOOM_STEPS if step <= limit]
+        self.zoom = choices[-1] if choices else ZOOM_STEPS[0]
+        self._fitted = True
+        self.canvas.set_size_request(max(1, allocation.width - 2),
+                                     max(1, allocation.height - 2))
+        self.zoom_label.set_text('%d%%' % round(self.zoom * 100))
+        self.canvas.queue_draw()
+
+    def _restore_tool_hint(self):
+        self.hint.set_text(_t(TOOL_HINTS[self.tool]))
+
+    def _flash(self, message):
+        self.hint.set_text(message)
+        if self._flash_timer:
+            GLib.source_remove(self._flash_timer)
+        self._flash_timer = GLib.timeout_add(2600, self._flash_done)
+
+    def _flash_done(self):
+        self._flash_timer = 0
+        if self._alive:
+            self._restore_tool_hint()
+        return False
+
+    def _zoom_step(self, delta):
+        index = min(range(len(ZOOM_STEPS)),
+                    key=lambda item: abs(ZOOM_STEPS[item] - self.zoom))
+        self._set_zoom(ZOOM_STEPS[max(0, min(len(ZOOM_STEPS) - 1,
+                                             index + delta))])
+
+    def _copy_frame_image(self, *_):
+        image = composite(self.doc, self.doc.scenes[self.scene_i], self.playhead)
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        raw = surface_png(image)
+        loader = GdkPixbuf.PixbufLoader.new_with_type('png')
+        loader.write(raw)
+        loader.close()
+        clipboard.set_image(loader.get_pixbuf())
+
+    def _place_image(self, *_):
+        path = nbpicker.open_file(self, title=_t('Place Image'),
+                                  start_dir=PICTURES_DIR, patterns=('*.png',))
+        if not path:
+            return
+        cel = self._active_cel()
+        if not cel:
+            cel, _run = self.sheet.ensure_drawing(self.layer_i, self.playhead)
+        try:
+            placed = cairo.ImageSurface.create_from_png(path)
+        except Exception:
+            self._flash(_t('That image could not be opened.'))
+            return
+        self._snapshot(_t('Place Image'))
+        target = cel.decoded(self.active_take.get(cel.id, 0))
+        scale = min(1, self.doc.canvas[0] / placed.get_width(),
+                    self.doc.canvas[1] / placed.get_height())
+        context = cairo.Context(target)
+        context.translate((self.doc.canvas[0] - placed.get_width() * scale) / 2,
+                          (self.doc.canvas[1] - placed.get_height() * scale) / 2)
+        context.scale(scale, scale)
+        context.set_source_surface(placed)
+        context.get_source().set_filter(cairo.FILTER_NEAREST)
+        context.paint()
+        cel.version += 1
+        self._commit_change()
+
+    def _add_sound(self, *_):
+        scene = self.doc.scenes[self.scene_i]
+        row = next((index for index, value in enumerate(scene['sounds'])
+                    if value is None), None)
+        if row is None:
+            self._flash(_t('Both sound rows are in use.'))
+            return
+        path = nbpicker.open_file(self, title=_t('Add Sound'),
+                                  start_dir=MUSIC_DIR,
+                                  patterns=('*.wav', '*.mp3', '*.ogg', '*.flac'))
+        if not path:
+            return
+        stat_result = os.stat(path)
+        sound = {'path': path, 'start': self.playhead, 'in_smp': 0,
+                 'out_smp': 0, 'mute': False, 'peaks': '',
+                 'sig': [stat_result.st_size, int(stat_result.st_mtime)],
+                 'duration_smp': 0, '_peak_token': 0}
+        self._snapshot(_t('Add Sound'))
+        scene['sounds'][row] = sound
+        self._commit_change()
+        self._start_peak_worker(sound)
+
+    def _start_peak_worker(self, sound):
+        sound['_peak_token'] = sound.get('_peak_token', 0) + 1
+        token = sound['_peak_token']
+
+        def work():
+            try:
+                samples = decode_samples(sound['path'], sound.get('sig'))
+                sound_duration = len(samples)
+                step = max(1, len(samples) // 512)
+                values = []
+                for offset in range(0, len(samples), step):
+                    block = samples[offset:offset + step]
+                    values.extend((min(block), max(block)))
+                peaks = array.array('h', values)
+                encoded = base64.b64encode(peaks.tobytes()).decode('ascii')
+                error = None
+            except Exception as exception:
+                encoded = ''
+                sound_duration = 0
+                error = str(exception)
+            GLib.idle_add(self._finish_peaks, token, sound, encoded,
+                          sound_duration, error)
+
+        worker = threading.Thread(target=work, daemon=True)
+        self._workers.append(worker)
+        worker.start()
+
+    def _finish_peaks(self, token, sound, encoded, duration, error):
+        if not self._alive or token != sound.get('_peak_token'):
+            return False
+        sound['peaks'] = encoded
+        sound['duration_smp'] = duration
+        sound['_decode_error'] = bool(error)
+        if error:
+            # The reason is a decoder detail; the person needs the outcome.
+            self._flash(_t('The waveform could not be drawn.'))
+        else:
+            self._mark_dirty()
+        self.timeline.queue_draw()
+        return False
+
+    def _record_prompt(self, *_):
+        project = os.path.splitext(os.path.basename(self.doc_path or 'animation'))[0]
+        take = 1
+        while True:
+            destination = os.path.join(MUSIC_DIR,
+                                       project + ' take %d.wav' % take)
+            if not os.path.exists(destination):
+                break
+            take += 1
+        self._overlay_prompt('Record Sound…',
+                             [('destination', 'Destination', destination, 'text')],
+                             'Record', self._record_apply,
+                             'The recording is saved in Music.')
+
+    def _record_apply(self, state):
+        """Start Sequencer's arecord stdout-to-wave pump, copied by behaviour."""
+        arecord = shutil.which('arecord')
+        if not arecord:
+            self._flash(_t('Sound recording is not available.'))
+            return
+        destination = state['destination']
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        device_args = []
+        try:
+            import nbaudio
+            nbaudio.unmute()
+            device = nbaudio.capture_device()
+            if device:
+                device_args = ['-D', device]
+        except Exception:
+            device_args = []
+        process = subprocess.Popen([arecord] + device_args +
+                                   ['-q', '-t', 'raw', '-f', 'S16_LE',
+                                    '-c', '1', '-r', '48000'],
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL)
+
+        def pump():
+            with wave.open(destination, 'wb') as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(48000)
+                while self._alive and process.poll() is None:
+                    block = process.stdout.read(4096)
+                    if not block:
+                        break
+                    output.writeframesraw(block)
+                    values = array.array('h')
+                    values.frombytes(block)
+                    peak = max((abs(value) for value in values), default=0) / 32768
+                    GLib.idle_add(self._record_level, peak)
+
+        worker = threading.Thread(target=pump, daemon=True)
+        self._workers.append(worker)
+        worker.start()
+        self._record_process = process
+        self._record_path = destination
+        self._overlay_prompt('Recording',
+                             [('meter', 'Input level', 0, 'meter')],
+                             'Stop', lambda _state: self._stop_recording(),
+                             destination)
+
+    def _record_level(self, peak):
+        if self._alive and hasattr(self, '_record_meter'):
+            self._record_meter.set_fraction(max(0, min(1, peak)))
+        return False
+
+    def _stop_recording(self):
+        process = getattr(self, '_record_process', None)
+        if not process:
+            return
+        process.terminate()
+        process.wait(timeout=2)
+        del self._record_process
+        if os.path.exists(self._record_path):
+            scene = self.doc.scenes[self.scene_i]
+            row = next((index for index, item in enumerate(scene['sounds'])
+                        if item is None), None)
+            if row is not None:
+                stat_result = os.stat(self._record_path)
+                scene['sounds'][row] = {
+                    'path': self._record_path, 'start': self.playhead,
+                    'in_smp': 0, 'out_smp': 0, 'mute': False, 'peaks': '',
+                    'sig': [stat_result.st_size, int(stat_result.st_mtime)],
+                    'duration_smp': stat_result.st_size // 2,
+                    '_peak_token': 0}
+                self._commit_change()
+                self._start_peak_worker(scene['sounds'][row])
+
+    def _draw_canvas(self, w, cr):
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        if not self._fitted:
+            self._fit_canvas()
+        scene = self.doc.scenes[self.scene_i]
+        s = self._cache.get(frame_key(self.doc, scene, self.playhead), lambda: composite(self.doc, scene, self.playhead))
+        scale = self.zoom
+        x = (w.get_allocated_width() - self.doc.canvas[0] * scale) / 2
+        y = (w.get_allocated_height() - self.doc.canvas[1] * scale) / 2
+        cr.translate(x, y)
+        cr.scale(scale, scale)
+        if self.onion:
+            neighbours = [self.playhead - 1]
+            if self.onion == 2:
+                neighbours.append(self.playhead + 1)
+            for frame in neighbours:
+                if not 0 <= frame < scene['length']:
+                    continue
+                onion = composite(self.doc, scene, frame)
+                cr.set_source_surface(onion)
+                cr.get_source().set_filter(cairo.FILTER_NEAREST)
+                cr.paint_with_alpha(.25)
+        cr.set_source_surface(s)
+        cr.get_source().set_filter(cairo.FILTER_NEAREST if scale >= 1
+                                   else cairo.FILTER_BILINEAR)
+        cr.paint()
+        if self.grid and scale >= 8:
+            cr.set_line_width(1 / scale)
+            cr.set_source_rgba(110 / 255, 105 / 255, 94 / 255, .45)
+            for px in range(self.doc.canvas[0] + 1):
+                cr.move_to(px, 0)
+                cr.line_to(px, self.doc.canvas[1])
+            for py in range(self.doc.canvas[1] + 1):
+                cr.move_to(0, py)
+                cr.line_to(self.doc.canvas[0], py)
+            cr.stroke()
+        if w.has_focus():
+            cr.set_line_width(2 / scale)
+            cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+            cr.rectangle(0, 0, self.doc.canvas[0], self.doc.canvas[1])
+            cr.stroke()
+        return False
+
+    def _draw_timeline(self, w, cr):
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        cr.set_source_rgb(252 / 255, 251 / 255, 248 / 255)
+        cr.paint()
+        cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+        scene = self.doc.scenes[self.scene_i]
+        cr.move_to(20, 24)
+        cr.show_text(_t('Scenes') + '  ' + scene['name'])
+        cr.move_to(w.get_allocated_width() - 320, 24)
+        cr.show_text((_t('Loop') if self.loop else _t('Play')) + '  ' +
+                     self.readout.get_text())
+        cr.rectangle(w.get_allocated_width() - 150, 4, 146, 28)
+        if self.stamp_mouths:
+            cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+            cr.fill_preserve()
+        cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+        cr.stroke()
+        cr.move_to(w.get_allocated_width() - 142, 23)
+        cr.show_text(_t('Stamp Mouths'))
+        top = 62
+        for display_row, layer_index in enumerate(reversed(range(len(scene['layers'])))):
+            layer = scene['layers'][layer_index]
+            y = top + display_row * 22
+            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            cr.move_to(0, y + 21)
+            cr.line_to(w.get_allocated_width(), y + 21)
+            cr.stroke()
+            for run in layer['runs']:
+                left = 20 + run['start'] * self.column_width
+                width = max(1, run['len'] * self.column_width)
+                cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+                cr.rectangle(left, y + 2, width, 18)
+                cr.fill()
+                cel = self.doc.cel(run['cel'])
+                cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+                cr.move_to(left + 3, y + 15)
+                if width >= 42:
+                    cr.show_text(cel.name if cel else _t('Missing drawing'))
+                if run.get('take', 0) == 0:
+                    cr.move_to(left + width - 10, y + 15)
+                    cr.show_text('~')
+        sound_top = top + LAYER_MAX * 22
+        for row, sound in enumerate(scene['sounds']):
+            y = sound_top + row * 22
+            if not sound:
+                continue
+            left = 20 + sound['start'] * self.column_width
+            duration = max(0, sound.get('duration_smp', 0) -
+                           sound.get('in_smp', 0) - sound.get('out_smp', 0))
+            frames = max(1, math.ceil(duration / SPF[self.doc.fps]))
+            width = max(self.column_width, frames * self.column_width)
+            if sound.get('_decode_error') or not os.path.exists(sound['path']):
+                cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
+            else:
+                cr.set_source_rgb(127 / 255, 169 / 255, 140 / 255)
+            cr.rectangle(left, y + 2, width, 18)
+            cr.fill()
+            try:
+                peaks = array.array('h')
+                peaks.frombytes(base64.b64decode(sound.get('peaks', '')))
+                pairs = len(peaks) // 2
+                cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+                for column in range(max(1, int(width))):
+                    pair = min(pairs - 1, int(column * pairs / max(1, width)))
+                    low = peaks[pair * 2] / 32768
+                    high = peaks[pair * 2 + 1] / 32768
+                    cr.move_to(left + column, y + 11 - high * 8)
+                    cr.line_to(left + column, y + 11 - low * 8)
+                cr.stroke()
+            except Exception:
+                pass
+            cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+            cr.move_to(left + 3, y + 15)
+            cr.show_text(os.path.basename(sound['path']))
+            cr.arc(left + width - 8, y + 11, 3, 0, math.tau)
+            if sound.get('mute'):
+                cr.fill()
+            else:
+                cr.stroke()
+        for marker in scene['markers']:
+            marker_x = 20 + marker['frame'] * self.column_width
+            cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+            cr.move_to(marker_x, 42)
+            cr.line_to(marker_x, 60)
+            cr.stroke()
+        x = 20 + self.playhead * self.column_width
+        cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+        cr.rectangle(x, 40, 1, 190)
+        cr.fill()
+        if w.has_focus():
+            cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+            cr.rectangle(.5, .5, w.get_allocated_width() - 1,
+                         w.get_allocated_height() - 1)
+            cr.stroke()
+        return False
+
+    def _start_playback(self):
+        if self._playing:
+            return
+        self._playing = True
+        self._playing_started = time.monotonic()
+        if self.stamp_mouths and self.selection:
+            _layer, range_start, _range_end = self.selection
+            self.playhead = range_start
+        self._play_origin = self.playhead
+        self._audio_position = self.playhead * SPF[self.doc.fps]
+        self._audio_clips = self._scene_audio_clips()
+        if self._audio_clips:
+            self.audio.start(self._audio_pull)
+        self._tick = self.canvas.add_tick_callback(self._play_tick)
+
+    def _stop_playback(self):
+        self._playing = False
+        self.audio.stop()
+        if self.stamp_mouths:
+            self.stamp_mouths = False
+            self._mouth_pass_open = False
+            self._mark_dirty()
+        if self._tick:
+            self.canvas.remove_tick_callback(self._tick)
+            self._tick = 0
+
+    def _play_tick(self, _widget, _clock):
+        if not self._playing or not self._alive:
+            return GLib.SOURCE_REMOVE
+        if self.audio.available and self._audio_clips:
+            frame = (self._play_origin +
+                     self.audio.samples_delivered // SPF[self.doc.fps])
+        else:
+            elapsed = time.monotonic() - self._playing_started
+            frame = self._play_origin + int(elapsed * self.doc.fps)
+        scene = self.doc.scenes[self.scene_i]
+        loop_end = self.selection[2] if self.stamp_mouths and self.selection \
+            else scene['length']
+        loop_start = self.selection[1] if self.stamp_mouths and self.selection \
+            else 0
+        if frame >= loop_end:
+            if self.loop:
+                self._playing_started = time.monotonic()
+                self._play_origin = loop_start
+                self._audio_position = loop_start * SPF[self.doc.fps]
+                if self._audio_clips:
+                    self.audio.start(self._audio_pull)
+                frame = loop_start
+            elif self.scene_i + 1 < len(self.doc.scenes):
+                # Entering the next scene is a fresh playback start: its own
+                # sounds, its own sample position, its own frame origin —
+                # otherwise the old pump's sample count keeps driving the
+                # frame math and the new scene plays silent.
+                self.audio.stop()
+                self._switch_scene(self.scene_i + 1)
+                self._playing_started = time.monotonic()
+                self._play_origin = 0
+                self._audio_position = 0
+                self._audio_clips = self._scene_audio_clips()
+                if self._audio_clips:
+                    self.audio.start(self._audio_pull)
+                frame = 0
+            else:
+                self._stop_playback()
+                return GLib.SOURCE_REMOVE
+        if frame != self.playhead:
+            self.playhead = frame
+            self._update_playhead()
+        return GLib.SOURCE_CONTINUE
+
+    def _scene_audio_clips(self):
+        clips = []
+        for sound in self.doc.scenes[self.scene_i]['sounds']:
+            if not sound or sound.get('mute') or not os.path.exists(sound['path']):
+                continue
+            try:
+                decoded = decode_samples(sound['path'], sound.get('sig'))
+            except Exception:
+                sound['_decode_error'] = True
+                self._flash(_t('A sound could not be read, so it plays silent.'))
+                continue
+            start = sound.get('in_smp', 0)
+            end_trim = sound.get('out_smp', 0)
+            end = len(decoded) - end_trim if end_trim else len(decoded)
+            clips.append((decoded[start:end],
+                          sound['start'] * SPF[self.doc.fps]))
+        return clips
+
+    def _audio_pull(self, count):
+        block = mix_s16(self._audio_clips, self._audio_position, count)
+        self._audio_position += len(block)
+        scene_end = self.doc.scenes[self.scene_i]['length'] * SPF[self.doc.fps]
+        if self._audio_position >= scene_end:
+            return array.array('h')
+        return block
+
+    def _scrub_frame(self):
+        clips = self._scene_audio_clips()
+        if not clips:
+            return
+        start = self.playhead * SPF[self.doc.fps]
+        self.audio.play_once(mix_s16(clips, start, SPF[self.doc.fps]))
+
+    def _snapshot(self, label):
+        self._undo.append((label, self.scene_i, self.doc.bytes()))
+        self._undo = self._undo[-UNDO_DEPTH:]
+        self._redo.clear()
+
+    def _history_apply(self, redo):
+        src = self._redo if redo else self._undo
+        dst = self._undo if redo else self._redo
+        if not src:
+            return False
+        label, scene, raw = src.pop()
+        dst.append((label, self.scene_i, self.doc.bytes()))
+        self.doc, _ = AnimationDocument.parse(json.loads(raw))
+        self.scene_i = min(scene, len(self.doc.scenes) - 1)
+        self.sheet = Sheet(self.doc, self.scene_i)
+        self._mark_dirty()
+        self.canvas.queue_draw()
+        self.timeline.queue_draw()
+        return True
+
+    def _mark_dirty(self):
+        self._dirty = True
+        self._doc_dirty = True
+        self.save_chip.set_text(_t('Editing'))
+        if self._save_timer:
+            GLib.source_remove(self._save_timer)
+        self._save_timer = GLib.timeout_add(2500, self._autosave)
+
+    def _autosave(self):
+        self._save_timer = 0
+        if self._store_read_only:
+            return False
+        try:
+            save_document(self.doc, STORE_FILE)
+            self._dirty = False
+            self._save_error = None
+            self.save_chip.set_text(_t('Saved %s') % time.strftime('%H:%M'))
+        except Exception as e:
+            self._save_error = e
+            self.save_chip.set_text(nbapp.save_failure_reason(e, STORE_FILE))
+        return False
+
+    def _save(self, *_):
+        if not self.doc_path:
+            return self._save_as()
+        try:
+            save_document(self.doc, self.doc_path)
+            self._dirty = False
+            self._doc_dirty = False
+            self._save_error = None
+            self.set_title(_t('Animation') + ' - ' + os.path.basename(self.doc_path))
+            return True
+        except Exception as e:
+            self._save_error = e
+            self.save_chip.set_text(nbapp.save_failure_reason(e, self.doc_path))
+            return False
+
+    def _save_as(self, *_):
+        path = nbpicker.save_file(self, title=_t('Save Animation As'),
+                                  start_dir=DOCS_DIR, patterns=('*.anim',),
+                                  default_ext='.anim')
+        if not path:
+            return False
+        old_path = self.doc_path
+        try:
+            save_document(self.doc, path)
+        except Exception as exception:
+            self.doc_path = old_path
+            self._save_error = exception
+            self.save_chip.set_text(nbapp.save_failure_reason(exception, path))
+            return False
+        self.doc_path = path
+        self._dirty = False
+        self._doc_dirty = False
+        self._save_error = None
+        self.set_title(_t('Animation') + ' - ' + os.path.basename(path))
+        return True
+
+    def _new(self, *_):
+        if not self._guard_bypass and self._needs_guard():
+            self._guard_document(self._new)
+            return
+        self._guard_bypass = False
+        self._overlay_prompt('New Animation…',
+                             [('canvas', 'Canvas', (320, 240),
+                               ('choices', tuple((preset,
+                                                  '%d × %d' % preset)
+                                                 for preset in CANVAS_PRESETS))),
+                              ('fps', 'Frames per second', 12,
+                               ('choices', tuple((fps, str(fps))
+                                                 for fps in FPS_VALUES)))],
+                             'Create', self._new_apply,
+                             'Size and speed are fixed once the project starts.')
+
+    def _new_apply(self, state):
+        self.doc = AnimationDocument(canvas=state['canvas'], fps=state['fps'])
+        self.sheet = Sheet(self.doc)
+        self.doc_path = None
+        self.scene_i = self.layer_i = self.playhead = 0
+        self._undo.clear()
+        self._redo.clear()
+        self._commit_change()
+
+    def _open(self, *_):
+        if not self._guard_bypass and self._needs_guard():
+            self._guard_document(self._open)
+            return False
+        self._guard_bypass = False
+        path = nbpicker.open_file(self, title=_t('Open Animation'),
+                                  start_dir=DOCS_DIR, patterns=('*.anim',))
+        if not path:
+            return False
+        doc, reports = open_document(path)
+        if doc is None:
+            self._flash(reports[0])
+            return False
+        self.doc = doc
+        self.doc_path = path
+        self._store_read_only = False
+        self._reports = reports
+        self.scene_i = self.layer_i = self.playhead = 0
+        self.sheet = Sheet(self.doc)
+        self._undo.clear()
+        self._redo.clear()
+        self._cache.clear()
+        self._doc_dirty = False
+        self._save_error = None
+        self._refresh_lists()
+        self._update_playhead()
+        self.set_title(_t('Animation') + ' - ' + os.path.basename(path))
+        if reports:
+            self._flash(reports[0])
+        return True
+
+    def _needs_guard(self):
+        return bool(self._doc_dirty or self._save_error)
+
+    def _guard_document(self, action):
+        def save_then():
+            if self._save():
+                self._guard_bypass = True
+                action()
+
+        def discard_then():
+            self._doc_dirty = False
+            self._save_error = None
+            self._guard_bypass = True
+            action()
+
+        self._guard_action = action
+        self._overlay_prompt('Unsaved changes', [], 'Save',
+                             lambda _state: save_then(),
+                             'Save the current Animation project before leaving it.')
+        layer = self._prompt_layer
+        # Add the explicit Discard choice beside the safe Save/Cancel pair.
+        discard = Gtk.Button(label=_t('Discard'))
+        discard.connect('clicked', lambda *_: (self._close_prompt(),
+                                                discard_then()))
+        for child in layer.get_children():
+            if isinstance(child, Gtk.EventBox):
+                box = child.get_child()
+                if isinstance(box, Gtk.Box):
+                    box.pack_start(discard, False, False, 0)
+                    discard.show()
+
+    def _on_delete(self, *_):
+        if not self._needs_guard():
+            return False
+        self._guard_document(self.destroy)
+        return True
+
+    def _export(self, *_):
+        missing = sorted({os.path.basename(sound['path'])
+                          for scene in self.doc.scenes
+                          for sound in scene['sounds']
+                          if sound and not os.path.exists(sound['path'])})
+        if missing:
+            self._flash(_t('Export needs these sound files: %s') %
+                        ', '.join(missing))
+            return
+        canvas_width, canvas_height = self.doc.canvas
+        largest = max(1, min(1920 // canvas_width, 1080 // canvas_height))
+        sizes = (((canvas_width * 2, canvas_height * 2),
+                  '%d × %d (2×)' % (canvas_width * 2, canvas_height * 2)),
+                 ((canvas_width * largest, canvas_height * largest),
+                  '%d × %d (%d×)' % (canvas_width * largest,
+                                     canvas_height * largest, largest)),
+                 ((1920, 1080), '1920 × 1080 (%d× with borders)' % largest))
+        repeats = CONFORM_FPS[self.doc.fps] // self.doc.fps
+        self._overlay_prompt('Export Movie…',
+                             [('name', 'Name', 'animation', 'text'),
+                              ('range', 'Range', 'everything',
+                               ('choices', (('everything', _t('Everything')),
+                                            ('scene', _t('This scene')),
+                                            ('selection', _t('Selection'))))),
+                              ('kind', 'Kind', 'video',
+                               ('choices', (('video', _t('Video')),
+                                            ('gif', 'GIF'),
+                                            ('png', _t('PNG frames'))))),
+                              ('size', 'Video size', (1920, 1080),
+                               ('choices', sizes)),
+                              ('gif_scale', 'GIF size', 1,
+                               ('choices', ((1, '1×'), (2, '2×'), (3, '3×')))),
+                              ('native', 'Keep the native frame rate', False, 'check')],
+                             'Export', self._export_apply,
+                             'Each drawing shows %d frames.' % repeats)
+
+    def _export_apply(self, state):
+        frames, audio_specs = self._export_range(state['range'])
+        if not frames:
+            self._flash(_t('Select exposures before exporting the selection.'))
+            return
+        if state['kind'] == 'video':
+            directory, suffix = VIDEOS_DIR, '.mp4'
+        elif state['kind'] == 'gif':
+            directory, suffix = PICTURES_DIR, '.gif'
+        else:
+            directory, suffix = PICTURES_DIR, ''
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, state['name'] + suffix)
+        if os.path.exists(path):
+            self._overlay_prompt('Replace video?', [], 'Replace',
+                                 lambda _ignored: self._export_start(
+                                     state, frames, audio_specs, path),
+                                 '“%s%s” is already in %s. Exporting replaces it.' %
+                                 (state['name'], suffix,
+                                  'Videos' if directory == VIDEOS_DIR else 'Pictures'))
+            return
+        self._export_start(state, frames, audio_specs, path)
+
+    def _export_range(self, range_name):
+        if range_name == 'scene':
+            chosen = [(self.doc.scenes[self.scene_i], frame)
+                      for frame in range(self.doc.scenes[self.scene_i]['length'])]
+            selected_scenes = [(self.scene_i, 0, self.doc.scenes[self.scene_i]['length'])]
+        elif range_name == 'selection' and self.selection:
+            _layer, start, end = self.selection
+            chosen = [(self.doc.scenes[self.scene_i], frame)
+                      for frame in range(start, end)]
+            selected_scenes = [(self.scene_i, start, end)]
+        elif range_name == 'selection':
+            return ([], [])
+        else:
+            chosen = [(scene, frame) for scene in self.doc.scenes
+                      for frame in range(scene['length'])]
+            selected_scenes = [(index, 0, scene['length'])
+                               for index, scene in enumerate(self.doc.scenes)]
+        audio_specs = []
+        output_cursor = 0
+        for scene_index, start, end in selected_scenes:
+            scene = self.doc.scenes[scene_index]
+            for sound in scene['sounds']:
+                if not sound or sound.get('mute'):
+                    continue
+                clip_start = max(start, sound['start'])
+                if clip_start >= end:
+                    continue
+                in_sample = sound.get('in_smp', 0) + \
+                    max(0, clip_start - sound['start']) * SPF[self.doc.fps]
+                duration = sound.get('duration_smp', 0)
+                end_sample = max(in_sample, duration - sound.get('out_smp', 0))
+                audio_specs.append({
+                    'path': sound['path'], 'in_smp': in_sample,
+                    'out_smp': end_sample,
+                    'delay_smp': output_cursor +
+                    (clip_start - start) * SPF[self.doc.fps]})
+            output_cursor += (end - start) * SPF[self.doc.fps]
+        return (chosen, audio_specs)
+
+    def _export_start(self, state, frames, audio_specs, path):
+        self._cancel.clear()
+        self._worker_generation += 1
+        generation = self._worker_generation
+        self.hint.set_text(_t('Preparing…'))
+        self._overlay_prompt('Export Movie…',
+                             [('meter', 'Preparing…', 0, 'meter')],
+                             'Cancel', lambda _state: self._cancel_export(),
+                             path)
+        self._export_meter = getattr(self, '_record_meter', None)
+
+        def progress(value):
+            GLib.idle_add(self._export_progress, generation, value)
+
+        def work():
+            error = None
+            try:
+                if state['kind'] == 'video':
+                    export_video(self.doc, frames, path, state['size'][0],
+                                 state['size'][1], state['native'], self._cancel,
+                                 progress, audio_specs)
+                elif state['kind'] == 'gif':
+                    export_gif(self.doc, frames, path, state['gif_scale'],
+                               self._cancel, progress)
+                else:
+                    export_png_frames(self.doc, frames, path, self._cancel,
+                                      progress)
+            except Exception as exception:
+                error = str(exception)
+            GLib.idle_add(self._export_finished, generation, path, error)
+
+        worker = threading.Thread(target=work, daemon=True)
+        self._workers.append(worker)
+        worker.start()
+
+    def _export_progress(self, generation, value):
+        if not self._alive or generation != self._worker_generation:
+            return False
+        self.hint.set_text(_t('Working - %d%%') % round(value * 100))
+        if self._export_meter is not None:
+            self._export_meter.set_fraction(max(0, min(1, value)))
+        return False
+
+    def _cancel_export(self):
+        self._cancel.set()
+        self.hint.set_text(_t('Cancelling…'))
+
+    def _export_finished(self, generation, path, error):
+        if not self._alive or generation != self._worker_generation:
+            return False
+        if error:
+            self.hint.set_text(error)
+        else:
+            self.hint.set_text(_t('Completed: %s') % path)
+        if self._prompt_layer is not None:
+            self._close_prompt()
+        return False
+
+    def _on_key(self, w, e):
+        ctrl = bool(e.state & Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(e.state & Gdk.ModifierType.SHIFT_MASK)
+        if self._prompt_layer is not None:
+            if e.keyval == Gdk.KEY_Escape:
+                self._close_prompt()
+                return True
+            if ctrl and e.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+                if self._prompt_callback is not None:
+                    self._apply_prompt(self._prompt_callback,
+                                       self._prompt_state)
+                return True
+            return False
+        if nbapp.undo_keys(self.history, e):
+            return True
+        if ctrl and e.keyval in (Gdk.KEY_s, Gdk.KEY_S):
+            return bool(self._save_as() if shift else self._save())
+        if ctrl and e.keyval in (Gdk.KEY_n, Gdk.KEY_N):
+            self._new()
+            return True
+        if ctrl and e.keyval in (Gdk.KEY_o, Gdk.KEY_O):
+            self._open()
+            return True
+        if ctrl and e.keyval in (Gdk.KEY_c, Gdk.KEY_C) and self.selection:
+            self._copy_selection()
+            return True
+        if ctrl and e.keyval in (Gdk.KEY_x, Gdk.KEY_X) and self.selection:
+            self._cut_selection()
+            return True
+        if ctrl and e.keyval in (Gdk.KEY_v, Gdk.KEY_V) and self.sheet.clipboard:
+            self._paste_selection()
+            return True
+        if ctrl and e.keyval in (Gdk.KEY_r, Gdk.KEY_R):
+            self._repeat_prompt()
+            return True
+        if ctrl and e.keyval in (Gdk.KEY_e, Gdk.KEY_E):
+            self._cycle_onion()
+            return True
+        focus = self.get_focus()
+        if isinstance(focus, (Gtk.Editable, Gtk.TextView)):
+            return super()._on_key(w, e)
+        if self.stamp_mouths and self._playing and \
+                Gdk.KEY_0 <= e.keyval <= Gdk.KEY_8:
+            self._stamp_mouth(e.keyval - Gdk.KEY_0)
+            return True
+        if e.keyval == Gdk.KEY_space:
+            if self._playing:
+                self._stop_playback()
+            else:
+                self._start_playback()
+            return True
+        if e.keyval in (Gdk.KEY_comma, Gdk.KEY_period):
+            self.playhead = max(0, min(self.doc.scenes[self.scene_i]['length'] - 1, self.playhead + (-self.doc.fps if shift and e.keyval == Gdk.KEY_comma else self.doc.fps if shift else -1 if e.keyval == Gdk.KEY_comma else 1)))
+            self._update_playhead()
+            self._scrub_frame()
+            return True
+        if e.keyval in (Gdk.KEY_bracketleft, Gdk.KEY_bracketright):
+            self.size = max(1, min(192, self.size +
+                                   (-1 if e.keyval == Gdk.KEY_bracketleft else 1)))
+            return True
+        if e.keyval in (Gdk.KEY_plus, Gdk.KEY_equal) and ctrl:
+            self._zoom_step(1)
+            return True
+        if e.keyval == Gdk.KEY_minus and ctrl:
+            self._zoom_step(-1)
+            return True
+        if e.keyval == Gdk.KEY_0 and ctrl:
+            self._fit_canvas()
+            return True
+        if e.keyval in (Gdk.KEY_g, Gdk.KEY_G):
+            self._toggle_grid()
+            return True
+        if e.keyval in (Gdk.KEY_n, Gdk.KEY_N):
+            self._new_drawing()
+            return True
+        if e.keyval in (Gdk.KEY_d, Gdk.KEY_D):
+            self._duplicate_drawing()
+            return True
+        if e.keyval == Gdk.KEY_slash:
+            self._split_hold()
+            return True
+        if e.keyval == Gdk.KEY_equal:
+            self._extend_hold()
+            return True
+        if e.keyval == Gdk.KEY_minus:
+            self._shorten_hold()
+            return True
+        if e.keyval == Gdk.KEY_Delete:
+            if self._selected_sound:
+                self._remove_sound()
+            else:
+                self._clear_exposure()
+            return True
+        if e.keyval in (Gdk.KEY_m, Gdk.KEY_M):
+            self._marker_prompt()
+            return True
+        if e.keyval == Gdk.KEY_Home:
+            self.playhead = 0
+            self._update_playhead()
+            return True
+        if e.keyval == Gdk.KEY_End:
+            self.playhead = self.doc.scenes[self.scene_i]['length'] - 1
+            self._update_playhead()
+            return True
+        if e.keyval == Gdk.KEY_Page_Up:
+            self._switch_scene(self.scene_i - 1)
+            return True
+        if e.keyval == Gdk.KEY_Page_Down:
+            self._switch_scene(self.scene_i + 1)
+            return True
+        if e.keyval in (Gdk.KEY_Left, Gdk.KEY_Right,
+                        Gdk.KEY_Up, Gdk.KEY_Down) and self.selection:
+            run = run_at(self.doc.scenes[self.scene_i]['layers'][self.layer_i]['runs'],
+                         self.playhead)
+            if run:
+                self._snapshot(_t('Move Exposure'))
+                amount = 10 if shift else 1
+                run['dx'] += amount * ((e.keyval == Gdk.KEY_Right) -
+                                       (e.keyval == Gdk.KEY_Left))
+                run['dy'] += amount * ((e.keyval == Gdk.KEY_Down) -
+                                       (e.keyval == Gdk.KEY_Up))
+                self._commit_change()
+                return True
+        if e.keyval == Gdk.KEY_Escape and self.selection is not None:
+            self.selection = None
+            self.canvas.queue_draw()
+            self.timeline.queue_draw()
+            return True
+        return super()._on_key(w, e)
+
+    def _on_destroy(self, *_):
+        self._alive = False
+        self._cancel.set()
+        self._stop_playback()
+        if getattr(self, '_record_process', None):
+            self._record_process.terminate()
+        if self._save_timer:
+            GLib.source_remove(self._save_timer)
+            self._save_timer = 0
+        if self._flash_timer:
+            GLib.source_remove(self._flash_timer)
+            self._flash_timer = 0
+        if self._dirty and (not self._store_read_only):
+            self._autosave()
+
+def main():
+    app = Animation(sys.argv[1] if len(sys.argv) > 1 else None)
+    app.show_all()
+    Gtk.main()
+if __name__ == '__main__':
+    main()

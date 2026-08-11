@@ -1568,3 +1568,47 @@ Motion lane is not touching either file (not my claim). Reporting so neither get
 - Pre-existing and already reported by motion lane, unchanged: self_attr
   findings illustrator:557 / installer:185. comics' own setattr finding was
   eliminated (source-registry rewrite).
+
+## 2026-08-11 (animation lane) — Animation app SHIPPED BEHIND THE HIDE; campaign owes the merge+unhide
+
+- **animation → campaign · fragment `062-animation` is ready to merge** (136
+  keys ×17, new-strings-only, sr in Gaj's Latin, "Cartooning" carried
+  identically to 059's so the two merges are order-independent). Validated:
+  i18n_merge dry-run clean ×17 (+136 each), zero Cyrillic in sr, zero stray
+  CJK spaces. **Dress-rehearsed against merged scratch catalogs with the
+  hide lifted**: i18n_check clean ×17 at 3470 keys (chrome included),
+  menu_conformance_check PASS (936 checks, animation inspected), minsize
+  with fragments injected (the batch-0810 vacuous-measurement law):
+  ru 867 · pl 819 · el 883 · sr 834 · pt 847 · de 843 · ja 879 · zh 711 wide
+  at the 1024×722 budget — all fit with ≥141px spare. Full Russian render
+  reviewed at guest fidelity (theme + fonts via guestrun).
+- **Unhide checklist (campaign, after merging 062):** delete the
+  `HIDDEN_APPS["Animation"]` entry in finder.py; add `"animation"` to
+  `tools/perf_baseline.py` APPS (deliberately not added while hidden —
+  comics is out of that list the same way); suggest one
+  `ellipsis_sweep --all-langs` pass over animation after the merge.
+- **Riding the campaign integration sweep UNCOMMITTED** (multi-lane files,
+  per the batch-0810 law): finder.py (APP_MODULES/APP_KIND "Cartooning"/
+  FILE_APPS[".anim"]/FILE_OPENERS + the HIDDEN_APPS entry),
+  tools/gen_nbicons.py + de/nbicons_data.py (the "animation" → Lucide
+  `film` mapping + regen; drift + uniqueness green), tools/
+  data_safety_selftest.py (_ALLOWED row: animation frame export =
+  mkstemp + os.replace, the illustrator pattern), tools/
+  store_damage_selftest.py (animation `suite:… VERIFIED` row), tools/
+  design_tokens.py (SEMANTIC_FILES entry: Illustrator palette reuse),
+  tools/menu_conformance_check.py (DEBT row: Animation's `New…` honestly
+  carries an ellipsis — it opens the canvas-preset/fps card).
+- **animation → illustrator owner · UPSTREAM ENGINE FINDING: the shipped
+  `_ellipse_spans` is horizontally asymmetric by one pixel on some
+  even-box rows.** Formula `xa = ceil(cx-dx-0.5)`, `xb = floor(cx+dx+0.5)-1`
+  puts box (3,4)-(18,15) row 4 at span 7..13 around centre 10.5 (the mirror
+  of 7 is 14); the docstring's symmetry claim is false for such rows.
+  animation.py copies the function verbatim (engine-parity law) and
+  `tools/animation_selftest.py` F1 now asserts PARITY with illustrator's
+  spans — an illustrator-side fix must update both apps and that check
+  together, or the parity check goes red by design.
+- **animation → user/campaign · the x264 decision** (ANIMATION-SPEC §16):
+  guest ffmpeg has no libx264/libopenh264, so Animation's (and Video
+  Editor's) exports land on the mpeg4 fallback. `FFMPEG_GPL=y` is already
+  set; enabling the x264 package is a one-line .config change that
+  upgrades every export in the OS. Open, not decided.
