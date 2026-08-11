@@ -2,13 +2,14 @@
 """Comics - the Notebook OS pixel comic zine studio.
 
 Comics joins Illustrator's byte-exact, non-antialiased drawing discipline to
-Novel's half-letter booklet workflow.  A single 550 x 850 pixel page model is
+Novel's half-letter booklet workflow.  A single 1650 x 2550 pixel page model is
 the source for the canvas, thumbnails, shared PDF and imposed zine: lettering
 and objects are flattened once and are never laid out again for print.  Komika
 Hand is preferred for lettering; Pango falls back per character for scripts
 outside its Western-European coverage while retaining hard pixel edges.
 """
 import base64
+import collections
 import copy
 import io
 import json
@@ -31,24 +32,29 @@ import nbapp
 import nbicons
 import nbpicker
 import nbprint
+import nbjobs
 from nbi18n import _t  # noqa: E402
 
-PAGE_PX_W = 550
-PAGE_PX_H = 850
-PRINT_SCALE = 0.72
+PAGE_PX_W = 1650
+PAGE_PX_H = 2550
+PRINT_SCALE = 0.24
+LEGACY_PAGE_W = 550
+LEGACY_PAGE_H = 850
+STORE_FORMAT = 2
+REBASE = 3
 PAGE_MIN = 4
 PAGE_MAX = 32
 PAGE_NEW = 8
 LAYER_MAX = 4
-BUBBLE_MIN_W = 24
-BUBBLE_MIN_H = 24
+BUBBLE_MIN_W = 72
+BUBBLE_MIN_H = 72
 UNDO_DEPTH = 200
 HISTORY_BYTES = 96 * 1024 * 1024
 DOCK_W = 240
 PANEL_W = 240
-SIZE_MIN, SIZE_MAX = 1, 64
-SIZE_RAMP = (1, 2, 4, 8, 16)
-BUBBLE_SIZES = (10, 13, 16, 20, 26)
+SIZE_MIN, SIZE_MAX = 1, 192
+SIZE_RAMP = (3, 6, 12, 24, 48)
+BUBBLE_SIZES = (30, 40, 50, 60, 80)
 ZOOM_MIN, ZOOM_MAX = 1 / 8, 32
 ZOOM_STEPS = (1 / 8, 1 / 6, 1 / 4, 1 / 3, 1 / 2,
               1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32)
@@ -351,7 +357,7 @@ def _polygon_spans(points):
     return out
 
 
-def _ring_rect(surface, x, y, w, h, border=2, colour="#000000"):
+def _ring_rect(surface, x, y, w, h, border=6, colour="#000000"):
     b = max(1, int(border))
     _spans(surface, [(yy, x, x + w - 1) for yy in range(y, y + b)] +
            [(yy, x, x + w - 1) for yy in range(y + h - b, y + h)] +
@@ -359,15 +365,15 @@ def _ring_rect(surface, x, y, w, h, border=2, colour="#000000"):
            [(yy, x + w - b, x + w - 1) for yy in range(y + b, y + h - b)], colour)
 
 
-def _bubble_defaults(x=185, y=380):
-    return {"style": "speech", "x": int(x), "y": int(y), "w": 180,
-            "h": 90, "tail": [int(x - 45), int(y + 135)], "text": "",
-            "size": 13, "align": "c", "bold": False, "italic": False}
+def _bubble_defaults(x=555, y=1140):
+    return {"style": "speech", "x": int(x), "y": int(y), "w": 540,
+            "h": 270, "tail": [int(x - 135), int(y + 405)], "text": "",
+            "size": 40, "align": "c", "bold": False, "italic": False}
 
 
 def _text_layout(cr, bubble):
     style = bubble.get("style", "speech")
-    pad = 8
+    pad = 24
     if style in ("speech", "thought"):
         tw, th = bubble["w"] * 0.72, bubble["h"] * 0.72
         tx = bubble["x"] + (bubble["w"] - tw) / 2
@@ -382,7 +388,7 @@ def _text_layout(cr, bubble):
                          else Pango.Alignment.CENTER)
     fd = Pango.FontDescription()
     fd.set_family("Komika Hand")
-    fd.set_absolute_size(int(bubble.get("size", 13) * Pango.SCALE))
+    fd.set_absolute_size(int(bubble.get("size", 40) * Pango.SCALE))
     if bubble.get("bold"):
         fd.set_weight(Pango.Weight.BOLD)
     if bubble.get("italic"):
@@ -395,7 +401,7 @@ def _text_layout(cr, bubble):
 def bubble_required_height(bubble):
     probe = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
     layout, _x, _y, _w, _h = _text_layout(cairo.Context(probe), bubble)
-    need = layout.get_pixel_size()[1] + 16
+    need = layout.get_pixel_size()[1] + 48
     if bubble.get("style") in ("speech", "thought"):
         need = int(math.ceil(need / 0.72))
     return max(int(bubble.get("h", BUBBLE_MIN_H)), need)
@@ -425,16 +431,16 @@ def raster_bubble(bubble, surface=None):
     style, tail = b.get("style", "speech"), b.get("tail")
     if style in ("speech", "thought"):
         _spans(s, _ellipse_spans(x, y, x + w - 1, y + h - 1), "#000000")
-        _spans(s, _ellipse_spans(x + 2, y + 2, x + w - 3, y + h - 3), "#FFFFFF")
+        _spans(s, _ellipse_spans(x + 6, y + 6, x + w - 7, y + h - 7), "#FFFFFF")
     elif style == "shout":
         pts = _starburst(b)
         _spans(s, _polygon_spans(pts), "#FFFFFF")
         for a, c in zip(pts, pts[1:] + pts[:1]):
             for px, py in _line_points(a[0], a[1], c[0], c[1]):
-                _stamp(s, px, py, 2, "round", "#000000")
+                _stamp(s, px, py, 6, "round", "#000000")
     else:
         _spans(s, [(yy, x, x + w - 1) for yy in range(y, y + h)], "#FFFFFF")
-        _ring_rect(s, x, y, w, h, 2)
+        _ring_rect(s, x, y, w, h, 6)
     if tail and style in ("speech", "shout"):
         # The tail roots ON the rim, aimed at the tip: base points sit on the
         # bubble's boundary either side of the tip's bearing, the white
@@ -451,21 +457,21 @@ def raster_bubble(bubble, surface=None):
         p2 = (int(round(cx + math.cos(theta + spread) * rx)),
               int(round(cy + math.sin(theta + spread) * ry)))
         _spans(s, _polygon_spans([p1, p2, (tx, ty)]), "#FFFFFF")
-        irx, iry = max(1.0, rx - 2.0), max(1.0, ry - 2.0)
+        irx, iry = max(1.0, rx - 6.0), max(1.0, ry - 6.0)
         for end in (p1, p2):
             for lx, ly2 in _line_points(end[0], end[1], tx, ty):
                 if ((lx - cx) / irx) ** 2 + ((ly2 - cy) / iry) ** 2 >= 1.0:
-                    _stamp(s, lx, ly2, 2, "round", "#000000")
+                    _stamp(s, lx, ly2, 6, "round", "#000000")
     elif tail and style == "thought":
         tx, ty = map(int, tail)
         sx, sy = x + w // 3, y + h
-        for k, (ew, eh) in enumerate(((10, 7), (6, 4)), 1):
+        for k, (ew, eh) in enumerate(((30, 21), (18, 12)), 1):
             cx = int(sx + (tx - sx) * k / 3)
             cy = int(sy + (ty - sy) * k / 3)
             _spans(s, _ellipse_spans(cx - ew // 2, cy - eh // 2,
                                      cx + ew // 2, cy + eh // 2), "#000000")
-            _spans(s, _ellipse_spans(cx - ew // 2 + 2, cy - eh // 2 + 2,
-                                     cx + ew // 2 - 2, cy + eh // 2 - 2), "#FFFFFF")
+            _spans(s, _ellipse_spans(cx - ew // 2 + 6, cy - eh // 2 + 6,
+                                     cx + ew // 2 - 6, cy + eh // 2 - 6), "#FFFFFF")
     cr = cairo.Context(s)
     cr.set_antialias(cairo.ANTIALIAS_NONE)
     opts = cairo.FontOptions()
@@ -483,13 +489,15 @@ def raster_bubble(bubble, surface=None):
 
 class Layer:
     def __init__(self, name="Layer 1", visible=True, opacity=100,
-                 surface=None, png=None, extra=None):
+                 surface=None, png=None, extra=None, dirty=None):
         self.name = name
         self.visible = bool(visible)
         self.opacity = max(0, min(100, int(opacity)))
         self.surface = surface
         self.png = png
         self._extra = dict(extra or {})
+        self.dirty = (surface is not None and png is None) if dirty is None else bool(dirty)
+        self.revision = 0
 
     def decode(self):
         if self.surface is None:
@@ -497,9 +505,18 @@ class Layer:
         return self.surface
 
     def encode(self):
+        if not self.dirty and self.png is not None:
+            return self.png
         if self.surface is not None:
             self.png = _png(self.surface)
-        return self.png or _png(_surface(False))
+        elif self.png is None:
+            self.png = _png(_surface(False))
+        self.dirty = False
+        return self.png
+
+    def touch(self):
+        self.dirty = True
+        self.revision += 1
 
     def serial(self):
         out = dict(self._extra)
@@ -526,7 +543,19 @@ def _page_serial(page):
     return out
 
 
-def _parse_page(raw, errors):
+def _upscale_legacy(surface):
+    out = _surface(False)
+    cr = cairo.Context(out)
+    cr.scale(REBASE, REBASE)
+    pattern = cairo.SurfacePattern(surface)
+    pattern.set_filter(cairo.FILTER_NEAREST)
+    cr.set_source(pattern)
+    cr.paint()
+    out.flush()
+    return out
+
+
+def _parse_page(raw, errors, legacy=False):
     if not isinstance(raw, dict) or not isinstance(raw.get("layers"), list):
         return None
     layers = []
@@ -537,15 +566,20 @@ def _parse_page(raw, errors):
         try:
             data = base64.b64decode(item.get("png", ""), validate=True)
             surface = _decode(data)
-            if (surface.get_width(), surface.get_height()) != (PAGE_PX_W, PAGE_PX_H):
+            expected = ((LEGACY_PAGE_W, LEGACY_PAGE_H) if legacy
+                        else (PAGE_PX_W, PAGE_PX_H))
+            if (surface.get_width(), surface.get_height()) != expected:
                 raise ValueError("page layer size")
+            if legacy:
+                surface = _upscale_legacy(surface)
         except Exception:
             errors.append("A page layer could not be read.")
             data, surface = _png(_surface(False)), None
         layers.append(Layer(str(item.get("name", "Layer %d" % (len(layers) + 1))),
                             item.get("visible", True), item.get("opacity", 100),
-                            surface=surface, png=data,
-                            extra={k: v for k, v in item.items() if k not in known}))
+                            surface=surface, png=(None if legacy else data),
+                            extra={k: v for k, v in item.items() if k not in known},
+                            dirty=legacy))
     if not layers:
         layers = [Layer(surface=_surface(True))]
     panels = []
@@ -554,10 +588,13 @@ def _parse_page(raw, errors):
             continue
         try:
             p = {k: int(item.get(k, d)) for k, d in
-                 (("x", 0), ("y", 0), ("w", 24), ("h", 24), ("border", 3))}
+                 (("x", 0), ("y", 0), ("w", 72), ("h", 72), ("border", 9))}
         except (TypeError, ValueError):
             continue
-        p["border"] = max(1, min(8, p["border"]))
+        if legacy:
+            for key in ("x", "y", "w", "h", "border"):
+                p[key] *= REBASE
+        p["border"] = max(1, min(24, p["border"]))
         p["_extra"] = {k: v for k, v in item.items() if k not in p}
         panels.append(p)
     bubbles = []
@@ -568,6 +605,12 @@ def _parse_page(raw, errors):
         for k in b:
             if k in item:
                 b[k] = item[k]
+        if legacy:
+            for key in ("x", "y", "w", "h", "size"):
+                b[key] = int(b[key]) * REBASE
+            if b.get("tail") is not None:
+                b["tail"] = [int(b["tail"][0]) * REBASE,
+                             int(b["tail"][1]) * REBASE]
         b["w"] = max(BUBBLE_MIN_W, int(b["w"]))
         b["h"] = max(BUBBLE_MIN_H, int(b["h"]))
         b["_extra"] = {k: v for k, v in item.items() if k not in b}
@@ -587,7 +630,7 @@ class ComicDocument:
 
     def serial(self):
         out = dict(self._extra)
-        out.update({"format": 1, "app": "comics",
+        out.update({"format": STORE_FORMAT, "app": "comics",
                     "pages": [_page_serial(p) for p in self.pages]})
         return out
 
@@ -597,14 +640,15 @@ class ComicDocument:
 
     @classmethod
     def parse(cls, data):
-        if not isinstance(data, dict) or data.get("format") != 1 or data.get("app") != "comics":
+        if not isinstance(data, dict) or data.get("format") not in (1, STORE_FORMAT) or data.get("app") != "comics":
             return None, []
+        legacy = data.get("format") == 1
         raw = data.get("pages")
         if not isinstance(raw, list) or not PAGE_MIN <= len(raw) <= PAGE_MAX:
             return None, []
         errors, pages = [], []
         for item in raw:
-            page = _parse_page(item, errors)
+            page = _parse_page(item, errors, legacy=legacy)
             if page is None:
                 return None, errors
             pages.append(page)
@@ -636,12 +680,12 @@ class ComicDocument:
         return True
 
 
-def panel_layout(preset, margin=30, gutter=14):
+def panel_layout(preset, margin=90, gutter=42):
     rows, cols = ((1, 1), (2, 1), (3, 1), (2, 2), (3, 2), (3, 3))[int(preset)]
     margin, gutter = max(0, int(margin)), max(0, int(gutter))
     usable_w = PAGE_PX_W - 2 * margin - (cols - 1) * gutter
     usable_h = PAGE_PX_H - 2 * margin - (rows - 1) * gutter
-    if usable_w < cols * 24 or usable_h < rows * 24:
+    if usable_w < cols * 72 or usable_h < rows * 72:
         raise ValueError("Panel layout does not fit the page.")
     out = []
     for row in range(rows):
@@ -651,7 +695,7 @@ def panel_layout(preset, margin=30, gutter=14):
             x0 = margin + (usable_w * col) // cols + col * gutter
             x1 = margin + (usable_w * (col + 1)) // cols + col * gutter
             out.append({"x": x0, "y": y0, "w": x1 - x0,
-                        "h": y1 - y0, "border": 3, "_extra": {}})
+                        "h": y1 - y0, "border": 9, "_extra": {}})
     return out
 
 
@@ -769,6 +813,21 @@ def draw_flat_page(cr, surface, w=nbprint.HALF_W_PT, h=nbprint.HALF_H_PT):
     cr.restore()
 
 
+def _cached_flatten(cache, pages, index):
+    surface = cache.pop(index, None)
+    if surface is None:
+        surface = flatten_page(pages[index])
+    cache[index] = surface
+    while len(cache) > 2:
+        cache.popitem(last=False)
+    return surface
+
+
+def _place_scale(width, height):
+    fit = min(PAGE_PX_W / float(width), PAGE_PX_H / float(height))
+    return float(max(1, int(math.floor(fit)))) if fit >= 1 else fit
+
+
 def load_store(path):
     """Return (document, read_only, reports) without ever rewriting input."""
     damaged = nbapp.preserve_damaged(path)
@@ -790,6 +849,63 @@ def load_store(path):
 
 def save_document(doc, path):
     nbapp.atomic_write_json(path, doc.serial())
+
+
+def _copy_surface(surface):
+    copy_surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                      surface.get_width(), surface.get_height())
+    cr = cairo.Context(copy_surface)
+    cr.set_operator(cairo.OPERATOR_SOURCE)
+    cr.set_source_surface(surface, 0, 0)
+    cr.paint()
+    copy_surface.flush()
+    return copy_surface
+
+
+def autosave_snapshot(doc):
+    """Capture dirty pixels on the UI thread without PNG compression."""
+    out = dict(doc._extra)
+    out.update({"format": STORE_FORMAT, "app": "comics", "pages": []})
+    updates = []
+    for page in doc.pages:
+        saved = dict(page.get("_extra", {}))
+        saved.update({"layers": [],
+                      "panels": [dict(x.get("_extra", {}), **{k: x[k] for k in
+                                 ("x", "y", "w", "h", "border")}) for x in page["panels"]],
+                      "bubbles": [dict(x.get("_extra", {}), **{k: x.get(k) for k in
+                                  ("style", "x", "y", "w", "h", "tail", "text",
+                                   "size", "align", "bold", "italic")}) for x in page["bubbles"]],
+                      "mask_gutters": bool(page.get("mask_gutters", False))})
+        for layer in page["layers"]:
+            item = dict(layer._extra)
+            item.update({"name": layer.name, "visible": layer.visible,
+                         "opacity": layer.opacity})
+            if layer.dirty:
+                surface = _copy_surface(layer.decode())
+                item["_surface"] = surface
+                updates.append((layer, layer.revision))
+            else:
+                item["_png"] = layer.encode()
+            saved["layers"].append(item)
+        out["pages"].append(saved)
+    return out, updates
+
+
+def write_autosave_snapshot(path, snapshot, job=None):
+    serial = snapshot
+    encoded = []
+    for page in serial["pages"]:
+        for layer in page["layers"]:
+            surface = layer.pop("_surface", None)
+            raw = layer.pop("_png", None)
+            if surface is not None:
+                raw = _png(surface)
+            encoded.append(raw)
+            layer["png"] = base64.b64encode(raw).decode("ascii")
+    if job is not None:
+        job.checkpoint()
+    nbapp.atomic_write_json(path, serial)
+    return encoded
 
 
 class StackHistory:
@@ -826,6 +942,8 @@ class Comics(nbapp.AppWindow):
     def __init__(self, path=None):
         super().__init__()
         self._closed = False
+        self.jobs = nbjobs.JobOwner(name="comics")
+        self._discarded = False
         # Every armed GLib source lives in this one registry, keyed by name,
         # so destroy-time teardown walks a dict instead of attribute names --
         # and the self_attr audit can still prove no attribute is a callable.
@@ -834,6 +952,7 @@ class Comics(nbapp.AppWindow):
         self._prompt_layer = None
         self._save_error = None
         self._recovery_dirty = False
+        self._change_generation = 0
         self._store_read_only = False
         self._undo_stack, self._redo_stack = [], []
         self._undo_names, self._redo_names = [], []
@@ -849,7 +968,7 @@ class Comics(nbapp.AppWindow):
                 self._recent=[x for x in values if isinstance(x,str) and len(x)==7][:16]
         except Exception:
             pass
-        self.size = 2
+        self.size = 6
         self.fill_shapes = False
         self.active_layer = 0
         self.page_guides = True
@@ -927,7 +1046,7 @@ class Comics(nbapp.AppWindow):
         dock.pack_start(self._caption("Shapes"),False,False,4)
         shape_row=Gtk.Box(spacing=4); self.outline_btn=Gtk.ToggleButton(label=_t("Outline")); self.filled_btn=Gtk.ToggleButton(label=_t("Filled")); self.outline_btn.set_active(True); self.outline_btn.connect("clicked",lambda *_:self._set_fill_shapes(False)); self.filled_btn.connect("clicked",lambda *_:self._set_fill_shapes(True)); shape_row.pack_start(self.outline_btn,True,True,0); shape_row.pack_start(self.filled_btn,True,True,0); dock.pack_start(shape_row,False,False,0)
         dock.pack_start(self._caption("Bubble"),False,False,4)
-        self.bubble_group=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=4); styles=Gtk.Grid(column_spacing=3,row_spacing=3); self.bubble_style="speech"; self.bubble_size=13; self.bubble_bold=False; self.bubble_italic=False
+        self.bubble_group=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=4); styles=Gtk.Grid(column_spacing=3,row_spacing=3); self.bubble_style="speech"; self.bubble_size=40; self.bubble_bold=False; self.bubble_italic=False
         for i,style in enumerate(("speech","thought","shout","caption")):
             btn=Gtk.Button(label=_t(style.title())); btn.connect("clicked",lambda _w,style=style:self._bubble_setting("style",style)); styles.attach(btn,i%2,i//2,1,1)
         self.bubble_group.pack_start(styles,False,False,0); bramp=Gtk.Box(spacing=2)
@@ -1177,6 +1296,7 @@ class Comics(nbapp.AppWindow):
         surface = page["layers"][layer_i].decode()
         current = self._rect_bytes(surface, (x, y, w, h))
         self._put_rect_bytes(surface, (x, y, w, h), before)
+        page["layers"][layer_i].touch()
         self.active_layer = layer_i
         self._touch_page(page_i, objects=False)
         self._refresh()
@@ -1225,6 +1345,7 @@ class Comics(nbapp.AppWindow):
                           for row in range(h))
         if before == after:
             return False
+        self.doc.pages[page_i]["layers"][layer_i].touch()
         self._push(("px", page_i, layer_i, x, y, w, h, before, after), name)
         self._touch_page(page_i, objects=False)
         return True
@@ -1244,6 +1365,7 @@ class Comics(nbapp.AppWindow):
         return x0, y0, x1 - x0, y1 - y0
 
     def _changed(self):
+        self._change_generation += 1
         self._recovery_dirty = True
         self._render_chip("unsaved")
         self._cancel_source("save")
@@ -1256,15 +1378,50 @@ class Comics(nbapp.AppWindow):
             return False
         if self._store_read_only:
             return False
+        snapshot, updates = autosave_snapshot(self.doc)
+        generation = self._change_generation
+
+        def work(job):
+            job.checkpoint()
+            return write_autosave_snapshot(COMICS_FILE, snapshot, job)
+
+        def done(encoded):
+            if self._closed:
+                return
+            for (layer, revision), raw in zip(updates, encoded):
+                if layer.revision == revision:
+                    layer.png = raw
+                    layer.dirty = False
+            self._save_error = None
+            self._recovery_dirty = self._change_generation != generation
+            self._render_chip("unsaved" if self._recovery_dirty else "saved")
+
+        def failed(error):
+            if self._closed:
+                return
+            self._save_error = error
+            self._recovery_dirty = True
+            self._flash(_t(nbapp.save_failure_reason(error, COMICS_FILE)), False)
+
+        self.jobs.start("autosave", work, on_done=done, on_error=failed,
+                        policy=nbjobs.REPLACE)
+        return False
+
+    def _save_state_sync(self):
+        if self._store_read_only:
+            return False
+        self.jobs.cancel("autosave")
+        self.jobs.join()
         try:
             save_document(self.doc, COMICS_FILE)
         except Exception as exc:
             self._save_error = exc
+            self._recovery_dirty = True
             return False
         self._save_error = None
         self._recovery_dirty = False
         self._render_chip("saved")
-        return False
+        return True
 
     def _refresh(self):
         if not hasattr(self, "pages_box"):
@@ -1502,31 +1659,86 @@ class Comics(nbapp.AppWindow):
         target, replacement = bytes(data[start:start + 4]), px4(self.color)
         if target == replacement:
             return False
-        self._begin_edit(); stack = [(px, py)]
+        self._begin_edit()
+        chunks, n = {}, 1
+        while n <= PAGE_PX_W:
+            chunks[n] = target * n
+            n *= 2
+
+        def extent_right(row, x):
+            pos, step = x, 1
+            while pos + step <= PAGE_PX_W:
+                off = row + pos * 4
+                if bytes(data[off:off + step * 4]) != chunks[step]:
+                    break
+                pos += step; step *= 2
+            lo, hi = 0, min(step - 1, PAGE_PX_W - pos)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2; off = row + pos * 4
+                if bytes(data[off:off + mid * 4]) == target * mid: lo = mid
+                else: hi = mid - 1
+            return pos + lo - 1
+
+        def extent_left(row, x):
+            pos, step = x + 1, 1
+            while pos - step >= 0:
+                off = row + (pos - step) * 4
+                if bytes(data[off:off + step * 4]) != chunks[step]:
+                    break
+                pos -= step; step *= 2
+            lo, hi = 0, min(step - 1, pos)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                off = row + (pos - mid) * 4
+                if bytes(data[off:off + mid * 4]) == target * mid: lo = mid
+                else: hi = mid - 1
+            return pos - lo
+
+        stack = [(px, py)]; seeds = 1
         while stack:
-            x, y = stack.pop(); row = y * stride
-            if bytes(data[row + x * 4:row + x * 4 + 4]) != target:
+            x, y = stack.pop(); row = y * stride; at = row + x * 4
+            if bytes(data[at:at + 4]) != target:
                 continue
-            left = right = x
-            while left and bytes(data[row + (left - 1) * 4:row + left * 4]) == target: left -= 1
-            while right < PAGE_PX_W - 1 and bytes(data[row + (right + 1) * 4:row + (right + 2) * 4]) == target: right += 1
+            left, right = extent_left(row, x), extent_right(row, x)
             data[row + left * 4:row + (right + 1) * 4] = replacement * (right - left + 1)
             for ny in (y - 1, y + 1):
-                if 0 <= ny < PAGE_PX_H:
-                    for xx in range(left, right + 1):
-                        i = ny * stride + xx * 4
-                        if bytes(data[i:i + 4]) == target: stack.append((xx, ny))
+                if not 0 <= ny < PAGE_PX_H:
+                    continue
+                nrow = ny * stride; begin = nrow + left * 4
+                end = nrow + (right + 1) * 4; scan = begin
+                while scan < end:
+                    hit = bytes(data[scan:end]).find(target)
+                    if hit < 0:
+                        break
+                    found = scan + hit
+                    aligned = found - ((found - nrow) % 4)
+                    if bytes(data[aligned:aligned + 4]) != target:
+                        scan = found + 1
+                        continue
+                    sx = (aligned - nrow) // 4
+                    stack.append((sx, ny)); seeds += 1
+                    run_right = extent_right(nrow, sx)
+                    scan = nrow + (run_right + 1) * 4
+        self._fill_seed_count = seeds
         surface.mark_dirty()
         return self._commit_edit(None, "Fill")
 
     def _pick_colour(self, point):
-        tmp = _surface(True); cr = cairo.Context(tmp)
+        out_r = out_g = out_b = 1.0
+        x, y = point
         for layer in self.doc.pages[self.doc.active]["layers"]:
             if layer.visible:
-                cr.set_source_surface(layer.decode(), 0, 0); cr.paint_with_alpha(layer.opacity / 100.0)
-        tmp.flush(); data, stride = tmp.get_data(), tmp.get_stride()
-        b, g, r, _a = data[point[1] * stride + point[0] * 4:point[1] * stride + point[0] * 4 + 4]
-        self.color = "#%02X%02X%02X" % (r, g, b)
+                surface = layer.decode(); surface.flush()
+                data, stride = surface.get_data(), surface.get_stride()
+                i = y * stride + x * 4
+                b, g, r, a = data[i:i + 4]
+                opacity = layer.opacity / 100.0
+                alpha = (a / 255.0) * opacity
+                out_r = (r / 255.0) * opacity + out_r * (1.0 - alpha)
+                out_g = (g / 255.0) * opacity + out_g * (1.0 - alpha)
+                out_b = (b / 255.0) * opacity + out_b * (1.0 - alpha)
+        self.color = "#%02X%02X%02X" % (round(out_r * 255),
+                                         round(out_g * 255), round(out_b * 255))
         self._set_tool(self.previous_tool)
 
     def _hit_object(self, point):
@@ -1544,10 +1756,12 @@ class Comics(nbapp.AppWindow):
     def _selection_part(self, point):
         if not self.selection:return "move"
         kind,index=self.selection; obj=self.doc.pages[self.doc.active]["bubbles" if kind=="bubble" else "panels"][index]; x,y=point
-        if kind=="bubble" and obj.get("tail") and abs(x-obj["tail"][0])<=6 and abs(y-obj["tail"][1])<=6:return "tail"
+        handle_tolerance = max(4, int(round(8 / self.zoom)))
+        tail_tolerance = max(6, int(round(10 / self.zoom)))
+        if kind=="bubble" and obj.get("tail") and abs(x-obj["tail"][0])<=tail_tolerance and abs(y-obj["tail"][1])<=tail_tolerance:return "tail"
         positions=((obj["x"],obj["y"],"nw"),(obj["x"]+obj["w"]//2,obj["y"],"n"),(obj["x"]+obj["w"],obj["y"],"ne"),(obj["x"],obj["y"]+obj["h"]//2,"w"),(obj["x"]+obj["w"],obj["y"]+obj["h"]//2,"e"),(obj["x"],obj["y"]+obj["h"],"sw"),(obj["x"]+obj["w"]//2,obj["y"]+obj["h"],"s"),(obj["x"]+obj["w"],obj["y"]+obj["h"],"se"))
         for hx,hy,name in positions:
-            if abs(x-hx)<=4 and abs(y-hy)<=4:return name
+            if abs(x-hx)<=handle_tolerance and abs(y-hy)<=handle_tolerance:return name
         return "move"
 
     def _on_press(self, _widget, ev):
@@ -1605,7 +1819,7 @@ class Comics(nbapp.AppWindow):
                 obj["x"] = max(0, min(PAGE_PX_W - obj["w"], obj["x"] + dx)); obj["y"] = max(0, min(PAGE_PX_H - obj["h"], obj["y"] + dy))
                 if obj.get("tail") is not None: obj["tail"] = [obj["tail"][0] + dx, obj["tail"][1] + dy]
             else:
-                minw,minh=(BUBBLE_MIN_W,BUBBLE_MIN_H) if self.selection[0]=="bubble" else (24,24)
+                minw,minh=(BUBBLE_MIN_W,BUBBLE_MIN_H) if self.selection[0]=="bubble" else (72,72)
                 if "e" in self._drag_part:obj["w"]=max(minw,min(PAGE_PX_W-obj["x"],obj["w"]+dx))
                 if "s" in self._drag_part:obj["h"]=max(minh,min(PAGE_PX_H-obj["y"],obj["h"]+dy))
                 if "w" in self._drag_part:
@@ -1627,9 +1841,9 @@ class Comics(nbapp.AppWindow):
             self._clear_scratch(); self._commit_edit(rect, self.tool.title())
         elif self.tool == "panel":
             x0, x1 = sorted((self._anchor[0], self._last[0])); y0, y1 = sorted((self._anchor[1], self._last[1]))
-            if x1 - x0 + 1 >= 24 and y1 - y0 + 1 >= 24:
+            if x1 - x0 + 1 >= 72 and y1 - y0 + 1 >= 72:
                 before = self._snapshot(); page = self.doc.pages[self.doc.active]
-                page["panels"].append({"x": x0, "y": y0, "w": x1 - x0 + 1, "h": y1 - y0 + 1, "border": 3, "_extra": {}})
+                page["panels"].append({"x": x0, "y": y0, "w": x1 - x0 + 1, "h": y1 - y0 + 1, "border": 9, "_extra": {}})
                 self.selection = ("panel", len(page["panels"]) - 1); self._push(before, "Add Panel"); self._touch_page(self.doc.active)
         elif self.tool == "select" and self._object_before:
             self._push(self._object_before, "Move Bubble" if self.selection[0] == "bubble" else "Move Panel")
@@ -1654,6 +1868,7 @@ class Comics(nbapp.AppWindow):
     def _draw_canvas(self, _widget, cr):
         cr.set_antialias(cairo.ANTIALIAS_NONE)
         z = self.zoom; page = self.doc.pages[self.doc.active]
+        # No view-composite cache: cairo scaling cost is destination-bound.
         cr.save(); cr.scale(z, z); cr.set_source_rgb(1, 1, 1); cr.paint()
         for layer in page["layers"]:
             if layer.visible:
@@ -1673,8 +1888,8 @@ class Comics(nbapp.AppWindow):
         cr.restore()
         if self.page_guides:
             cr.set_source_rgba(*_rgb("#9A9484"), 0.75); cr.set_line_width(1)
-            cr.rectangle(25 * z + 0.5, 25 * z + 0.5,
-                         (PAGE_PX_W - 50) * z, (PAGE_PX_H - 50) * z); cr.stroke()
+            cr.rectangle(75 * z + 0.5, 75 * z + 0.5,
+                         (PAGE_PX_W - 150) * z, (PAGE_PX_H - 150) * z); cr.stroke()
         if self.grid and z >= GRID_FROM:
             cr.set_source_rgba(*_rgb("#C9C4B6"), 0.45); cr.set_line_width(1)
             for x in range(1, PAGE_PX_W): cr.move_to(x * z + 0.5, 0); cr.line_to(x * z + 0.5, PAGE_PX_H * z)
@@ -1705,7 +1920,9 @@ class Comics(nbapp.AppWindow):
         if not 0 <= index < len(seq): return
         obj = seq[index]; x, y, w, h = obj["x"]*z, obj["y"]*z, obj["w"]*z, obj["h"]*z
         cr.set_source_rgb(*_rgb("#C8341E")); cr.set_line_width(1); cr.rectangle(x+.5, y+.5, w, h); cr.stroke()
-        d = 6
+        # Selection chrome is authored in screen pixels, so fit zoom does not
+        # turn its handles and hairline into sub-pixel dust.
+        d = 7
         for hx, hy in ((x,y),(x+w/2,y),(x+w,y),(x,y+h/2),(x+w,y+h/2),(x,y+h),(x+w/2,y+h),(x+w,y+h)):
             cr.rectangle(hx-d/2, hy-d/2, d, d); cr.fill()
         if kind == "bubble" and obj.get("tail"):
@@ -1863,6 +2080,7 @@ class Comics(nbapp.AppWindow):
         page = self.doc.pages[self.doc.active]
         before = self._snapshot()
         page["layers"][self.active_layer].surface = _surface(False)
+        page["layers"][self.active_layer].touch()
         self._push(before, "Clear Layer")
 
     def _delete_selection(self):
@@ -1895,7 +2113,7 @@ class Comics(nbapp.AppWindow):
         return True
 
     def _panel_layout_prompt(self):
-        state = {"preset": 3, "margin": "30", "gutter": "14"}
+        state = {"preset": 3, "margin": "90", "gutter": "42"}
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         combo = Gtk.ComboBoxText()
         for label in ("1", "2 rows", "3 rows", "2x2", "2x3", "3x3"):
@@ -2103,13 +2321,14 @@ class Comics(nbapp.AppWindow):
             return
         before = self._snapshot()
         target = self.doc.pages[self.doc.active]["layers"][self.active_layer].decode()
-        scale = min(1.0, PAGE_PX_W / image.get_width(), PAGE_PX_H / image.get_height())
+        scale = _place_scale(image.get_width(), image.get_height())
         cr = cairo.Context(target); cr.set_antialias(cairo.ANTIALIAS_NONE)
         cr.translate((PAGE_PX_W - image.get_width() * scale) // 2,
                      (PAGE_PX_H - image.get_height() * scale) // 2)
         cr.scale(scale, scale)
         pat = cairo.SurfacePattern(image); pat.set_filter(cairo.FILTER_NEAREST)
         cr.set_source(pat); cr.paint()
+        self.doc.pages[self.doc.active]["layers"][self.active_layer].touch()
         self._push(before, "Place Image")
 
     def _export_prompt(self):
@@ -2131,11 +2350,11 @@ class Comics(nbapp.AppWindow):
             self._overlay_prompt("Replace file?", _t("\u201c%s\u201d already exists in Documents. Replace it?") % name,
                                  [("Cancel",None),("Replace",lambda:self._export(next_state))])
             return
-        cache = {}
+        cache = collections.OrderedDict()
         covers = {0, 1, len(self.doc.pages) - 2, len(self.doc.pages) - 1}
         def draw(cr, number, _w, _h):
             idx = number - 1
-            flat = cache.setdefault(idx, flatten_page(self.doc.pages[idx]))
+            flat = _cached_flatten(cache, self.doc.pages, idx)
             if state["bw"] and idx not in covers:
                 flat = desaturate(flat)
             draw_flat_page(cr, flat)
@@ -2168,11 +2387,11 @@ class Comics(nbapp.AppWindow):
 
     def _print(self, state):
         order = _page_order(len(self.doc.pages))
-        cache, colour = {}, cover_pages(order)
+        cache, colour = collections.OrderedDict(), cover_pages(order)
         def prepare(path):
             def draw(cr, page_no, _w, _h):
                 idx = page_no - 1
-                flat = cache.setdefault(idx, flatten_page(self.doc.pages[idx]))
+                flat = _cached_flatten(cache, self.doc.pages, idx)
                 if state["bw"] and page_no not in colour:
                     flat = desaturate(flat)
                 draw_flat_page(cr, flat)
@@ -2203,7 +2422,7 @@ class Comics(nbapp.AppWindow):
         if ev.keyval == Gdk.KEY_Delete:
             return bool(self._delete_selection())
         if ev.keyval in (Gdk.KEY_Left,Gdk.KEY_Right,Gdk.KEY_Up,Gdk.KEY_Down) and self.selection:
-            dx=(-1 if ev.keyval==Gdk.KEY_Left else 1 if ev.keyval==Gdk.KEY_Right else 0)*(10 if shift else 1); dy=(-1 if ev.keyval==Gdk.KEY_Up else 1 if ev.keyval==Gdk.KEY_Down else 0)*(10 if shift else 1); self._nudge(dx,dy); return True
+            dx=(-1 if ev.keyval==Gdk.KEY_Left else 1 if ev.keyval==Gdk.KEY_Right else 0)*(30 if shift else 1); dy=(-1 if ev.keyval==Gdk.KEY_Up else 1 if ev.keyval==Gdk.KEY_Down else 0)*(30 if shift else 1); self._nudge(dx,dy); return True
         if ev.keyval == Gdk.KEY_Page_Down:
             return self._switch_page(min(len(self.doc.pages) - 1, self.doc.active + 1))
         if ev.keyval == Gdk.KEY_Page_Up:
@@ -2255,21 +2474,28 @@ class Comics(nbapp.AppWindow):
     def _on_delete(self, *_args):
         if not self._recovery_dirty:
             return False
-        if self._autosave() is False and not self._recovery_dirty:
+        if self._save_state_sync():
             return False
         save_label = "Save As\u2026" if self._store_read_only else "Save"
         save_cb = self._save_as if self._store_read_only else self._autosave
         self._overlay_prompt("Not saved", nbapp.save_failure_reason(self._save_error, COMICS_FILE),
-                             [("Cancel", None), ("Discard", self.destroy),
+                             [("Cancel", None), ("Discard", self._discard_and_close),
                               (save_label, save_cb)])
         return True
+
+    def _discard_and_close(self):
+        self._discarded = True
+        self.destroy()
 
     def _on_destroy(self, *_args):
         if self._closed:
             return False
+        if self._recovery_dirty and not self._discarded and not self._store_read_only:
+            self._save_state_sync()
         self._closed = True
         for key in list(self._src):
             self._cancel_source(key)
+        self.jobs.close()
         return False
 
 

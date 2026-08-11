@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")
@@ -20,6 +21,7 @@ sys.path.insert(0, DE)
 
 import cairo  # noqa: E402
 import nbprint  # noqa: E402
+import nbjobs  # noqa: E402
 import comics  # noqa: E402
 
 if "--store-cycle" in sys.argv:
@@ -57,12 +59,28 @@ def skip(name, reason):
     print("SKIP %s - %s" % (name, reason))
 
 
-def pixels(surface):
-    surface.flush()
-    data, stride = surface.get_data(), surface.get_stride()
-    return [bytes(data[y * stride + x * 4:y * stride + x * 4 + 4])
-            for y in range(surface.get_height())
-            for x in range(surface.get_width())]
+class PixelView:
+    """Lazy pixels: a 300 ppi page must not become 4.2M Python objects."""
+    def __init__(self, surface):
+        surface.flush(); self.surface=surface; self.data=surface.get_data()
+        self.stride=surface.get_stride(); self.width=surface.get_width()
+        self.height=surface.get_height()
+    def __len__(self): return self.width*self.height
+    def __getitem__(self,index):
+        if index<0:index+=len(self)
+        y,x=divmod(index,self.width); i=y*self.stride+x*4
+        return bytes(self.data[i:i+4])
+    def __iter__(self):
+        for y in range(self.height):
+            row=y*self.stride
+            for x in range(self.width):
+                i=row+x*4; yield bytes(self.data[i:i+4])
+    def __contains__(self,value): return any(pixel==value for pixel in self)
+    def __eq__(self,other):
+        return isinstance(other,PixelView) and self.width==other.width and self.height==other.height and all(a==b for a,b in zip(self,other))
+
+
+def pixels(surface): return PixelView(surface)
 
 
 def page_count(path):
@@ -82,10 +100,10 @@ def geometry_family():
                 (3, "round"): 5, (4, "round"): 12}
     check("geometry brush footprints", all(comics.brush_pixels(*k) == v for k, v in expected.items()))
     r = comics._surface(False)
-    comics._ring_rect(r, 20, 20, 30, 20, 2)
+    comics._ring_rect(r, 20, 20, 40, 30, 6)
     ps = pixels(r)
     at = lambda x, y: ps[y * comics.PAGE_PX_W + x]
-    check("geometry rectangle ring two pixels", at(20, 25) == comics.px4("#000000") and at(21, 25) == comics.px4("#000000") and at(22, 25) == comics.CLEAR4)
+    check("geometry rectangle ring six pixels", all(at(x, 27) == comics.px4("#000000") for x in range(20, 26)) and at(26, 27) == comics.CLEAR4)
     e = comics.raster_bubble(dict(comics._bubble_defaults(40, 40), text="", tail=None))
     ep = pixels(e)
     allowed = {comics.CLEAR4, comics.px4("#FFFFFF"), comics.px4("#000000")}
@@ -93,9 +111,9 @@ def geometry_family():
     shout = comics.raster_bubble(dict(comics._bubble_defaults(60, 60), style="shout", text=""))
     check("geometry starburst fill and edge", comics.px4("#FFFFFF") in pixels(shout) and comics.px4("#000000") in pixels(shout))
     p = comics._surface(False)
-    comics._ring_rect(p, 10, 10, 40, 40, 3)
+    comics._ring_rect(p, 10, 10, 80, 80, 9)
     pp = pixels(p)
-    check("geometry panel ring bytes", pp[20 * comics.PAGE_PX_W + 11] == comics.px4("#000000") and pp[20 * comics.PAGE_PX_W + 13] == comics.CLEAR4)
+    check("geometry panel ring bytes", pp[30 * comics.PAGE_PX_W + 18] == comics.px4("#000000") and pp[30 * comics.PAGE_PX_W + 19] == comics.CLEAR4)
 
 
 def bubble_family():
@@ -112,7 +130,7 @@ def bubble_family():
 
 def auto_height_family():
     b = comics._bubble_defaults(30, 30)
-    b.update(w=70, h=24, text="This is enough lettering to wrap onto many separate lines")
+    b.update(w=210, h=72, size=40, text="This is enough lettering to wrap onto many separate lines")
     old = b["h"]
     comics.grow_bubble(b)
     grown = b["h"]
@@ -152,7 +170,7 @@ def imposition_family():
     mono = comics.desaturate(colour)
     check("imposition black-and-white interior", all(v[0] == v[1] == v[2] for v in pixels(mono)))
     check("imposition cover remains colour", comics.px4("#C8341E") in pixels(colour))
-    check("imposition print scale 0.72", comics.PAGE_PX_W * comics.PRINT_SCALE == nbprint.HALF_W_PT and comics.PAGE_PX_H * comics.PRINT_SCALE == nbprint.HALF_H_PT)
+    check("imposition print scale 0.24 exact", comics.PRINT_SCALE == 0.24 and comics.PAGE_PX_W * comics.PRINT_SCALE == nbprint.HALF_W_PT and comics.PAGE_PX_H * comics.PRINT_SCALE == nbprint.HALF_H_PT)
     shutil.rmtree(tmp)
 
 
@@ -250,7 +268,7 @@ class Event:
 
 def interaction_app(pages=2):
     app=comics.Comics.__new__(comics.Comics)
-    app.doc=comics.ComicDocument([comics.new_page() for _ in range(max(4,pages))])
+    app.doc=comics.ComicDocument([comics.new_page() for _ in range(max(1,pages))])
     app.active_layer=0; app.tool="pencil"; app.previous_tool="pencil"
     app.color="#C8341E"; app.size=1; app.fill_shapes=False; app.zoom=1
     app.selection=None; app._drawing=False; app._anchor=None; app._last=None
@@ -283,7 +301,7 @@ def interaction_family():
     check("interaction flood fill bounded", ps[15*comics.PAGE_PX_W+15]==comics.px4("#C8341E") and ps[9*comics.PAGE_PX_W+15]==comics.px4("#FFFFFF"))
     app=interaction_app(); app.doc.pages[1]["layers"][0].surface=comics._surface(False); app.doc.active=1; app._begin_edit(); comics._write_pixel(app._active_surface(),7,9,"#C8341E"); app._commit_edit((7,9,1,1),"Pencil"); app.doc.active=0; app._undo()
     check("interaction pixel undo exact rect switches page", app.doc.active==1 and pixels(app.doc.pages[1]["layers"][0].decode())[9*comics.PAGE_PX_W+7]==comics.CLEAR4)
-    app=interaction_app(); before=len(app.doc.pages[0]["bubbles"]); app.tool="bubble"; app.bubble_style="speech"; app.bubble_size=13; app.bubble_bold=False; app.bubble_italic=False
+    app=interaction_app(4); before=len(app.doc.pages[0]["bubbles"]); app.tool="bubble"; app.bubble_style="speech"; app.bubble_size=40; app.bubble_bold=False; app.bubble_italic=False
     app._bubble_editor=lambda index,new_before=None: app._restore_snapshot(new_before)
     app._on_press(None,Event(30,30))
     check("interaction bubble placement cancel removes new bubble",len(app.doc.pages[0]["bubbles"])==before)
@@ -292,6 +310,10 @@ def interaction_family():
     check("interaction ramp click sets brush size",app.size==comics.SIZE_RAMP[-1])
     app=interaction_app(); app.palette_area=DummyWidget(); app.recent_area=DummyWidget(); app.colour_chip=DummyWidget(); app.colour_name=type("Label",(),{"set_text":lambda self,text:None})(); app._recent=[]; app._on_palette_press(None,Event(1,1))
     check("interaction palette click sets colour",app.color==comics.PALETTE[0])
+    app=interaction_app(1); top=comics.Layer("Top",opacity=50,surface=comics._surface(False)); comics._write_pixel(top.decode(),3,4,"#FF0000"); app.doc.pages[0]["layers"].append(top); app.previous_tool="pencil"; app._set_tool=lambda tool:setattr(app,"tool",tool); app._pick_colour((3,4))
+    check("interaction eyedropper blends one pixel without page composite",app.color=="#FF8080")
+    check("interaction placed 100ppi page scales full-bleed by integer three",
+          comics._place_scale(550,850)==3.0)
     app=interaction_app(); app.bw_inside=False; app.grid=False; app.page_guides=True; app.selection=None
     menu_ok=True
     try:
@@ -300,19 +322,102 @@ def interaction_family():
     except Exception:
         menu_ok=False
     check("interaction menu smoke no invalid separators",menu_ok)
-    app=interaction_app(); app.doc.pages[0]["layers"][0].decode(); app.doc.pages[1]["layers"][0].decode(); app.doc.pages[2]["layers"][0].decode(); app._cache_page_switch(1,2)
+    app=interaction_app(3); app.doc.pages[0]["layers"][0].decode(); app.doc.pages[1]["layers"][0].decode(); app.doc.pages[2]["layers"][0].decode(); app._cache_page_switch(1,2)
     decoded=sum(any(layer.surface is not None for layer in page["layers"]) for page in app.doc.pages)
     check("interaction page switch keeps at most two decoded pages",decoded<=2)
     app=interaction_app(); app._thumb_cache[0]=object(); app._touch_page(0,False)
     check("interaction thumbnail cache invalidates on commit",0 not in app._thumb_cache)
-    app=interaction_app(); bubble=comics._bubble_defaults(100,100); app.doc.pages[0]["bubbles"].append(bubble); app.tool="select"
-    app._on_press(None,Event(120,120)); app._on_motion(None,Event(125,127)); app._on_release(None,Event(125,127))
-    moved=(bubble["x"],bubble["y"])==(105,107)
+    app=interaction_app(); bubble=comics._bubble_defaults(300,100); app.doc.pages[0]["bubbles"].append(bubble); app.tool="select"
+    app._on_press(None,Event(320,120)); app._on_motion(None,Event(325,127)); app._on_release(None,Event(325,127))
+    moved=(bubble["x"],bubble["y"])==(305,107)
     app.selection=("bubble",0); corner=(bubble["x"]+bubble["w"],bubble["y"]+bubble["h"]); oldw=bubble["w"]; app._on_press(None,Event(*corner)); app._on_motion(None,Event(corner[0]+12,corner[1]+8)); app._on_release(None,Event(corner[0]+12,corner[1]+8)); resized=bubble["w"]>oldw
     tail=tuple(bubble["tail"]); app.selection=("bubble",0); app._on_press(None,Event(*tail)); app._on_motion(None,Event(tail[0]+9,tail[1]+4)); app._on_release(None,Event(tail[0]+9,tail[1]+4)); tailed=tuple(bubble["tail"])==(tail[0]+9,tail[1]+4)
-    check("interaction select move resize tail handlers",moved and resized and tailed)
+    check("interaction select move resize tail handlers",moved and resized and tailed,
+          "moved=%r resized=%r tailed=%r pos=%r tail=%r"%
+          (moved,resized,tailed,(bubble["x"],bubble["y"]),bubble["tail"]))
     app.selection=("bubble",0); x=bubble["x"]; app._nudge(1,0); app._finish_nudge()
     check("interaction selected object nudge",bubble["x"]==x+1)
+
+
+def migration_family():
+    legacy = cairo.ImageSurface(cairo.FORMAT_ARGB32, 550, 850)
+    comics._write_pixel(legacy, 17, 23, "#C8341E")
+    buf = tempfile.SpooledTemporaryFile()
+    legacy.write_to_png(buf); buf.seek(0)
+    encoded = __import__("base64").b64encode(buf.read()).decode("ascii")
+    layer = {"name":"Paper","visible":True,"opacity":100,"png":encoded,
+             "layer-extra":"kept"}
+    panel = {"x":10,"y":20,"w":100,"h":80,"border":3,"panel-extra":1}
+    bubble = {"style":"speech","x":30,"y":40,"w":180,"h":90,
+              "tail":[5,120],"text":"Migration","size":13,"align":"c",
+              "bold":False,"italic":False,"bubble-extra":2}
+    page = {"layers":[layer],"panels":[panel],"bubbles":[bubble],
+            "mask_gutters":True,"page-extra":3}
+    raw = {"format":1,"app":"comics","pages":[page,page,page,page],
+           "top-extra":4}
+    doc, errors = comics.ComicDocument.parse(raw)
+    migrated = doc.pages[0]; surface = migrated["layers"][0].decode()
+    block = all(pixels(surface)[y*comics.PAGE_PX_W+x] == comics.px4("#C8341E")
+                for y in range(69,72) for x in range(51,54))
+    outside = pixels(surface)[68*comics.PAGE_PX_W+51] == comics.CLEAR4
+    p, b = migrated["panels"][0], migrated["bubbles"][0]
+    check("migration format-1 pixel triples to exact 3x3 block",
+          not errors and block and outside)
+    check("migration coordinates panels bubbles tail size rebase",
+          (p["x"],p["y"],p["w"],p["h"],p["border"]) == (30,60,300,240,9)
+          and (b["x"],b["y"],b["w"],b["h"],b["tail"],b["size"])
+          == (90,120,540,270,[15,360],39))
+    check("migration marks layers dirty and preserves extras",
+          migrated["layers"][0].dirty and migrated["layers"][0]._extra["layer-extra"]=="kept"
+          and migrated["_extra"]["page-extra"]==3 and doc._extra["top-extra"]==4)
+    saved = doc.serial()
+    check("migration saves back as format 2", saved["format"]==2)
+
+
+FILL_MEASURE = {}
+
+
+def fill_perf_family():
+    app=interaction_app(1); app.doc.pages[0]["layers"][0].surface=comics._surface(False)
+    app.doc.pages[0]["layers"][0].dirty=True; app.color="#C8341E"
+    started=time.perf_counter(); ok=app._flood_fill((0,0)); elapsed=time.perf_counter()-started
+    seeds=app._fill_seed_count; FILL_MEASURE.update(seconds=elapsed,seeds=seeds)
+    print("MEASURE fill %.3fs, %d seeds"%(elapsed,seeds))
+    view=pixels(app._active_surface())
+    check("fill perf whole 300ppi page under 1.5 seconds",ok and elapsed<1.5,elapsed)
+    check("fill perf span seeds below three per row",seeds<3*comics.PAGE_PX_H,seeds)
+    check("fill perf fills exact page bytes",view[0]==comics.px4("#C8341E") and view[-1]==comics.px4("#C8341E"))
+
+
+def autosave_family():
+    layer=comics.Layer(surface=comics._surface(False)); first=layer.encode(); second=layer.encode()
+    check("autosave clean encode reuses identical PNG bytes",first is second)
+    comics._write_pixel(layer.decode(),4,5,"#C8341E"); layer.touch(); third=layer.encode()
+    check("autosave edited layer re-encodes PNG",third is not first and third!=first)
+    doc=comics.ComicDocument([{"layers":[layer],"panels":[],"bubbles":[],
+                               "mask_gutters":False,"_extra":{}} for _ in range(4)])
+    comics._write_pixel(layer.decode(),7,8,"#1A1916"); layer.touch()
+    snapshot, updates=comics.autosave_snapshot(doc)
+    out=os.path.join(tempfile.mkdtemp(prefix="comic-autosave-"),"worker.json")
+    dispatch=nbjobs.ManualDispatcher(); owner=nbjobs.JobOwner(dispatch=dispatch,name="comics-test")
+    seen=[]; owner.start("autosave",lambda job:comics.write_autosave_snapshot(out,snapshot),
+                         on_done=seen.append,policy=nbjobs.REPLACE)
+    owner.join(10); dispatch.drain(); parsed,_=comics.ComicDocument.parse(json.load(open(out)))
+    check("autosave worker writes parseable format 2",bool(seen) and parsed is not None and json.load(open(out))["format"]==2)
+    sync=os.path.join(os.path.dirname(out),"sync.json"); comics.save_document(doc,sync)
+    parsed_sync,_=comics.ComicDocument.parse(json.load(open(sync)))
+    check("autosave synchronous close flush writes format 2",parsed_sync is not None and json.load(open(sync))["format"]==2)
+    owner.close()
+
+
+def zoom_tolerance_family():
+    app=interaction_app(1); bubble=comics._bubble_defaults(100,100)
+    app.doc.pages[0]["bubbles"].append(bubble); app.selection=("bubble",0)
+    corner=(bubble["x"],bubble["y"])
+    app.zoom=.25; fit_part=app._selection_part((corner[0]+20,corner[1]+20))
+    app.zoom=1; actual_part=app._selection_part((corner[0]+20,corner[1]+20))
+    check("zoom tolerance fit zoom grabs handle twenty page pixels away",fit_part=="nw")
+    check("zoom tolerance actual size rejects twenty-pixel miss",actual_part=="move")
 
 
 def gtk_family():
@@ -366,6 +471,14 @@ def store_cycle_family():
     if not os.environ.get("DISPLAY"):
         skip("store real-app cycles on a damaged store", "no display")
         return
+    try:
+        from gi.repository import Gtk
+        if not Gtk.init_check(None)[0]:
+            skip("store real-app cycles on a damaged store", "GTK display unavailable")
+            return
+    except Exception:
+        skip("store real-app cycles on a damaged store", "GTK display unavailable")
+        return
     home = tempfile.mkdtemp(prefix="comics-cycle-")
     cfg = os.path.join(home, ".config", "notebook")
     os.makedirs(cfg)
@@ -397,7 +510,7 @@ def store_cycle_family():
     if os.path.exists(store):
         try:
             raw = json.load(open(store))
-            fresh_ok = raw.get("app") == "comics" and raw.get("format") == 1
+            fresh_ok = raw.get("app") == "comics" and raw.get("format") == 2
         except Exception:
             fresh_ok = False
     check("store real-app second session starts a fresh valid store",
@@ -413,6 +526,10 @@ store_family()
 undo_family()
 limits_family()
 interaction_family()
+migration_family()
+fill_perf_family()
+autosave_family()
+zoom_tolerance_family()
 gtk_family()
 store_cycle_family()
 print("%d checks: %d PASS, %d SKIP, %d FAIL" %

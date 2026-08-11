@@ -50,11 +50,17 @@ other app does.
 
 ## 1. Page geometry — the one clean number
 
-A page is a fixed **550 × 850 px** pixel canvas. That is 100 px per inch of
-the 5.5 × 8.5" zine page, and it maps onto the print page (396 × 612 pt,
-`nbprint.HALF_W_PT/HALF_H_PT`) at **exactly 0.72 pt per px** — no rounding
-anywhere in the pipeline. Both numbers are module constants (`PAGE_PX_W`,
-`PAGE_PX_H`, `PRINT_SCALE = 0.72`); nothing else may restate them.
+A page is a fixed **1650 × 2550 px** pixel canvas. That is 300 px per inch
+of the 5.5 × 8.5" zine page — print resolution, so lettering and line work
+come off the press smooth (the user's "not grainy" directive, raised from
+the original 100 ppi) — and it maps onto the print page (396 × 612 pt,
+`nbprint.HALF_W_PT/HALF_H_PT`) at **exactly 0.24 pt per px** — no rounding
+anywhere in the pipeline. Documents carry `"format": 2`; a format-1
+(550×850) store loads by MIGRATION — layers pixel-triple with
+FILTER_NEAREST and every page-pixel field (panel and bubble geometry,
+tails, borders, text sizes) multiplies by 3, so old art keeps its exact
+look at its exact place. Both numbers are module constants (`PAGE_PX_W`,
+`PAGE_PX_H`, `PRINT_SCALE = 0.24`); nothing else may restate them.
 
 There is ONE page size. No per-document density option: one grid, one look,
 and a page drawn today composites beside a page drawn next month. (Finer
@@ -80,8 +86,16 @@ Only the ACTIVE page (and the previously active page, as a ping-pong cache)
 holds decoded `cairo.ImageSurface` layers. Every other page holds its layers
 as PNG bytes (the same encoding the save file uses). Switching pages encodes
 the leaving page's layers back to bytes and decodes the entering page's.
-A 550×850 ARGB32 layer is 1.87 MB; the two decoded pages are ≤ 15 MB, and a
-32-page document costs its PNG bytes, not its pixels. Thumbnails are small
+A 1650×2550 ARGB32 layer is 16.8 MB; the two decoded pages are ≤ 135 MB
+worst-case, and a 32-page document costs its PNG bytes, not its pixels.
+The sizes force three perf provisions: the flood fill finds run extents by
+GALLOPING SLICE-COMPARE and seeds one entry per run (a whole-page fill
+measures ~0.13 s, asserted < 1.5 s in the suite); the recovery autosave
+snapshots only DIRTY layers and PNG-encodes them on an nbjobs worker
+(REPLACE policy, superseded-write checkpoint) so the UI thread never
+blocks on a 16 MB encode — the close-time flush stays synchronous; and
+the export flatten memo is capped at 2 pages. Repaint needs NO cache:
+cairo scaling cost is destination-bound. Thumbnails are small
 persistent surfaces (§7) and cost nothing that matters.
 
 Undo frames own their own byte copies, so history is independent of this
@@ -179,7 +193,7 @@ as comics); the palette drives the drawing tools only.
 ## 5. Panels
 
 A panel is `{x, y, w, h, border}` in integer page px; border width default
-**3**, range 1..8. The interior is transparent — a panel is a *frame over
+**9**, range 1..24. The interior is transparent — a panel is a *frame over
 the art*, so art may be drawn edge to edge and the frame reads on top. The
 border is a pixel rect ring (outer rect minus inner rect, span-filled, pure
 black), drawn above the layers.
@@ -188,7 +202,7 @@ black), drawn above the layers.
   Shift = square). Or **Page ▸ Panel Layout…** — an overlay card with the
   preset grid choices **1 · 2 rows · 3 rows · 2×2 · 2×3 · 3×3**, drawn as
   little diagrams (marks, not words), plus Margin and Gutter number entries
-  (defaults **30** and **14** px). Applying replaces the page's panels —
+  (defaults **90** and **42** px). Applying replaces the page's panels —
   one undo frame ("Undo Panel Layout"). The overlay uses the **state-dict
   pattern** (the Canvas-Size lesson: the card's widgets are destroyed
   before the callback runs, so every input mirrors into a plain dict on
@@ -214,7 +228,7 @@ A bubble is `{style, x, y, w, h, tail, text, size, align, bold, italic}`;
 `tail` is `[tx, ty]` page-px or `None`; `style` ∈ `speech | thought |
 shout | caption`.
 
-**Rendering (pixel-crisp, zero AA, white fill + 2 px black rim):**
+**Rendering (pixel-crisp, zero AA, white fill + 6 px black rim):**
 
 * *speech*: filled black ellipse spans over the bubble rect, then white
   ellipse spans inset 2 px → a ring. Tail: a triangle from the ellipse edge
@@ -235,11 +249,11 @@ real faces, so Pango weight/style selects them). Laid out with PangoCairo
 onto the object raster with **font options ANTIALIAS_NONE + HINT_FULL** set
 on the target context and **absolute pixel size**
 (`FontDescription.set_absolute_size(size * Pango.SCALE)` — a bubble's
-"13 px" means 13 page pixels at every zoom and on paper, where it prints at
-9.4 pt). Wrap WORD_CHAR to the bubble's text box: the inscribed rect for
-ellipse styles (0.72 × w/h, centred), the rect minus 8 px padding for
+"40 px" means 40 page pixels at every zoom and on paper, where it prints at
+9.6 pt). Wrap WORD_CHAR to the bubble's text box: the inscribed rect for
+ellipse styles (0.72 × w/h, centred), the rect minus 24 px padding for
 caption/shout. Alignment: centre for speech/thought/shout, left for
-caption. Sizes on a ramp **10 · 13 · 16 · 20 · 26** (the dock's BUBBLE
+caption. Sizes on a ramp **30 · 40 · 50 · 60 · 80** (the dock's BUBBLE
 group: style choices drawn as marks with names, the size ramp, B and I
 toggles). Komika covers Western-European Latin only; other scripts fall
 back per character through Pango to the shipped faces and still rasterise
@@ -312,12 +326,12 @@ session recovery underneath.
   default_ext `.comic`). Format:
 
   ```json
-  {"format": 1, "app": "comics",
+  {"format": 2, "app": "comics",
    "pages": [{"layers": [{"name": "...", "visible": true, "opacity": 100,
                           "png": "<base64 PNG>"}],
               "panels": [{"x":0,"y":0,"w":0,"h":0,"border":3}],
               "bubbles": [{"style":"speech","x":0,"y":0,"w":0,"h":0,
-                           "tail":[0,0],"text":"","size":13,
+                           "tail":[0,0],"text":"","size":40,
                            "align":"c","bold":false,"italic":false}],
               "mask_gutters": false}]}
   ```
@@ -390,7 +404,7 @@ absent (never a control that does nothing).
 
 `draw_page(cr, page_no, w, h)` (both routes): opaque white ground; look up
 the padded order; blanks draw nothing further; otherwise
-`set_source_surface(flatten, 0, 0)` scaled ×0.72 with **FILTER_NEAREST**
+`set_source_surface(flatten, 0, 0)` scaled ×0.24 with **FILTER_NEAREST**
 (pixels stay square at the RIP; cairo marks the image not-interpolated) and
 `paint()`. Flattens are built per page on demand and memoised for the run.
 
@@ -501,8 +515,10 @@ guarded and honestly SKIP-named without one; fonts via the ABSOLUTE
    count 4..32; local sheet order == `nbprint._booklet_order`; cover-sheet
    set == the four faces of sheet 1; subset PDFs hold exactly the chosen
    sheets' sides; B/W flatten of an interior page has R==G==B at every
-   pixel while the cover keeps a colour pixel; the 0.72 scale places a
-   known pixel at the right PDF coordinate.
+   pixel while the cover keeps a colour pixel; the 0.24 scale places a
+   known pixel at the right PDF coordinate; format-1 stores migrate ×3
+   (pixels, geometry, text sizes) and the fill meets its seed and wall
+   bounds.
 5. **Store law**: damaged/zero-byte/wrong-shape recovery stores → aside +
    read-only session + never rewritten (drive open+close); `_extra`
    round-trips; Save As on a read-only dir keeps the old binding; a
