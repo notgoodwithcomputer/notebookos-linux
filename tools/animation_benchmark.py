@@ -73,6 +73,10 @@ FONT = {
     "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
     "X": ("10001", "01010", "00100", "00100", "00100", "01010", "10001"),
     "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
+    "N": ("10001", "11001", "11001", "10101", "10011", "10011", "10001"),
+    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
 }
 
 
@@ -207,6 +211,18 @@ def therapist_background(image):
     rect(image, 294, 160, 12, 62, INK)
     rect(image, 270, 62, 8, 72, INK)
     animation.stamp(image, 274, 58, 24, "round", RED)
+    # Bookshelf and uneven book spines, using the room's existing six inks.
+    for shelf_y in (58, 76, 94, 112):
+        animation.write_span(image, shelf_y, 136, 180, INK)
+    for book_x, book_y, book_width, colour in (
+            (139, 61, 5, RED), (146, 65, 7, GREEN),
+            (156, 60, 4, RED), (163, 64, 8, GREEN), (173, 61, 5, RED)):
+        rect(image, book_x, book_y, book_width, 12, colour)
+    # The pale rectangle was already the window; give it a hairline frame.
+    for frame_y in (42, 113):
+        animation.write_span(image, frame_y, 32, 123, INK)
+    for frame_x in (32, 123):
+        rect(image, frame_x, 42, 1, 72, INK)
 
 
 def therapist_body(image):
@@ -228,6 +244,11 @@ def patient_background(image):
     rect(image, 264, 190, 14, 34, INK)
     rect(image, 232, 28, 62, 74, PAPER)
     rect(image, 238, 34, 50, 62, RED, "checker")
+    # A sparse rug and a tiny side table keep the room readable in wide shots.
+    rect(image, 64, 202, 170, 22, RED, "sparse")
+    rect(image, 278, 124, 30, 7, INK)
+    rect(image, 282, 131, 5, 42, INK)
+    rect(image, 299, 131, 5, 42, INK)
 
 
 def patient_body(image):
@@ -237,6 +258,26 @@ def patient_body(image):
     rect(image, 146, 146, 78, 15, INK)
     rect(image, 91, 94, 5, 5, INK)
     rect(image, 108, 94, 5, 5, INK)
+
+
+def blink_painter(x, y):
+    """Return a transparent two-eye closed-lid drawing."""
+    def paint(image):
+        animation.write_span(image, y, x - 13, x - 5, INK)
+        animation.write_span(image, y, x + 5, x + 13, INK)
+    return paint
+
+
+def gesture_painter(setup):
+    """Draw one emphatic raised forearm over the matching body setup."""
+    def paint(image):
+        if setup == 0:
+            rect(image, 188, 90, 9, 45, GREEN)
+            animation.stamp(image, 192, 84, 12, "round", "#C98E70")
+        else:
+            rect(image, 202, 80, 42, 9, RED)
+            animation.stamp(image, 247, 82, 12, "round", "#D6A07E")
+    return paint
 
 
 def mouth_painter(x, y, state):
@@ -313,6 +354,26 @@ def mouth_runs(samples, start_sample, frames, slots):
     return animation.slots_to_runs(lane[:frames], slots)
 
 
+def phrase_energy(samples, start, end):
+    """Return mean-square phrase energy without allocating a float buffer."""
+    first = max(0, round(start * SR))
+    last = min(len(samples), round(end * SR))
+    if last <= first:
+        return 0
+    return sum(value * value for value in samples[first:last]) / (last - first)
+
+
+def jittered_blinks(length, cel_id, seed):
+    """Make two-frame blinks separated by deterministic 60-110 frame rests."""
+    rng = random.Random(seed)
+    runs = []
+    frame = rng.randint(60, 110)
+    while frame + 2 <= length:
+        runs.append(animation.make_run(cel_id, frame, 2))
+        frame += rng.randint(60, 110)
+    return runs
+
+
 def build_couch(output):
     wav_path = output / "couch-dialogue.wav"
     samples, phrases = dialogue_tape(wav_path)
@@ -338,6 +399,17 @@ def build_couch(output):
         [add_cel(document, "Patient mouth %d" % state,
                  mouth_painter(102, 113, state)).id for state in range(3)],
     ]
+    blinks = [add_cel(document, "Therapist blink", blink_painter(224, 92)),
+              add_cel(document, "Patient blink", blink_painter(102, 102))]
+    gestures = [add_cel(document, "Therapist raised hand", gesture_painter(0)),
+                add_cel(document, "Patient raised hand", gesture_painter(1))]
+    loud_onsets = {}
+    for speaker in (0, 1):
+        ranked = sorted(
+            ((phrase_energy(samples, start, end), start)
+             for owner, start, end in phrases if owner == speaker),
+            reverse=True)
+        loud_onsets[speaker] = {start for _energy, start in ranked[:3]}
 
     title_scene = animation.new_scene("THE COUCH", 24)
     title_scene["layers"][0]["runs"] = [animation.make_run(title.id, 0, 24)]
@@ -346,7 +418,8 @@ def build_couch(output):
 
     detected_starts = phrase_starts_from_rms(samples)
     detected_phrases = [(0, start, start) for start in detected_starts]
-    shots = group_shots(detected_phrases, 178)
+    # Credits occupy the last 24 frames, so dialogue shots stop at 176 seconds.
+    shots = group_shots(detected_phrases, 176)
     for shot_index, (start, end) in enumerate(shots):
         setup = shot_index % 2
         start_frame = round(start * 12)
@@ -356,7 +429,9 @@ def build_couch(output):
             "Therapist" if setup == 0 else "Patient", length)
         scene["layers"] = [animation.new_layer("Room"),
                            animation.new_layer("Boiling character"),
-                           animation.new_layer("Mouth")]
+                           animation.new_layer("Mouth"),
+                           animation.new_layer("Blink"),
+                           animation.new_layer("Gesture")]
         scene["layers"][0]["runs"] = [
             animation.make_run(backgrounds[setup].id, 0, length, take=1)]
         scene["layers"][1]["runs"] = [
@@ -365,6 +440,19 @@ def build_couch(output):
         sample_start = start_frame * animation.SPF[12]
         scene["layers"][2]["runs"] = mouth_runs(
             samples, sample_start, length, mouth_sets[setup])
+        scene["layers"][3]["runs"] = jittered_blinks(
+            length, blinks[setup].id, SEED + shot_index * 17 + setup)
+        gesture_runs = []
+        for owner, phrase_start, phrase_end in phrases:
+            if (owner == setup and phrase_start in loud_onsets[setup] and
+                    start <= phrase_start < end):
+                gesture_length = 8 + (round(phrase_start * 1000) % 7)
+                local_frame = round((phrase_start - start) * 12)
+                gesture_length = min(gesture_length, length - local_frame)
+                if gesture_length > 0:
+                    gesture_runs.append(animation.make_run(
+                        gestures[setup].id, local_frame, gesture_length))
+        scene["layers"][4]["runs"] = gesture_runs
         total_samples = len(samples)
         scene["sounds"][0] = {
             "path": str(wav_path), "start": 0, "in_smp": sample_start,
@@ -380,6 +468,16 @@ def build_couch(output):
             for phrase_index, phrase_start in enumerate(detected_starts)
             if start <= phrase_start < end]
         document.scenes.append(scene)
+
+    credits = add_cel(document, "THE COUCH credits", lambda image: (
+        fill(image, PAPER),
+        fitted_text(image, "THE COUCH", 54, MUTED, scale=4),
+        fitted_text(image, "NOTEBOOK OS ANIMATION", 112, INK, scale=4)))
+    credits_scene = animation.new_scene("Credits", 24)
+    credits_scene["layers"][0]["runs"] = [
+        animation.make_run(credits.id, 0, 24)]
+    credits_scene["markers"] = [{"frame": 0, "text": "Credits"}]
+    document.scenes.append(credits_scene)
 
     frames = [(scene, frame) for scene in document.scenes
               for frame in range(scene["length"])]
@@ -405,6 +503,26 @@ def creature(image, pose, palette):
     rect(image, 55, 88, 50, 20, palette[2], "sparse")
 
 
+def swapped_creature(image, palette):
+    """Duplicate the stare design, then invert its main chips and move eyes."""
+    creature(image, 0, palette)
+    animation.stamp(image, 80, 60, 58, "round", palette[1], "checker")
+    animation.stamp(image, 80, 60, 48, "round", palette[0])
+    rect(image, 61, 57, 7, 6, palette[1])
+    rect(image, 93, 45, 7, 6, palette[1])
+    animation.write_span(image, 73, 68, 93, palette[1])
+    rect(image, 55, 88, 50, 20, palette[2], "sparse")
+
+
+def floor_painter(palette, pattern):
+    """Paint only the lower checkerboard band so the creature remains visible."""
+    def paint(image):
+        rect(image, 0, 102, 160, 18, palette[5], pattern)
+        for y in range(102, 120, 6):
+            animation.write_span(image, y, 0, 159, palette[6], pattern)
+    return paint
+
+
 def build_buttercup(output):
     wav_path = output / "buttercup-beat.wav"
     samples, step_seconds = beat_tape(wav_path)
@@ -417,10 +535,17 @@ def build_buttercup(output):
     scene["name"] = "BUTTERCUP LOOP"
     scene["length"] = 360
     scene["layers"] = [animation.new_layer("Creature"),
+                       animation.new_layer("Floor beat"),
                        animation.new_layer("Title crawl")]
     poses = [add_cel(document, "Stare", lambda image: creature(image, 0, palette)),
              add_cel(document, "Jolt", lambda image: creature(image, 1, palette)),
              add_cel(document, "Open", lambda image: creature(image, 2, palette))]
+    swap = add_cel(document, "Hard-swap creature",
+                   lambda image: swapped_creature(image, palette))
+    checker_floor = add_cel(document, "Checker floor",
+                            floor_painter(palette, "checker"))
+    sparse_floor = add_cel(document, "Sparse floor",
+                           floor_painter(palette, "sparse"))
     title = add_cel(document, "PIXEL title",
                     lambda image: pixel_text(image, "PIXEL", 8, 92, 3, palette[0]))
 
@@ -439,14 +564,25 @@ def build_buttercup(output):
     runs.append(animation.make_run(poses[0].id, 359, 1))
     scene["layers"][0]["runs"] = runs
 
-    sheet = animation.Sheet(document)
-    sheet.stamp(1, animation.make_run(title.id, 60, 1, dx=160, take=1))
-    sheet.stamp(1, animation.make_run(title.id, 108, 1, dx=-80, take=1))
-    if not sheet.slide(1, 60, 108):
-        raise RuntimeError("title crawl slide did not stamp its gap")
     beat_frames = sorted(set(round(index * step_seconds * 12)
                              for index in range(112)
                              if round(index * step_seconds * 12) < 360))
+    swap_starts = [min(beat_frames, key=lambda value: abs(value - target))
+                   for target in (120, 240)]
+    sheet = animation.Sheet(document)
+    for start in swap_starts:
+        sheet.clear(0, start, start + 6)
+        sheet.stamp(0, animation.make_run(swap.id, start, 6))
+    scene["layers"][1]["runs"] = [
+        animation.make_run(checker_floor.id, 0, 360)]
+    for start in swap_starts:
+        sheet.clear(1, start, start + 6)
+        sheet.stamp(1, animation.make_run(sparse_floor.id, start, 6))
+
+    sheet.stamp(2, animation.make_run(title.id, 60, 1, dx=160, take=1))
+    sheet.stamp(2, animation.make_run(title.id, 108, 1, dx=-80, take=1))
+    if not sheet.slide(2, 60, 108):
+        raise RuntimeError("title crawl slide did not stamp its gap")
     scene["markers"] = [{"frame": frame, "text": "Beat"}
                         for frame in beat_frames]
     scene["sounds"][0] = {
