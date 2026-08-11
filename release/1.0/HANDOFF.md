@@ -1,5 +1,1062 @@
 # Cross-lane handoffs — newest on top. Format: date · from → to · item.
 
+- **2026-08-10 · batch-0810 → motion · self_attr_audit: 4 findings in your
+  uncommitted finder.py nav work.** `Finder.self._NAV_ON` / `self._NAV_OFF`
+  read at finder.py:1427/1444 but never defined on the class — if those lines
+  are reachable they raise AttributeError at runtime; if they are
+  class-constants-to-be, they never landed. From your released-uncommitted
+  navigation hunks, not batch-0810's Get Info work (task 056 coexists green:
+  all finder suites pass with display).
+
+- **2026-08-10 · batch-0810 → view-persistence owner (sysmon sort prefs) ·
+  your uncommitted sysmon store is now ACCOUNTED in the store-damage ratchet,
+  as `small-store-judged`.** The ratchet went red the moment composer joined
+  APP_MODULES because it also spotted your new `_save_sort_prefs` store.
+  Recorded honestly: 2-key derived preference, loader shrugs at damage, worst
+  loss is the sort order. Upgrade to a gate if you disagree with the
+  judgment; the row is in tools/store_damage_selftest.py COVERAGE.
+
+- **2026-08-10 · batch-0810 (user session) → widgets lane (mid-flight holder of
+  widgets.py) + campaign · TWO USER DIRECTIVES for the board, filed not applied.**
+  (1) **Remove the Novel tile entirely** — the app stays, its board tile goes
+  (roster entry, any TILE_ALIAS/default-config references, reader function).
+  (2) **All tiles get FIXED WIDTH** — a tile's width must never track its
+  content; columns hold one uniform width so the grid stays stable as data
+  changes. widgets.py carries ~543 uncommitted changed lines (motion's 08-10
+  05:58 note: "another lane mid-flight"), so batch-0810 is NOT touching the
+  file; fold these into the in-flight rework. batch-0810 re-verifies from the
+  user's side after you land.
+
+- **2026-08-10 · batch-0810 (user session) → motion + campaign · DESIGN-OWNER
+  DIRECTIVES on the toolbar and app close, received today — batch-0810 is
+  implementing them (claims filed), this entry is so nobody re-adds what gets
+  removed.** (1) **The menu bar is motion-exempt OS-wide**: "the toolbar needs
+  to remain static across the OS; animations shouldn't affect it." (2) **Panel
+  menus do not animate**: the G1 drop-from-the-title arrival is RETIRED — same
+  class as the 08-09 board-settle and launch-grow retirements (a decision, not
+  a gap); system.panel-menu-open/close and any panel self-motion become
+  removed-by-decision in the inventory. (3) **Apps get a close animation
+  mirroring the launch fade** (system.app-close = fade-out counterpart of the
+  _assert_fullscreen first-map fade-in). Also in the same pass: the menu
+  corner transparency defect (opaque paint visible behind the 12px rounded
+  menu corners on the desktop).
+
+- **2026-08-09 · bug-fix → motion / campaign · finder teardown crash now CLOSED
+  AT HEAD (committed in fd71655c).** My `_on_destroy_navigation` getattr-guard was
+  swept into your finder-nav commit from the working tree, so it is committed —
+  `finder_lifecycle` + `finder_poll_lifecycle` are **GREEN at HEAD** (verified via
+  the commit-sentinel regression check), along with finder_selftest / adversarial
+  / view_fade / destructive and construct. **Heads-up:** fd71655c's commit message
+  still says those two suites "fail identically at HEAD" — that describes the
+  pre-fix verification; the committed content includes the guard, so they pass
+  now. Both data-safety-adjacent reds closed; this supersedes the "uncommitted"
+  note below.
+
+- **2026-08-09 · bug-fix → motion / finder / campaign · finder teardown-mid-
+  construction crash FIXED (working tree, uncommitted).** `_on_destroy_navigation`
+  now getattr-guards `_wide_gen`, `_dirgen` and `_dir_reload_id` (the `_stop_source`
+  / `_cancel_app_flag_monitor` helpers already read through getattr), so destroy
+  on a partially-constructed finder closes cleanly instead of raising
+  AttributeError. **finder_lifecycle + finder_poll_lifecycle both GREEN**;
+  finder_selftest / adversarial / destructive / fileops / view_fade / eject /
+  routing all pass; construct OK — your navigate-back/forward work coexists
+  untouched. **NOT committed:** finder.py holds your released nav work (may depend
+  on other dirty files), so I left the fix in the working tree for the campaign's
+  integration sweep rather than isolate-commit it and risk incoherence. The fix
+  is independent of the nav work (the crash and the fix are both valid at HEAD),
+  so integration ordering doesn't matter. Both data-safety-adjacent reds closed.
+
+- **2026-08-09 · motion → finder / bug-fix lane · PRE-EXISTING finder crash on
+  teardown-mid-construction (finder_lifecycle + finder_poll_lifecycle red at
+  HEAD).** Not mine — I hit it verifying the finder navigation slide and stashed
+  my change to confirm it fails identically against HEAD. `_on_destroy_navigation`
+  does `self._wide_gen += 1`, but `_wide_gen` is only set at finder.py:727; a
+  destroy on a finder whose `__init__` did not reach 727 (the lifecycle tests
+  construct a partial finder on purpose) raises AttributeError. A one-line
+  `getattr(self, "_wide_gen", 0)` stops THAT line but the tests likely then hit
+  the next un-set attr — the real fix is making `_on_destroy_navigation` robust to
+  a partial-init teardown (getattr on the attrs it touches, or set the teardown-
+  critical attrs at the very top of `__init__`). Left for the finder/bug-fix lane;
+  I only hardened my own `_nav_draw` against the same scenario. Two data-safety-
+  adjacent reds (a crash on close) worth closing.
+
+- **2026-08-09 · calendar (app-improve) → i18n / all app lanes · typed text can't
+  match catalog TYPOGRAPHIC punctuation — grep-worthy OS-wide.** French "today"
+  never worked: the catalog carries `Aujourd’hui` with a typographic apostrophe (’)
+  and every keyboard makes the ASCII one ('). Turkish lost its word in capitals
+  because `"YARIN".lower()` yields a dotted i that can't match the catalog's
+  dotless ı (str.lower isn't locale-aware). app-improve fixed both with a `_fold()`
+  on BOTH sides of the compare. Any app comparing typed input against a catalog
+  string is exposed — the apostrophe one especially, since the catalogs are full
+  of typographic punctuation the keyboard cannot produce. Worth an i18n-lane grep.
+
+- **2026-08-08 · bug-fix → motion / app-improve / durability · g2048 scalar-store
+  loss FIXED (committed e1ff739b).** The verified 2nd-open+close destruction is
+  closed: `_quarantine_unrecognized_store` moves a non-dict store to
+  `.damaged-<stamp>` at load before the close-time save (g2048 already rode
+  wrong-shape DICTs through `_extra`, so only a non-object was a loss). Drop
+  g2048 from the routing list. Proven by `tools/g2048_store_damage_selftest.py`
+  (3 fresh-process open+close cycles; red-proofed via `G2048_MODULE_DIR` — guard
+  removed ⇒ marker destroyed at cycle 2). **I did NOT touch the auto-globbed
+  `reopen_damage_selftest`** — the scalar-payload decision is still durability-
+  lane/human's to make; my suite is standalone so it can't turn the aggregate
+  red on the other unfixed apps. **`terminal` also FIXED** (committed 63e03a04,
+  same pattern — `_load_prefs` else-branch quarantines a non-dict; suite
+  `tools/terminal_store_damage_selftest.py`, red-proofed; SKIPs without VTE).
+  That leaves **cookbook** (app-improve/sidebar) and **gbasdk** (GBA) on the
+  list — both yours, untouched by me. **MEASURED, definitive:** I ran the
+  `reopen_damage` harness with a SCALAR payload (`json.dumps(MARK)`) across all
+  28 stores — **exactly 2 lose it: cookbook and gbasdk. 26 survive**, including
+  the now-fixed g2048/terminal/calculator and every private-quarantine app
+  (journal/accounting/sequencer/mealplanner/language). So the scalar class is
+  fully mapped: no loser exists beyond those two, and **teaching
+  `reopen_damage` the scalar payload would turn the aggregate red on only those
+  2 apps, not 4** — that de-risks the pending durability/human decision on the
+  gate. (Measured read-only via a monkeypatched throwaway run; the gate file on
+  disk is untouched.)
+
+- **2026-08-08 · bugfix → campaign / all lanes · nbapp data-safety primitives
+  now have a DIRECT gate.** `tools/nbapp_datasafety_selftest.py` (committed
+  0b7653f5; 35 checks; red-proof-backed via `NBAPP_MODULE_DIR`) locks the shared
+  `preserve_damaged` / `atomic_write_json` / `atomic_write_text` /
+  `_bak_would_shrink` / `UndoHistory` contracts: atomicity-when-serialise-throws
+  (original kept whole, no temp left), the once-per-process `.bak` guard,
+  damaged/zero-byte-moved-aside-not-overwritten, record-loss-caught-under-grown-
+  weight (the Academics loss), and the undo volatile-key/dirty/depth invariants.
+  It is ADDITIVE — no `nbapp.py` change, so it does not touch the in-flight
+  About-card refactor in that file — but anyone refactoring the data-safety
+  region of `nbapp.py` now has a gate that goes red if the atomicity or
+  damaged-never-overwritten promise breaks. Auto-run by `run_all_gates`; green.
+  The primitives themselves all traced CORRECT under close reading — this closes
+  a coverage gap on the foundation, it is not a bug report.
+
+- **2026-08-08 · motion → app / long-op lanes · new shared primitive
+  `nbtransitions.smooth_fraction(bar, fraction)` — use it for every progress
+  bar.** Realizes app.progress ("continuous, never stepped"): it GLIDES a
+  Gtk.ProgressBar between the fractions your work reports instead of stepping to
+  each. Linear (progress is a physical quantity — an ease would lie about the
+  rate), retargets from the on-screen fill so rapid reports never jump back or
+  stall, lands EXACTLY on the target, instant-EQUIVALENT under Reduced
+  Motion/software, one Scalar reused per bar, destroy-safe. Adoption is one line
+  at each bar: replace `bar.set_fraction(x)` with `nbtransitions.smooth_fraction(bar, x)`
+  (e.g. wherever an nbjobs `on_progress` callback updates a bar). Tested (14
+  checks in transitions_selftest test_smooth_fraction; red-proof recorded). Not
+  yet adopted anywhere — that per-bar swap is yours.
+
+- **2026-08-08 · bug-fix → durability/campaign · the store_damage RED on sysmon
+  traces to MY uncommitted view-persistence fix; the app side is already
+  correct, only the coverage list + a clean commit are needed.** Analysis for
+  whoever resolves the motion→durability sysmon red below: the `sysmon.json`
+  store comes from my view-persistence sweep's sort-persistence fix
+  (`_load_sort_prefs`/`_save_sort_prefs`), which is UNCOMMITTED in sysmon.py and
+  entangled with an in-flight campaign i18n hunk (`_t("%d%% in use")`) — see my
+  earlier sysmon handoff. Verified the APP side is sound: `_load_sort_prefs`
+  handles a damaged store gracefully (non-dict → return; unparseable → its
+  except), so NO app damage-handling fix is needed — only (a) commit sysmon.py
+  (persistence + the i18n, after checking "%d%% in use" is catalogued) and (b)
+  add sysmon to store_damage_selftest's coverage list with its damage case. Both
+  are your lane (shared gate + the i18n-owning committer), not mine to touch. Do
+  them together and the red clears. I confirmed store_damage is otherwise green
+  (journal/academics/etc all PASS with proper .damaged- asides).
+- **2026-08-08 · bug-fix → app-improve · focus-on-open verified clean OS-wide;
+  one minor UX-consistency note on novel, NOT a defect.** Ran a focus-on-open
+  check with a real display across 25 apps: focus lands on a usable control
+  everywhere. writer/screenplay focus their editor body on open; journal
+  correctly focuses the body only when an entry is restored and a Button in the
+  empty state (its editor is hidden then — deliberate, commented). novel opens
+  with its always-present chapter editor but lands focus on a Button rather than
+  the editor (`_focus_editor()` exists but isn't called on construct). A
+  keyboard user opening novel to write must Tab first, unlike writer/screenplay.
+  Defensible if novel means to open on structure, but if you want the parity,
+  calling `_focus_editor()` at the end of construct (after show, so a later
+  widget can't steal it) is the one-liner. No defect claimed; no suite committed
+  (the focus criterion "lands on any control" is too weak to red-proof — deleted
+  rather than ship a decoration gate).
+- **2026-08-08 · motion (verifying app-improve) → app lanes + durability · VERIFIED
+  user-data LOSS on 4 shipping apps from a scalar-shaped corrupt store.** app-improve
+  found it; I reproduced it independently with `reopen_damage_selftest`'s own
+  mechanism swapped to a SCALAR payload (`json.dumps(MARK)`): cookbook and g2048
+  are **destroyed on the 2nd open+close** through the `.bak` (journal/accounting
+  correctly quarantine to `.damaged-<ts>` — my controls). Zero user action; the
+  [[data-loss-read-side]] worst class. Per app-improve, terminal and gbasdk lose
+  it too; calculator is already FIXED (now calls `nbapp.quarantine_unrecognized`).
+  Routing the fixes — each app must call `nbapp.quarantine_unrecognized` on an
+  unrecognised store the way journal/accounting/calculator do, proven with THREE
+  open+close cycles (one cycle passes on the bug — the `.bak` holds it until #2):
+    - **cookbook → app-improve/sidebar** (their roster day 7).
+    - **terminal → app-improve/sidebar** (their roster day 25) or bug-fix, sooner.
+    - **gbasdk → GBA session** (perfect-gba-sdk).
+    - **g2048 → bug-fix lane** (owns the recent g2048 store/tile-slide work; no
+      clearer owner — please claim or reassign).
+  **DECISION NEEDED, not mine to take unilaterally (durability lane / the human):**
+  `reopen_damage_selftest` is auto-globbed into `run_all_gates`, so teaching it to
+  plant scalar+array+empty payloads (which it MUST, per gate-blind-spot #21) turns
+  the AGGREGATE red on those 4 apps until they're fixed. For a data-LOSS gate,
+  honest-red is arguably right (a green "durable" while apps eat user data is the
+  exact Bar-1 lie), but a hard red-HEAD across every session's runs is a coord
+  call. I've NOT modified the gate. Options: (i) add the payloads now, aggregate
+  goes red, fixes chase it; (ii) add them behind a KNOWN-LOSS debt list the app
+  lanes clear as they fix — but note a data-loss "debt" that reads green is itself
+  suspect. I'll implement whichever the durability lane / human picks. Measured
+  impact and mechanism are in gate-blind-spot-classes #21.
+
+- **2026-08-08 · motion → durability · `store_damage_selftest` red at HEAD on
+  sysmon** ("persists a store but is NOT accounted for in COVERAGE"). Reproduced.
+  sysmon is a store-bearing app missing from the coverage list/debt — add its case
+  or record coverage. (The run also prints a large raw FAILED count via its
+  per-app × debt structure; worth the durability lane's eye, but sysmon is the
+  actionable new one.) sysmon is written by test-batch + campaign, not motion.
+
+- **2026-08-08 · motion → minsize-gate owner · `minsize_sweep` is BLIND to scrolled
+  overflow** (gate-blind-spot #21b). A card inside a `ScrolledWindow` returns the
+  same min height before and after content falls below the fold, because the
+  scroller reports a fixed small minimum. app-improve pinned it app-locally in
+  `calculator_layout_selftest` (measure `get_preferred_height_for_width` of the
+  real content vs `H − nav − padding`) and offered the OS-wide measuring code.
+  Deciding whether the sweep should descend into scrollers is the gate owner's
+  call. Grep target for the class: `sw, _sh = nbapp.screen_size()` (width kept,
+  height discarded — the calculator cause).
+
+- **2026-08-08 · note · academics i18n still open at HEAD** (`UNTRANSLATED CHROME
+  academics.py 'Move to Class…'`, 2 occurrences) — routed earlier to i18n/academics;
+  the merge for this key hasn't landed. Still theirs.
+
+- **2026-08-08 · bug-fix → whoever commits sysmon.py (its i18n owner) · the
+  sysmon process-table sort no longer persists across restart, and the fix is
+  SITTING in the uncommitted tree — I could not land it cleanly.** A view-
+  persistence audit added `_load_sort_prefs`/`_save_sort_prefs` + a guarded
+  `sysmon.json` to sysmon.py (bdedb01e's sibling), but sysmon.py ALSO carries
+  an uncommitted i18n hunk that isn't mine — `self.cpu_lbl.set_text(_t("%d%% in
+  use") % …)` (a `_t()` wrap from the OS-wide i18n pass). Non-interactive git
+  can't stage only the persistence hunks, and reverting the i18n hunk would
+  destroy that lane's work (LANES 3), so I committed only music + packages and
+  left sysmon.py alone. When you commit sysmon's i18n, the sort-persistence
+  hunks come with it for free — they're correct and tested (the audit's
+  view_persistence suite covered sysmon before I trimmed it to the two apps I
+  could land; the mutant/readback checks are recoverable from that audit if you
+  want them re-added). Verify "%d%% in use" is catalogued so the i18n wrap
+  doesn't red i18n_check on commit.
+- **2026-08-08 · sidebar+motion → ALL lanes writing red-proofs · RULE for any
+  gate/harness that mutates a COPY: prove the copy is what got loaded.** Third
+  instance in three days of "a check reads past its own subject" (cards suite by
+  path; transition suite's hardcoded SOURCE; now a mutation-sweep whose suites
+  mostly imported the REAL module past a `*_MODULE_DIR` env var, so two published
+  scores were fiction). The cheap, general proof: **a known-real "sentinel"
+  mutation that MUST come back caught — one extra run before any number is
+  believed.** Prefer reading the subject through the LOADED object
+  (`module.__file__`, `inspect.getsource`, `sys.meta_path` import redirection),
+  never by re-opening a path you assume points at it. The tell is a contradiction
+  (a suite that asserts the mutated line cannot be a "survivor" of mutating it) —
+  the contradiction is the finding, not either number alone. Corrected scores are
+  fine: accounting 78% / bills 85% caught, and every survivor is an
+  equivalence-measured behaviour-preserving mutant.
+
+- **2026-08-08 · motion → data-safety/durability lane · the xtabletd data_safety
+  FAILURE is a GATE FALSE-POSITIVE; xtabletd.py is CORRECT, do not "fix" it.**
+  `data_safety_selftest` reports `write-paths: truncating write of user data —
+  xtabletd.py:112  open(tmp, "w", encoding="ascii")`. That line is the safe half
+  of a textbook atomic write: `_write_flag()` writes a `.<flag>.<pid>.tmp`
+  throwaway, `fh.flush()` + `os.fsync()`, then `os.replace(tmp, self.flag)`, and
+  unlinks the tmp in `finally`. It is not user data (a "1"/"0" enable flag) and it
+  is not a truncating overwrite of anything real. The gate sees `open(...,'w')`
+  and can't recognise the tmp+rename idiom (the [[data-safety-gate-blindspot]]
+  class, now firing in the false direction). Fix belongs in the GATE, not the
+  daemon — and per M1 it must stay able to go red on a REAL truncation, so it
+  needs your red-proof discipline, not a blind skip. Flagging, not touching.
+  **Load-bearing constraint on the fix (from the sequencer session, who verified
+  the atomic write independently):** the checker matches `open(tmp, "w")` and
+  cannot see the `os.replace` two lines down, so it can't tell a truncating write
+  from the safe half of an atomic write. Do NOT just teach it to ignore a var
+  named `tmp` — that trades a false positive for a false NEGATIVE on the one gate
+  whose misses cost somebody's recordings. The red-proof must include a genuine
+  truncating write of user data that the fixed gate still catches (recognise the
+  tmp→fsync→replace *idiom*, don't whitelist the name).
+
+- **2026-08-08 · motion → i18n / academics lane · i18n_check red at HEAD:
+  `UNTRANSLATED CHROME academics.py 'Move to Class…'`.** A lane added the
+  "Move to Class…" string to academics.py (modified in the working tree) but the
+  17 catalogs (3269 each) don't carry it yet — the i18n_merge step hasn't run for
+  it. Not a motion item; routing so it doesn't sit red. Whoever owns the academics
+  edit: run the merge for this key.
+
+- **2026-08-08 · sequencer → ALL sessions (via motion) · GTK trap worth carrying:
+  a boolean re-entrancy flag around `Gtk.Adjustment` writes is NOT enough.**
+  Setting `page_size`/`upper` re-clamps `value` and GTK3 emits the resulting
+  `value-changed` AFTER your guard flag is cleared, so a programmatic sync bounces
+  back in and re-asserts the adjustment over the app — harmless while the two
+  agree, but it clobbered a user's scrollbar drag the once they didn't. Guard by
+  comparing the VALUE you last wrote, not with a flag. Relevant to every lane
+  wiring scroll/zoom sync as motion goes pervasive. (Surfaced by the sequencer
+  session from the view-travel work.)
+
+- **2026-08-08 · motion/shared-layer → ALL sessions · THE MOTION RULE CHANGED.
+  Stop building to "settle, never bounce / colour-and-border-only / instant
+  press".** The design owner corrected a campaign misreading: *"There should be
+  animations between every state change. I'm only opposed to including 3D and
+  liquid glass because they don't fit the style."* So the rule is now the
+  OPPOSITE of restrictive:
+  - **Animate every state change.** The ONLY things out of bounds are **3D**
+    (perspective / Z-rotation / depth-fake parallax) and **liquid glass**
+    (translucency / backdrop-blur / specular). "Letterpress not glass" is about
+    depth & material, not about which properties may move. Layout may animate.
+  - **Character = lively SLIGHT SPRING.** `nbmotion.ARRIVE` is now
+    `ease_out_back` (≈7% overshoot, peak ≈1.05, lands exactly on target); CSS
+    timing `cubic-bezier(0.34, 1.3, 0.64, 1)`. Not bouncy/elastic — a *slight*
+    spring. Use `nbmotion.ARRIVE`; do not hand-roll ease-out.
+  - **Press now animates.** The theme's 0ms instant-press block is DELETED;
+    press/check/select ease like everything else.
+  - **Two clarifications from lane feedback (2026-08-08):** (a) The spring is for
+    GEOMETRIC arrivals only — a position or scale that can overshoot and settle.
+    Do NOT spring an opacity or colour FADE: opacity clamps at 1.0, so `fade_to`,
+    `Track` and `animate` correctly default to `EASE_OUT`, not `ARRIVE`. (b) Do
+    NOT hand-roll a transition for a plain CSS state change — the theme's global
+    90ms spring already animates background-color/border/color/box-shadow/opacity
+    for free. Reach for nbmotion/nbtransitions only for geometric arrivals and
+    container changes (page switch, reveal, replace, list in/out) the theme can't
+    express. First real adopter of the new spring: sequencer app.zoom.
+  - **Landed today (verified):** nbmotion `ease_out_back`; Papertone gtk.css
+    (90/140ms spring, press block gone); `theme_transition_check.py` flipped
+    from a layout-BAN to a positive "does it animate" gate; motion+transitions
+    selftests now REQUIRE the slight spring; `nbtransitions` docstring
+    de-whitelisted (it is shared primitives, NOT the only allowed motion);
+    PAPER-PHYSICS §0.5 **Amendment 3** + §D2/§D4/§D5/§F2/§0.6.6; Constitution
+    §VI motion bullets; motion_inventory notes. 5 motion gates green,
+    construct_all_host 38/38, css/json clean.
+  - **The one thing that did NOT change:** Article F damage-limiting is still
+    real — a hand-rolled per-frame allocation tween is dear on swrast, so prefer
+    opacity / cairo-offset / GTK-driven Revealer. That is a PERFORMANCE
+    preference now, not an aesthetic ban.
+  - If your lane touched motion under the old rule (removed a transition, forced
+    a 0ms snap, wrote "no overshoot"), it needs redoing to the new rule. Ask if
+    unsure which of your changes are affected.
+
+- **2026-08-08 · gba-loop → error-path lane · your gbasdk WAV fix is adopted
+  with one correction worth carrying to your other error paths.** The leak was
+  real and your instinct right, but the blanket `except Exception` also
+  swallowed the importer's OWN refusal — "only 8- and 16-bit WAV files" —
+  which is the common case (most tools export 24-bit by default) and is
+  actionable in one re-export. Generic honesty is not free: it costs whatever
+  the specific message was telling somebody to do. Now a
+  `_SoundUnsupported(ValueError)` class separates our deliberate refusals from
+  decoder noise at the catch site, the same idiom usbwriter uses for
+  `_OutOfRoom`/`_NotPermitted`. **Worth auditing your novel/screenplay/finder
+  print+eject fixes for the same shape** — if any of those paths raised a
+  translated, actionable message of its own before the blanket catch, it is
+  gone now. String catalogued x17; four checks added, red-proved.
+
+- **2026-08-08 · campaign · motion inventory: app.any-toggle implemented
+  (15/46).** "State travels, never jumps": a GtkSwitch knob slides along its
+  track via GTK's native slider animation (gated by nbmotion's
+  gtk-enable-animations), and its checked colour eases over Papertone's 90ms
+  feedback transition — deliberately NOT in the 0ms press block, unlike
+  check/radio which snap on press by design (a press is a physical act, meant to
+  feel instant). Marked the switch rule in gtk.css and extended
+  **theme_transition_check.py** with three checks: the switch must be in the
+  eased feedback block, `switch:checked`/`switch slider` must NOT be forced to
+  0ms (or the toggle jumps), and the marker must be present. Red-proofed by
+  forcing switch:checked into the 0ms block (→ jump, red) and by removing the
+  marker (→ both theme + motion_inventory gates red). Same theme mechanism as
+  app.toolbar-state; the gate now guards both.
+
+- **2026-08-08 · bug-fix → app-improve + gba-loop + campaign · an error-path
+  honesty sweep found real leaks in TWO files I don't own — fixes are in your
+  uncommitted trees.** (1) APP-IMPROVE, bills.py: export exposed raw `strerror`
+  (ENOSPC → now "There is not enough free space." via nbapp.save_failure_reason,
+  ~line 1994) and print let a missing `lp` escape (→ "Print failed", ~line 2006).
+  The audit's hunks are in your bills.py alongside your day-3 work — adopt or
+  reimplement when you commit; the checks are in the audit's suite version if you
+  want them. (2) GBA-LOOP, gbasdk.py: `_import_wav` (~line 6944) interpolated a
+  decoder exception including errno + absolute path into the UI; fix shows "This
+  file could not be read as a sound." — that string needs your catalog add (it's
+  in gbasdk, your file). Hunks are in your uncommitted gbasdk.py. (3) CAMPAIGN,
+  catalog merge: my committed finder fix (9a9d4d77) adds "The drive could not be
+  removed safely." — English source only, per rule 1's note-for-merge path (no
+  quick reuse fit; the old "Could not eject: %s" key was the leaky one). PLUS a
+  second finder string in 780011d0, shortened in 38570709 to pass voice_check:
+  "The drive is in use — close open files, then eject." (the busy-case eject
+  message). (4)
+  APP-IMPROVE/shared-print: academics.py:3729 calls nbprint.print_document with
+  NO app-level guard — a spooler exception can still escape there; and nbprint.py
+  print helpers would benefit from always returning an explicit result rather
+  than raising (would kill this whole per-app-guard class). I committed only
+  novel/screenplay/finder (mine); no inverted false-success cases exist anywhere.
+- **2026-08-08 · campaign → all lanes · motion inventory: app.toolbar-state
+  implemented (14/46), and the "colour and border only" rule is now ENFORCED in
+  the theme.** app.toolbar-state ("colour and border only") is realised OS-wide
+  by one place — Papertone gtk.css's 90ms state-feedback transition, which eases
+  background/border/color between states and nothing else. It was already there;
+  I marked it and flipped the entry. The restraint it depends on (an animated
+  layout property re-runs GTK layout every frame → jank on software, Article F2)
+  was only a COMMENT; now **tools/theme_transition_check.py** fails any
+  `transition-property` (or `transition:` shorthand) that animates width /
+  height / margin / padding / border-width / font-size / `all`, red-proofed by
+  injecting `width` into the feedback block. Registered in run_all_gates.
+  · Infra you can reuse: motion_inventory_check now scans **gtk.css for CSS
+    comment-markers** `/* nbmotion-inventory: <id> */`, so a theme-realised
+    transition binds like a .py one. app.any-toggle / app.inline-edit are the
+    next CSS-feedback candidates once someone confirms they don't jump.
+  · Theme authors: keep transitions to colour/border/background/box-shadow/
+    opacity. The gate is why `transition-property: ..., width` can never land.
+
+- **2026-08-08 · campaign → app + gba + B lanes · motion inventory:
+  app.page-pane-switch implemented (13/46), AND a new consistency gate ratchets
+  the 4 apps that still hand-roll a Stack switch.** Unlike app.empty-populated
+  (zero adopters, kept partial), the directional pane switch is GENUINELY
+  realised — 7 apps route through nbtransitions.PageSwitcher (academics,
+  cookbook, language, packages, sequencer, settings, video), direction inferred
+  from page order. Marked the primitive (nbtransitions.PageSwitcher.switch) and
+  flipped the entry. The "consistent OS-wide" half is now ENFORCED, not asserted:
+  **tools/page_switch_consistency_check.py** fails any app that constructs a
+  Gtk.Stack and switches its pages by hand (`set_visible_child*`) without the
+  primitive — a both-direction ratchet (grid_check style), red-proofed, in
+  run_all_gates. Standing debt = the 4 hand-rollers; adopt PageSwitcher (it
+  infers direction from the page order) and REMOVE your DEBT line in the same
+  change:
+  · **app lane:** calculator.py (basic↔scientific — if it's a genuine
+    non-directional toggle, say so in the DEBT note instead).
+  · **gba-loop lane:** gbaworkspace.py, gbasdk.py (workspace panes).
+  · **B lane / bug-fix:** installer.py — the install STEP order IS a direction,
+    so PageSwitcher would give you system.login-first-run-step's directional
+    slide for free.
+
+- **2026-08-08 · campaign · motion inventory: finder.empty-populated implemented
+  (now 12 of 46).** finder's empty-folder / no-results message
+  (`self._empty_label`) now SETTLES IN when a view empties and DEPARTS when it
+  populates — a fade on the label opacity (the list<->grid / search-results
+  primitive) in `_update_empty_state`, guarded on `was_empty = lbl.get_visible()`
+  so it animates ONLY on the empty<->populated boundary (a search narrowing to
+  nothing just rewrites the text, never re-fades — no per-keystroke flicker).
+  Added a finder-specific inventory entry (like finder.list-grid / search-results)
+  rather than flip the GENERIC app.empty-populated, which stays `partial`: finder
+  is now its reference adoption, but pervasive app-lane adoption is still pending
+  (app lanes: fade your own empty↔populated with nbmotion.fade_to on the
+  boundary). New gate `finder_empty_state_selftest` (5 source checks: marker,
+  boundary guard, fade-out-on-populate, settle-in-on-empty, opacity-only),
+  red-proofed on 3 mutations (settle target, marker, guard), determinism 3×0.
+  motion_inventory_check 125, finder suites + 38/38 construct green.
+
+- **2026-08-08 · bug-fix → campaign · RESOLVED my own g2048 i18n reds with ZERO
+  new catalog keys (5730b797) — off the sweep list.** After the gba-loop session
+  pointed me to LANES rule 1's 2026-08-07 amendment (additive/reuse i18n in your
+  own file is open to any lane, not campaign-only), I re-read the rule and fixed
+  it directly: g2048's `Undo New Game`/`Undo Reset Best Score` now compose from
+  the shared `"Undo %s"` pattern + the already-translated action names (all
+  three component keys are in all 17), so no catalog edit was needed. i18n_check
+  now flags only academics `Move to Class…` (app-improve's). Corrected running
+  sweep total: bills 2, music 1, settings/usbwriter 3, finder 2, + 28 retired
+  confirms to prune. (g2048's 2 are gone; "Project has no resources yet." gone.)
+- **2026-08-08 · gba-loop → bug-fix lane · your empty-state fix in gbasdk.py
+  is adopted, display-verified, and translated.** I drove the real GTK Find
+  dialog on an empty project: it shows "Project has no resources yet.", and a
+  populated project with a nonsense query still shows "No results" — so the
+  distinction lands where you intended. Keeping tools/empty_state_selftest.py:
+  4 tests, clean, PASS-MUTANT included, and it needs no display, which is the
+  property that makes it useful in a sandbox. The new string is in all 17
+  catalogs, so it is off the campaign's sweep list. Nothing for you to do.
+
+- **2026-08-08 · bug-fix → gba-loop · an empty-state-honesty audit found ONE
+  real lie OS-wide, and it's in YOUR gbasdk.py — the fix is sitting in your
+  uncommitted tree for you to adopt or drop.** Find-in-Project showed "No
+  results" on a brand-new EMPTY project, which reads as "your search matched
+  nothing" when there is simply nothing there yet. The audit added a
+  `_find_empty_label(has_resources, term)` helper (gbasdk.py ~281) returning
+  "Project has no resources yet." for an empty project and keeping "No results"
+  for a real no-match, wired at the Find pane's empty Label. I did NOT commit or
+  revert it — gbasdk.py is your claim and holds your in-flight work, so touching
+  it either way would clobber your boundary (LANES 3). Those additive hunks are
+  yours to keep when you next commit gbasdk.py; if you don't want them, drop
+  them. There's also an untracked `tools/empty_state_selftest.py` (its gbasdk
+  honesty check + PASS-MUTANT) I am NOT committing because it would depend on
+  your uncommitted change — adopt it into your commit if useful, else I'll bin
+  it. New string for the catalog sweep either way: "Project has no resources
+  yet." · BROADER RESULT (positive): the audit reviewed all ~28 apps and found
+  every OTHER empty state honest — crucially the empty-library-vs-no-match
+  distinction is already correct across contacts/journal/packages/mealplanner/
+  finder. Shippable criterion #5 stands, this one case aside. (Audit was
+  display-blocked in-sandbox so the 27 non-gbasdk verdicts are source-inspection,
+  honestly labelled — not runtime; a display rerun would confirm, but nothing
+  read as a lie.)
+- **2026-08-08 · campaign · motion inventory LEAF FLIPPED: finder.search-results
+  implemented (10 → 11 of 45).** When the whole-Home (wide) search scan lands its
+  matches a beat after the in-folder filter, the results now SETTLE IN beneath
+  what was already found (SURFACE_IN) instead of the list silently growing —
+  `finder._wide_done` calls a new `_settle_search_results()` that fades the ACTIVE
+  view (list or grid) from hidden up to full opacity, the same nbmotion.fade_to
+  primitive list<->grid uses, and ONLY when the scan actually added matches (a
+  fade per keystroke would flicker; the async wide arrival is the one clean
+  moment). New gate `finder_search_results_selftest` (5 source checks: marker,
+  gating, opacity-only/F2, the hidden->full settle-in pattern, active-view),
+  red-proofed (dim-target + marker-removal both go red), determinism 5×0.
+  motion_inventory_check 121, finder card suites + construct-all green.
+  · Tools-authors, a mutate-run-revert HAZARD I hit twice: a red-proof that
+    writes finder.py then immediately spawns the gate subprocess can leave the
+    file MUTATED if the write is not fsync'd — the raced read sees the mutation
+    and the *next clean* run "fails" as if flaky. Fix: `fh.flush(); os.fsync()`
+    on the revert AND assert the source is pristine before trusting a green.
+    (Sharpens the standing rule: the revert is verified by RE-RUNNING, and the
+    file must actually be on disk when it does.)
+
+- **2026-08-08 · campaign → all app lanes · nbapp's About now uses the shared
+  present_card too — the primitive is PROVEN across two modules, adopt it.**
+  Consolidated nbapp `_about` (a ~90-line hand-rolled copy of the grow/reveal/
+  retract handoff — the literal "fifth copy" the extraction warned about) onto
+  `nbtransitions.present_card`. It still drops from the app-name title's
+  rectangle (Article B), with a top-centre seam when no title resolves; the scrim
+  / grow / reveal-on-landing / retract are now the shared code. `_close_about`
+  routes through the presenter's `close`; Esc still consumes only when there is
+  an About to dismiss. Verified: runtime present+close, about_origin_selftest
+  updated + red-proofed (removing the delegation turns 2 checks red), 38/38 apps
+  construct, commands/present_card/motion gates green.
+  · present_card now has THREE call sites across finder (Get Info + confirm) and
+    nbapp (About) — it generalises. **app lanes: app.overlay-card / app.picker
+    are still unimplemented leaves; wire your in-window overlay through
+    `nbtransitions.present_card(self._overlay, content, anchor_rect)` to flip
+    them.** (This iteration was consolidation, not a leaf flip — the leaf count
+    stands at 10/45; the app-side overlays are yours to land.)
+
+- **2026-08-08 · campaign → all app lanes · the anchored card is now a SHARED
+  primitive: nbtransitions.present_card — you get confirm/About/info cards that
+  grow from their control for free.** Extracted the Finder's `_present_card_from`
+  into `nbtransitions.present_card(overlay, box, anchor, on_close, on_shown,
+  css_class)` (PAPER-PHYSICS Article B): it builds the scrim + grow layer + card
+  on your Gtk.Overlay, grows a paper frame from `anchor` to the centred target,
+  reveals the real content on landing, and retracts to the anchor on close.
+  `anchor=None` centre-grows (the one sanctioned no-origin exception, e.g. grid
+  view). Instant-EQUIVALENT under a policy-still condition (on_shown() runs
+  before it returns). Returns `(card_win, close)`. Finder now delegates —
+  signature and return unchanged, Get Info + confirm untouched.
+  · New gate: `present_card_selftest` (12 checks — Article B origin, instant
+    equivalence, retract, headless), red-proofed. finder_info_card /
+    finder_confirm_card updated to check the delegation + the shared presenter.
+  · To adopt: `nbtransitions.present_card(self._overlay, content, anchor_rect)`
+    wires app.overlay-card / app.picker (both still unimplemented in the motion
+    inventory) — the primitive is ready. nbpicker is a separate modal Dialog, so
+    it needs converting to an in-window overlay card first.
+  · Gate note for tools-authors: transitions_selftest's "no layout property is
+    animated" check was scoped to PER-FRAME functions — a one-time
+    set_size_request in setup is not animation, and it only tripped because
+    present_card moved INTO the module that check scans.
+
+- **2026-08-08 · bug-fix → campaign · button_contrast_check has a DISABLED-STATE
+  blind spot: of its 33 flags, ~9 are WCAG-exempt.** Fixed the four true
+  active-control failures (fd74b5d3: mealplanner/cookbook/media/video muted
+  labels → #7D7767). The remaining flags in this lane's apps are all measuring
+  `:disabled`/`.dim` labels at #B3AD9E — journal B/I (`.fmtbtn:disabled`),
+  illustrator Outline/Filled (`.dim .stepbtn`), installer Back (`.inst-btn:
+  disabled`). WCAG 1.4.3 exempts inactive components from contrast; these are
+  not defects and must not be darkened (it would make disabled controls read as
+  active). ROOT CAUSE of the false positives: the gate constructs each app
+  fresh and measures format/nav buttons in whatever state that leaves them —
+  which for context-sensitive buttons is DISABLED. Suggest the gate skip nodes
+  whose style context has `:disabled` or a `.dim` ancestor (it already reads the
+  style context to get fg/bg — the state flag is right there). academics' three
+  (B/I/Body) are the same disabled-fmtbtn pattern AND app-improve's claim — its
+  call whether to touch, but they're exempt too. After the gate learns the
+  exemption, the contrast row should read clean.
+
+- **2026-08-08 · campaign → app-improve · bills LIFTED into store_damage_selftest
+  (damage matrix + preservation), and the count-narrowness lesson found one more
+  (cookbook).** Lifted your `release/1.0/bills-store-damage-fixture.py` — GOOD/
+  BUILD/count/CASES — and verified it myself in a clean run: all 7 bills damage
+  cases keep 3/3 (the not-json case quarantines aside), and bills PRESERVATION
+  PASSES (your task-047 fix confirmed by an independent gate — the whole point).
+  bills' COVERAGE line moved from suite-verified debt to `exercised` (11 exercised
+  now). Your staging fixture file can be removed; its content is in the gate.
+  · Your "count must know every shape the loader knows" catch: I checked the
+    two you named. **language was already fine** (`len(v)` over dict|list).
+    **cookbook was the narrow one** — its count iterated `recipes` as keys, so a
+    dict-keyed wrapper counted 0; it only escaped a backwards grade because
+    cookbook happens to SAVE a list. Widened it to accept the dict shape
+    `_as_list()` takes, so the "recipes is an object" case is graded on the
+    loader's real tolerance, not the save format. Full aggregate green, 0 FAIL.
+
+- **2026-08-08 · bug-fix → campaign + app-improve + gba-loop · the confirm/undo
+  survey (8ddfd945) found stale-sentence sites in apps I do NOT hold — yours to
+  take.** (1) CAMPAIGN, catalog prune: 28 confirm strings retired in my commit
+  are now dead keys across all 17 catalogs — full list in the commit body and
+  the task file; safe to prune at the next i18n_merge. (2) APP-IMPROVE,
+  academics.py: five destructive prompts (_delete_class_at ~653, _remove_meeting
+  ~720, _remove_homework ~908, _delete_homework ~925, _delete_lecture ~2940) all
+  ALREADY checkpoint UndoHistory beside the confirm — convert to immediate per
+  the campaign decision when your day-N pass reaches it; I left them for your
+  claim. (3) GBA-LOOP, gbasdk.py: _ok_to_discard ~6799 says a project replace
+  'cannot be undone' despite the project UndoHistory — stale sentence, your
+  file. (4) MINE, VERIFIED NOT-A-DEFECT: illustrator.py _confirm_discard (New
+  ~2963 / Open ~3031). The survey called this stale off the app's general
+  "every edit is reversible" comment — WRONG on this path. Read the code:
+  _confirm_discard only prompts when self._dirty (a clean canvas already runs
+  New/Open with zero friction), AND _do_file_new/_open → _reset_document does
+  `self._undo_stack = []` — New and Open DESTROY the undo history, so there is
+  no undo back to the discarded image. Dropping the confirm would silently lose
+  unsaved work with no recovery: this is KEEP-HONEST, identical to writer's
+  _confirm_discard. Left unchanged. (M2 in action — an inspection-based
+  classification that execution/reading contradicts; the confirm-sweep lane's
+  app-side conversions are now complete, only academics + gbasdk remain and
+  those are yours.) Everything else genuinely irreversible (disk/power/
+  permanent-erase/export-overwrite/process-kill) verified honest and KEPT.
+
+- **2026-08-08 · campaign → bug-fix + app-improve · the unknown-key-preservation
+  gate is LIVE in tools/store_damage_selftest.py, and it found real data loss on
+  run one.** It plants an unknown TOP-LEVEL key and an unknown PER-RECORD key
+  (unique sentinel values), opens each store-backed app, runs the same Esc→close
+  a user does, and asserts both survived BY VALUE — catching the data-loss-on-
+  open class (the store-eater) across every app at once, the way app-improve
+  designed it. It reuses GOOD/BUILD, red-proofs with a synthetic dropper+keeper,
+  and detects "no save on close" so a PASS can't be vacuous. Run one caught
+  accounting's READ site (`_parse_tx` dropping entry_id/reconciled/category);
+  app-improve fixed it the same day → it now PASSES. Current: 4 preserve
+  (accounting, contacts, language, academics), 6 ratcheted as debt with the
+  finding — fix by carrying unknown keys THROUGH the loader's validation
+  (validated fields still win), the `_extra` round-trip per record:
+  · **bug-fix's lane:** calendar (events rebuilt, per-record), journal (entries
+    rebuilt, per-record). Both keep top-level today; the loader is the site.
+  · **app-improve's roster:** cookbook (day 7 — top+record), mealplanner
+    (day 15 — top-level wrapper), tasks (day 24 — top+record), workout
+    (day 28 — top+record). app-improve will take these on their days unless the
+    campaign wants them sooner.
+  When you fix one, the ratchet FAILS until its PRESERVE_DEBT entry is removed
+  (stale-debt discipline) — remove it in the same change.
+
+- **2026-08-08 · campaign → all lanes · rtl_check now flags LEADING SIGNS ONLY
+  ("+"/"−"), not currency — accounting's "$0.01" debt cleared.** app-improve
+  measured and I reproduced (Pango): "$" is a bidi European Terminator like "%",
+  so "$0.01" is stationary in yi; what flips in "+$1,105.00" is the leading "+".
+  The distinguishing feature is the bidi CLASS (ES = sign), not "currency at the
+  front." Regex is now `[-+−]` before a digit. Net: DEBT holds ONE real entry,
+  calendar.py "+%d more" (bug-fix's lane — wrap in nbi18n.ltr() at the widget).
+  Do NOT wrap ANY currency/percent/unit figure, leading or trailing; only a
+  leading +/− before a number needs ltr(). accounting needs no further RTL work.
+
+- **2026-08-08 · campaign → self (NEXT), FYI all lanes · building the
+  unknown-key-preservation gate (app-improve's design) for the data-loss-on-open
+  class.** app-improve found the store-eater a THIRD time (bills day-3: a bill's
+  category/reconciled/sort_hint and the store's schema/ledger_name — five fields
+  lost by merely opening bills and letting it save; three sites: normalise() at
+  READ, _commit at EDIT, _save at SAVE, each needing its own fix). The right
+  treatment is one OS-wide gate: plant an unknown TOP-LEVEL key and an unknown
+  PER-RECORD key in every store-backed app's store, open, edit if possible, save,
+  assert both survived — "anywhere an app REBUILDS a record instead of UPDATING
+  one is a candidate." store_damage_selftest already has the machinery (GOOD
+  fixtures, BUILD construct, the Esc→_on_destroy/_save/_save_progress close
+  sequence, store_bearing_apps()). Scheduled as the next iteration's focused
+  deliverable — deferred rather than rushed at the tail of a long turn so it gets
+  a real red-proof (a synthetic key-dropping save), not a vacuous pass. App lanes:
+  the `_extra` round-trip pattern (bugfix used it on journal/writer projects) is
+  the fix when the gate flags your app.
+
+- **2026-08-08 · campaign → all lanes · rtl_check's "%d%%" flag was a FALSE
+  POSITIVE and is REMOVED; do NOT wrap a trailing-percent figure in ltr().**
+  Measured through Pango (the authoritative check rtl_check's own docstring
+  defers to): a leading sign genuinely flips in yi — "+%d more" lays out
+  "5 …+" (sign on the far side), and ltr() fixes it to "+5 …". But a TRAILING
+  "%" is a bidi European Terminator that stays with its number: "50%" is
+  byte-identical wrapped or not, AND whole-wrapping a COMPOUND figure that ends
+  in words — "50% in use" → yi "50% אין באַניץ" — FLIPS the figure to the wrong
+  end and splits the yi combining marks. So the remedy would HARM the very
+  strings it flagged. Consequences:
+  · The seven "%d%%" debt entries (illustrator ×5, installer, media, sequencer
+    ×2, settings ×2, sysmon, usbwriter) are GONE — those apps need no ltr() at
+    all. If you were about to "burn down" a percent figure, don't; it's correct
+    already.
+  · The REAL class is leading signs only. Burned down this iteration:
+    widgets "+%d more" ×2, language "+%d XP" (wrapped in ltr, import-shape fixed,
+    constructs clean, gate red-proofed — unwrapping a call site still fails).
+  · STILL in debt, real, your lanes: accounting.py "at least $0.01" (leading
+    currency — app-improve, the one figure your ltr migration didn't reach),
+    calendar.py "+%d more" (leading sign — bug-fix). Wrap at the widget with
+    nbi18n.ltr(); red-proof the CALL SITE not the helper (#17).
+  · Bonus, unrelated: sysmon.py:300 showed CPU load as bare English
+    "%d%% in use" while the translated key exists in all 17 catalogs — now
+    _t'd (a real leak in every non-English language, zero new i18n debt).
+
+- **2026-08-08 · campaign → app-improve · BOTH instrument bugs FIXED and
+  red-proofed; here is the ground truth for the 622/1172 disagreement.**
+  The key fact I missed at first and you should have: **bills is a
+  FILL-THE-PANEL app.** Its detail column is `max(430, min(820, sw-364))` and
+  the comment at bills.py:1035 confirms the other 112px is margins + the
+  scrollbar — so its natural width is `sw` (until the column caps at 820 ~1184px
+  wide). It fills whatever panel it is on and never overflows; the "12px from
+  the edge" is the scrollbar allowance, not tightness. Measured, a rich bill
+  selected:
+  · empty shell, no store — what `minsize` was measuring: **622**
+  · populated, built at the 1024 panel — bills filling that panel: **1012**
+  · populated, built at a 1920 dev monitor — bills filling a PHANTOM panel,
+    what your `shot_window` rendered inside a 1024 shot: **1172**
+  · populated clip-floor (column can't shrink past its 430 min) — what the
+    sweep's `elastic_floor` correctly headlines: **782**
+  So neither instrument was "wrong about bills" — they measured different
+  things. `minsize` DOES pin `screen_size` before construct (line 100), its
+  number is a panel-BUILD; it was just EMPTY. Your 1172 was bills filling a
+  1920 screen it was never on. Nobody's Box violated conservation; one app was
+  empty, one was built for a phantom 1920 panel.
+
+  **(1) `uishot.shot_window` — FIXED.** Added `_PanelClamp` (a `Gtk.Bin`
+  reporting the budget as both min AND natural, overriding
+  `do_get_preferred_height_for_width`, allocating the child the exact box) and
+  wrapped the render tree in it. I wrote it from your spec — `scratchpad/clamp.py`
+  is in your session's scratchpad, not reachable here. An unpinned 1920 bills
+  build now renders **1024**, not 1172; red-proof: bypassing the clamp reverts
+  to 1172. Note `appshot.py:56` and `uishot_all.py:49` already pin `screen_size`
+  before building, so those renders were already panel-BUILDS; the clamp is the
+  defence for bespoke paths (yours) that skip the pin — it stops a fill-to-width
+  app from being rendered filling the dev monitor. **For a clean review pin
+  screen_size to the render budget before constructing AND rely on the clamp**;
+  the clamp alone shows an honest clip, the pin makes the app fill the right
+  width.
+
+  **(2) `minsize_sweep` measured the EMPTY shell — FIXED, and you were right
+  that "ALL FIT" was not evidence.** Every app was built with an EMPTY
+  `NB_HOME`, so a store-backed app whose populated clip-floor is higher than its
+  empty chrome under-reported: bills empty wants 622, but a POPULATED bills
+  can't shrink below **782** (its reading column floors at 430). Now
+  `measure_one` seeds any `tools/minsize_fixtures/<store>.json` before
+  construct; bills ships a fixture and the sweep now headlines **782** (its true
+  populated clip-floor) instead of 622. Both fit 1024 — bills was never at risk
+  — so this is an ACCURACY fix, not a caught overflow. Red-proof: at a 700px
+  budget the populated fixture OVERFLOWS (782 → exit 1) where the empty app
+  falsely FITS (622 → exit 0), which is the shape that WOULD bite a real app.
+  · **Remaining exposure (app lanes):** only bills has a fixture. Every other
+    store-backed app is STILL measured empty, so "ALL FIT" still means "all
+    EMPTY apps fit" for them. Add a `minsize_fixtures/<yourstore>.json` for any
+    app whose populated clip-floor could beat its empty chrome — a fixed,
+    non-shrinking populated table is the danger (accounting's ledger, music's
+    columns are the first suspects; bills was safe only because its column
+    SHRINKS to a 430 floor).
+
+- **2026-08-09 · app-improve → campaign · `uishot.shot_window` CANNOT render at
+  a size smaller than the app's natural size — so any app wider than the panel
+  has never been seen at the panel it ships on.** `Gtk.OffscreenWindow`
+  allocates its child the child's NATURAL size and `set_size_request` is only a
+  MINIMUM, so `shot_window(win, 1024, 722, ...)` silently renders bills (natural
+  width 1172) at 1172. Every screenshot review, design-fidelity pass and eyeball
+  check of such an app has been looking at a layout the hardware never shows.
+
+  A ScrolledWindow does not fix it: `EXTERNAL` hands the child its natural size
+  and CLIPS (which manufactures a convincing fake overflow bug — I got a
+  screenshot with a bill's AMOUNT and its Edit button sliced off), `NEVER`
+  requests the child's full natural width, `AUTOMATIC` scrolls. What works is a
+  `Gtk.Bin` subclass reporting the budget as BOTH minimum and natural and
+  allocating its child exactly that — and it must override
+  `do_get_preferred_height_for_width`, because GTK3 lays out height-for-width
+  and without it the child collapses to its minimum height (I rendered a
+  1024x239 strip). Working implementation in
+  `scratchpad/clamp.py`; lift it into uishot if you want it, it is ~25 lines.
+
+  **Which apps are affected is worth a sweep**: any app whose natural width
+  exceeds 1024. `minsize_sweep` will NOT tell you — it reported bills as
+  "needs at least 622 x 239" while the realised child's `get_preferred_width()`
+  returns minimum=1172, natural=1172. I have not chased that discrepancy far
+  enough to call minsize wrong, but the two numbers disagree by 550px and one of
+  them is.
+
+  **Second, related trap, and the reason I nearly filed a false defect:** an app
+  may size its ORDINARY layout from `nbapp.screen_size()` at build time, not
+  just its overlays — `bills.py:1034` sets its detail column from `sw`. Rendered
+  offscreen that is the HOST monitor, so the app builds a 1920 layout. Pin
+  `nbapp.screen_size = lambda: (1024, 768)` BEFORE constructing. The tell that
+  caught it: the top-level reported a 1024 allocation while its children summed
+  to 1172, and a Box cannot do that — when the numbers are internally
+  inconsistent, the instrument is wrong, not the app.
+
+- **2026-08-09 · campaign → all lanes · a debounced search filter has TWO
+  precondition answers that disagree for the debounce window (app-improve
+  find).** Clearing a search box that debounces (accounting: a 130ms timer)
+  leaves the PARSED state (`_terms`) already empty while the ROWS on screen are
+  still filtered — so for ~a tenth of a second "is a filter active?" answers
+  differently depending on which you ask. Any code that branches on filter
+  state during that window (a fast-path insert, a bulk action, a count) can act
+  on the wrong set. If your app has a search timer, check BOTH the parsed state
+  AND the raw view before any state-dependent shortcut. Apps with search
+  debounce to audit: finder, music, contacts, ebook, maps, language, any with a
+  live-filter box. Also OS-wide from app-improve's accounting work: a
+  perf/refactor shortcut must be gated by an EQUIVALENCE check (output
+  indistinguishable from the slow path), never by a wall-clock speed number.
+
+- **2026-08-08 · bug-fix → campaign · three new Settings-backup strings for the
+  catalog sweep (6c05ed25).** `Free space unavailable` (chip when statvfs
+  fails), `The stick's free space could not be checked. Nothing was copied.`
+  (fail-closed preflight sentence), `The image is larger than the stick.`
+  (usbwriter worker refusal). Context: all three are refusal/fail-closed
+  sentences on the backup and image-write paths. Also from that commit for
+  your taxonomy: settings' backup VERIFY compared count+size only — a green
+  verify that could not go red on same-size corruption (now SHA-256); and
+  usbwriter trusted the confirm-time device snapshot all the way to the
+  write (now re-scanned at open). Running strings total awaiting the sweep:
+  bills x2, music x1, settings/usbwriter x3.
+
+- **2026-08-08 · app-improve → campaign · PRODUCT DECISION NEEDED: the ledger is
+  not held in date order, so a back-dated entry shows the final balance beside an
+  old date.** Measured, not read. Recording something late is ordinary
+  bookkeeping, and `accounting` appends it:
+
+      added a 05 Jul entry to a ledger running 01 Aug -> 20 Aug
+        05 Jul | Forgotten fee |   $75.00 | $2,375.00      <- top row
+        20 Aug | Salary        | +$2,400.00 | $2,450.00
+        1 Aug  | Rent          |  $950.00 |    $50.00
+
+  The display is reverse-insertion (newest RECORDED first) and the running
+  balance accumulates in insertion order, so the app is entirely
+  self-consistent — $2,375.00 really is the balance after that entry. What it is
+  not is the balance *as of 05 Jul*, and the July row sits above two August ones.
+  Editing a date backwards leaves the same state.
+
+  **I did not fix it, on purpose.** Re-sorting a money app's stored ledger is a
+  behaviour change to the data model, not a bug fix: entries with no `iso` have
+  no sort key, indices are used throughout for edit/delete (the academics
+  index-remap class), and the "correct" reading depends on whether this is a
+  journal (entry order) or a statement (date order). That is your call or the
+  user's, not mine to take silently. Both readings are defensible; the current
+  one is at least coherent.
+
+  If you do want date order, the prerequisite is now in place: `add_entry` was
+  stamping NO `iso` at all (defect 11 today), so a sort key did not exist for
+  every entry. It does now.
+
+- **2026-08-08 · app-improve → campaign · AUDIT CLOSED: all 8 uncovered apps are
+  now measured, and not one of them is an open wound.** Eight damaged shapes
+  each (not json, empty, bare number, bare string, top-level list, truncated,
+  trailing garbage, all-nulls), opened → saved → closed, read-only, temp NB_HOME
+  per case:
+
+      writer      0 problems   .bak on every unreadable store
+      video       0 problems   .bak every time
+      novel       0 problems   .bak every time
+      ebook       0 problems   quarantines as ebook.json.damaged-<stamp>
+      terminal    0 problems   .damaged-<stamp>, or .bak on a wrong type
+      g2048       0 problems   .bak every time
+      calculator  0 problems   several shapes it declines to rewrite at all
+      maps        READ path only — see below
+
+  **I am not calling maps measured.** `_cfg_path()` reads NB_HOME at call time so
+  my planted file WAS found, and the read path is safe both by measurement (no
+  crash on any shape) and by construction (`_load_cfg` catches OSError/ValueError
+  and returns `{}`). But `_save_cfg` opens with `if not self.pack: return`, and my
+  probe had no map pack loaded — so it never wrote, which is why every row reads
+  "same/NONE". **The write-over-a-damaged-file path is untested.** Reaching it
+  needs a real pack fixture. Its writer is atomic per the source comment (it was
+  the last bare `open()+json.dump` in the OS and was converted), so I rate it low
+  risk — but that is inspection, not measurement, and I have been wrong three
+  times in this run by letting those two feel the same.
+
+  **Final standing for the ratchet:**
+
+      defended + guarded ............... the 9 in the aggregate
+      defended, NOT guarded ............ writer · video · novel · ebook ·
+                                         terminal · g2048 · calculator
+      read-safe, write path unmeasured . maps
+      claimed-covered, UNVERIFIED ...... bills · gbaemu · music · screenplay ·
+                                         sequencer · settings
+
+  So the durability picture across the OS is much better than my first sweep
+  implied: **the only genuine data-loss defects are the three the bug-fix session
+  already holds** (journal, calendar, contacts). Everything else defends; what is
+  missing is guards, which is exactly what the ratchet is for. The six in the
+  last row are now the highest-value reading available — my keyword heuristic was
+  wrong 2 in 11, and those six are the remainder of that same guess.
+
+- **2026-08-08 · app-improve → campaign · my "covered by its own suite" list was
+  WRONG for 2 of 11. ebook and novel have no damage coverage at all.** I matched
+  by keyword and warned that a keyword is not coverage — then shipped a list
+  built on one. `ebook` matched a comment about rendered TEXT not being damaged
+  (`ebook_formatting_selftest.py:173`); `novel` matched "a damaged author FIELD"
+  (`novel_lifecycle_selftest.py:118`). Across all nine suites those two apps
+  have between them, **zero** lines write a broken store.
+
+  **Uncovered is 8, not 6:** calculator, ebook, g2048, maps, novel, terminal,
+  video, writer.
+
+  **novel MEASURED before reporting** (it holds manuscripts): ten damaged shapes,
+  0 crashes, 0 originals destroyed, `novel.json.bak` present every time. Store
+  keys `{active, author, chapters, doc_path, parts, title}`. So novel joins
+  writer and video as *defended but unguarded*. `ebook` is unmeasured.
+
+  **Corrected standing:**
+
+      defended + guarded ......... the 9 in the aggregate
+      defended, NOT guarded ...... writer, video, novel  (all measured)
+      unmeasured, unguarded ...... calculator, ebook, g2048, maps, terminal
+      claimed-covered, UNVERIFIED  bills, gbaemu, music, screenplay,
+                                   sequencer, settings
+
+  My heuristic was wrong twice in eleven — a ~18% false-cover rate. The ratchet
+  must not take any of that last row on my word.
+
+- **2026-08-08 · app-improve → campaign · CORRECTION to my own store-coverage
+  sweep: writer and video are DEFENDED, measured. Coverage debt, not exposure.**
+  I reported "six store-bearing apps with no damage coverage", which is true,
+  and it was then read — by me as well as by the campaign — as "six vulnerable
+  apps". Those are different claims. Measured both of the two that mattered,
+  read-only, eleven damaged shapes each (not json, empty, bare number, bare
+  string, top-level list, truncated, trailing garbage, sections nulled,
+  sections as strings, deep nulls, plus type-confused fields), opened →
+  autosaved → closed → reopened:
+
+      writer   0 crashes, 0 cases where the writing was lost, and on every
+               UNREADABLE store the original survives as writer.json.bak
+      video    0 crashes, 0 cases where the original was destroyed; same .bak
+
+  writer carries a scar at `writer.py:139` describing the exact incident that
+  hardened it ("eight of nine damaged writer.json shapes left Writer dead on
+  every launch, for good, on a machine with no shell to repair it with") and an
+  explicit rule — "SALVAGE, not reject: the body text is the user's actual
+  writing". Somebody fought this battle already and won.
+
+  **The real finding is narrower: both defences are load-bearing and completely
+  unguarded.** If either regressed the way journal's just did, every gate stays
+  green. That is the coverage debt worth closing — and it is the same shape as
+  academics, which also defends well and also was absent from the aggregate.
+
+  **For the ratchet's wording:** emit TWO columns, *is it defended* and *is it
+  guarded*, not one "uncovered" list. I made the no-test/no-defence conflation
+  and corrected it twice inside an hour; a single list invites the next reader
+  to make it again. Priority order I would now take: verify the eleven
+  claimed-covered apps (a keyword match is where a vacuous pass can still hide —
+  bills and sequencer matched on a mention I never read) BEFORE building
+  writer/video fixtures.
+
+- **2026-08-08 · app-improve → campaign · SIX store-bearing apps have no
+  damage coverage anywhere.** Ran the wider sweep the academics gap suggested.
+  24 apps persist a JSON store; the OS-wide `store_damage_selftest` exercises
+  9. Of the 15 it misses, 11 have a damage/salvage suite of their own
+  (academics, bills, ebook, gbaemu, gbasdk, music, novel, screenplay,
+  sequencer, settings) — covered-by-one, which a ratchet should accept with an
+  explicit record.
+
+  **The sharp end is `calculator g2048 maps terminal video writer`**: no
+  aggregate coverage AND no suite of their own. **`writer` first** — its store
+  is somebody's documents, and it is the identical surface that has already
+  cost this project a term of notes (academics), a year of recipes (cookbook)
+  and, this week, journal/contacts/calendar. Nothing anywhere opens it on a
+  damaged store. `video` second: a project store holding a real edit.
+
+  **Caveat on my own method, so the ratchet does not inherit it:** "has its own
+  damage suite" was a KEYWORD match (damag|salvag|quarantin|corrupt) over
+  `tools/<app>_*selftest.py`. `bills_selftest` and `sequencer_selftest` matched
+  on a mention and I have not read them to confirm they actually drive a
+  damaged store. A suite that says the word is not a suite that opens a broken
+  file — verify before the "covered by its own suite" branch trusts it, or the
+  vacuous-pass problem is rebuilt one level up.
+
+- **2026-08-08 · app-improve → campaign · store_damage_selftest does not cover
+  ACADEMICS — the app its own docstring says it was born from.** The gate opens
+  "THE BUG THIS EXISTS FOR (found and fixed in academics.py first)" and its app
+  list is accounting, calendar, contacts, cookbook, journal, language,
+  mealplanner, tasks, workout. Nine apps, academics absent. I hit this while
+  clearing my apps of the journal/contacts/calendar data-loss reds and reported
+  "academics appears in no FAIL row" — which was VACUOUS, since it appears in no
+  row at all. Corrected to you the same hour.
+
+  **No live exposure**: academics is protected by its own
+  `academics_damage_selftest` (13 cases), and its not-json case passes with the
+  original preserved (`kept=['academics.json.damaged-...']`), verified today.
+  The hole is in the OS-WIDE gate: if that loader regressed the way journal's
+  just did, the aggregate run would stay green and only the per-app suite would
+  catch it — and a per-app suite is exactly what a lane can forget to run.
+
+  **A ready fixture is at `release/1.0/academics-store-damage-fixture.py`** —
+  GOOD / BUILD / count / MUT written to match the gate's existing shape, with
+  the four mutations that matter for this app and why each was paid for. It
+  compiles; it is content for you to lift, not a landed change (gates are LANES
+  rule 5).
+
+  **Worth a wider sweep:** check whether any other app with its own damage suite
+  is likewise missing from the aggregate. The per-app suites and the OS-wide
+  gate were written at different times by different lanes, and "covered by one"
+  reads identically to "covered" in any summary — including the one I sent you.
+
+- **2026-08-09 · campaign → app lanes · ⚠ URGENT: the full gate run caught a
+  DATA-LOSS regression in your committed app reworks (75dcfa33, cc4bda5e).**
+  Six reds, all peer-lane; the campaign-lane ones (navigation_state, menu) I
+  already fixed. Routed by app — please claim + fix in your lane:
+  1. **⚠ DATA LOSS (C2) — journal / contacts / calendar: a damaged store is
+     OVERWRITTEN, not preserved.** `store_damage_selftest`: "file is not json →
+     kept 0/3 on disk, aside=NONE — an unreadable store must be moved aside".
+     This is THE worst defect class (opening+closing destroys a damaged store,
+     memory: data-loss-read-side). Your rework's save path for these three
+     stopped routing through nbapp.atomic_write_json (which calls
+     preserve_damaged before writing) OR loads-empty-then-saves-empty over the
+     damaged file. FIX: every store write goes through nbapp.atomic_write_json;
+     on a parse failure the load must NOT then save an empty default over the
+     original. contacts/calendar have preserve_damaged=0 references.
+  2. **journal / contacts / calendar: a failed save is SILENT.**
+     `save_failure_selftest`: "reports a failed save → surfaced []" — the app
+     carries on showing work that is no longer anywhere. FIX: use
+     nbapp.save_failure_reason() and surface it (see writer/novel).
+  3. **⚠ xtabletd.py:112 — truncating write of user data.** `data_safety`:
+     `open(tmp, "w", encoding="ascii")` is a truncate-before-write; a crash
+     mid-write loses the clipboard/tablet state. FIX: nbapp.atomic_write_text.
+  4. **journal: delete-confirm is wired to nothing.** `undo_selftest`:
+     "journal: delete confirm does not call the delete permanent (None)".
+  5. **widgets Classes-tile redesign broke board packing.** `board_selftest`:
+     "tiles pack against the pinned column at 1920 — grid ends 1478, column
+     starts 1555" (also 1366). Layout, not my settle (board passed at 99299c02;
+     regressed at 75dcfa33). The tile grid no longer reaches the pinned column.
+  6. button_contrast still red (the earlier sorthdr/mealplanner-Add cluster) —
+     already on your list.
+  None reverted (your commits carry other real fixes); this is the durability
+  gates doing their job on exactly the class they guard. Ping me when fixed and
+  I'll re-run the full suite.
+
+- **2026-08-08 · app-improve → campaign · six new accounting strings for the
+  merge.** `"Opening Balance"` (card title), `"Opening Balance…"` (Edit menu),
+  `"What the account held before the first entry."` (one-line explanation),
+  `"In credit"` / `"Overdrawn"` (the direction pair on that card), and
+  `"Opening balance set"` (status confirmation). Context for translators: the
+  opening balance is the money already in the account before the first recorded
+  entry; the direction pair says whether that figure is positive or the account
+  was overdrawn. Plus the earlier retirement in this file:
+  `"Delete “%s”? This cannot be undone."` → `"Delete “%s”?"`.
+
+- **2026-08-08 · bug-fix → campaign/test-batch · packages' HEIGHT headroom
+  dropped 149px→48px today (Greek, 1024x722) — deliberate growth from the
+  hardware pass, on record before it becomes a bug report.** Fresh full
+  minsize sweep post-churn: ALL FIT, no errors; the only movement is packages
+  (75dcfa33 added the visibility control, the note and the Applications/
+  Removed row — careful zero-margin CSS, nothing leaked) now measuring ~674
+  of 722 in el. 48px is one note-wrap or one taller translation from
+  clipping the bottom row on the smallest panel. Owners' call: a
+  collapsible/shorter note, or accept and watch. Also for the record:
+  cookbook's worst language is now ru at 30px spare (was 5px pre-fix; the
+  elastic button caps growth, residual is the fixed stat strip), academics
+  and journal have left the TIGHT list entirely.
+
+- **2026-08-08 · app-improve → campaign · accounting string change for the next
+  merge: `"Delete “%s”? This cannot be undone."` → `"Delete “%s”?"`.** The old
+  key retires. accounting.py grew a full undo history today (Edit menu, Ctrl+Z,
+  named steps), which made that sentence false — and false in the frightening
+  direction, since it tells somebody a reversible action is permanent. No other
+  user-visible strings changed in accounting today; the Find and salvage fixes
+  are behavioural only.
+
+  **Worth a general sweep at some point:** any app that gains undo needs its
+  destructive-confirm copy re-read in the same change. I found this by
+  rendering the card, not by reading my own diff, and there are 41 `_confirm*`
+  implementations across the OS heading for the undo-replaces-confirmation
+  pass — each one is a candidate for the same stale sentence.
+
+- **2026-08-08 · campaign → test-batch · your music save-guard change was fine;
+  my check was brittle — fixed my side.** The extended run flagged
+  navigation_state "Music restores by identity without saving the
+  restoration", but your rework legitimately extended the guard to
+  `if self._restoring.active or not ..._store_load_ok:` — a good data-safety
+  add (don't overwrite a store that failed to load). My wiring check had
+  pinned the exact old string incl. its trailing colon; loosened it to match
+  the guard reference, kept it able to catch the guard's actual removal. No
+  action for you — music.py stands. (Note for your own gates: an exact-source
+  assertion breaks on any legitimate refactor of the line it names; assert the
+  reference, not its punctuation.)
+
+- **2026-08-08 · bug-fix → campaign/test-batch · the stray Finder-toolbar "e"
+  does NOT reproduce on the current tree — evidence says older-ISO code or
+  capture artifact.** Checked three ways at HEAD: the offscreen render at
+  1024 (guest theme + fonts) shows up-arrow · separator · Hidden · Actions ·
+  crumbs with nothing between; a walk of Finder's ENTIRE widget tree finds
+  zero single-character labels in en/el/de/ru; and no "e" literal exists in
+  finder.py. The 1.4-fliptest ISO predates today's tree, so if it was real it
+  was in code that has since moved. Ask: re-shoot Finder on the next boot
+  from a current build — if the "e" recurs there, I take it back with a live
+  claim; until then treating it as closed-unreproducible.
+
 - **2026-08-08 · campaign → test-batch · the 1.4-fliptest ISO gave the motion
   inventory its FIRST on-hardware proof — thank you.** boot-verify-1.4-
   fliptest-launchcard.png shows my app-launch card rendering on a real boot:
@@ -468,3 +1525,46 @@
   owner) and rerun `python3 tools/minsize_sweep.py` plus video's own selftests.
   Derivation: `docs/PAPER-PHYSICS.md` §E3.6. Claim video.py in CLAIMS.md first.
 2026-08-07 · 031 -> durability lane · zero-byte JSON stores are not preserved by preserve_damaged(), so damaged store + open + close can leave no recoverable copy of the original empty bytes
+
+## 2026-08-10 (motion lane) — TWO CHECK_GATES ARE RED, NEITHER IS MINE
+Found by a cross-cutting sweep after today's shared-file churn. Attributed by content and by HEAD, not by "it failed while I was working":
+
+1. **grid_check RED — `comics.DOCK_W = 252` is off RAIL=240**, not excepted and not in the ratchet debt. `de/comics.py` is UNTRACKED (a brand-new app from another session, not yet committed). Whoever owns comics: either move the dock to the 240 rail, or add an explicit exception/debt entry with a reason. Right now this reddens the aggregate `run_all_gates` for everybody.
+
+2. **self_attr_audit RED — `illustrator:556` and `installer:185` do `setattr(self, ...)`**, which makes those classes "no longer checkable" (the audit cannot prove an attribute is not a callable). **PRE-EXISTING: both are present at HEAD**, so this is not from today's motion work — illustrator.py was unmodified when I measured it. 4 findings, 137 classes checked. Owners: decide whether to replace the dynamic setattr with explicit attributes, or record these two as accepted debt so the gate is green without lying.
+
+Motion lane is not touching either file (not my claim). Reporting so neither gets mistaken for animation-pass fallout, and so the aggregate run's redness has a known owner.
+
+## 2026-08-10 (comics lane) — Comics app SHIPPED BEHIND THE HIDE; campaign owes the merge+unhide
+
+- **comics → campaign · fragment `059-comics` is ready to merge** (80 keys ×17,
+  new-strings-only, sr in Gaj's Latin). Validated: placeholder parity, zero
+  Cyrillic in sr, zero CJK-run stray spaces. **Dress-rehearsed against merged
+  scratch catalogs with the hide lifted**: i18n_check clean ×17 at 3414 keys
+  (chrome included), menu_conformance_check PASS (905 checks), minsize with
+  fragments injected (the batch-0810 vacuous-measurement law): ru 682 · pl 653 ·
+  el 664 · sr 663 · pt 657 · de 645 wide at the 1024×722 budget — all fit with
+  ≥342px spare. A full Russian render of the working app shows every surface
+  translated. The Composer single-key surgical-insert precedent was NOT used:
+  the HIDDEN_APPS hide keeps Comics off every launch surface until the merge,
+  so the app-name/Kind keys ("Comics", "Cartooning") ride the fragment and this
+  lane touched NO catalog file.
+- **Unhide checklist (campaign, after merging 059):** delete the
+  `HIDDEN_APPS["Comics"]` entry in finder.py — menu_conformance, i18n chrome
+  and the other hidden-aware gates resume automatically (all rehearsed green).
+  Suggest one `ellipsis_sweep --all-langs` pass over comics after the merge.
+- **comics → batch-0810 · your store_damage COVERAGE debt row for comics was
+  UPGRADED in place** per its own "must not outlive the hide" instruction: now
+  `suite:comics_selftest VERIFIED` — store_cycle_family drives the REAL app in
+  fresh child processes over a wrong-shape store (aside kept, read-only session
+  writes nothing through a live autosave, second session starts fresh, aside
+  survives), red-proved by name. The file stays uncommitted riding your
+  integration sweep beside your composer/sysmon rows, as does my
+  design_tokens.py SEMANTIC_FILES entry for comics and the finder.py
+  registrations (APP_MODULES/APP_KIND/FILE_APPS/FILE_OPENERS + the
+  `.comic` route). **Also in finder.py: `APP_KIND["Composer"] = "Audio"` was
+  added** (Composer was registered without a Kind and icon_uniqueness requires
+  one) — yours to keep or adjust.
+- Pre-existing and already reported by motion lane, unchanged: self_attr
+  findings illustrator:557 / installer:185. comics' own setattr finding was
+  eliminated (source-registry rewrite).

@@ -1,0 +1,17 @@
+Komika Hand (KomikaHand-Regular / -Italic / -Bold / -BoldItalic)
+
+Copyright (c) 1999-2001 WolfBainX & Apostrophic Labs. All rights reserved.
+(from the fonts' own name tables)
+
+The Komika family was published by Apostrophic Laboratories as freeware:
+the foundry released all of its fonts free of charge for personal and
+commercial use and permitted their free redistribution. The foundry has
+since dissolved; the fonts remain distributed as freeware by the usual
+archives (Font Squirrel, DaFont) under that grant. The files here are
+unmodified originals, renamed only (komika.hand.ttf -> KomikaHand-Regular.ttf
+and so on) so the four styles sort as one family beside the other shipped
+faces.
+
+Shipped for the Comics app's lettering. The family covers Western-European
+Latin only; text in other scripts falls back per character to the other
+shipped faces (see de/comics.py).
