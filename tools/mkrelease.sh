@@ -13,6 +13,43 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Buildroot invokes this file as a rootfs post-build hook.  Installing modules
+# here is deliberately after packages/firmware and before rootfs images are
+# generated, so PCI coldplug can find both modules and firmware on first boot.
+if [ "${1:-}" = "$ROOT/buildroot/output/target" ]; then
+    TARGET_DIR=$1
+    KBUILD="$ROOT/kbuild-desktop"
+    KREL="$(make -s -C "$KBUILD" kernelrelease)"
+    make -C "$KBUILD" modules_install INSTALL_MOD_PATH="$TARGET_DIR"
+    # depmod lives in /sbin on most hosts, and buildroot's hook environment
+    # (and an unprivileged user shell) may not carry sbin on PATH — which made
+    # this check die on a machine that has depmod perfectly well. Resolve it
+    # with sbin appended rather than trusting the inherited PATH.
+    DEPMOD="$(PATH="$PATH:/sbin:/usr/sbin" command -v depmod || true)"
+    [ -n "$DEPMOD" ] || {
+        echo "mkrelease: host depmod is required to package kernel modules" >&2
+        exit 1
+    }
+    "$DEPMOD" -b "$TARGET_DIR" "$KREL"
+
+    # Buildroot 2024.02 can select all AMDGPU firmware, but has no NVIDIA
+    # selector.  Add the vendored Turing tu10x and Ampere ga10x GSP/ancillary
+    # directories from the same pinned linux-firmware package.
+    FW_SRC=$(find "$ROOT/buildroot/output/build" -maxdepth 1 -type d \
+        -name 'linux-firmware-*' -print -quit)
+    [ -n "$FW_SRC" ] || {
+        echo "mkrelease: vendored linux-firmware build directory is missing" >&2
+        exit 1
+    }
+    mkdir -p "$TARGET_DIR/lib/firmware/nvidia"
+    for family in "$FW_SRC"/nvidia/tu10* "$FW_SRC"/nvidia/ga10*; do
+        [ -e "$family" ] || continue
+        cp -a "$family" "$TARGET_DIR/lib/firmware/nvidia/"
+    done
+    exit 0
+fi
+
 cd "$ROOT"
 
 VER="${NB_VERSION:-1.0}"
@@ -144,13 +181,20 @@ MAN="$OUTDIR/BUILD_MANIFEST.txt"
     echo "rootfs size:    $(du -hL "$ROOTFS" | cut -f1)"
     echo ""
     echo "artifacts:"
+    # if-fi, not `[ -f ] &&`: under set -e the && list's status-1 on a
+    # missing OPTIONAL .img (every --no-image build) killed the script right
+    # after the sha line — the manifest tail, MAPS-README and the staging
+    # tidy silently never ran. Found on the 1.8-composer spins, where BOTH
+    # builds died here while looking complete.
     for f in "$ISO" "$OUTDIR/notebookos-${VER}.img"; do
-        [ -f "$f" ] && printf '  %-40s %s\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+        if [ -f "$f" ]; then
+            printf '  %-40s %s\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+        fi
     done
     echo ""
     echo "sha256:"
     ( cd "$OUTDIR" && for f in notebookos-${VER}.iso notebookos-${VER}.img; do
-        [ -f "$f" ] && sha256sum "$f"
+        if [ -f "$f" ]; then sha256sum "$f"; fi
     done )
     echo ""
     echo "starting on a machine with Secure Boot switched on:"
