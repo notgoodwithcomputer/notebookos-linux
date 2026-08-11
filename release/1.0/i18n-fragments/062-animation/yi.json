@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d וואַריאַנט|%d וואַריאַנטן",
+ "%s copy": "קאָפּיע פֿון %s",
  "A sound could not be read, so it plays silent.": "א קלאַנג האָט זיך נישט געלאָזט לייענען, טאָ ער שפּילט שטיל.",
  "A sound file is missing: %s": "עס פֿעלט אַ קלאַנג־טעקע: %s",
  "Across": "האָריזאָנטאַל",

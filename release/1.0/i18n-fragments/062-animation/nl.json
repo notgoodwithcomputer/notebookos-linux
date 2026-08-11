@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d variant|%d varianten",
+ "%s copy": "Kopie van %s",
  "A sound could not be read, so it plays silent.": "Een geluid kon niet worden gelezen en blijft daarom stil.",
  "A sound file is missing: %s": "Er ontbreekt een geluidsbestand: %s",
  "Across": "Horizontaal",

@@ -1,4 +1,6 @@
 {
+ "%d take%s": "변형 %d개",
+ "%s copy": "%s 사본",
  "A sound could not be read, so it plays silent.": "소리를 읽을 수 없어 무음으로 재생됩니다.",
  "A sound file is missing: %s": "소리 파일이 없습니다: %s",
  "Across": "좌우",

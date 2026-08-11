@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d varyant",
+ "%s copy": "%s kopyası",
  "A sound could not be read, so it plays silent.": "Bir ses okunamadı, bu yüzden sessiz çalıyor.",
  "A sound file is missing: %s": "Bir ses dosyası eksik: %s",
  "Across": "Yatay",

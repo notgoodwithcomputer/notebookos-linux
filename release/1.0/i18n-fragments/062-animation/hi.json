@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d प्रति|%d प्रतियां",
+ "%s copy": "%s की नक़ल",
  "A sound could not be read, so it plays silent.": "एक आवाज़ पढ़ी नहीं जा सकी, इसलिए वह चुप बजती है।",
  "A sound file is missing: %s": "एक आवाज़ फ़ाइल नहीं मिली: %s",
  "Across": "आड़ा",

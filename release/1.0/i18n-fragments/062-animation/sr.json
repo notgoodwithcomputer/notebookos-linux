@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d varijanta|%d varijanti",
+ "%s copy": "Kopija %s",
  "A sound could not be read, so it plays silent.": "Jedan zvuk nije mogao da se pročita, pa svira tišinu.",
  "A sound file is missing: %s": "Nedostaje zvučna datoteka: %s",
  "Across": "Vodoravno",

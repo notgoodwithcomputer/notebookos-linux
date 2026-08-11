@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d つの違い",
+ "%s copy": "%s のコピー",
  "A sound could not be read, so it plays silent.": "サウンドを読み込めなかったため、無音で再生します。",
  "A sound file is missing: %s": "サウンドファイルが見つかりません: %s",
  "Across": "左右",

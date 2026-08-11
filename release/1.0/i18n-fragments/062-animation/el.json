@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d παραλλαγή|%d παραλλαγές",
+ "%s copy": "Αντίγραφο του %s",
  "A sound could not be read, so it plays silent.": "Ένας ήχος δεν διαβάστηκε, οπότε παίζει σιωπή.",
  "A sound file is missing: %s": "Λείπει ένα αρχείο ήχου: %s",
  "Across": "Οριζόντια",

@@ -10,7 +10,7 @@ import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import Gtk, Gdk, GLib, GdkPixbuf, Pango
+from gi.repository import Gtk, Gdk, GLib, GdkPixbuf, Pango, PangoCairo
 import nbapp
 import nbicons
 import nbpicker
@@ -89,6 +89,27 @@ CSS = b"""
 .animation-saved { color: #7FA98C; }
 .animation-unsaved { color: #C8341E; }
 """
+
+def _pango_layout(cr, text, size, bold=False):
+    """A Pango layout in the interface face (academics.py's helper — cairo's
+    toy text API draws .notdef boxes, or nothing at all, for every non-Latin
+    script the OS ships)."""
+    layout = PangoCairo.create_layout(cr)
+    fd = Pango.FontDescription('Nimbus Sans')
+    fd.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
+    fd.set_absolute_size(size * Pango.SCALE)
+    layout.set_font_description(fd)
+    layout.set_text(text, -1)
+    return layout
+
+
+def _show_text(cr, x, y, text, size=12, bold=False):
+    """Draw text with its BASELINE at y, the anchor cr.show_text used, so the
+    timeline keeps the geometry its rows were tuned with."""
+    layout = _pango_layout(cr, text, size, bold)
+    cr.move_to(x, y - layout.get_baseline() / Pango.SCALE)
+    PangoCairo.show_layout(cr, layout)
+
 
 def _rgb255(h):
     h = h.lstrip('#')
@@ -596,9 +617,17 @@ def wobble_take(source, cel_id, take_no, strength):
     out = surface(w, h)
     dst = out.get_data()
     seed = '%d:%d:%.3f' % (cel_id, take_no, strength)
+    noise_cache = ({}, {})
 
     def noise(gx, gy, axis):
-        return random.Random(seed + ':%d:%d:%d' % (gx, gy, axis)).uniform(-strength, strength)
+        """Return one deterministic grid value, constructing its RNG once."""
+        key = (gx, gy)
+        cached = noise_cache[axis]
+        if key not in cached:
+            point_seed = seed + ':%d:%d:%d' % (gx, gy, axis)
+            cached[key] = random.Random(point_seed).uniform(-strength,
+                                                            strength)
+        return cached[key]
 
     def field(x, y, axis):
         gx, gy = (x // 6, y // 6)
@@ -716,6 +745,24 @@ class AudioOut:
         self.available = True
         return True
 
+    def position_samples(self):
+        """Samples actually PLAYED, from the pipeline clock.
+
+        samples_delivered counts what the pump has pushed, which runs ahead
+        of the speaker by the sink's buffer; a mouth stamped against the
+        pushed count lands early. The pipeline's position query reports what
+        has really sounded; fall back to the pushed count when the query is
+        not answerable yet (first moments of a fresh pipeline)."""
+        if self._pipe is not None:
+            try:
+                from gi.repository import Gst
+                ok, position = self._pipe.query_position(Gst.Format.TIME)
+                if ok and position >= 0:
+                    return int(position * 48000 // Gst.SECOND)
+            except Exception:
+                pass
+        return self.samples_delivered
+
     def play_once(self, samples):
         position = 0
 
@@ -829,7 +876,11 @@ def _encoder_probe(ffmpeg):
         out = subprocess.run([ffmpeg, '-hide_banner', '-encoders'], capture_output=True, timeout=8).stdout.decode('utf-8', 'replace')
     except Exception:
         out = ''
-    names = {p[1] for line in out.splitlines() if len((p := line.split())) > 1}
+    names = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) > 1:
+            names.add(parts[1])
     return 'libx264' if 'libx264' in names else 'libopenh264' if 'libopenh264' in names else 'mpeg4'
 _ENCODERS = {}
 
@@ -1415,7 +1466,9 @@ class Animation(nbapp.AppWindow):
         for cel in self.doc.cels:
             row = Gtk.ListBoxRow()
             row.add(Gtk.Label(label=cel.name + '  ' +
-                              (_t('%d takes') % len(cel.takes)), xalign=0))
+                              (_t('%d take%s') % (len(cel.takes),
+                                                  's' if len(cel.takes) != 1
+                                                  else '')), xalign=0))
             row.cel_id = cel.id
             self.cel_list.add(row)
         self._refresh_layers()
@@ -1675,6 +1728,11 @@ class Animation(nbapp.AppWindow):
         if event.y < 40 and event.x > self.timeline.get_allocated_width() - 150:
             self._toggle_stamp_mouths()
             return True
+        if event.y < 36:
+            for left, right, index in getattr(self, '_scene_cards', []):
+                if left <= event.x <= right:
+                    self._switch_scene(index)
+                    return True
         frame = max(0, int((event.x - 20) // self.column_width))
         scene = self.doc.scenes[self.scene_i]
         self.playhead = min(scene['length'] - 1, frame)
@@ -2555,6 +2613,11 @@ class Animation(nbapp.AppWindow):
         cr.get_source().set_filter(cairo.FILTER_NEAREST if scale >= 1
                                    else cairo.FILTER_BILINEAR)
         cr.paint()
+        # the paper's cut edge: one hairline, so the canvas sits ON the mat
+        cr.set_line_width(1 / scale)
+        cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+        cr.rectangle(0, 0, self.doc.canvas[0], self.doc.canvas[1])
+        cr.stroke()
         if self.grid and scale >= 8:
             cr.set_line_width(1 / scale)
             cr.set_source_rgba(110 / 255, 105 / 255, 94 / 255, .45)
@@ -2578,19 +2641,40 @@ class Animation(nbapp.AppWindow):
         cr.paint()
         cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
         scene = self.doc.scenes[self.scene_i]
-        cr.move_to(20, 24)
-        cr.show_text(_t('Scenes') + '  ' + scene['name'])
-        cr.move_to(w.get_allocated_width() - 320, 24)
-        cr.show_text((_t('Loop') if self.loop else _t('Play')) + '  ' +
-                     self.readout.get_text())
+        _show_text(cr, 20, 24, _t('Scenes'))
+        # The scene strip: one card per scene (name + length), the active
+        # card washed, click-to-switch hit rects remembered for the press
+        # handler. Cards are the visible structure the strip promised.
+        x = 84
+        self._scene_cards = []
+        limit = w.get_allocated_width() - 340
+        for index, entry in enumerate(self.doc.scenes):
+            label = '%s  %d' % (entry['name'][:14], entry['length'])
+            width = 12 + 7 * len(label)
+            if x + width > limit:
+                _show_text(cr, x, 24, '…')
+                break
+            if index == self.scene_i:
+                cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+                cr.rectangle(x, 6, width, 24)
+                cr.fill()
+            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            cr.rectangle(x + .5, 6.5, width, 24)
+            cr.stroke()
+            cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+            _show_text(cr, x + 6, 24, label)
+            self._scene_cards.append((x, x + width, index))
+            x += width + 6
+        _show_text(cr, w.get_allocated_width() - 320, 24,
+                   (_t('Loop') if self.loop else _t('Play')) + '  ' +
+                   self.readout.get_text())
         cr.rectangle(w.get_allocated_width() - 150, 4, 146, 28)
         if self.stamp_mouths:
             cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
             cr.fill_preserve()
         cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
         cr.stroke()
-        cr.move_to(w.get_allocated_width() - 142, 23)
-        cr.show_text(_t('Stamp Mouths'))
+        _show_text(cr, w.get_allocated_width() - 142, 23, _t('Stamp Mouths'))
         top = 62
         for display_row, layer_index in enumerate(reversed(range(len(scene['layers'])))):
             layer = scene['layers'][layer_index]
@@ -2607,12 +2691,11 @@ class Animation(nbapp.AppWindow):
                 cr.fill()
                 cel = self.doc.cel(run['cel'])
                 cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
-                cr.move_to(left + 3, y + 15)
                 if width >= 42:
-                    cr.show_text(cel.name if cel else _t('Missing drawing'))
+                    _show_text(cr, left + 3, y + 15,
+                               cel.name if cel else _t('Missing drawing'))
                 if run.get('take', 0) == 0:
-                    cr.move_to(left + width - 10, y + 15)
-                    cr.show_text('~')
+                    _show_text(cr, left + width - 10, y + 15, '~')
         sound_top = top + LAYER_MAX * 22
         for row, sound in enumerate(scene['sounds']):
             y = sound_top + row * 22
@@ -2644,8 +2727,7 @@ class Animation(nbapp.AppWindow):
             except Exception:
                 pass
             cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
-            cr.move_to(left + 3, y + 15)
-            cr.show_text(os.path.basename(sound['path']))
+            _show_text(cr, left + 3, y + 15, os.path.basename(sound['path']))
             cr.arc(left + width - 8, y + 11, 3, 0, math.tau)
             if sound.get('mute'):
                 cr.fill()
@@ -2657,6 +2739,12 @@ class Animation(nbapp.AppWindow):
             cr.move_to(marker_x, 42)
             cr.line_to(marker_x, 60)
             cr.stroke()
+            # a small flag so a marker reads as a placed thing, not a glitch
+            cr.move_to(marker_x, 42)
+            cr.line_to(marker_x + 8, 45)
+            cr.line_to(marker_x, 48)
+            cr.close_path()
+            cr.fill()
         x = 20 + self.playhead * self.column_width
         cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
         cr.rectangle(x, 40, 1, 190)
@@ -2699,7 +2787,7 @@ class Animation(nbapp.AppWindow):
             return GLib.SOURCE_REMOVE
         if self.audio.available and self._audio_clips:
             frame = (self._play_origin +
-                     self.audio.samples_delivered // SPF[self.doc.fps])
+                     self.audio.position_samples() // SPF[self.doc.fps])
         else:
             elapsed = time.monotonic() - self._playing_started
             frame = self._play_origin + int(elapsed * self.doc.fps)

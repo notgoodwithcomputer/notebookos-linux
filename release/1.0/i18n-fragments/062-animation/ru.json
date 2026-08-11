@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d дубль|%d дублей",
+ "%s copy": "Копия %s",
  "A sound could not be read, so it plays silent.": "Звук не удалось прочитать, поэтому он молчит.",
  "A sound file is missing: %s": "Не хватает звукового файла: %s",
  "Across": "По горизонтали",

@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d wariant|%d wariantów",
+ "%s copy": "Kopia %s",
  "A sound could not be read, so it plays silent.": "Nie udało się odczytać dźwięku, więc gra cisza.",
  "A sound file is missing: %s": "Brakuje pliku dźwięku: %s",
  "Across": "Poziomo",

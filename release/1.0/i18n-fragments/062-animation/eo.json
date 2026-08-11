@@ -1,4 +1,6 @@
 {
+ "%d take%s": "%d varianto|%d variantoj",
+ "%s copy": "Kopio de %s",
  "A sound could not be read, so it plays silent.": "Sono ne legeblis, do ĝi restas silenta.",
  "A sound file is missing: %s": "Mankas sondosiero: %s",
  "Across": "Horizontale",
