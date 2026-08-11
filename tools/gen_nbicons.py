@@ -20,7 +20,11 @@ MAPPING = {
     "academic": "graduation-cap", "journal": "notebook-pen", "screenplay": "scroll-text",
     "tasks": "list-todo", "calendar": "calendar", "workout": "dumbbell",
     "cookbook": "cooking-pot", "mealplanner": "utensils", "ebook": "book",
-    "calculator": "calculator", "accounting": "scale", "bills": "mail",
+    # accounting: banknote, not scale — the scales read as JUSTICE, not money
+    # (design owner, 2026-08-10, on the 1.8 boot shot). banknote is money
+    # itself and currency-neutral; wallet/landmark/piggy-bank are the easy
+    # swaps if the note ever reads as a card.
+    "calculator": "calculator", "accounting": "banknote", "bills": "mail",
     "contacts": "contact-round", "messages": "message-circle-more",
     "g2048": "layout-grid", "tetris": "blocks", "gamepad": "gamepad-2",
     "mappin": "map-pin", "globe": "languages", "cartridge": "cassette-tape",

@@ -192,3 +192,9 @@ copy): the generator drift check AND the bounds checks at 16/24/48 all fail
 by name. Contact sheets + in-situ strip reviewed: legible at 16px, uniform
 professional weight throughout. Idempotence proven by the suite's
 regenerate-and-byte-compare. VERIFIED per M2.
+
+## Mapping correction (design owner, 2026-08-10, post-1.8 boot shot)
+accounting: scale → banknote. The scales read as JUSTICE, not money. First
+exercise of the promised one-word-remap flow: mapping edit + regenerate +
+suite (drift/uniqueness green) + a 16/22/24/48 proof strip. wallet /
+landmark / piggy-bank remain the documented easy swaps.
