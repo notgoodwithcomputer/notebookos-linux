@@ -1237,6 +1237,13 @@ class Animation(nbapp.AppWindow):
         self.timeline.connect('query-tooltip', self._timeline_tooltip)
         self.timeline.connect('motion-notify-event', self._timeline_motion)
         self.timeline.connect('button-release-event', self._timeline_release)
+        target = Gtk.TargetEntry.new('application/x-animation-cel',
+                                     Gtk.TargetFlags.SAME_APP, 0)
+        self.timeline.drag_dest_set(Gtk.DestDefaults.ALL, [target],
+                                    Gdk.DragAction.COPY)
+        self.timeline.connect('drag-motion', self._timeline_drag_motion)
+        self.timeline.connect('drag-data-received',
+                              self._timeline_drag_data_received)
         root.pack_start(self.timeline, False, False, 0)
         status = Gtk.Box()
         self.hint = Gtk.Label(label=_t('Drag to draw. Square tip, hard edges.'), xalign=0)
@@ -1772,10 +1779,82 @@ class Animation(nbapp.AppWindow):
             box.pack_start(words, True, True, 0)
             row.add(box)
             row.cel_id = cel.id
+            target = Gtk.TargetEntry.new('application/x-animation-cel',
+                                         Gtk.TargetFlags.SAME_APP, 0)
+            row.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target],
+                                Gdk.DragAction.COPY)
+            row.connect('drag-data-get', self._cel_drag_data_get, cel.id)
+            row.connect('drag-begin', self._cel_drag_begin, cel)
             self.cel_list.add(row)
         self._refresh_layers()
         self._refresh_project_palette()
         self.cel_list.show_all()
+
+    def _cel_drag_data_get(self, _row, _context, selection, _info,
+                           _time, cel_id):
+        """Put the private cel identity into a library-row drag."""
+        selection.set_text(str(cel_id), -1)
+
+    def _cel_drag_begin(self, _row, context, cel):
+        """Carry the library's real cel thumbnail under the pointer."""
+        Gtk.drag_set_icon_surface(context, self._cel_thumb_surface(cel))
+
+    def _timeline_drop_target(self, x, y):
+        """Map a drop through the exposure sheet's shared row geometry."""
+        scene = self.doc.scenes[self.scene_i]
+        if x < TL_GUTTER or y < TL_ROWS_TOP:
+            return None
+        row = int((y - TL_ROWS_TOP) // TL_ROW_H)
+        if not 0 <= row < len(scene['layers']):
+            return None
+        frame = int((x - TL_GUTTER) // self.column_width)
+        if not 0 <= frame < scene['length']:
+            return None
+        return (len(scene['layers']) - row - 1, frame)
+
+    def _timeline_drag_motion(self, _widget, context, x, y, time):
+        """Advertise COPY only over an actual exposure-sheet cell."""
+        if self._timeline_drop_target(x, y) is None:
+            Gdk.drag_status(context, Gdk.DragAction.DEFAULT, time)
+        else:
+            Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+        return True
+
+    def _timeline_drag_data_received(self, _widget, context, x, y,
+                                     selection, _info, time):
+        """Stamp a dragged library cel to the next exposure or scene end."""
+        target = self._timeline_drop_target(x, y)
+        try:
+            cel_id = int(selection.get_text())
+        except (TypeError, ValueError):
+            Gtk.drag_finish(context, False, False, time)
+            return
+        cel = self.doc.cel(cel_id)
+        if target is None or cel is None:
+            Gtk.drag_finish(context, False, False, time)
+            return
+        if target is None or cel is None:
+            Gtk.drag_finish(context, False, False, time)
+            return
+        layer_index, frame = target
+        scene = self.doc.scenes[self.scene_i]
+        runs = scene['layers'][layer_index]['runs']
+        next_start = min((run['start'] for run in runs
+                          if run['start'] > frame), default=scene['length'])
+        self._snapshot(_t('New Drawing'))
+        try:
+            self.sheet.stamp(layer_index,
+                             make_run(cel_id, frame, next_start - frame))
+        except ValueError:
+            self._undo.pop()
+            self._flash(_t('The exposures would overlap or run past the scene.'))
+            Gtk.drag_finish(context, False, False, time)
+            return
+        self.layer_i = layer_index
+        self.playhead = frame
+        self.selection = (layer_index, frame, next_start)
+        self._commit_change()
+        Gtk.drag_finish(context, True, False, time)
 
     def _refresh_layers(self):
         for child in self.layer_list.get_children():
