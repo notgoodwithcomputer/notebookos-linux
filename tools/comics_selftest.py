@@ -237,6 +237,63 @@ def undo_family():
     check("undo disabled Delete accelerators", len(doc.pages) > comics.PAGE_MIN or not comics.ComicDocument([comics.new_page() for _ in range(4)]).delete_page())
 
 
+def lazy_page_family():
+    """A fresh page must cost nothing until something actually needs its
+    pixels -- neither a decoded surface (the memory model's "only the
+    active page" promise) nor even a materialised PNG (the eager
+    write_to_png() this once cost ~170ms PER starter page, x8 at every
+    document construction, measured 396ms total construct against
+    illustrator's 120ms and 275MB RSS against its 15MB)."""
+    page = comics.new_page()
+    ly = page["layers"][0]
+    check("lazy page starts fully unmaterialised", ly.surface is None and ly.png is None)
+    doc = comics.ComicDocument()
+    check("lazy document construction touches nothing",
+          all(p["layers"][0].surface is None and p["layers"][0].png is None
+              for p in doc.pages))
+    surf = ly.decode()
+    check("lazy page decodes to the right size, opaque white",
+          (surf.get_width(), surf.get_height()) == (comics.PAGE_PX_W, comics.PAGE_PX_H)
+          and bytes(surf.get_data()[:4]) == comics.px4("#FFFFFF"))
+
+
+def duplicate_page_family():
+    """Page > Duplicate Page on the ACTIVE page -- the ordinary case, since
+    duplicating is something you do to the page you are looking at, which
+    is exactly the page most likely to hold a live cairo.ImageSurface.
+    copy.deepcopy cannot cross one (TypeError: cannot pickle
+    'cairo.ImageSurface' object), so this crashed outright before
+    add_page(duplicate=True) was routed through _duplicate_page()."""
+    doc = comics.ComicDocument()
+    page = doc.pages[doc.active]
+    surf = page["layers"][0].decode()
+    comics._write_pixel(surf, 12, 12, "#C8341E")
+    surf.flush()
+    page["panels"] = comics.panel_layout(3)
+    page["bubbles"] = [comics._bubble_defaults(40, 40)]
+    before_count = len(doc.pages)
+    try:
+        ok = doc.add_page(duplicate=True)
+        crashed = False
+    except TypeError:
+        ok, crashed = False, True
+    check("duplicate active decoded page does not crash", ok and not crashed)
+    if ok:
+        dup = doc.pages[doc.active]
+        dsurf = dup["layers"][0].decode()
+        dsurf.flush()
+        px = bytes(dsurf.get_data()[12 * dsurf.get_stride() + 12 * 4:
+                                    12 * dsurf.get_stride() + 12 * 4 + 4])
+        check("duplicate carries the source page's pixels",
+              px == comics.px4("#C8341E"))
+        check("duplicate carries panels and bubbles, independently",
+              dup["panels"] == page["panels"] and dup["panels"] is not page["panels"]
+              and dup["bubbles"] == page["bubbles"] and dup["bubbles"] is not page["bubbles"])
+        check("duplicate is an independent surface (editing one leaves the other alone)",
+              dup["layers"][0].surface is not page["layers"][0].surface)
+        check("duplicate page count grew by exactly one", len(doc.pages) == before_count + 1)
+
+
 def limits_family():
     doc = comics.ComicDocument([comics.new_page() for _ in range(comics.PAGE_MIN)])
     check("limits page minimum", not doc.delete_page())
@@ -524,6 +581,8 @@ auto_height_family()
 imposition_family()
 store_family()
 undo_family()
+lazy_page_family()
+duplicate_page_family()
 limits_family()
 interaction_family()
 migration_family()

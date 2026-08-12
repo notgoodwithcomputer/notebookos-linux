@@ -1612,3 +1612,95 @@ Motion lane is not touching either file (not my claim). Reporting so neither get
   Editor's) exports land on the mpeg4 fallback. `FFMPEG_GPL=y` is already
   set; enabling the x264 package is a one-line .config change that
   upgrades every export in the OS. Open, not decided.
+
+- **2026-08-11 ~02:5x AMENDMENT (animation lane): the 062 merge + unhide were
+  EXECUTED BY THE LANE**, per the user's overnight directive ("Continue
+  working on the app… Ship it by noon tomorrow"): fragment 062-animation
+  merged into the real catalogs via i18n_merge --apply (17×3470),
+  HIDDEN_APPS["Animation"] deleted, "animation" added to perf_baseline.APPS
+  (112 ms total, under the suite median). Unhidden battery on the REAL tree:
+  i18n_check clean ×17, menu_conformance 936 PASS, minsize en 787 / ru 867
+  at 1024×722, construct_all 41/41. Campaign's unhide checklist for 062 is
+  therefore DONE except the catalog/finder/tools commits, which still ride
+  the integration sweep (multi-lane files; the merge itself is in the
+  working tree only). Comics stays hidden — untouched.
+
+## 2026-08-11 (grid lane) — TWO packages SUITES ARE RED AT HEAD, NOT FROM THE RAIL WORK
+Found while converging packages' sidebar onto RAIL=240. **Both fail identically against a HEAD-ONLY copy of packages.py**, so neither is caused by the width change — proven by running each suite with PYTHONPATH pointed at a scratch tree holding `git show HEAD:...packages.py`, not by reading the diff and hoping.
+
+1. **`packages_removal_selftest` — CRASHES.** `AttributeError: 'Harness' object has no attribute '_save_view_prefs'`. `_set_app_removed` calls `self._save_view_prefs()` (present at HEAD), and the suite's own `Harness` stub has never gained the method. This is the same shape as the `_fill_sidebar` stub break the motion lane caused and fixed yesterday: **an app gains a call, a test's hand-written stub goes stale, and the suite then accuses the app.** Owner: whoever landed the packages view-persistence work (`bdedb01e`, "the packages sort survive a restart"). Fix is one line on the stub — but note it CRASHES rather than failing by name, so it also takes the whole suite down.
+
+2. **`packages_transition_selftest` — "the app opens on Installed" FAILS** (24 checks, 1 failed). Also red at HEAD. Almost certainly the same view-persistence change: if the app now restores the LAST view, it no longer opens on Installed, and the suite still pins the old contract. Someone needs to decide which is right — the persisted view is probably the intended behaviour and the CHECK is stale — but that is the owner's call, not the grid lane's.
+
+Neither is mine and I have not touched them. Flagging because both are `*_selftest.py`, so they are inside `run_all_gates`' glob and are reddening the aggregate run for everyone.
+
+## 2026-08-11 (comics lane) — Comics UNHIDDEN; three real defects found and fixed during the unhide's own due diligence
+
+- **comics → campaign · unhide EXECUTED, following the animation lane's
+  precedent from earlier tonight exactly**: fragment 059-comics merged into
+  the real catalogs via `i18n_merge --apply` (17×3545, +74 each — 6 of the
+  fragment's 80 keys had already been absorbed by generic-string overlap
+  since it was written; one real term_consistency fix applied to the
+  fragment first, see below), `HIDDEN_APPS["Comics"]` entry deleted,
+  `"comics"` added to `perf_baseline.APPS`. Unhidden battery on the REAL
+  tree: i18n_check clean ×17 at 3545, menu_conformance 987 PASS, full
+  minsize sweep ALL FIT (comics not even in the TIGHT list), icon_uniqueness
+  34/34, construct_all 41/41, data_safety 126/126, store_damage ALL PASS.
+  **Catalogs and finder.py left UNCOMMITTED for the integration sweep**,
+  same as 062 — comics.py, tools/comics_selftest.py and
+  tools/perf_baseline.py were committed directly (comics-only files, no
+  multi-lane risk).
+- **Before merging, checked every fragment key already present in the live
+  (multi-lane-dirty) catalogs for a homograph/inconsistency risk rather than
+  trusting `i18n_merge`'s unconditional overwrite blindly** — `grep`'d every
+  colliding English key's usage across `de/*.py` to rule out another app
+  owning the same key with a different established translation, then checked
+  each differing value against the catalog's OWN precedent (13 "Insert X"
+  keys for German settled `Bild einfügen` over the fragment's original
+  `Bild einsetzen`; 8 "Move X" menu-verb keys for Serbian settled the
+  fragment ITSELF needed fixing, `Premesti sloj` → `Pomeri sloj`, applied
+  before merging). Worth the ten minutes: a silent overwrite either way
+  would have been a real, easy-to-miss regression in a shared file.
+- **THREE real defects found and fixed while doing perf/correctness due
+  diligence on the unhide** (none were in scope of "flip the flag", all
+  three would have shipped to real users the moment the flag was flipped):
+  1. **`new_page()` handed every fresh Layer an already-decoded, already-
+     PAINTED 1650x2550 surface.** A brand-new 8-page document therefore
+     decoded and painted ALL EIGHT pages before a single pixel was drawn —
+     measured construct 396.5ms / 275MB RSS via `perf_baseline.py`, making
+     comics the single slowest, heaviest app in the OS at the moment it
+     became visible (illustrator: 120ms/15MB, novel: 114ms/19MB). Root
+     cause: the documented "only the active page is decoded" memory model
+     was never actually applied at CONSTRUCTION time, only at explicit page
+     SWITCHES.
+  2. **The SAME class of defect, worse, on the OPEN/LOAD path**:
+     `_parse_page` decoded every layer's PNG to validate its dimensions
+     and then KEPT that decoded surface on every page, unconditionally —
+     so opening ANY existing multi-page document (not just a fresh one)
+     permanently retained every page decoded. For a real 32-page book that
+     is 500+MB kept alive for pages nobody is looking at.
+  3. **`Page ▸ Duplicate Page` crashed outright** (`TypeError: cannot
+     pickle 'cairo.ImageSurface' object`) whenever the ACTIVE page had ever
+     been decoded — i.e. whenever you duplicate the page you are currently
+     looking at, the overwhelmingly ordinary case. `add_page(duplicate=True)`
+     called bare `copy.deepcopy()` on a page dict that can hold a live
+     cairo surface; deepcopy cannot cross one. No test exercised this at
+     all (the only existing add/delete-page check used `duplicate=False`).
+  Fixes: (1)+(2) — pages/layers now stay fully unmaterialised (`surface=
+  None, png=None`) until something genuinely needs pixels; a shared,
+  process-wide cached blank-page PNG (`_blank_page_png()`) absorbs the one
+  real ~170ms write_to_png() cost AT MOST ONCE per process, deferred off
+  the UI thread via the existing autosave worker's `_blank` marker rather
+  than forced synchronously. (3) — duplication now copies through each
+  layer's ENCODED form (`_duplicate_page()`), never through a live surface.
+  Measured after: construct 91.8ms/122.6ms total, 20.5MB RSS — in line with
+  novel/illustrator, no longer an outlier. 8 new selftest checks added
+  (`lazy_page_family`, `duplicate_page_family`), both red-proved by name
+  (sabotaging either regression reddens the exact check that should catch
+  it); full suite 76/76 with display.
+- Every one of the three fixes was VERIFIED through the real drawing path
+  (`_on_press`/`_on_release`/`_switch_page`), not just unit-level pokes —
+  a raw pixel write via `_write_pixel()` bypassing `.touch()` produced a
+  misleading false "content lost" result twice during investigation before
+  the real end-to-end path (strokes across real page switches, saved,
+  reloaded) confirmed both the app and the fix are correct.

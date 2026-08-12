@@ -489,7 +489,8 @@ def raster_bubble(bubble, surface=None):
 
 class Layer:
     def __init__(self, name="Layer 1", visible=True, opacity=100,
-                 surface=None, png=None, extra=None, dirty=None):
+                 surface=None, png=None, extra=None, dirty=None,
+                 blank_white=False):
         self.name = name
         self.visible = bool(visible)
         self.opacity = max(0, min(100, int(opacity)))
@@ -497,11 +498,23 @@ class Layer:
         self.png = png
         self._extra = dict(extra or {})
         self.dirty = (surface is not None and png is None) if dirty is None else bool(dirty)
+        # True only for a brand-new page's layer that has never been
+        # decoded, encoded or drawn on: its content (opaque white) is known
+        # without a real surface OR a real PNG existing yet. decode() and
+        # encode() materialise it lazily, on the first call that actually
+        # needs pixels -- writing a 1650x2550 solid-colour PNG measures
+        # ~170ms on this build, and PAGE_NEW=8 of them paid eagerly at
+        # document construction cost more than the rest of launch combined
+        # for a document nobody had drawn a single pixel into yet.
+        self._blank_white = blank_white
         self.revision = 0
 
     def decode(self):
         if self.surface is None:
-            self.surface = _decode(self.png) if self.png else _surface(False)
+            if self._blank_white:
+                self.surface = _surface(True)
+            else:
+                self.surface = _decode(self.png) if self.png else _surface(False)
         return self.surface
 
     def encode(self):
@@ -509,6 +522,11 @@ class Layer:
             return self.png
         if self.surface is not None:
             self.png = _png(self.surface)
+        elif self._blank_white:
+            # Shared, process-wide cache: whichever blank page is saved
+            # first pays the encode once, and every other still-blank page
+            # -- this session or a later one -- reuses the identical bytes.
+            self.png = _blank_page_png()
         elif self.png is None:
             self.png = _png(_surface(False))
         self.dirty = False
@@ -526,9 +544,48 @@ class Layer:
         return out
 
 
+_BLANK_PAGE_PNG = None
+
+
+def _blank_page_png():
+    """PNG bytes of one blank (opaque white) page -- Layer.encode()'s
+    fallback for a `blank_white` layer that must be serialised (saved)
+    before anything was ever drawn into it. Built and cached at most ONCE
+    per process, on whichever page hits that path first, and shared
+    (immutable bytes, so aliasing is free) by every blank page after it --
+    never built eagerly at document construction, since encoding a full
+    1650x2550 solid fill measures ~170ms and nothing needs it done before
+    the first save."""
+    global _BLANK_PAGE_PNG
+    if _BLANK_PAGE_PNG is None:
+        _BLANK_PAGE_PNG = _png(_surface(True))
+    return _BLANK_PAGE_PNG
+
+
 def new_page():
-    return {"layers": [Layer(surface=_surface(True))], "panels": [],
+    return {"layers": [Layer(blank_white=True)], "panels": [],
             "bubbles": [], "mask_gutters": False, "_extra": {}}
+
+
+def _duplicate_page(page):
+    """A copy of `page` fit to become a second, independent page.
+
+    `copy.deepcopy` cannot cross a live cairo.ImageSurface (it raises
+    TypeError: cannot pickle 'cairo.ImageSurface' object) -- and the ACTIVE
+    page, the one a person duplicates, is exactly the page most likely to
+    have a decoded surface, so Page > Duplicate Page on the page you are
+    looking at crashed outright. Each layer is copied through its
+    authoritative ENCODED form instead (the same bytes a save would write),
+    never through its live surface; encode() also caches that result back
+    onto the ORIGINAL layer, which is a harmless early save of work the
+    layer already owed the next autosave."""
+    layers = [Layer(ly.name, ly.visible, ly.opacity, png=ly.encode(),
+                    extra=dict(ly._extra)) for ly in page["layers"]]
+    return {"layers": layers,
+            "panels": copy.deepcopy(page["panels"]),
+            "bubbles": copy.deepcopy(page["bubbles"]),
+            "mask_gutters": page.get("mask_gutters", False),
+            "_extra": copy.deepcopy(page.get("_extra", {}))}
 
 
 def _page_serial(page):
@@ -571,7 +628,22 @@ def _parse_page(raw, errors, legacy=False):
             if (surface.get_width(), surface.get_height()) != expected:
                 raise ValueError("page layer size")
             if legacy:
+                # The upscale must be kept: a migrated layer has no `png`
+                # of its own yet (dirty=True below is what tells a later
+                # encode() to produce one), so its surface is the only
+                # record of the tripled content until the first save.
                 surface = _upscale_legacy(surface)
+            else:
+                # Validated; do not RETAIN the decode. _parse_page runs
+                # once per LAYER of every page a document has, at every
+                # open and every recovery-store reload -- keeping all of
+                # them decoded is 16.8 MB EACH held for pages nobody is
+                # looking at, which for a full 32-page book is 500+ MB
+                # against a memory model that promises at most the active
+                # (+ one ping-pong) page. `data` is the durable bytes;
+                # decode() rebuilds the surface lazily the moment a page
+                # actually becomes active.
+                surface = None
         except Exception:
             errors.append("A page layer could not be read.")
             data, surface = _png(_surface(False)), None
@@ -659,7 +731,7 @@ class ComicDocument:
         if len(self.pages) >= PAGE_MAX:
             return False
         at = self.active + 1 if index is None else max(0, min(len(self.pages), index))
-        page = copy.deepcopy(self.pages[self.active]) if duplicate else new_page()
+        page = _duplicate_page(self.pages[self.active]) if duplicate else new_page()
         self.pages.insert(at, page)
         self.active = at
         return True
@@ -884,8 +956,18 @@ def autosave_snapshot(doc):
                 surface = _copy_surface(layer.decode())
                 item["_surface"] = surface
                 updates.append((layer, layer.revision))
+            elif layer.png is None:
+                # Never decoded, never drawn on, never previously saved --
+                # a lazy blank_white layer. Its content is the shared
+                # blank-page bytes, but PRODUCING them (~170ms for a
+                # 1650x2550 solid fill) is exactly the encode work this
+                # worker exists to keep off the UI thread; calling
+                # layer.encode() right here would do it synchronously and
+                # erase the whole point of snapshotting first.
+                item["_blank"] = True
+                updates.append((layer, layer.revision))
             else:
-                item["_png"] = layer.encode()
+                item["_png"] = layer.png
             saved["layers"].append(item)
         out["pages"].append(saved)
     return out, updates
@@ -898,8 +980,11 @@ def write_autosave_snapshot(path, snapshot, job=None):
         for layer in page["layers"]:
             surface = layer.pop("_surface", None)
             raw = layer.pop("_png", None)
+            blank = layer.pop("_blank", None)
             if surface is not None:
                 raw = _png(surface)
+            elif blank:
+                raw = _blank_page_png()
             encoded.append(raw)
             layer["png"] = base64.b64encode(raw).decode("ascii")
     if job is not None:
