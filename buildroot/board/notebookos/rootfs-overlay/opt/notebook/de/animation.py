@@ -2275,7 +2275,10 @@ class Animation(nbapp.AppWindow):
                     if index == 'add':
                         self._new_scene()
                     else:
-                        self._switch_scene(index)
+                        # switching happens on release; a held press begins
+                        # a reorder drag along the strip
+                        self._scene_card_drag = {'index': index,
+                                                 'moved': False}
                     return True
             return True
         scene = self.doc.scenes[self.scene_i]
@@ -2348,6 +2351,31 @@ class Animation(nbapp.AppWindow):
         return True
 
     def _timeline_motion(self, _widget, event):
+        card_drag = getattr(self, '_scene_card_drag', None)
+        if card_drag is not None:
+            target = None
+            for left, right, index in getattr(self, '_scene_cards', []):
+                if index != 'add' and left <= event.x <= right:
+                    target = index
+                    break
+            if target is not None and target != card_drag['index']:
+                if not card_drag['moved']:
+                    self._snapshot(_t('Move Scene'))
+                    card_drag['moved'] = True
+                scenes = self.doc.scenes
+                scene = scenes.pop(card_drag['index'])
+                scenes.insert(target, scene)
+                if self.scene_i == card_drag['index']:
+                    self.scene_i = target
+                elif card_drag['index'] < self.scene_i <= target:
+                    self.scene_i -= 1
+                elif target <= self.scene_i < card_drag['index']:
+                    self.scene_i += 1
+                card_drag['index'] = target
+                self._scene_thumbs.clear()
+                self.sheet = Sheet(self.doc, self.scene_i)
+                self.timeline.queue_draw()
+            return True
         if getattr(self, '_ruler_drag', False):
             scene = self.doc.scenes[self.scene_i]
             frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
@@ -2408,6 +2436,14 @@ class Animation(nbapp.AppWindow):
 
     def _timeline_release(self, _widget, _event):
         handled = False
+        card_drag = getattr(self, '_scene_card_drag', None)
+        if card_drag is not None:
+            if card_drag['moved']:
+                self._commit_change()
+            else:
+                self._switch_scene(card_drag['index'])
+            self._scene_card_drag = None
+            handled = True
         if getattr(self, '_ruler_drag', False):
             self._ruler_drag = False
             handled = True
@@ -2639,8 +2675,14 @@ class Animation(nbapp.AppWindow):
                     widget.pack_start(choice, False, False, 0)
             elif kind == 'mouth-preview':
                 widget = Gtk.DrawingArea()
-                widget.set_size_request(300, 28)
+                widget.set_size_request(300, 72)
                 widget.connect('draw', self._draw_mouth_preview, state)
+                self._prompt_previews.append(widget)
+            elif kind == 'wobble-preview':
+                widget = Gtk.DrawingArea()
+                widget.set_size_request(120, 90)
+                widget._wobble_surface = None
+                widget.connect('draw', self._draw_wobble_preview)
                 self._prompt_previews.append(widget)
             else:
                 widget = Gtk.Entry(text=str(initial))
@@ -2673,6 +2715,9 @@ class Animation(nbapp.AppWindow):
         card_height = natural.height if natural.height > 1 else 220
         layer.move(card_window, max(0, (width - card_width) // 2),
                    max(0, (height - card_height) // 2))
+        for preview in self._prompt_previews:
+            if hasattr(preview, '_wobble_surface'):
+                self._schedule_wobble_preview(state)
 
     def _prompt_choice(self, button, state, key, value):
         if button.get_active():
@@ -2682,8 +2727,60 @@ class Animation(nbapp.AppWindow):
         state[key] = widget.get_value()
         for preview in self._prompt_previews:
             preview.queue_draw()
+            if hasattr(preview, '_wobble_surface'):
+                self._schedule_wobble_preview(state)
+
+    def _schedule_wobble_preview(self, state):
+        """Debounce the one generated take owned by the open Wobble card."""
+        source = getattr(self, '_prompt_preview_timer', 0)
+        if source:
+            GLib.source_remove(source)
+        self._prompt_preview_timer = GLib.timeout_add(
+            200, self._refresh_wobble_preview, state)
+
+    def _refresh_wobble_preview(self, state):
+        """Generate one deterministic chrome-only wobble preview take."""
+        self._prompt_preview_timer = 0
+        if self._prompt_layer is None:
+            return False
+        cel = self._active_cel()
+        if cel is None:
+            return False
+        strength = min(1.8, max(.7, state.get('strength', 1.1)))
+        preview = wobble_take(cel.decoded(0), cel.id, 2, strength)
+        for widget in self._prompt_previews:
+            if hasattr(widget, '_wobble_surface'):
+                widget._wobble_surface = preview
+                widget.queue_draw()
+        return False
+
+    def _draw_wobble_preview(self, widget, context):
+        """Overlay take zero and one wobbled take in the Wobble card."""
+        cel = self._active_cel()
+        if cel is None:
+            return False
+        context.set_antialias(cairo.ANTIALIAS_NONE)
+        width = widget.get_allocated_width()
+        height = widget.get_allocated_height()
+        scale = min(width / cel.w, height / cel.h)
+        left = (width - cel.w * scale) / 2
+        top = (height - cel.h * scale) / 2
+        context.save()
+        context.translate(left, top)
+        context.scale(scale, scale)
+        context.set_source_surface(cel.decoded(0), 0, 0)
+        context.get_source().set_filter(cairo.FILTER_BILINEAR)
+        context.paint()
+        preview = widget._wobble_surface
+        if preview is not None:
+            context.set_source_surface(preview, 0, 0)
+            context.get_source().set_filter(cairo.FILTER_BILINEAR)
+            context.paint_with_alpha(.5)
+        context.restore()
+        return False
 
     def _draw_mouth_preview(self, widget, context, state):
+        context.set_antialias(cairo.ANTIALIAS_NONE)
         slots = self._mouth_preview_slots(state.get('quiet', .10),
                                           state.get('loud', .45))
         width = max(1, widget.get_allocated_width())
@@ -2695,6 +2792,20 @@ class Animation(nbapp.AppWindow):
             context.set_source_rgb(*colours[min(2, slot - 1)])
             context.rectangle(index * cell, 0, math.ceil(cell), 28)
             context.fill()
+        layer = self.doc.scenes[self.scene_i]['layers'][self.layer_i]
+        mouth_slots = layer.get('mouth_slots') or []
+        for index, cel_id in enumerate(mouth_slots[:3]):
+            cel = self.doc.cel(cel_id)
+            if cel is None:
+                continue
+            thumb = self._cel_thumb_surface(cel)
+            x = index * 52
+            context.set_source_surface(thumb, x, 34)
+            context.get_source().set_filter(cairo.FILTER_BILINEAR)
+            context.paint()
+            context.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            context.rectangle(x + .5, 34.5, 44, 33)
+            context.stroke()
         return False
 
     def _apply_prompt(self, callback, state):
@@ -2704,6 +2815,10 @@ class Animation(nbapp.AppWindow):
 
     def _close_prompt(self):
         self._prompt_badges = []
+        source = getattr(self, '_prompt_preview_timer', 0)
+        if source:
+            GLib.source_remove(source)
+            self._prompt_preview_timer = 0
         if self._prompt_layer is None:
             return
         self._overlay.remove(self._prompt_layer)
@@ -2875,7 +2990,9 @@ class Animation(nbapp.AppWindow):
             return
         self._overlay_prompt('Add Wobble Takes…',
                              [('takes', 'Takes (3 or 5)', 3, 'int'),
-                              ('strength', 'Strength', 1.1, 'float')],
+                              ('strength', 'Strength', 1.1, 'float'),
+                              ('preview', 'Preview', None,
+                               'wobble-preview')],
                              'Add Wobble Takes', self._wobble_apply)
 
     def _wobble_apply(self, state):
@@ -3329,13 +3446,14 @@ class Animation(nbapp.AppWindow):
         Stamp Mouths box already used.
         """
         w_, h_ = 30, 28
-        if active:
+        if active and kind != 'mouths':
             cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
             cr.rectangle(x, y, w_, h_)
             cr.fill()
-        cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
-        cr.rectangle(x + .5, y + .5, w_, h_)
-        cr.stroke()
+        if kind != 'mouths':
+            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            cr.rectangle(x + .5, y + .5, w_, h_)
+            cr.stroke()
         ink = (154 / 255, 148 / 255, 132 / 255) if dim else (26 / 255, 25 / 255, 22 / 255)
         cr.set_source_rgb(*ink)
         cx, cy = x + w_ / 2, y + h_ / 2
@@ -3367,6 +3485,13 @@ class Animation(nbapp.AppWindow):
             for dot in range(self.onion):
                 cr.arc(cx - 3 + dot * 6, cy + 11, 1.5, 0, math.tau)
                 cr.fill()
+        elif kind == 'mouths':
+            # Two opposed arcs are the open-lips mark; no font glyph is asked
+            # to carry this transport meaning (Illustrator's painted-mark law).
+            cr.move_to(cx - 6, cy)
+            cr.curve_to(cx - 3, cy - 5, cx + 3, cy - 5, cx + 6, cy)
+            cr.curve_to(cx + 3, cy + 5, cx - 3, cy + 5, cx - 6, cy)
+            cr.stroke()
 
     def _scene_thumb(self, index):
         """A tiny frame-0 composite for a scene card, cached until an edit."""
@@ -3411,7 +3536,8 @@ class Animation(nbapp.AppWindow):
                 cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
                 cr.stroke()
                 cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
-                _show_text(cr, bx + 8, 23, _t('Stamp Mouths'), 11)
+                self._draw_mark_box(cr, bx + 1, 4, 'mouths')
+                _show_text(cr, bx + 26, 23, _t('Stamp Mouths'), 11)
                 self._transport.append((bx, bx + box_w, action))
                 bx -= 6
             else:
@@ -4215,6 +4341,10 @@ class Animation(nbapp.AppWindow):
         self._alive = False
         self._cancel.set()
         self._stop_playback()
+        source = getattr(self, '_prompt_preview_timer', 0)
+        if source:
+            GLib.source_remove(source)
+            self._prompt_preview_timer = 0
         if getattr(self, '_record_process', None):
             self._record_process.terminate()
         if self._save_timer:
