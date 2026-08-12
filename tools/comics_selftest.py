@@ -316,6 +316,38 @@ class DummyWidget:
     def set_text(self, _text): pass
 
 
+class DummyStyle:
+    def __init__(self): self.classes=set()
+    def add_class(self,name): self.classes.add(name)
+    def remove_class(self,name): self.classes.discard(name)
+
+
+class DummyControl:
+    def __init__(self): self.style=DummyStyle(); self.sensitive=True
+    def get_style_context(self): return self.style
+    def set_sensitive(self,on): self.sensitive=bool(on)
+
+
+def polish_feedback_family():
+    app=comics.Comics.__new__(comics.Comics); app.tool="pencil"
+    app.tool_buttons={name:DummyControl() for name,_label,_key in comics.TOOLS}
+    app.size_grp=DummyControl(); app.shape_grp=DummyControl(); app.bubble_group=DummyControl()
+    app._sync_tool_state()
+    check("polish initial pencil selected class", "sel" in app.tool_buttons["pencil"].style.classes)
+    samples=[]
+    for tool in ("pencil","fill","line","select"):
+        app.tool=tool; app._sync_tool_state(); samples.append((tool,app.size_grp.sensitive,app.shape_grp.sensitive,"dim" in app.size_grp.style.classes,"dim" in app.shape_grp.style.classes))
+    check("polish tool dim states size and shapes",
+          samples==[("pencil",True,False,False,True),("fill",False,False,True,True),("line",True,True,False,False),("select",False,False,True,True)],samples)
+    class Tip:
+        def __init__(self):self.text=None
+        def set_text(self,text):self.text=text
+    tip=Tip(); app._recent=["#385C78"]
+    pal=app._palette_tooltip(None,1,1,False,tip); pal_name=tip.text
+    recent=app._recent_tooltip(None,1,1,False,tip); recent_name=tip.text
+    check("polish palette recent tooltip names",pal and recent and pal_name==comics.palette_name(0) and recent_name==comics.mix_name("#385C78"))
+
+
 class Event:
     def __init__(self, x=0, y=0, button=1, state=0, keyval=0, direction=None,
                  event_type=None):
@@ -480,24 +512,41 @@ def zoom_tolerance_family():
 def gtk_family():
     if not os.environ.get("DISPLAY"):
         skip("dialog real Panel Layout overlay widgets", "DISPLAY is absent")
+        skip("dialog panel preset buttons drive all six states", "DISPLAY is absent")
+        skip("dialog mix sliders preview and apply", "DISPLAY is absent")
+        skip("dialog initial tool selected after construct", "DISPLAY is absent")
         skip("dialog real bubble editor widgets", "DISPLAY is absent")
         skip("undo all window destructive operations", "DISPLAY is absent")
         return
     from gi.repository import Gtk
     if not Gtk.init_check(None)[0]:
         skip("dialog real Panel Layout overlay widgets", "GTK display unavailable")
+        skip("dialog panel preset buttons drive all six states", "GTK display unavailable")
+        skip("dialog mix sliders preview and apply", "GTK display unavailable")
+        skip("dialog initial tool selected after construct", "GTK display unavailable")
         skip("dialog real bubble editor widgets", "GTK display unavailable")
         skip("undo all window destructive operations", "GTK display unavailable")
         return
     app = comics.Comics()
+    check("dialog initial tool selected after construct",
+          app.tool_buttons["pencil"].get_style_context().has_class("sel"))
     app._panel_layout_prompt()
     widgets = app._dialog_widgets
-    widgets["preset"].set_active(4)
+    states=[]
+    for index,button in enumerate(widgets["preset"]):
+        button.clicked(); states.append(widgets["preset_state"]["preset"])
     widgets["margin"].set_text("31")
     widgets["gutter"].set_text("15")
     buttons = [x for x in app._prompt_layer.get_children()]
-    check("dialog real Panel Layout overlay widgets", widgets["preset"].get_active() == 4)
+    check("dialog real Panel Layout overlay widgets", widgets["preset_state"]["preset"] == 5)
+    check("dialog panel preset buttons drive all six states",states==list(range(6)),states)
     app._close_prompt()
+    app._recent=["#385C78"]; app._mix_prompt(); mix_widgets=app._dialog_widgets
+    mix_widgets["sliders"][0].set_value(17); mix_widgets["sliders"][1].set_value(34); mix_widgets["sliders"][2].set_value(51)
+    mix_widgets["apply"]()
+    check("dialog mix sliders preview and apply",
+          mix_widgets["mix"]["rgb"]==[17,34,51] and app.color=="#112233" and app.colour_name.get_text()==comics.mix_name("#112233") and app._recent[0]=="#112233")
+    app._close_prompt(run_cancel=False)
     app.doc.pages[0]["bubbles"].append(comics._bubble_defaults())
     app._bubble_editor(0)
     view = app._dialog_widgets["text"]
@@ -589,6 +638,7 @@ migration_family()
 fill_perf_family()
 autosave_family()
 zoom_tolerance_family()
+polish_feedback_family()
 gtk_family()
 store_cycle_family()
 print("%d checks: %d PASS, %d SKIP, %d FAIL" %

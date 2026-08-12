@@ -139,14 +139,68 @@ def mix_name(colour):
 
 CSS = b"""
 .comics { background: #FCFBF8; color: #1A1916; }
-.comics * { border-radius: 0; }
 .comics-dock, .comics-side { background: #FCFBF8; }
 .comics-mat { background: #DED4C2; }
-.comics-group { color: #6E695E; }
+.comics-group { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
+                 font-weight: 700; }
+.comics-toolbtn { min-height: 30px; padding: 0 8px; background: #FCFBF8;
+                  border: 1px solid #C9C4B6; border-radius: 8px;
+                  box-shadow: none; }
+.comics-toolbtn:hover { background: #F4F2EC; }
+.comics-toolname { font-size: 12px; color: #1A1916; }
+.comics-toolbtn.sel { background: #C8341E; border-color: #C8341E; }
+.comics-toolbtn.sel:hover { background: #B12C18; border-color: #B12C18; }
+.comics-toolbtn.sel .comics-toolname { color: #FCFBF8; font-weight: 600; }
+.comics-stepbtn { min-width: 30px; min-height: 30px; padding: 0;
+                  background: #FCFBF8; border: 1px solid #C9C4B6;
+                  border-radius: 8px; box-shadow: none; }
+.comics-stepbtn:hover { background: #F4F2EC; }
+.comics-stepbtn.sel { background: #EAE3D2; border-color: #B3AD9E; }
+.comics-stepbtn.wide { padding: 0 9px; }
+.comics-marklabel { font-size: 12px; color: #1A1916; }
+.dim .comics-group, .dim label, .dim .comics-marklabel { color: #B3AD9E; }
+.dim .comics-stepbtn { background: #F4F2EC; border-color: #D7D2C5; }
+.dim .comics-stepbtn.sel { background: #EFEBE0; border-color: #D7D2C5; }
+.dim entry { color: #B3AD9E; background: #F4F2EC; border-color: #D7D2C5; }
 .comics-row { border-bottom: 1px solid #C9C4B6; }
 .comics-row:checked { background: #EAE3D2; }
-.comics button.selected { background: #EAE3D2; }
-.comics-prompt { background: #FCFBF8; border: 1px solid #C9C4B6; padding: 24px; }
+.comics-prow { border-radius: 6px; }
+.comics-prow.active { background: #FCFBF8; box-shadow: inset 3px 0 0 #C8341E; }
+.comics-lrow { padding: 8px 10px; border-radius: 6px; box-shadow: none;
+               background: transparent; border: none; }
+.comics-lrow:hover { background: #F4F2EC; }
+.comics-lrow.active { background: #FCFBF8; box-shadow: inset 3px 0 0 #C8341E; }
+.comics-lname { font-size: 14px; color: #1A1916; }
+.comics-lrow.active .comics-lname { font-weight: 600; }
+.comics-lopacity { font-size: 11px; color: #9A9484; }
+.comics-eyebtn { min-width: 26px; min-height: 26px; padding: 0;
+                 background: transparent; border: none; box-shadow: none; }
+.comics-prompt { background: #FCFBF8; border: 1px solid #1A1916;
+                  padding: 24px; min-width: 330px; }
+.comics-prompttitle { font-family: "Newsreader","Liberation Serif",serif;
+                      font-size: 20px; color: #1A1916; }
+.comics-promptbody { font-size: 14px; color: #6E695E; }
+.comics-promptok { min-height: 34px; padding: 0 18px; border: 1px solid #1A1916;
+                   border-radius: 8px; background: #1A1916; color: #FCFBF8;
+                   box-shadow: none; font-size: 14px; font-weight: 600; }
+.comics-promptok:hover { background: #2A2620; }
+.comics-promptcancel { min-height: 34px; padding: 0 16px; color: #2A2620;
+                       border: 1px solid #C9C4B6; border-radius: 8px;
+                       background: #FCFBF8; box-shadow: none; font-size: 14px; }
+.comics-promptcancel:hover { background: #F4F2EC; }
+.comics-promptdestructive { min-height: 34px; padding: 0 16px; color: #C8341E;
+                            border: 1px solid #E0B3AA; border-radius: 8px;
+                            background: #FCFBF8; box-shadow: none; font-size: 14px; }
+.comics-promptdestructive:hover { background: #F6E7E3; }
+.comics-promptok label { color: #FCFBF8; }
+.comics-promptdestructive label { color: #C8341E; }
+.comics-presetbtn { min-height: 28px; padding: 0 8px; background: #FCFBF8;
+                    border: 1px solid #C9C4B6; border-radius: 8px;
+                    box-shadow: none; }
+.comics-presetbtn:hover { background: #F4F2EC; }
+.comics-presetbtn.sel { background: #EAE3D2; border-color: #B3AD9E; }
+.comics-swatchbtn { padding: 0; margin: 0; min-width: 26px; min-height: 26px;
+                    background: transparent; border: none; box-shadow: none; }
 .comics-scrim { background: rgba(26,25,22,0.28); }
 .comics .opacity trough { min-height: 4px; background: #D7D2C5;
                           border: none; border-radius: 100px; }
@@ -1116,33 +1170,42 @@ class Comics(nbapp.AppWindow):
         self.tool_buttons = {}
         for i, (ident, name, key) in enumerate(TOOLS):
             btn = Gtk.Button(); toolbox=Gtk.Box(spacing=5)
+            btn.set_relief(Gtk.ReliefStyle.NONE); btn.get_style_context().add_class("comics-toolbtn")
             if ident in nbicons.ICONS: toolicon=nbicons.image(ident,15)
             else:
                 toolicon=Gtk.DrawingArea(); toolicon.set_size_request(15,15); toolicon._kind=ident; toolicon.connect("draw",self._draw_tool_mark)
-            toolbox.pack_start(toolicon,False,False,0); toolbox.pack_start(Gtk.Label(label=_t(name)),True,True,0); btn.add(toolbox)
+            toolname=Gtk.Label(label=_t(name)); toolname.get_style_context().add_class("comics-toolname"); toolname.set_ellipsize(Pango.EllipsizeMode.END)
+            toolbox.pack_start(toolicon,False,False,0); toolbox.pack_start(toolname,True,True,0); btn.add(toolbox)
             btn.set_tooltip_text(_t(TOOL_HINTS[ident]) + " (" + key + ")")
             btn.connect("clicked", lambda _w, ident=ident: self._set_tool(ident))
             grid.attach(btn, i % 2, i // 2, 1, 1)
             self.tool_buttons[ident] = btn
         dock.pack_start(grid, False, False, 0)
-        dock.pack_start(self._caption("Brush size"),False,False,4)
-        size_row=Gtk.Box(spacing=4); minus=Gtk.Button(label="-"); plus=Gtk.Button(label="+"); self.size_lbl=Gtk.Label(label=str(self.size)); minus.connect("clicked",lambda *_:self._set_size(self.size-1)); plus.connect("clicked",lambda *_:self._set_size(self.size+1)); size_row.pack_start(minus,False,False,0); size_row.pack_start(self.size_lbl,True,True,0); size_row.pack_start(plus,False,False,0); dock.pack_start(size_row,False,False,0)
-        self.ramp_area=Gtk.DrawingArea(); self.ramp_area.set_size_request(-1,30); self.ramp_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.ramp_area.connect("draw",self._draw_ramp); self.ramp_area.connect("button-press-event",self._on_ramp_press); dock.pack_start(self.ramp_area,False,False,0)
-        dock.pack_start(self._caption("Shapes"),False,False,4)
-        shape_row=Gtk.Box(spacing=4); self.outline_btn=Gtk.ToggleButton(label=_t("Outline")); self.filled_btn=Gtk.ToggleButton(label=_t("Filled")); self.outline_btn.set_active(True); self.outline_btn.connect("clicked",lambda *_:self._set_fill_shapes(False)); self.filled_btn.connect("clicked",lambda *_:self._set_fill_shapes(True)); shape_row.pack_start(self.outline_btn,True,True,0); shape_row.pack_start(self.filled_btn,True,True,0); dock.pack_start(shape_row,False,False,0)
+        self.size_grp=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=4); self.size_grp.pack_start(self._caption("Brush size"),False,False,4)
+        size_row=Gtk.Box(spacing=4); minus=Gtk.Button(label="-"); plus=Gtk.Button(label="+"); self.size_lbl=Gtk.Label(label=str(self.size)); minus.connect("clicked",lambda *_:self._set_size(self.size-1)); plus.connect("clicked",lambda *_:self._set_size(self.size+1)); size_row.pack_start(minus,False,False,0); size_row.pack_start(self.size_lbl,True,True,0); size_row.pack_start(plus,False,False,0)
+        for button in (minus,plus): button.set_relief(Gtk.ReliefStyle.NONE); button.get_style_context().add_class("comics-stepbtn"); button.get_child().get_style_context().add_class("comics-marklabel")
+        self.size_grp.pack_start(size_row,False,False,0)
+        self.ramp_area=Gtk.DrawingArea(); self.ramp_area.set_size_request(-1,30); self.ramp_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.ramp_area.connect("draw",self._draw_ramp); self.ramp_area.connect("button-press-event",self._on_ramp_press)
+        self.size_grp.pack_start(self.ramp_area,False,False,0); dock.pack_start(self.size_grp,False,False,0)
+        self.shape_grp=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=4); self.shape_grp.pack_start(self._caption("Shapes"),False,False,4)
+        shape_row=Gtk.Box(spacing=4); self.outline_btn=Gtk.ToggleButton(label=_t("Outline")); self.filled_btn=Gtk.ToggleButton(label=_t("Filled")); self.outline_btn.set_active(True); self.outline_btn.connect("clicked",lambda *_:self._set_fill_shapes(False)); self.filled_btn.connect("clicked",lambda *_:self._set_fill_shapes(True)); shape_row.pack_start(self.outline_btn,True,True,0); shape_row.pack_start(self.filled_btn,True,True,0)
+        for button in (self.outline_btn,self.filled_btn): button.set_relief(Gtk.ReliefStyle.NONE); button.get_style_context().add_class("comics-stepbtn"); button.get_style_context().add_class("wide"); button.get_child().get_style_context().add_class("comics-marklabel")
+        self.shape_grp.pack_start(shape_row,False,False,0); dock.pack_start(self.shape_grp,False,False,0)
         dock.pack_start(self._caption("Bubble"),False,False,4)
         self.bubble_group=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=4); styles=Gtk.Grid(column_spacing=3,row_spacing=3); self.bubble_style="speech"; self.bubble_size=40; self.bubble_bold=False; self.bubble_italic=False
         for i,style in enumerate(("speech","thought","shout","caption")):
-            btn=Gtk.Button(label=_t(style.title())); btn.connect("clicked",lambda _w,style=style:self._bubble_setting("style",style)); styles.attach(btn,i%2,i//2,1,1)
+            btn=Gtk.Button(label=_t(style.title())); btn.set_relief(Gtk.ReliefStyle.NONE); btn.get_style_context().add_class("comics-stepbtn"); btn.get_style_context().add_class("wide"); btn.get_child().get_style_context().add_class("comics-marklabel"); btn.connect("clicked",lambda _w,style=style:self._bubble_setting("style",style)); styles.attach(btn,i%2,i//2,1,1)
         self.bubble_group.pack_start(styles,False,False,0); bramp=Gtk.Box(spacing=2)
         for n in BUBBLE_SIZES:
-            btn=Gtk.Button(label=str(n)); btn.set_tooltip_text(_t("%d px")%n); btn.connect("clicked",lambda _w,n=n:self._bubble_setting("size",n)); bramp.pack_start(btn,True,True,0)
-        self.bubble_group.pack_start(bramp,False,False,0); fmt=Gtk.Box(spacing=4); bold=Gtk.ToggleButton(label="B"); italic=Gtk.ToggleButton(label="I"); bold.connect("toggled",lambda w:self._bubble_setting("bold",w.get_active())); italic.connect("toggled",lambda w:self._bubble_setting("italic",w.get_active())); fmt.pack_start(bold,False,False,0); fmt.pack_start(italic,False,False,0); self.bubble_group.pack_start(fmt,False,False,0); dock.pack_start(self.bubble_group,False,False,0)
+            btn=Gtk.Button(label=str(n)); btn.set_relief(Gtk.ReliefStyle.NONE); btn.get_style_context().add_class("comics-stepbtn"); btn.get_child().get_style_context().add_class("comics-marklabel"); btn.set_tooltip_text(_t("%d px")%n); btn.connect("clicked",lambda _w,n=n:self._bubble_setting("size",n)); bramp.pack_start(btn,True,True,0)
+        self.bubble_group.pack_start(bramp,False,False,0); fmt=Gtk.Box(spacing=4); bold=Gtk.ToggleButton(label="B"); italic=Gtk.ToggleButton(label="I")
+        for button in (bold,italic): button.set_relief(Gtk.ReliefStyle.NONE); button.get_style_context().add_class("comics-stepbtn"); button.get_child().get_style_context().add_class("comics-marklabel")
+        bold.connect("toggled",lambda w:self._bubble_setting("bold",w.get_active())); italic.connect("toggled",lambda w:self._bubble_setting("italic",w.get_active())); fmt.pack_start(bold,False,False,0); fmt.pack_start(italic,False,False,0); self.bubble_group.pack_start(fmt,False,False,0); dock.pack_start(self.bubble_group,False,False,0)
         dock.pack_start(self._caption("Colour"),False,False,4)
-        colour_row=Gtk.Box(spacing=8); self.colour_chip=Gtk.DrawingArea(); self.colour_chip.set_size_request(32,24); self.colour_chip.connect("draw",self._draw_colour_chip); self.colour_name=Gtk.Label(label=mix_name(self.color),xalign=0); colour_row.pack_start(self.colour_chip,False,False,0); colour_row.pack_start(self.colour_name,True,True,0); dock.pack_start(colour_row,False,False,0)
+        colour_row=Gtk.Box(spacing=8); self.colour_chip=Gtk.DrawingArea(); self.colour_chip.set_size_request(32,24); self.colour_chip.connect("draw",self._draw_colour_chip); self.colour_name=Gtk.Label(label=mix_name(self.color),xalign=0); self.colour_name.set_ellipsize(Pango.EllipsizeMode.END); colour_row.pack_start(self.colour_chip,False,False,0); colour_row.pack_start(self.colour_name,True,True,0); dock.pack_start(colour_row,False,False,0)
         mix=Gtk.Button(label=_t("Mix Colour\u2026")); mix.connect("clicked",lambda *_:self._mix_prompt()); dock.pack_start(mix,False,False,0)
-        self.palette_area=Gtk.DrawingArea(); self.palette_area.set_size_request(PAL_COLS*13,7*13); self.palette_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.palette_area.connect("draw",self._draw_palette); self.palette_area.connect("button-press-event",self._on_palette_press); dock.pack_start(self.palette_area,False,False,0)
-        dock.pack_start(self._caption("Recent"),False,False,2); self.recent_area=Gtk.DrawingArea(); self.recent_area.set_size_request(PAL_COLS*13,13); self.recent_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.recent_area.connect("draw",self._draw_recent); self.recent_area.connect("button-press-event",self._on_recent_press); dock.pack_start(self.recent_area,False,False,0)
+        self.palette_area=Gtk.DrawingArea(); self.palette_area.set_size_request(PAL_COLS*13,7*13); self.palette_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.palette_area.set_has_tooltip(True); self.palette_area.connect("draw",self._draw_palette); self.palette_area.connect("button-press-event",self._on_palette_press); self.palette_area.connect("query-tooltip",self._palette_tooltip); dock.pack_start(self.palette_area,False,False,0)
+        dock.pack_start(self._caption("Recent"),False,False,2); self.recent_area=Gtk.DrawingArea(); self.recent_area.set_size_request(PAL_COLS*13,13); self.recent_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.recent_area.set_has_tooltip(True); self.recent_area.connect("draw",self._draw_recent); self.recent_area.connect("button-press-event",self._on_recent_press); self.recent_area.connect("query-tooltip",self._recent_tooltip); dock.pack_start(self.recent_area,False,False,0)
         self.canvas = Gtk.DrawingArea()
         self.canvas.set_size_request(PAGE_PX_W, PAGE_PX_H)
         self.canvas.connect("draw", self._draw_canvas)
@@ -1231,6 +1294,8 @@ class Comics(nbapp.AppWindow):
                 ("-", "Zoom out  (-)", lambda *_: self._step_zoom(-1)),):
             b = Gtk.Button(label=text)
             b.set_relief(Gtk.ReliefStyle.NONE)
+            b.get_style_context().add_class("comics-stepbtn")
+            b.get_child().get_style_context().add_class("comics-marklabel")
             b.set_tooltip_text(_t(tip))
             b.connect("clicked", action)
             zrow.pack_start(b, False, False, 0)
@@ -1242,6 +1307,8 @@ class Comics(nbapp.AppWindow):
                 ("Fit", "Fit to window  (0)", lambda *_: self._zoom_fit())):
             b = Gtk.Button(label=text)
             b.set_relief(Gtk.ReliefStyle.NONE)
+            b.get_style_context().add_class("comics-stepbtn")
+            b.get_child().get_style_context().add_class("comics-marklabel")
             b.set_tooltip_text(_t(tip))
             b.connect("clicked", action)
             zrow.pack_start(b, False, False, 0)
@@ -1255,6 +1322,8 @@ class Comics(nbapp.AppWindow):
         self.content.pack_start(root, True, True, 0)
         self.show_all()
         self._new_scratch()
+        self._set_fill_shapes(self.fill_shapes)
+        self._sync_tool_state()
         self._render_chip("unsaved")
 
     def _caption(self, text):
@@ -1517,19 +1586,21 @@ class Comics(nbapp.AppWindow):
         total = len(self.doc.pages)
         for i in range(total):
             row = Gtk.ListBoxRow()
+            row.get_style_context().add_class("comics-prow")
             box=Gtk.Box(spacing=8); thumb=Gtk.DrawingArea(); thumb.set_size_request(96,148); thumb._page_i=i; thumb.connect("draw",self._draw_thumbnail)
             box.pack_start(thumb,False,False,6)
             text=Gtk.Label(label=self._page_name(i),xalign=0); text.set_ellipsize(Pango.EllipsizeMode.END); box.pack_start(text,True,True,0); row.add(box)
             row.connect("button-press-event", lambda _w, _e, i=i: self._switch_page(i))
             self.pages_box.add(row)
             if i == self.doc.active:
+                row.get_style_context().add_class("active")
                 self.pages_box.select_row(row)
         page=self.doc.pages[self.doc.active]
         for index in reversed(range(len(page["layers"]))):
-            ly=page["layers"][index]; row=Gtk.ListBoxRow(); box=Gtk.Box(spacing=6)
-            eye=Gtk.ToggleButton(); eye.set_active(ly.visible); eye.add(nbicons.image("eye" if ly.visible else "eyeoff",15)); eye.connect("toggled",lambda w,index=index:self._toggle_layer(index,w.get_active())); box.pack_start(eye,False,False,0)
-            box.pack_start(Gtk.Label(label=ly.name,xalign=0),True,True,0); box.pack_start(Gtk.Label(label="%d%%"%ly.opacity),False,False,6); row.add(box); row.connect("button-press-event",lambda _w,_e,index=index:self._select_layer(index)); self.layers_box.add(row)
-            if index==self.active_layer:self.layers_box.select_row(row)
+            ly=page["layers"][index]; row=Gtk.ListBoxRow(); row.get_style_context().add_class("comics-lrow"); box=Gtk.Box(spacing=6)
+            eye=Gtk.ToggleButton(); eye.set_relief(Gtk.ReliefStyle.NONE); eye.get_style_context().add_class("comics-eyebtn"); eye.set_active(ly.visible); eye.add(nbicons.image("eye" if ly.visible else "eyeoff",15)); eye.connect("toggled",lambda w,index=index:self._toggle_layer(index,w.get_active())); box.pack_start(eye,False,False,0)
+            lname=Gtk.Label(label=ly.name,xalign=0); lname.get_style_context().add_class("comics-lname"); lname.set_ellipsize(Pango.EllipsizeMode.END); box.pack_start(lname,True,True,0); opacity=Gtk.Label(label="%d%%"%ly.opacity); opacity.get_style_context().add_class("comics-lopacity"); box.pack_start(opacity,False,False,6); row.add(box); row.connect("button-press-event",lambda _w,_e,index=index:self._select_layer(index)); self.layers_box.add(row)
+            if index==self.active_layer:row.get_style_context().add_class("active");self.layers_box.select_row(row)
         if len(page["layers"])==1:
             hint=Gtk.ListBoxRow(); hint.set_sensitive(False)
             hint_lbl=Gtk.Label(label=_t("Add a layer to draw over the Background without changing it."),xalign=0)
@@ -2039,10 +2110,17 @@ class Comics(nbapp.AppWindow):
         if ident not in ("select","bubble","panel","picker"):
             self.previous_tool=ident
         self.tool = ident
-        for key,button in self.tool_buttons.items():
-            button.get_style_context().add_class("selected") if key==ident else button.get_style_context().remove_class("selected")
-        self.bubble_group.set_sensitive(ident in ("select","bubble"))
+        self._sync_tool_state()
         self._refresh()
+
+    def _sync_tool_state(self):
+        for key,button in self.tool_buttons.items():
+            button.get_style_context().add_class("sel") if key==self.tool else button.get_style_context().remove_class("sel")
+        for group,on in ((self.size_grp,self.tool in {"pencil","brush","eraser","line","rect","ellipse"}),
+                         (self.shape_grp,self.tool in {"line","rect","ellipse"})):
+            group.set_sensitive(on)
+            group.get_style_context().remove_class("dim") if on else group.get_style_context().add_class("dim")
+        self.bubble_group.set_sensitive(self.tool in ("select","bubble"))
 
     def _set_size(self,size):
         self.size=max(SIZE_MIN,min(SIZE_MAX,int(size))); self.size_lbl.set_text(str(self.size)); self.ramp_area.queue_draw(); self.canvas.queue_draw()
@@ -2059,6 +2137,8 @@ class Comics(nbapp.AppWindow):
 
     def _set_fill_shapes(self,filled):
         self.fill_shapes=bool(filled); self.outline_btn.set_active(not filled); self.filled_btn.set_active(filled)
+        self.outline_btn.get_style_context().remove_class("sel") if filled else self.outline_btn.get_style_context().add_class("sel")
+        self.filled_btn.get_style_context().add_class("sel") if filled else self.filled_btn.get_style_context().remove_class("sel")
 
     def _bubble_setting(self,key,value):
         # explicit, not setattr: the self_attr audit must be able to prove no
@@ -2071,12 +2151,26 @@ class Comics(nbapp.AppWindow):
             before=self._snapshot(); bubble=self.doc.pages[self.doc.active]["bubbles"][self.selection[1]]; bubble[key]=value; grow_bubble(bubble); self._push(before,"Edit Bubble"); self._touch_page(self.doc.active)
 
     def _draw_colour_chip(self,area,cr):
-        cr.set_source_rgb(*_rgb(self.color)); cr.rectangle(0,0,area.get_allocated_width(),area.get_allocated_height()); cr.fill(); return False
+        cr.set_source_rgb(*_rgb(self.color)); cr.rectangle(0,0,area.get_allocated_width(),area.get_allocated_height()); cr.fill(); cr.set_source_rgb(*_rgb("#C9C4B6")); cr.set_line_width(1); cr.rectangle(.5,.5,area.get_allocated_width()-1,area.get_allocated_height()-1); cr.stroke(); return False
+
+    def _paint_swatch(self,cr,x,y,colour,selected,size=12):
+        cr.set_source_rgb(*_rgb(colour)); cr.rectangle(x,y,size,size); cr.fill()
+        if selected:
+            cr.set_source_rgb(*_rgb("#FCFBF8")); cr.set_line_width(2); cr.rectangle(x+1.5,y+1.5,size-3,size-3); cr.stroke()
+            cr.set_source_rgb(*_rgb("#C8341E"))
+        else: cr.set_source_rgb(*_rgb("#C9C4B6"))
+        cr.set_line_width(1); cr.rectangle(x+.5,y+.5,size-1,size-1); cr.stroke()
 
     def _draw_palette(self,_area,cr):
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
         for i,colour in enumerate(PALETTE):
-            x=(i%PAL_COLS)*13; y=(i//PAL_COLS)*13; cr.set_source_rgb(*_rgb(colour)); cr.rectangle(x,y,12,12); cr.fill()
+            x=(i%PAL_COLS)*13; y=(i//PAL_COLS)*13; self._paint_swatch(cr,x,y,colour,colour.upper()==self.color.upper())
         return False
+
+    def _palette_tooltip(self,_area,x,y,_keyboard,tip):
+        col,row=int(x)//13,int(y)//13; index=row*PAL_COLS+col
+        if col<0 or col>=PAL_COLS or int(x)%13>=12 or int(y)%13>=12 or not 0<=index<len(PALETTE):return False
+        tip.set_text(palette_name(index)); return True
 
     def _on_palette_press(self,_area,ev):
         col,row=int(ev.x)//13,int(ev.y)//13; index=row*PAL_COLS+col
@@ -2088,8 +2182,14 @@ class Comics(nbapp.AppWindow):
         return True
 
     def _draw_recent(self,_area,cr):
-        for i,colour in enumerate(self._recent[:16]):cr.set_source_rgb(*_rgb(colour));cr.rectangle(i*13,0,12,12);cr.fill()
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        for i,colour in enumerate(self._recent[:16]):self._paint_swatch(cr,i*13,0,colour,colour.upper()==self.color.upper())
         return False
+
+    def _recent_tooltip(self,_area,x,y,_keyboard,tip):
+        index=int(x)//13
+        if y<0 or y>=12 or int(x)%13>=12 or not 0<=index<len(self._recent):return False
+        tip.set_text(mix_name(self._recent[index])); return True
 
     def _on_recent_press(self,_area,ev):
         index=int(ev.x)//13
@@ -2097,16 +2197,33 @@ class Comics(nbapp.AppWindow):
         return True
 
     def _mix_prompt(self):
-        state={"colour":self.color}; entry=Gtk.Entry(text=self.color); entry.connect("changed",lambda w:state.update(colour=w.get_text()))
+        try: mix={"rgb":[int(self.color[i:i+2],16) for i in (1,3,5)]}
+        except (ValueError,IndexError): mix={"rgb":[0,0,0]}
+        content=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=12); well=Gtk.DrawingArea(); well.set_size_request(-1,44)
+        def draw_well(area,cr):
+            r,g,b=mix["rgb"]; cr.set_source_rgb(r/255.,g/255.,b/255.); cr.rectangle(0,0,area.get_allocated_width(),area.get_allocated_height()); cr.fill(); cr.set_source_rgb(*_rgb("#C9C4B6")); cr.set_line_width(1); cr.rectangle(.5,.5,area.get_allocated_width()-1,area.get_allocated_height()-1); cr.stroke(); return False
+        well.connect("draw",draw_well); content.pack_start(well,False,False,0)
+        name=Gtk.Label(label=mix_name("#%02X%02X%02X"%tuple(mix["rgb"])),xalign=0); content.pack_start(name,False,False,0); sliders=[]
+        def repaint(): well.queue_draw(); name.set_text(mix_name("#%02X%02X%02X"%tuple(mix["rgb"])))
+        def load(colour):
+            mix["rgb"]=[int(colour[i:i+2],16) for i in (1,3,5)]
+            for i,scale in enumerate(sliders):scale.set_value(mix["rgb"][i])
+            repaint()
+        if self._recent:
+            recent=Gtk.Box(spacing=6)
+            for colour in self._recent[:8]:
+                button=Gtk.Button(); button.set_relief(Gtk.ReliefStyle.NONE); button.get_style_context().add_class("comics-swatchbtn"); button.set_tooltip_text(mix_name(colour)); area=Gtk.DrawingArea(); area.set_size_request(26,26); area._colour=colour
+                area.connect("draw",lambda w,cr:self._paint_swatch(cr,0,0,w._colour,w._colour.upper()==self.color.upper(),26)); button.add(area); button.connect("clicked",lambda _w,colour=colour:load(colour)); recent.pack_start(button,False,False,0)
+            content.pack_start(recent,False,False,0)
+        for index,label in enumerate(("Red","Green","Blue")):
+            row=Gtk.Box(spacing=12); row.pack_start(Gtk.Label(label=_t(label),xalign=0),False,False,0); scale=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,0,255,1); scale.set_draw_value(False); scale.set_value(mix["rgb"][index]); scale.get_style_context().add_class("opacity")
+            scale.connect("value-changed",lambda w,index=index:(mix["rgb"].__setitem__(index,int(round(w.get_value()))),repaint())); sliders.append(scale); row.pack_start(scale,True,True,0); content.pack_start(row,False,False,0)
         def apply():
-            value=state["colour"].strip().upper()
-            if len(value)==7 and value.startswith("#"):
-                try:_rgb(value)
-                except Exception:return
-                self.color=value; self.colour_name.set_text(mix_name(value)); self.colour_chip.queue_draw(); self._recent=[value]+[x for x in self._recent if x!=value]
-                try:nbapp.atomic_write_json(PREFS_FILE,{"recent":self._recent[:16]})
-                except Exception:pass
-        self._overlay_prompt("Mix Colour","Type a colour code, like #385C78.",[("Cancel",None),("Apply",apply)],entry)
+            value="#%02X%02X%02X"%tuple(mix["rgb"]); self.color=value; self.colour_name.set_text(mix_name(value)); self.colour_chip.queue_draw(); self._recent=[value]+[x for x in self._recent if x!=value]; self.recent_area.queue_draw()
+            try:nbapp.atomic_write_json(PREFS_FILE,{"recent":self._recent[:16]})
+            except Exception:pass
+        self._overlay_prompt("Mix a colour","Red, green and blue, 0 to 255.",[("Cancel",None,"cancel"),("Apply",apply,"primary")],content)
+        self._dialog_widgets={"mix":mix,"well":well,"name":name,"sliders":sliders,"apply":apply}
 
     def _set_zoom(self, zoom):
         self.zoom = max(ZOOM_MIN, min(ZOOM_MAX, zoom))
@@ -2200,12 +2317,13 @@ class Comics(nbapp.AppWindow):
     def _panel_layout_prompt(self):
         state = {"preset": 3, "margin": "90", "gutter": "42"}
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        combo = Gtk.ComboBoxText()
-        for label in ("1", "2 rows", "3 rows", "2x2", "2x3", "3x3"):
-            combo.append_text(_t(label))
-        combo.set_active(3)
-        combo.connect("changed", lambda w: state.update(preset=w.get_active()))
-        content.pack_start(combo, False, False, 0)
+        presets=Gtk.Grid(column_spacing=6,row_spacing=6); preset_buttons=[]
+        def choose(index):
+            state["preset"]=index
+            for i,button in enumerate(preset_buttons):button.get_style_context().add_class("sel") if i==index else button.get_style_context().remove_class("sel")
+        for index,(rows,cols) in enumerate(((1,1),(2,1),(3,1),(2,2),(3,2),(3,3))):
+            button=Gtk.Button(); button.set_relief(Gtk.ReliefStyle.NONE); button.get_style_context().add_class("comics-presetbtn"); area=Gtk.DrawingArea(); area.set_size_request(36,28); area._grid=(rows,cols); area.connect("draw",self._draw_panel_preset); button.add(area); button.connect("clicked",lambda _w,index=index:choose(index)); preset_buttons.append(button); presets.attach(button,index%3,index//3,1,1)
+        choose(3); content.pack_start(presets,False,False,0)
         entries = []
         for label, key in (("Margin", "margin"), ("Gutter", "gutter")):
             row = Gtk.Box(spacing=8)
@@ -2227,7 +2345,13 @@ class Comics(nbapp.AppWindow):
             self._push(before, "Panel Layout")
         self._overlay_prompt("Panel Layout", "Choose a panel grid.",
                              [("Cancel", None), ("Apply", apply)], content)
-        self._dialog_widgets = {"preset": combo, "margin": entries[0], "gutter": entries[1]}
+        self._dialog_widgets = {"preset": preset_buttons, "preset_state": state, "margin": entries[0], "gutter": entries[1]}
+
+    def _draw_panel_preset(self,area,cr):
+        rows,cols=area._grid; x,y,w,h=8.5,2.5,19,23; cr.set_source_rgb(*_rgb("#1A1916")); cr.set_line_width(1); cr.rectangle(x,y,w,h); cr.stroke()
+        for col in range(1,cols):cr.move_to(x+w*col/cols,y);cr.line_to(x+w*col/cols,y+h)
+        for row in range(1,rows):cr.move_to(x,y+h*row/rows);cr.line_to(x+w,y+h*row/rows)
+        cr.stroke(); return False
 
     def _bubble_editor(self, index, new_before=None):
         bubble = self.doc.pages[self.doc.active]["bubbles"][index]
@@ -2292,8 +2416,9 @@ class Comics(nbapp.AppWindow):
         layer.put(scrim, 0, 0)
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         card.get_style_context().add_class("comics-prompt")
-        card.pack_start(Gtk.Label(label=_t(title), xalign=0), False, False, 0)
+        title_label=Gtk.Label(label=_t(title), xalign=0); title_label.get_style_context().add_class("comics-prompttitle"); card.pack_start(title_label, False, False, 0)
         bd = Gtk.Label(label=_t(body), xalign=0)
+        bd.get_style_context().add_class("comics-promptbody")
         bd.set_line_wrap(True)
         bd.set_max_width_chars(38)
         card.pack_start(bd, False, False, 0)
@@ -2302,8 +2427,12 @@ class Comics(nbapp.AppWindow):
         row = Gtk.Box(spacing=8)
         row.set_halign(Gtk.Align.END)
         focus_btn = None
-        for label, callback in buttons:
+        for index,item in enumerate(buttons):
+            label,callback=item[:2]
+            role=item[2] if len(item)>2 else ("cancel" if index==0 else "primary" if index==len(buttons)-1 else "cancel")
             btn = Gtk.Button(label=_t(label))
+            btn.set_relief(Gtk.ReliefStyle.NONE)
+            btn.get_style_context().add_class({"primary":"comics-promptok","destructive":"comics-promptdestructive"}.get(role,"comics-promptcancel"))
             btn.connect("clicked", lambda _w, cb=callback: (self._close_prompt(run_cancel=False), cb and cb())[1])
             row.pack_start(btn, False, False, 0)
             # keyboard focus rests on the safe first button (Cancel), so a
@@ -2433,7 +2562,7 @@ class Comics(nbapp.AppWindow):
         if os.path.exists(path) and not state.get("replace"):
             next_state=dict(state); next_state["replace"]=True
             self._overlay_prompt("Replace file?", _t("\u201c%s\u201d already exists in Documents. Replace it?") % name,
-                                 [("Cancel",None),("Replace",lambda:self._export(next_state))])
+                                 [("Cancel",None,"cancel"),("Replace",lambda:self._export(next_state),"destructive")])
             return
         cache = collections.OrderedDict()
         covers = {0, 1, len(self.doc.pages) - 2, len(self.doc.pages) - 1}
@@ -2564,8 +2693,9 @@ class Comics(nbapp.AppWindow):
         save_label = "Save As\u2026" if self._store_read_only else "Save"
         save_cb = self._save_as if self._store_read_only else self._autosave
         self._overlay_prompt("Not saved", nbapp.save_failure_reason(self._save_error, COMICS_FILE),
-                             [("Cancel", None), ("Discard", self._discard_and_close),
-                              (save_label, save_cb)])
+                             [("Cancel", None, "cancel"),
+                              ("Discard", self._discard_and_close, "destructive"),
+                              (save_label, save_cb, "primary")])
         return True
 
     def _discard_and_close(self):
