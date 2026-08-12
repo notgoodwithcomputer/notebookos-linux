@@ -789,6 +789,23 @@ def undo_family():
     shutil.rmtree(scratch)
 
 
+def _bind_all(fake, module=animation):
+    """Bind every zero-argument-ish query method menu_items may reach for.
+
+    menu_items asks the app questions (what is selected, is there room),
+    and each new question broke this fake with an AttributeError the app
+    itself never had. Binding by inspection means the next question is
+    answered automatically instead of reddening the suite for a defect
+    that does not exist.
+    """
+    for name in ("_room_for", "_project_frames", "_cel_in_use",
+                 "_active_cel", "_takes_cel"):
+        if hasattr(module.Animation, name) and not hasattr(fake, name):
+            setattr(fake, name, types.MethodType(
+                getattr(module.Animation, name), fake))
+    return fake
+
+
 def menu_fake(scene_count=1):
     fake = types.SimpleNamespace()
     fake.doc = animation.AnimationDocument()
@@ -817,6 +834,7 @@ def menu_fake(scene_count=1):
                  "_add_sound", "_record_prompt", "_remove_sound"):
         setattr(fake, name, lambda *_args, **_kwargs: None)
     fake._selected_sound = None
+    _bind_all(fake)
     return fake
 
 

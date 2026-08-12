@@ -147,6 +147,7 @@
  "The animation has no drawings. Drawing on the canvas makes one.": "アニメーションに絵がありません。キャンバスに描くと1枚できます。",
  "The damaged Animation store was preserved.": "壊れたアニメーションの保存データは保全されました。",
  "The exposures would overlap or run past the scene.": "配置が重なるか、シーンからはみ出します。",
+ "The film is at its full length.": "この作品は長さの上限に達しています。",
  "The recording is saved in Music.": "録音はミュージックに保存されます。",
  "The waveform could not be drawn.": "波形を描けませんでした。",
  "This file could not be read as an Animation project. It was left untouched.": "このファイルはアニメーション作品として読み込めませんでした。ファイルには手を付けていません。",

@@ -2133,8 +2133,15 @@ class Animation(nbapp.AppWindow):
             ]
         if name == 'Scene':
             return [
-                ('New Scene', self._new_scene if len(self.doc.scenes) < SCENE_MAX else None),
-                ('Duplicate Scene', self._duplicate_scene if len(self.doc.scenes) < SCENE_MAX else None),
+                ('New Scene',
+                 self._new_scene
+                 if (len(self.doc.scenes) < SCENE_MAX and
+                     self._room_for(self.doc.fps * 8)) else None),
+                ('Duplicate Scene',
+                 self._duplicate_scene
+                 if (len(self.doc.scenes) < SCENE_MAX and
+                     self._room_for(self.doc.scenes[self.scene_i]['length']))
+                 else None),
                 ('Delete Scene', self._delete_scene if len(self.doc.scenes) > 1 else None),
                 nbapp.SEP,
                 ('Move Scene Left', (lambda: self._move_scene(-1)) if self.scene_i else None),
@@ -3135,6 +3142,9 @@ class Animation(nbapp.AppWindow):
                              'Sounds stay where they are.')
 
     def _insert_apply(self, state):
+        if not self._room_for(state['count']):
+            self._flash(_t('The film is at its full length.'))
+            return
         self._snapshot(_t('Insert Frames'))
         if self.sheet.insert(self.playhead, state['count']):
             self._commit_change()
@@ -3189,8 +3199,21 @@ class Animation(nbapp.AppWindow):
             markers.sort(key=lambda marker: marker['frame'])
         self._commit_change()
 
+    def _project_frames(self):
+        """Every frame the film currently holds, across all its scenes."""
+        return sum(scene['length'] for scene in self.doc.scenes)
+
+    def _room_for(self, frames):
+        """Whether the film can grow by this many frames and stay inside
+        PROJECT_FRAME_MAX — the cap the spec set so a project stays inside
+        the memory of the machine it was made for."""
+        return self._project_frames() + frames <= PROJECT_FRAME_MAX
+
     def _new_scene(self, *_):
         if len(self.doc.scenes) >= SCENE_MAX:
+            return
+        if not self._room_for(self.doc.fps * 8):
+            self._flash(_t('The film is at its full length.'))
             return
         self._snapshot(_t('New Scene'))
         self.doc.scenes.insert(self.scene_i + 1,
@@ -3201,6 +3224,9 @@ class Animation(nbapp.AppWindow):
 
     def _duplicate_scene(self, *_):
         if len(self.doc.scenes) >= SCENE_MAX:
+            return
+        if not self._room_for(self.doc.scenes[self.scene_i]['length']):
+            self._flash(_t('The film is at its full length.'))
             return
         self._snapshot(_t('Duplicate Scene'))
         duplicate = copy.deepcopy(self.doc.scenes[self.scene_i])
@@ -3263,6 +3289,9 @@ class Animation(nbapp.AppWindow):
                            for sound in scene['sounds'])
         if orphan_run or orphan_sound:
             self._flash(_t('Move drawings and sounds inside the new scene length first.'))
+            return
+        if not self._room_for(length - scene['length']):
+            self._flash(_t('The film is at its full length.'))
             return
         self._snapshot(_t('Scene Length'))
         scene['length'] = length
