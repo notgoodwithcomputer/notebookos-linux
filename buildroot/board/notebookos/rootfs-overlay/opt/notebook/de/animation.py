@@ -2843,9 +2843,20 @@ class Animation(nbapp.AppWindow):
         self.canvas.queue_draw()
         self.timeline.queue_draw()
 
-    def _update_playhead(self):
+    def _update_playhead(self, targeted=False):
+        """Move the playhead and repaint what actually changed.
+
+        B5 asks an animation to invalidate its own allocation and no more.
+        A playing film moves one red line, one readout and one dot: with
+        `targeted` the sheet repaints those strips instead of all of it,
+        which is the difference between 6% and 60% of a frame budget on
+        the software renderer this OS is measured against. Anything that
+        can change the sheet's CONTENT leaves targeted False.
+        """
         scene = self.doc.scenes[self.scene_i]
         self.playhead = max(0, min(scene['length'] - 1, self.playhead))
+        previous_origin = self.view_origin
+        previous_x = getattr(self, '_playhead_x', None)
         self._follow_playhead()
         seconds, frame = divmod(self.playhead, self.doc.fps)
         minutes, seconds = divmod(seconds, 60)
@@ -2854,7 +2865,20 @@ class Animation(nbapp.AppWindow):
                                    (_t('Scene %d of %d') %
                                     (self.scene_i + 1, len(self.doc.scenes))))
         self.canvas.queue_draw()
-        self.timeline.queue_draw()
+        moved_view = self.view_origin != previous_origin
+        current_x = self._frame_to_x(self.playhead)
+        if targeted and not moved_view and previous_x is not None:
+            height = TL_ROWS_TOP + (LAYER_MAX + 2) * TL_ROW_H + 12
+            for x in (previous_x, current_x):
+                self.timeline.queue_draw_area(int(x) - 6, 0, 18, height)
+            width = self.timeline.get_allocated_width()
+            # the transport readout, and the extent band's whole row
+            self.timeline.queue_draw_area(width - 380, 0, 240, TL_STRIP_H)
+            self.timeline.queue_draw_area(
+                0, TL_ROWS_TOP + (LAYER_MAX + 2) * TL_ROW_H, width, 10)
+        else:
+            self.timeline.queue_draw()
+        self._playhead_x = current_x
 
     def _new_drawing(self, *_):
         self._snapshot(_t('New Drawing'))
@@ -3261,13 +3285,13 @@ class Animation(nbapp.AppWindow):
 
     def _step_back(self, *_):
         self.playhead = max(0, self.playhead - 1)
-        self._update_playhead()
+        self._update_playhead(targeted=True)
         self._scrub_frame()
 
     def _step_forward(self, *_):
         scene = self.doc.scenes[self.scene_i]
         self.playhead = min(scene['length'] - 1, self.playhead + 1)
-        self._update_playhead()
+        self._update_playhead(targeted=True)
         self._scrub_frame()
 
     def _go_start(self, *_):
@@ -4356,7 +4380,7 @@ class Animation(nbapp.AppWindow):
                 return GLib.SOURCE_REMOVE
         if frame != self.playhead:
             self.playhead = frame
-            self._update_playhead()
+            self._update_playhead(targeted=True)
         return GLib.SOURCE_CONTINUE
 
     def _scene_audio_clips(self):
