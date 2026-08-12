@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d кадр/с",
  "%d take%s": "%d дубль|%d дублей",
  "%s copy": "Копия %s",
  "A sound could not be read, so it plays silent.": "Звук не удалось прочитать, поэтому он молчит.",
@@ -28,6 +29,7 @@
  "Colour swatches": "Образцы цвета",
  "Completed: %s": "Готово: %s",
  "Copy Frame as Image": "Копировать кадр как изображение",
+ "Delete Drawing": "Удалить рисунок",
  "Delete Scene": "Удалить сцену",
  "Destination": "Назначение",
  "Down": "По вертикали",

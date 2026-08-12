@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d fps",
  "%d take%s": "%d varyant",
  "%s copy": "%s kopyası",
  "A sound could not be read, so it plays silent.": "Bir ses okunamadı, bu yüzden sessiz çalıyor.",
@@ -28,6 +29,7 @@
  "Colour swatches": "Renk örnekleri",
  "Completed: %s": "Tamamlandı: %s",
  "Copy Frame as Image": "Kareyi resim olarak kopyala",
+ "Delete Drawing": "Çizimi sil",
  "Delete Scene": "Sahneyi sil",
  "Destination": "Hedef",
  "Down": "Dikey",

@@ -1,4 +1,5 @@
 {
+ "%d fps": "초당 %d프레임",
  "%d take%s": "변형 %d개",
  "%s copy": "%s 사본",
  "A sound could not be read, so it plays silent.": "소리를 읽을 수 없어 무음으로 재생됩니다.",
@@ -28,6 +29,7 @@
  "Colour swatches": "색 견본",
  "Completed: %s": "완료: %s",
  "Copy Frame as Image": "프레임을 그림으로 복사",
+ "Delete Drawing": "그림 삭제",
  "Delete Scene": "장면 삭제",
  "Destination": "저장 위치",
  "Down": "상하",

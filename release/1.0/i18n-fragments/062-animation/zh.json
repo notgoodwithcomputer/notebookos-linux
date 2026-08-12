@@ -1,4 +1,5 @@
 {
+ "%d fps": "每秒 %d 帧",
  "%d take%s": "%d 个变体",
  "%s copy": "%s 副本",
  "A sound could not be read, so it plays silent.": "有一段声音无法读取，只能静音播放。",
@@ -28,6 +29,7 @@
  "Colour swatches": "色样",
  "Completed: %s": "已完成：%s",
  "Copy Frame as Image": "把这一帧复制为图片",
+ "Delete Drawing": "删除这张画",
  "Delete Scene": "删除场景",
  "Destination": "保存位置",
  "Down": "上下",

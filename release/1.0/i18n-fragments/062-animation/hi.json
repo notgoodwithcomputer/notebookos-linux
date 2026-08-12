@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d फ़्रेम/से",
  "%d take%s": "%d प्रति|%d प्रतियां",
  "%s copy": "%s की नक़ल",
  "A sound could not be read, so it plays silent.": "एक आवाज़ पढ़ी नहीं जा सकी, इसलिए वह चुप बजती है।",
@@ -28,6 +29,7 @@
  "Colour swatches": "रंग नमूने",
  "Completed: %s": "पूरा हुआ: %s",
  "Copy Frame as Image": "फ़्रेम को चित्र की तरह कॉपी करें",
+ "Delete Drawing": "चित्र मिटाएं",
  "Delete Scene": "दृश्य मिटाएं",
  "Destination": "गंतव्य",
  "Down": "खड़ा",

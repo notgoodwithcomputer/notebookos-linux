@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d fps",
  "%d take%s": "%d variant|%d varianten",
  "%s copy": "Kopie van %s",
  "A sound could not be read, so it plays silent.": "Een geluid kon niet worden gelezen en blijft daarom stil.",
@@ -28,6 +29,7 @@
  "Colour swatches": "Kleurstalen",
  "Completed: %s": "Klaar: %s",
  "Copy Frame as Image": "Beeldje als afbeelding kopiëren",
+ "Delete Drawing": "Tekening verwijderen",
  "Delete Scene": "Scène verwijderen",
  "Destination": "Bestemming",
  "Down": "Verticaal",

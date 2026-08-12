@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d kl./s",
  "%d take%s": "%d wariant|%d wariantów",
  "%s copy": "Kopia %s",
  "A sound could not be read, so it plays silent.": "Nie udało się odczytać dźwięku, więc gra cisza.",
@@ -28,6 +29,7 @@
  "Colour swatches": "Próbki kolorów",
  "Completed: %s": "Ukończono: %s",
  "Copy Frame as Image": "Kopiuj klatkę jako obraz",
+ "Delete Drawing": "Usuń rysunek",
  "Delete Scene": "Usuń scenę",
  "Destination": "Miejsce docelowe",
  "Down": "Pionowo",

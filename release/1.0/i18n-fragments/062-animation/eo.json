@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d kadroj/s",
  "%d take%s": "%d varianto|%d variantoj",
  "%s copy": "Kopio de %s",
  "A sound could not be read, so it plays silent.": "Sono ne legeblis, do ĝi restas silenta.",
@@ -28,6 +29,7 @@
  "Colour swatches": "Kolorspecimenoj",
  "Completed: %s": "Finite: %s",
  "Copy Frame as Image": "Kopii kadron kiel bildon",
+ "Delete Drawing": "Forigi la desegnaĵon",
  "Delete Scene": "Forigi la scenon",
  "Destination": "Celo",
  "Down": "Vertikale",

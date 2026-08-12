@@ -1210,6 +1210,7 @@ class Animation(nbapp.AppWindow):
                                  Gdk.EventMask.BUTTON_RELEASE_MASK)
         self.cel_list.connect('button-press-event', self._cel_list_press)
         self.cel_list.connect('row-activated', self._cel_row_activated)
+        self.cel_list.connect('row-selected', self._cel_row_selected)
         self.cel_list.connect('button-release-event', self._cel_list_release)
         cel_scroll = Gtk.ScrolledWindow()
         cel_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1755,6 +1756,28 @@ class Animation(nbapp.AppWindow):
         self._cel_thumbs[cel.id] = (cel.version, thumb)
         return thumb
 
+    def _cel_row_selected(self, _list, row):
+        self._library_cel = row.cel_id if (row is not None and
+                                           hasattr(row, 'cel_id')) else None
+
+    def _cel_in_use(self, cel_id):
+        return any(run['cel'] == cel_id
+                   for scene in self.doc.scenes
+                   for layer in scene['layers']
+                   for run in layer['runs'])
+
+    def _delete_cel(self, *_):
+        cel_id = getattr(self, '_library_cel', None)
+        if cel_id is None or self._cel_in_use(cel_id):
+            return
+        cel = self.doc.cel(cel_id)
+        if cel is None:
+            return
+        self._snapshot(_t('Delete Drawing'))
+        self.doc.cels.remove(cel)
+        self._library_cel = None
+        self._commit_change()
+
     def _cel_row_activated(self, _list, row):
         if hasattr(row, 'cel_id'):
             self._rename_cel_prompt(cel_id=row.cel_id)
@@ -2027,6 +2050,10 @@ class Animation(nbapp.AppWindow):
             return [
                 ('Rename Drawing…',
                  self._rename_cel_prompt if self._active_cel() else None),
+                ('Delete Drawing',
+                 self._delete_cel
+                 if (getattr(self, '_library_cel', None) is not None and
+                     not self._cel_in_use(self._library_cel)) else None),
                 ('Choose Take…', self._choose_take_prompt),
                 ('Add Wobble Takes…', self._wobble_prompt),
                 ('Recolor Drawing to Palette', self._recolor_cel if self.doc.palette else None),
@@ -2625,8 +2652,9 @@ class Animation(nbapp.AppWindow):
         seconds, frame = divmod(self.playhead, self.doc.fps)
         minutes, seconds = divmod(seconds, 60)
         self.readout.set_text('%d:%02d+%02d' % (minutes, seconds, frame))
-        self.scene_status.set_text(_t('Scene %d of %d') %
-                                   (self.scene_i + 1, len(self.doc.scenes)))
+        self.scene_status.set_text((_t('%d fps') % self.doc.fps) + '   ' +
+                                   (_t('Scene %d of %d') %
+                                    (self.scene_i + 1, len(self.doc.scenes))))
         self.canvas.queue_draw()
         self.timeline.queue_draw()
 

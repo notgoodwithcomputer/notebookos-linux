@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d i/s",
  "%d take%s": "%d variante|%d variantes",
  "%s copy": "Copie de %s",
  "A sound could not be read, so it plays silent.": "Un son n'a pas pu être lu ; il reste muet.",
@@ -28,6 +29,7 @@
  "Colour swatches": "Nuancier",
  "Completed: %s": "Terminé : %s",
  "Copy Frame as Image": "Copier le photogramme comme image",
+ "Delete Drawing": "Supprimer le dessin",
  "Delete Scene": "Supprimer la scène",
  "Destination": "Destination",
  "Down": "Vertical",

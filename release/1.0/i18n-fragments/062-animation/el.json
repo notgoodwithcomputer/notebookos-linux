@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d καρέ/δ",
  "%d take%s": "%d παραλλαγή|%d παραλλαγές",
  "%s copy": "Αντίγραφο του %s",
  "A sound could not be read, so it plays silent.": "Ένας ήχος δεν διαβάστηκε, οπότε παίζει σιωπή.",
@@ -28,6 +29,7 @@
  "Colour swatches": "Δείγματα χρωμάτων",
  "Completed: %s": "Ολοκληρώθηκε: %s",
  "Copy Frame as Image": "Αντιγραφή καρέ ως εικόνας",
+ "Delete Drawing": "Διαγραφή σχεδίου",
  "Delete Scene": "Διαγραφή σκηνής",
  "Destination": "Προορισμός",
  "Down": "Κατακόρυφα",

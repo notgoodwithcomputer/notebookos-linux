@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d fps",
  "%d take%s": "%d varijanta|%d varijanti",
  "%s copy": "Kopija %s",
  "A sound could not be read, so it plays silent.": "Jedan zvuk nije mogao da se pročita, pa svira tišinu.",
@@ -28,6 +29,7 @@
  "Colour swatches": "Uzorci boja",
  "Completed: %s": "Završeno: %s",
  "Copy Frame as Image": "Kopiraj kadar kao sliku",
+ "Delete Drawing": "Izbriši crtež",
  "Delete Scene": "Izbriši scenu",
  "Destination": "Odredište",
  "Down": "Uspravno",

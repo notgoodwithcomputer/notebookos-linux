@@ -1,4 +1,5 @@
 {
+ "%d fps": "%d קאַדערן/סעק",
  "%d take%s": "%d וואַריאַנט|%d וואַריאַנטן",
  "%s copy": "קאָפּיע פֿון %s",
  "A sound could not be read, so it plays silent.": "א קלאַנג האָט זיך נישט געלאָזט לייענען, טאָ ער שפּילט שטיל.",
@@ -28,6 +29,7 @@
  "Colour swatches": "קאָליר־מוסטערן",
  "Completed: %s": "פֿאַרטיק: %s",
  "Copy Frame as Image": "קאָפּירן דעם קאַדער ווי אַ בילד",
+ "Delete Drawing": "אויסמעקן די צייכענונג",
  "Delete Scene": "אויסמעקן די סצענע",
  "Destination": "ציל",
  "Down": "ווערטיקאַל",
