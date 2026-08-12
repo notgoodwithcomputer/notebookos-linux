@@ -100,6 +100,12 @@ CSS = b"""
 .animation-focus { border: 1px solid #C8341E; }
 .animation-saved { color: #7FA98C; }
 .animation-unsaved { color: #C8341E; }
+.animation-stepbtn { min-width: 30px; min-height: 30px; padding: 0;
+                     background: #FCFBF8; border: 1px solid #C9C4B6; }
+.animation-stepbtn:hover { background: #EAE3D2; }
+.animation-stepbtn:checked { background: #EAE3D2; border-color: #9A9484; }
+.animation-stepbtn.animation-wide { padding: 0 6px; }
+.animation-marklabel { font-size: 12px; color: #1A1916; }
 """
 
 def _pango_layout(cr, text, size, bold=False):
@@ -1160,10 +1166,10 @@ class Animation(nbapp.AppWindow):
         dock.pack_start(Gtk.Label(label=_t('Tools'), xalign=0), False, False, 4)
         tool_grid = Gtk.Grid(column_spacing=4, row_spacing=4)
         for index, (tool, name, key) in enumerate(TOOLS):
-            button = Gtk.ToggleButton(label=_t(name) + '  ' + key)
+            button = self._mark_btn(
+                tool, TOOL_HINTS[tool], self._choose_tool,
+                label=name, key=key, toggle=True, callback_arg=tool)
             button.set_active(tool == self.tool)
-            button.connect('clicked', self._choose_tool, tool)
-            button.get_child().set_ellipsize(Pango.EllipsizeMode.END)
             tool_grid.attach(button, index % 2, index // 2, 1, 1)
         dock.pack_start(tool_grid, False, False, 0)
         self._build_brush_group(dock)
@@ -1258,37 +1264,240 @@ class Animation(nbapp.AppWindow):
         label.get_style_context().add_class('animation-group')
         dock.pack_start(label, False, False, 4)
 
+    def _mark_btn(self, kind, tip, callback, label=None, key=None,
+                  toggle=False, callback_arg=None, group=None, radio=False):
+        """Make Illustrator's painted-mark dock control.
+
+        The mark is cairo-painted rather than styled: CSS cannot leave a
+        supposedly dim control with a full-ink icon.  Toggle and radio forms
+        retain GTK's native state and accessibility behaviour. A radio's
+        FIRST button passes group=None and still gets a RadioButton — the
+        None group founds the set — and set_mode(False) keeps the control
+        looking like a letterpress button rather than an indicator dot.
+        """
+        if radio or group is not None:
+            button = Gtk.RadioButton.new_from_widget(group)
+            button.set_mode(False)
+        elif toggle:
+            button = Gtk.ToggleButton()
+        else:
+            button = Gtk.Button()
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.get_style_context().add_class('animation-stepbtn')
+        button.set_tooltip_text(_t(tip))
+        area = Gtk.DrawingArea()
+        area.set_size_request(17, 17)
+        area._animation_mark = kind
+        area.connect('draw', self._draw_mark)
+        box = Gtk.Box(spacing=5)
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_valign(Gtk.Align.CENTER)
+        box.pack_start(area, False, False, 0)
+        if label is not None:
+            text = _t(label)
+            if key is not None:
+                text += '  ' + key
+            word = Gtk.Label(label=text, xalign=0)
+            word.set_ellipsize(Pango.EllipsizeMode.END)
+            word.get_style_context().add_class('animation-marklabel')
+            box.pack_start(word, True, True, 0)
+            button.get_style_context().add_class('animation-wide')
+        button.add(box)
+        if callback_arg is None:
+            button.connect('toggled' if toggle or group is not None else
+                           'clicked', callback)
+        else:
+            button.connect('toggled' if group is not None else 'clicked',
+                           callback, callback_arg)
+        return button
+
+    def _draw_mark(self, area, cr):
+        """Paint the compact letterpress marks used throughout the dock."""
+        width = area.get_allocated_width()
+        height = area.get_allocated_height()
+        if width <= 0 or height <= 0:
+            return False
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        colour = '#1A1916' if area.is_sensitive() else '#B3AD9E'
+        cr.set_source_rgb(*[part / 255.0 for part in _rgb255(colour)])
+        cr.set_line_width(1.6)
+        kind = area._animation_mark
+        if kind == 'select':
+            cr.move_to(3, 2)
+            cr.line_to(12, 10)
+            cr.line_to(8, 11)
+            cr.line_to(6, 15)
+            cr.close_path()
+            cr.stroke()
+        elif kind in ('pencil', 'brush', 'picker'):
+            cr.move_to(3, 14)
+            cr.line_to(12, 5)
+            if kind == 'pencil':
+                cr.line_to(14, 3)
+                cr.line_to(12, 2)
+            elif kind == 'brush':
+                cr.curve_to(13, 7, 15, 9, 13, 12)
+                cr.curve_to(11, 14, 8, 13, 7, 11)
+            else:
+                cr.line_to(14, 7)
+                cr.move_to(11, 4)
+                cr.arc(12, 3, 2, 0, 2 * math.pi)
+            cr.stroke()
+        elif kind == 'eraser':
+            cr.save()
+            cr.translate(8.5, 8.5)
+            cr.rotate(-0.55)
+            cr.rectangle(-4.5, -3, 9, 6)
+            cr.stroke()
+            cr.restore()
+        elif kind == 'fill':
+            cr.move_to(3, 7)
+            cr.line_to(9, 3)
+            cr.line_to(14, 9)
+            cr.line_to(8, 13)
+            cr.close_path()
+            cr.stroke()
+            cr.arc(14, 14, 1.5, 0, 2 * math.pi)
+            cr.fill()
+        elif kind == 'line':
+            cr.move_to(2, 14)
+            cr.line_to(15, 2)
+            cr.stroke()
+        elif kind == 'rect':
+            cr.rectangle(2.5, 3.5, 12, 10)
+            cr.stroke()
+        elif kind == 'ellipse':
+            cr.save()
+            cr.translate(8.5, 8.5)
+            cr.scale(1, 0.72)
+            cr.arc(0, 0, 6, 0, 2 * math.pi)
+            cr.restore()
+            cr.stroke()
+        elif kind in ('tip-square', 'tip-round'):
+            if kind == 'tip-square':
+                cr.rectangle(4, 4, 9, 9)
+            else:
+                cr.arc(8.5, 8.5, 4.5, 0, 2 * math.pi)
+            cr.fill()
+        elif kind in ('symx', 'symy'):
+            cr.save()
+            cr.set_line_width(1)
+            cr.set_dash([2, 2])
+            if kind == 'symx':
+                cr.move_to(8.5, 0)
+                cr.line_to(8.5, 17)
+            else:
+                cr.move_to(0, 8.5)
+                cr.line_to(17, 8.5)
+            cr.stroke()
+            cr.restore()
+            for side in (-1, 1):
+                if kind == 'symx':
+                    x = 8.5 + side * 2
+                    cr.move_to(x, 4)
+                    cr.line_to(x + side * 4, 8.5)
+                    cr.line_to(x, 13)
+                else:
+                    y = 8.5 + side * 2
+                    cr.move_to(4, y)
+                    cr.line_to(8.5, y + side * 4)
+                    cr.line_to(13, y)
+                cr.close_path()
+                cr.fill()
+        elif kind.startswith('pattern-'):
+            cr.rectangle(2, 2, 13, 13)
+            cr.stroke()
+            pattern = kind[8:]
+            for y in range(4, 14, 3):
+                for x in range(4, 14, 3):
+                    paint = pattern == 'solid'
+                    paint = paint or pattern == 'checker' and (x + y) % 2 == 0
+                    paint = paint or pattern == 'sparse' and x % 2 == 0 and y % 2 == 0
+                    if paint:
+                        cr.rectangle(x, y, 2, 2)
+            cr.fill()
+        return False
+
+    def _ramp_cells(self):
+        """Return the live x and width of each brush-ramp cell."""
+        width = max(1, self.ramp_area.get_allocated_width())
+        step = width / 6.0
+        return [(index * step, step) for index in range(6)]
+
+    def _draw_brush_ramp(self, area, cr):
+        """Paint Illustrator's small-to-large brush-tip ramp."""
+        width = area.get_allocated_width()
+        height = area.get_allocated_height()
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        sizes = (1, 2, 3, 6, 12, 24)
+        for index, (x, cell_width) in enumerate(self._ramp_cells()):
+            size = sizes[index]
+            diameter = max(3, min(cell_width, height) * 0.66 *
+                           (size / 24.0) ** 0.58)
+            cx = x + cell_width / 2.0
+            cy = height / 2.0
+            cr.set_source_rgb(*[part / 255.0 for part in _rgb255('#1A1916')])
+            if self.shape == 'square':
+                cr.rectangle(round(cx - diameter / 2),
+                             round(cy - diameter / 2),
+                             round(diameter), round(diameter))
+            else:
+                cr.arc(cx, cy, diameter / 2, 0, 2 * math.pi)
+            cr.fill()
+            if size == self.size:
+                cr.rectangle(round(x) + 1.5, 1.5,
+                             round(cell_width) - 3, height - 3)
+                cr.stroke()
+        cr.set_source_rgb(*[part / 255.0 for part in _rgb255('#C9C4B6')])
+        cr.rectangle(0.5, 0.5, width - 1, height - 1)
+        cr.stroke()
+        return False
+
+    def _brush_ramp_press(self, _area, event):
+        sizes = (1, 2, 3, 6, 12, 24)
+        for index, (x, width) in enumerate(self._ramp_cells()):
+            if x <= event.x < x + width:
+                self._set_size(None, sizes[index])
+                self.size_lbl.set_text(_t('%d px') % self.size)
+                self.ramp_area.queue_draw()
+                break
+        return True
+
     def _build_brush_group(self, dock):
         # Illustrator's group vocabulary, existing catalog keys: one title
         # over the size grid, one over the tip shapes.
         self._group_title(dock, 'Brush size')
-        # Three columns keep six size buttons inside the 240 rail; a single
-        # row of six theme buttons demanded 296px and widened the window.
-        sizes = Gtk.Grid(column_spacing=4, row_spacing=4,
-                         column_homogeneous=True)
-        for index, size in enumerate((1, 2, 3, 6, 12, 24)):
-            button = Gtk.Button(label=str(size))
-            button.connect('clicked', self._set_size, size)
-            sizes.attach(button, index % 3, index // 3, 1, 1)
-        dock.pack_start(sizes, False, False, 0)
+        # Copied mechanism-for-mechanism from Illustrator: one painted ramp is
+        # both a relative-size preview and a six-cell shortcut.
+        self.ramp_area = Gtk.DrawingArea()
+        self.ramp_area.set_size_request(-1, 30)
+        self.ramp_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.ramp_area.connect('draw', self._draw_brush_ramp)
+        self.ramp_area.connect('button-press-event', self._brush_ramp_press)
+        dock.pack_start(self.ramp_area, False, False, 0)
+        self.size_lbl = Gtk.Label(label=_t('%d px') % self.size, xalign=1)
+        dock.pack_start(self.size_lbl, False, False, 0)
         self._group_title(dock, 'Shapes')
         shapes = Gtk.Box(homogeneous=True)
-        for shape, label in (('square', _t('Square')), ('round', _t('Round'))):
-            button = Gtk.RadioButton.new_with_label_from_widget(
-                shapes.get_children()[0] if shapes.get_children() else None,
-                label)
-            button.connect('toggled', self._set_shape, shape)
-            button.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+        first = None
+        for shape, label in (('square', 'Square'), ('round', 'Round')):
+            button = self._mark_btn('tip-' + shape, label, self._set_shape,
+                                    label=label, callback_arg=shape,
+                                    group=first, radio=True)
+            if first is None:
+                first = button
+            button.set_active(shape == self.shape)
             shapes.pack_start(button, True, True, 0)
         dock.pack_start(shapes, False, False, 0)
 
     def _build_mirror_group(self, dock):
         self._group_title(dock, 'Mirror')
         row = Gtk.Box(homogeneous=True)
-        for attr, label in (('symx', _t('Across')), ('symy', _t('Down'))):
-            button = Gtk.ToggleButton(label=label)
-            button.connect('toggled', self._set_boolean, attr)
-            button.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+        for attr, tip in (('symx', 'Mirror left and right'),
+                          ('symy', 'Mirror top and bottom')):
+            button = self._mark_btn(attr, tip, self._set_boolean,
+                                    toggle=True, callback_arg=attr)
+            button.set_active(getattr(self, attr))
             row.pack_start(button, True, True, 0)
         dock.pack_start(row, False, False, 0)
 
@@ -1297,11 +1506,13 @@ class Animation(nbapp.AppWindow):
         row = Gtk.Box(homogeneous=True)
         first = None
         for pattern, label in zip(PATTERNS, ('Solid', 'Checker', 'Sparse')):
-            button = Gtk.RadioButton.new_with_label_from_widget(first, _t(label))
+            button = self._mark_btn('pattern-' + pattern, label,
+                                    self._set_pattern, label=label,
+                                    callback_arg=pattern, group=first,
+                                    radio=True)
             if first is None:
                 first = button
-            button.connect('toggled', self._set_pattern, pattern)
-            button.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+            button.set_active(pattern == self.pattern)
             row.pack_start(button, True, True, 0)
         dock.pack_start(row, False, False, 0)
 
@@ -1533,7 +1744,7 @@ class Animation(nbapp.AppWindow):
         if not self.doc.cels:
             row = Gtk.ListBoxRow()
             row.set_selectable(False)
-            hint = Gtk.Label(label=_t('Drawings appear here as you draw.'),
+            hint = Gtk.Label(label=_t('The animation has no drawings. Drawing on the canvas makes one.'),
                              xalign=0)
             hint.set_line_wrap(True)
             hint.get_style_context().add_class('animation-muted')
@@ -3021,7 +3232,7 @@ class Animation(nbapp.AppWindow):
             cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
             _show_text(cr, TL_GUTTER + 24,
                        TL_ROWS_TOP + TL_ROW_H * 2 - 6,
-                       _t('Your drawings line up here in time.'), 12)
+                       _t('Drawings line up here in time.'), 12)
 
         # --- sound rows: tinted band, named gutter, waveforms -------------
         sound_top = TL_ROWS_TOP + LAYER_MAX * TL_ROW_H
