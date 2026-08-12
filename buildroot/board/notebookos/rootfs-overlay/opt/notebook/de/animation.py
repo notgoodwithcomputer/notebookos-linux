@@ -3959,6 +3959,29 @@ class Animation(nbapp.AppWindow):
                 cr.set_source_surface(self._onion_surface(scene, frame, tint))
                 cr.get_source().set_filter(cairo.FILTER_NEAREST)
                 cr.paint_with_alpha(.35)
+        # While mirror is on, show WHERE it folds: the same dashed axis the
+        # dock's mark draws, laid on the paper it applies to. Illustrator
+        # keeps this in the button only; a beginner benefits from seeing the
+        # fold before the stroke rather than after it. Screen chrome — it is
+        # drawn after the artwork and never written into a cel.
+        if self.symx or self.symy:
+            cr.save()
+            cr.set_line_width(1 / scale)
+            cr.set_dash([4 / scale, 4 / scale])
+            cr.set_source_rgba(154 / 255, 148 / 255, 132 / 255, .9)
+            # +0.5 lands the hairline on a pixel CENTRE: with antialiasing
+            # off, a line straddling a pixel boundary covers neither side
+            # and draws nothing at all.
+            if self.symx:
+                middle = self.doc.canvas[0] // 2 + .5
+                cr.move_to(middle, 0)
+                cr.line_to(middle, self.doc.canvas[1])
+            if self.symy:
+                middle = self.doc.canvas[1] // 2 + .5
+                cr.move_to(0, middle)
+                cr.line_to(self.doc.canvas[0], middle)
+            cr.stroke()
+            cr.restore()
         # the paper's cut edge: one hairline, so the canvas sits ON the mat
         cr.set_line_width(1 / scale)
         cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
