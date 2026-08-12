@@ -1131,6 +1131,7 @@ class Animation(nbapp.AppWindow):
         self.selection = None
         self._selected_sound = None
         self.column_width = 6
+        self.view_origin = 0
         self._prompt_layer = None
         self._worker_generation = 0
         self._workers = []
@@ -1868,7 +1869,7 @@ class Animation(nbapp.AppWindow):
         row = int((y - TL_ROWS_TOP) // TL_ROW_H)
         if not 0 <= row < len(scene['layers']):
             return None
-        frame = int((x - TL_GUTTER) // self.column_width)
+        frame = self.view_origin + int((x - TL_GUTTER) // self.column_width)
         if not 0 <= frame < scene['length']:
             return None
         return (len(scene['layers']) - row - 1, frame)
@@ -2377,6 +2378,35 @@ class Animation(nbapp.AppWindow):
                 return
         self.selection = None
 
+    def _frame_to_x(self, frame):
+        """Sheet frame -> timeline x, through the one scroll origin."""
+        return TL_GUTTER + (frame - self.view_origin) * self.column_width
+
+    def _x_to_frame(self, x):
+        """Timeline x -> sheet frame, clamped at zero."""
+        return max(0, self.view_origin +
+                   int((x - TL_GUTTER) // self.column_width))
+
+    def _follow_playhead(self):
+        """Keep the playhead inside the visible window of the sheet."""
+        width = self.timeline.get_allocated_width()
+        visible = max(1, (width - TL_GUTTER) // self.column_width)
+        if self.playhead < self.view_origin:
+            self.view_origin = self.playhead
+        elif self.playhead >= self.view_origin + visible - 2:
+            self.view_origin = max(0, self.playhead - visible + 2)
+
+    def _edge_scroll(self, x):
+        """Dragging near either edge walks the view along the sheet."""
+        width = self.timeline.get_allocated_width()
+        if x < TL_GUTTER + 10:
+            self.view_origin = max(0, self.view_origin - 2)
+        elif x > width - 12:
+            scene = self.doc.scenes[self.scene_i]
+            visible = max(1, (width - TL_GUTTER) // self.column_width)
+            self.view_origin = max(0, min(scene['length'] - visible // 2,
+                                          self.view_origin + 2))
+
     def _timeline_tooltip(self, _widget, x, y, _keyboard, tip):
         """Drawn controls still introduce themselves: the transport and the
         scene cards answer hover the way real buttons would."""
@@ -2440,7 +2470,7 @@ class Animation(nbapp.AppWindow):
         scene = self.doc.scenes[self.scene_i]
         if TL_STRIP_H <= event.y < TL_ROWS_TOP:
             for marker in scene['markers']:
-                marker_x = TL_GUTTER + marker['frame'] * self.column_width
+                marker_x = self._frame_to_x(marker['frame'])
                 if abs(event.x - marker_x) <= 6:
                     self.playhead = marker['frame']
                     self._update_playhead()
@@ -2454,6 +2484,7 @@ class Animation(nbapp.AppWindow):
                         index = widths.index(self.column_width) \
                             if self.column_width in widths else 1
                         self.column_width = widths[index + delta]
+                        self._follow_playhead()
                         self.timeline.queue_draw()
                     return True
         if event.x < TL_GUTTER and event.y >= TL_ROWS_TOP:
@@ -2464,7 +2495,7 @@ class Animation(nbapp.AppWindow):
                 self._refresh_layers()
                 self.timeline.queue_draw()
             return True
-        frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
+        frame = self._x_to_frame(event.x)
         self.playhead = min(scene['length'] - 1, frame)
         if event.y < TL_ROWS_TOP:
             # dragging along the ruler scrubs; the press already lands here
@@ -2494,7 +2525,7 @@ class Animation(nbapp.AppWindow):
                 if start <= frame < start + frames:
                     self._selected_sound = (self.scene_i, sound_row)
                     self.selection = None
-                    dot_x = TL_GUTTER + (start + frames) * self.column_width - 8
+                    dot_x = self._frame_to_x(start + frames) - 8
                     if abs(event.x - dot_x) <= 8:
                         self._snapshot(_t('Mute Sound'))
                         sound['mute'] = not sound.get('mute', False)
@@ -2542,8 +2573,8 @@ class Animation(nbapp.AppWindow):
             return True
         if getattr(self, '_ruler_drag', False):
             scene = self.doc.scenes[self.scene_i]
-            frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
-            frame = min(scene['length'] - 1, frame)
+            frame = min(scene['length'] - 1, self._x_to_frame(event.x))
+            self._edge_scroll(event.x)
             if frame != self.playhead:
                 self.playhead = frame
                 self._update_playhead()
@@ -2552,7 +2583,8 @@ class Animation(nbapp.AppWindow):
         drag = getattr(self, '_run_drag', None)
         if drag is not None:
             scene = self.doc.scenes[self.scene_i]
-            frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
+            frame = self._x_to_frame(event.x)
+            self._edge_scroll(event.x)
             target = max(0, min(scene['length'] - drag['run']['len'],
                                 drag['origin'] + frame - drag['anchor']))
             run = drag['run']
@@ -2579,7 +2611,8 @@ class Animation(nbapp.AppWindow):
             return False
         row, mode, anchor, before = self._sound_drag
         sound = self.doc.scenes[self.scene_i]['sounds'][row]
-        frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
+        frame = self._x_to_frame(event.x)
+        self._edge_scroll(event.x)
         delta = frame - anchor
         spf = SPF[self.doc.fps]
         if mode == 'move':
@@ -2670,6 +2703,9 @@ class Animation(nbapp.AppWindow):
         self.timeline.queue_draw()
 
     def _update_playhead(self):
+        scene = self.doc.scenes[self.scene_i]
+        self.playhead = max(0, min(scene['length'] - 1, self.playhead))
+        self._follow_playhead()
         seconds, frame = divmod(self.playhead, self.doc.fps)
         minutes, seconds = divmod(seconds, 60)
         self.readout.set_text('%d:%02d+%02d' % (minutes, seconds, frame))
@@ -3114,6 +3150,7 @@ class Animation(nbapp.AppWindow):
         self.scene_i = max(0, min(len(self.doc.scenes) - 1, index))
         self.sheet = Sheet(self.doc, self.scene_i)
         self.playhead = 0
+        self.view_origin = 0
         self.layer_i = 0
         self.selection = None
         self._update_playhead()
@@ -3852,9 +3889,9 @@ class Animation(nbapp.AppWindow):
         cr.stroke()
         step = self.column_width
         major = self.doc.fps
-        frame = 0
+        frame = (self.view_origin // 4) * 4
         while True:
-            px = TL_GUTTER + frame * step
+            px = TL_GUTTER + (frame - self.view_origin) * step
             if px > width_all:
                 break
             if frame % major == 0:
@@ -3890,7 +3927,7 @@ class Animation(nbapp.AppWindow):
                 cr.fill()
             self._ruler_stepper.append((sx, sx + 22, delta if can else 0))
         for marker in scene['markers']:
-            marker_x = TL_GUTTER + marker['frame'] * step
+            marker_x = self._frame_to_x(marker['frame'])
             cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
             cr.move_to(marker_x + .5, TL_STRIP_H + 2)
             cr.line_to(marker_x + .5, TL_ROWS_TOP - 2)
@@ -3919,7 +3956,7 @@ class Animation(nbapp.AppWindow):
                 label += ' M'
             _show_text(cr, 8, y + 15, label, 11)
             for run in layer['runs']:
-                left = TL_GUTTER + run['start'] * step
+                left = self._frame_to_x(run['start'])
                 width = max(1, run['len'] * step)
                 cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
                 cr.rectangle(left, y + 2, width, TL_ROW_H - 4)
@@ -3960,7 +3997,7 @@ class Animation(nbapp.AppWindow):
             _show_text(cr, 8, y + 15, _t('Sound') + ' %d' % (row + 1), 11)
             if not sound:
                 continue
-            left = TL_GUTTER + sound['start'] * step
+            left = self._frame_to_x(sound['start'])
             duration = max(0, sound.get('duration_smp', 0) -
                            sound.get('in_smp', 0) - sound.get('out_smp', 0))
             frames = max(1, math.ceil(duration / SPF[self.doc.fps]))
@@ -4000,7 +4037,7 @@ class Animation(nbapp.AppWindow):
                        _t('Add a sound from the Sound menu.'), 11)
 
         # --- the playhead, through every band -----------------------------
-        x = TL_GUTTER + self.playhead * step
+        x = self._frame_to_x(self.playhead)
         cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
         cr.rectangle(x, TL_STRIP_H + 2, 1,
                      TL_ROWS_TOP - TL_STRIP_H - 2 + (LAYER_MAX + 2) * TL_ROW_H)
