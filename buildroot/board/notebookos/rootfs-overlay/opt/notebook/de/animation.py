@@ -1206,6 +1206,10 @@ class Animation(nbapp.AppWindow):
         side.set_size_request(240, -1)
         side.pack_start(Gtk.Label(label=_t('Drawings'), xalign=0), False, False, 8)
         self.cel_list = Gtk.ListBox()
+        self.cel_list.add_events(Gdk.EventMask.BUTTON_PRESS_MASK |
+                                 Gdk.EventMask.BUTTON_RELEASE_MASK)
+        self.cel_list.connect('button-press-event', self._cel_list_press)
+        self.cel_list.connect('button-release-event', self._cel_list_release)
         cel_scroll = Gtk.ScrolledWindow()
         cel_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         cel_scroll.add(self.cel_list)
@@ -1749,6 +1753,21 @@ class Animation(nbapp.AppWindow):
         self._cel_thumbs[cel.id] = (cel.version, thumb)
         return thumb
 
+    def _cel_list_press(self, _widget, event):
+        """Press-and-hold a drawing's row to see it on the canvas; release
+        puts the frame back. A look costs nothing and changes nothing."""
+        row = self.cel_list.get_row_at_y(int(event.y))
+        if row is not None and hasattr(row, 'cel_id'):
+            self._preview_cel = row.cel_id
+            self.canvas.queue_draw()
+        return False
+
+    def _cel_list_release(self, _widget, _event):
+        if getattr(self, '_preview_cel', None) is not None:
+            self._preview_cel = None
+            self.canvas.queue_draw()
+        return False
+
     def _refresh_lists(self):
         for child in self.cel_list.get_children():
             self.cel_list.remove(child)
@@ -1781,6 +1800,7 @@ class Animation(nbapp.AppWindow):
             row.cel_id = cel.id
             target = Gtk.TargetEntry.new('application/x-animation-cel',
                                          Gtk.TargetFlags.SAME_APP, 0)
+            row.connect('drag-begin', lambda *_a: self._cel_list_release(None, None))
             row.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target],
                                 Gdk.DragAction.COPY)
             row.connect('drag-data-get', self._cel_drag_data_get, cel.id)
@@ -3478,7 +3498,11 @@ class Animation(nbapp.AppWindow):
         if not self._fitted:
             self._fit_canvas()
         scene = self.doc.scenes[self.scene_i]
-        s = self._cache.get(frame_key(self.doc, scene, self.playhead), lambda: composite(self.doc, scene, self.playhead))
+        preview = self.doc.cel(getattr(self, '_preview_cel', None) or -1)
+        if preview is not None:
+            s = preview.decoded(0)
+        else:
+            s = self._cache.get(frame_key(self.doc, scene, self.playhead), lambda: composite(self.doc, scene, self.playhead))
         scale = self.zoom
         x = (w.get_allocated_width() - self.doc.canvas[0] * scale) / 2
         y = (w.get_allocated_height() - self.doc.canvas[1] * scale) / 2
@@ -3530,7 +3554,7 @@ class Animation(nbapp.AppWindow):
             cr.rectangle(0, 0, self.doc.canvas[0], self.doc.canvas[1])
             cr.stroke()
         cr.restore()
-        if not any(l['runs'] for l in scene['layers']):
+        if preview is None and not any(l['runs'] for l in scene['layers']):
             # the first thing a new person sees: one honest sentence, gone
             # the moment they draw
             hint = _t('Draw here. Each drawing becomes a frame.')
