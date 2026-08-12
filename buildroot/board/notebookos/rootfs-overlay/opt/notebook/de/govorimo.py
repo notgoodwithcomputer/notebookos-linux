@@ -57,11 +57,11 @@ STORE = os.path.join(os.environ.get("NB_HOME", os.path.expanduser("~")),
 # non-Latin-1 marks to DejaVu Sans when rendered (Nimbus Sans has no U+2192 /
 # U+2713 and would show tofu on hardware).
 _STATE_GLYPHS = {
-    "queued":    ("…", "Queued — waiting for the channel or the airtime budget"),
-    "sent":      ("→", "Sent — transmitted by this radio"),
-    "relayed":   ("»", "Relayed — this frame was overheard being passed on"),
-    "delivered": ("✓", "Delivered — the other device acknowledged it"),
-    "failed":    ("×", "Failed — retries exhausted, nobody acknowledged"),
+    "queued":    ("…", "Queued. Waiting for the channel or the airtime budget."),
+    "sent":      ("→", "Sent. Transmitted by this radio."),
+    "relayed":   ("»", "Relayed. This frame was overheard being passed on."),
+    "delivered": ("✓", "Delivered. The other device acknowledged it."),
+    "failed":    ("×", "Failed. Retries exhausted; nobody acknowledged."),
 }
 _DEJAVU = ("→", "✓")
 
@@ -840,7 +840,7 @@ class GovorimoWindow(nbapp.AppWindow):
             chip.get_style_context().add_class("gvchip")
             chip.set_tooltip_text(
                 _t("No pseudonym announcement has arrived for this pen "
-                   "name; the signature is not yet checkable"))
+                   "name; the signature cannot be checked"))
             top.pack_start(chip, False, False, 0)
         idl = Gtk.Label(label="#%s" % p.get("msgid", ""), xalign=0)
         idl.get_style_context().add_class("gvref")
@@ -1274,14 +1274,13 @@ class GovorimoWindow(nbapp.AppWindow):
         elif path in ("none", "", None):
             radio_lines = [
                 (_t("No radio attached"), "gvname"),
-                (_t("Chats and boards read fine; nothing sends until a "
-                    "dongle is plugged in."), "gvsub"),
+                (_t("Reading works. Sending needs a dongle."), "gvsub"),
             ]
         elif r.get("state") == "error":
             radio_lines = [
                 (_t("Radio error"), "gvname"),
-                (_t("The service retries by itself; unplugging and "
-                    "replugging the dongle also restarts it."), "gvsub"),
+                (_t("The service retries by itself. Replugging the "
+                    "dongle also restarts it."), "gvsub"),
             ]
         else:
             ch = r.get("channel")
@@ -1307,8 +1306,8 @@ class GovorimoWindow(nbapp.AppWindow):
             (_t("channel busy %s%% · %s frames queued")
              % (busy if busy is not None else "?",
                 q if q is not None else "?"), "gvsub"),
-            (_t("About 20 MB a day crosses this channel for everyone in "
-                "range together; the share adapts to how many neighbours "
+            (_t("The channel carries about 20 MB a day for everyone in "
+                "range together. The share follows how many neighbours "
                 "are heard."), "gvsub"),
         ])
         self._role_value.set_text(
@@ -1851,9 +1850,9 @@ class GovorimoWindow(nbapp.AppWindow):
             sub.get_style_context().add_class("gvsub")
             sub.set_line_wrap(True)
             sub.set_size_request(640, -1)
-            sub.set_text(_t("Bundles cross by hand — a saved file on a "
-                            "stick, or retyped — never over the air. Done "
-                            "in person, there is nobody in the middle."))
+            sub.set_text(_t("Bundles cross by hand, as a saved file or "
+                            "retyped, never over the air. Done in person, "
+                            "there is nobody in the middle."))
             card.pack_start(sub, False, False, 0)
 
             cols = Gtk.Box(spacing=16)
