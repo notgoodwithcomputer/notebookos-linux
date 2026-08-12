@@ -75,7 +75,13 @@ class FakeE22:
         self._t.start()
 
     def close(self):
+        # Join BEFORE closing: freed fd numbers are reused by the very next
+        # openpty, and a serve thread still parked in select() would then
+        # read the NEXT fake's wire and answer it with THIS fake's stale
+        # registers. Seen live — check 13 received another test's factory
+        # bytes — so the order here is load-bearing, not tidiness.
         self._stop = True
+        self._t.join(timeout=2.0)
         for fd in (self.master, self.slave):
             try:
                 os.close(fd)
@@ -91,7 +97,9 @@ class FakeE22:
                 r, _, _ = select.select([self.master], [], [], 0.05)
             except OSError:
                 return
-            if not r:
+            if self._stop or not r:
+                if self._stop:
+                    return
                 continue
             try:
                 data = os.read(self.master, 256)
