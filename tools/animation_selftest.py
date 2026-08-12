@@ -1012,7 +1012,112 @@ loudness_family()
 sample_family()
 store_family()
 undo_family()
+
+def workflow_family():
+    """One whole film, driven through the REAL handlers.
+
+    Every other family tests a mechanism. This one asks what a person
+    asks: if I draw, add sound, make mouths, save, close and reopen — is
+    my film still there? Bugs that live BETWEEN mechanisms only show up
+    here.
+    """
+    if not gtk_available():
+        skip("F10 whole-film workflow", "GTK cannot open a display")
+        return
+    from gi.repository import Gdk
+    import nbapp as _nbapp
+    _nbapp.claim_single_instance = lambda *a, **k: None
+    import nbpicker
+    home = tempfile.mkdtemp(prefix="animation-workflow-")
+    for folder in ("Documents", "Music", "Videos"):
+        os.makedirs(os.path.join(home, folder))
+    previous_home = os.environ.get("NB_HOME")
+    os.environ["NB_HOME"] = home
+    previous_open, previous_save = nbpicker.open_file, nbpicker.save_file
+
+    class Ev:
+        def __init__(self, x, y):
+            self.x, self.y, self.state, self.button = x, y, 0, 1
+            self.type = Gdk.EventType.BUTTON_PRESS
+
+    try:
+        app = animation.Animation()
+        # start from a KNOWN film the way a person does — File > New — so
+        # this family never depends on whatever recovery store the process
+        # happens to carry
+        app._new_apply({"canvas": (320, 240), "fps": 12})
+        app.zoom = 1
+        app._fitted = True
+        allocation = app.canvas.get_allocation()
+
+        def at(px, py):
+            width, height = app.doc.canvas
+            return ((allocation.width - width * app.zoom) / 2 + px * app.zoom,
+                    (allocation.height - height * app.zoom) / 2 + py * app.zoom)
+
+        # NB_HOME is read at IMPORT time, so this process may already carry
+        # a recovery store from an earlier family: count the DELTA, not the
+        # total. (The store-law families use child processes for this reason.)
+        cels_before = len(app.doc.cels)
+        app.tool, app.size = "pencil", 6
+        app._canvas_press(app.canvas, Ev(*at(60, 60)))
+        for step in range(1, 12):
+            app._canvas_motion(app.canvas, Ev(*at(60 + step * 4, 60 + step * 2)))
+        app._canvas_release(app.canvas, Ev(*at(104, 82)))
+        painted = 0
+        if len(app.doc.cels) > cels_before:
+            take = app.doc.cels[-1].decoded(0)
+            painted = sum(1 for yy in range(app.doc.canvas[1])
+                          for xx in range(app.doc.canvas[0])
+                          if animation.pix_at(take, xx, yy)[3])
+        check("F10 a drag on the empty canvas makes a drawing with ink",
+              len(app.doc.cels) == cels_before + 1 and painted > 50,
+              "cels %d->%d px=%d" % (cels_before, len(app.doc.cels), painted))
+
+        app.playhead = 12
+        app._new_drawing()
+        check("F10 the sheet carries both exposures",
+              len(app.doc.scenes[0]["layers"][0]["runs"]) == 2)
+
+        samples = array.array("h")
+        for index in range(48000):
+            level = 9000 if (index // 8000) % 2 == 0 else 300
+            samples.append(int(level * math.sin(2 * math.pi * 180 * index / 48000)))
+        sound_path = os.path.join(home, "Music", "line.wav")
+        with wave.open(sound_path, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(48000)
+            handle.writeframes(samples.tobytes())
+        nbpicker.open_file = lambda *a, **k: sound_path
+        app._add_sound()
+        app.doc.scenes[0]["layers"].append(animation.new_layer("Mouth"))
+        app.layer_i = 1
+        slots = [app.doc.add_cel("m%d" % i).id for i in range(3)]
+        app._mouth_slots_apply({"slots": slots})
+        app._mouth_loudness_apply({"quiet": .10, "loud": .45})
+        check("F10 sound and loudness-driven mouths land on the sheet",
+              bool(app.doc.scenes[0]["sounds"][0]) and
+              len(app.doc.scenes[0]["layers"][1]["runs"]) >= 2)
+
+        document = os.path.join(home, "Documents", "film.anim")
+        nbpicker.save_file = lambda *a, **k: document
+        saved = app._save_as()
+        expected = app.doc.bytes()
+        app._on_destroy()
+        reopened, reports = animation.open_document(document)
+        check("F10 the film survives save, close and reopen byte-for-byte",
+              bool(saved) and reopened is not None and not reports and
+              reopened.bytes() == expected, str(reports))
+    finally:
+        nbpicker.open_file, nbpicker.save_file = previous_open, previous_save
+        if previous_home is not None:
+            os.environ["NB_HOME"] = previous_home
+        shutil.rmtree(home, ignore_errors=True)
+
+
 dialog_limits_family()
+workflow_family()
 
 total = len(PASSES) + len(FAILS) + len(SKIPS) + len(MUTANTS) + len(UNCAUGHT_MUTANTS)
 print("TALLY total=%d passed=%d failed=%d skipped=%d mutants-caught=%d mutants-uncaught=%d" %
