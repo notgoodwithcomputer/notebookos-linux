@@ -2136,10 +2136,12 @@ class Animation(nbapp.AppWindow):
                 ('Extend Hold    =', self._extend_hold),
                 ('Shorten Hold    -', self._shorten_hold),
                 ('Split Hold    /', self._split_hold),
-                ('Clear Exposure    Delete', self._clear_exposure),
+                ('Clear Exposure    Delete',
+                 self._clear_exposure if self.selection else None),
                 nbapp.SEP,
                 ('Repeat Selection…    Ctrl+R', self._repeat_prompt),
-                ('Slide Between Exposures', self._slide_selection),
+                ('Slide Between Exposures',
+                 self._slide_selection if self.selection else None),
                 ('Insert Frames…', self._insert_prompt),
                 ('Remove Frames…', self._remove_prompt),
                 nbapp.SEP,
@@ -2188,7 +2190,8 @@ class Animation(nbapp.AppWindow):
                  self._delete_cel
                  if (getattr(self, '_library_cel', None) is not None and
                      not self._cel_in_use(self._library_cel)) else None),
-                ('Choose Take…', self._choose_take_prompt),
+                ('Choose Take…',
+                 self._choose_take_prompt if self._active_cel() else None),
                 ('Add Take',
                  self._add_take
                  if (self._takes_cel() is not None and
@@ -2197,8 +2200,11 @@ class Animation(nbapp.AppWindow):
                  self._remove_take
                  if (self._takes_cel() is not None and
                      len(self._takes_cel().takes) > 1) else None),
-                ('Add Wobble Takes…', self._wobble_prompt),
-                ('Recolor Drawing to Palette', self._recolor_cel if self.doc.palette else None),
+                ('Add Wobble Takes…',
+                 self._wobble_prompt if self._active_cel() else None),
+                ('Recolor Drawing to Palette',
+                 self._recolor_cel
+                 if (self.doc.palette and self._active_cel()) else None),
                 ('Place Image…', self._place_image),
             ]
         if name == 'Layer':
