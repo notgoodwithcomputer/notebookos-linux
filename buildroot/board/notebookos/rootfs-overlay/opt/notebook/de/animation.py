@@ -344,7 +344,10 @@ class Cel:
 def new_layer(name='Layer 1'):
     return {'name': name, 'visible': True, 'mouth_slots': None, 'runs': []}
 
-def new_scene(name='Scene 1', length=96):
+def new_scene(name='Scene 1', length=None, fps=12):
+    if length is None:
+        # eight seconds of runway at the project's own speed
+        length = fps * 8
     return {'name': name, 'length': length, 'layers': [new_layer()], 'sounds': [None, None], 'markers': []}
 
 class AnimationDocument:
@@ -356,7 +359,7 @@ class AnimationDocument:
         self.palette = list(palette or [])
         self.palette_only = bool(palette_only)
         self.cels = list(cels or [])
-        self.scenes = list(scenes or [new_scene()])
+        self.scenes = list(scenes or [new_scene(fps=fps)])
         self._extra = extra or {}
         self.next_cel = max([c.id for c in self.cels] + [0]) + 1
 
@@ -3053,7 +3056,7 @@ class Animation(nbapp.AppWindow):
             return
         self._snapshot(_t('New Scene'))
         self.doc.scenes.insert(self.scene_i + 1,
-                               new_scene(_t('Scene %d') % (len(self.doc.scenes) + 1)))
+                               new_scene(_t('Scene %d') % (len(self.doc.scenes) + 1), fps=self.doc.fps))
         self._switch_scene(self.scene_i + 1)
         self._commit_change()
 

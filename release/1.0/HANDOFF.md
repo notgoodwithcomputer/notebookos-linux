@@ -1704,3 +1704,10 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   misleading false "content lost" result twice during investigation before
   the real end-to-end path (strokes across real page switches, saved,
   reloaded) confirmed both the app and the fix are correct.
+
+- **2026-08-12 (animation) · x264 DECIDED by user + BUILD NOTE for the next
+  spin:** `BR2_PACKAGE_X264=y` is in the tree config. ffmpeg will NOT link
+  it on an incremental build — run `make -C buildroot ffmpeg-dirclean`
+  before the next mkrelease (the libdrm-dirclean class from the HiDPI run),
+  then both Animation's and Video Editor's encoder probes pick libx264 up
+  with no app changes. Sample-film cut stands; respin deferred by user.
