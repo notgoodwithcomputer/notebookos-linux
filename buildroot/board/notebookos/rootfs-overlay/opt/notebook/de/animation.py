@@ -1209,6 +1209,7 @@ class Animation(nbapp.AppWindow):
         self.cel_list.add_events(Gdk.EventMask.BUTTON_PRESS_MASK |
                                  Gdk.EventMask.BUTTON_RELEASE_MASK)
         self.cel_list.connect('button-press-event', self._cel_list_press)
+        self.cel_list.connect('row-activated', self._cel_row_activated)
         self.cel_list.connect('button-release-event', self._cel_list_release)
         cel_scroll = Gtk.ScrolledWindow()
         cel_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1219,6 +1220,7 @@ class Animation(nbapp.AppWindow):
         side.pack_start(Gtk.Label(label=_t('Layers'), xalign=0), False, False, 8)
         self.layer_list = Gtk.ListBox()
         self.layer_list.connect('row-selected', self._layer_row_selected)
+        self.layer_list.connect('row-activated', lambda *_a: self._rename_layer_prompt())
         side.pack_start(self.layer_list, False, False, 0)
         layer_actions = Gtk.Box(homogeneous=True)
         for label, callback in (('+', self._add_layer), ('-', self._delete_layer),
@@ -1753,6 +1755,10 @@ class Animation(nbapp.AppWindow):
         self._cel_thumbs[cel.id] = (cel.version, thumb)
         return thumb
 
+    def _cel_row_activated(self, _list, row):
+        if hasattr(row, 'cel_id'):
+            self._rename_cel_prompt(cel_id=row.cel_id)
+
     def _cel_list_press(self, _widget, event):
         """Press-and-hold a drawing's row to see it on the canvas; release
         puts the frame back. A look costs nothing and changes nothing."""
@@ -2019,13 +2025,16 @@ class Animation(nbapp.AppWindow):
             ]
         if name == 'Drawing':
             return [
+                ('Rename Drawing…',
+                 self._rename_cel_prompt if self._active_cel() else None),
                 ('Choose Take…', self._choose_take_prompt),
                 ('Add Wobble Takes…', self._wobble_prompt),
                 ('Recolor Drawing to Palette', self._recolor_cel if self.doc.palette else None),
                 ('Place Image…', self._place_image),
             ]
         if name == 'Layer':
-            return [('Mouth Slots…', self._mouth_slots_prompt),
+            return [('Rename Layer…', self._rename_layer_prompt),
+                    ('Mouth Slots…', self._mouth_slots_prompt),
                     ('Mouth from Loudness…', self._mouth_loudness_prompt)]
         if name == 'Sound':
             return [('Add Sound…', self._add_sound),
@@ -3150,6 +3159,42 @@ class Animation(nbapp.AppWindow):
                 data[offset:offset + 4] = px4(colour)
             image.mark_dirty()
         cel.version += 1
+        self._commit_change()
+
+    def _rename_cel_prompt(self, *_, cel_id=None):
+        cel = (self.doc.cel(cel_id) if cel_id is not None
+               else self._active_cel())
+        if cel is None:
+            return
+        self._rename_cel_target = cel.id
+        self._overlay_prompt('Rename Drawing…',
+                             [('name', 'Name', cel.name, 'text')],
+                             'Rename', self._rename_cel_apply)
+
+    def _rename_cel_apply(self, state):
+        cel = self.doc.cel(getattr(self, '_rename_cel_target', -1))
+        if cel is None:
+            return
+        name = state['name'].strip()
+        if not name or name == cel.name:
+            return
+        self._snapshot(_t('Rename Drawing'))
+        cel.name = name
+        self._commit_change()
+
+    def _rename_layer_prompt(self, *_):
+        layer = self.doc.scenes[self.scene_i]['layers'][self.layer_i]
+        self._overlay_prompt('Rename Layer…',
+                             [('name', 'Name', layer['name'], 'text')],
+                             'Rename', self._rename_layer_apply)
+
+    def _rename_layer_apply(self, state):
+        layer = self.doc.scenes[self.scene_i]['layers'][self.layer_i]
+        name = state['name'].strip()
+        if not name or name == layer['name']:
+            return
+        self._snapshot(_t('Rename Layer'))
+        layer['name'] = name
         self._commit_change()
 
     def _mouth_slots_prompt(self, *_):
