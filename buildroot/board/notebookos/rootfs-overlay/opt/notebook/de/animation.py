@@ -1320,7 +1320,7 @@ class Animation(nbapp.AppWindow):
             button = Gtk.Button()
         button.set_relief(Gtk.ReliefStyle.NONE)
         button.get_style_context().add_class('animation-stepbtn')
-        button.set_tooltip_text(_t(tip))
+        button.set_tooltip_text(_t(tip) + ('  (%s)' % key if key else ''))
         area = Gtk.DrawingArea()
         area.set_size_request(17, 17)
         area._animation_mark = kind
@@ -1330,9 +1330,10 @@ class Animation(nbapp.AppWindow):
         box.set_valign(Gtk.Align.CENTER)
         box.pack_start(area, False, False, 0)
         if label is not None:
+            # The key rides in the TOOLTIP, not the label — illustrator.py's
+            # solution to the same nine tools in the same 240 rail. Appending
+            # '  R' to a label is what cut 'Прямоугольник' in Russian.
             text = _t(label)
-            if key is not None:
-                text += '  ' + key
             word = Gtk.Label(label=text, xalign=0)
             word.set_ellipsize(Pango.EllipsizeMode.END)
             word.get_style_context().add_class('animation-marklabel')
@@ -1514,7 +1515,11 @@ class Animation(nbapp.AppWindow):
         self.size_lbl = Gtk.Label(label=_t('%d px') % self.size, xalign=1)
         dock.pack_start(self.size_lbl, False, False, 0)
         self._group_title(dock, 'Shapes')
-        shapes = Gtk.Box(homogeneous=True)
+        # One per row: a two-across row leaves ~85px for the word, which cut
+        # the Greek and Russian tip names (ellipsis_sweep). A dock that
+        # scrolls can afford the height; an unreadable word cannot be fixed
+        # by the reader.
+        shapes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         first = None
         for shape, label in (('square', 'Square tip'), ('round', 'Round tip')):
             button = self._mark_btn('tip-' + shape, label, self._set_shape,
@@ -1528,7 +1533,7 @@ class Animation(nbapp.AppWindow):
 
     def _build_mirror_group(self, dock):
         self._group_title(dock, 'Mirror')
-        row = Gtk.Box(homogeneous=True)
+        row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         for attr, tip in (('symx', 'Mirror left and right'),
                           ('symy', 'Mirror top and bottom')):
             button = self._mark_btn(attr, tip, self._set_boolean,
@@ -1539,7 +1544,7 @@ class Animation(nbapp.AppWindow):
 
     def _build_pattern_group(self, dock):
         self._group_title(dock, 'Pattern')
-        row = Gtk.Box(homogeneous=True)
+        row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         first = None
         for pattern, label in zip(PATTERNS, ('Solid', 'Checker', 'Sparse')):
             button = self._mark_btn('pattern-' + pattern, label,
