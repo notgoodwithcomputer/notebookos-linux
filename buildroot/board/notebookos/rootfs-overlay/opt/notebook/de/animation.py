@@ -2468,6 +2468,16 @@ class Animation(nbapp.AppWindow):
                     return True
             return True
         scene = self.doc.scenes[self.scene_i]
+        band = getattr(self, '_extent_band', None)
+        if band and band[0] <= event.y <= band[1] and event.x >= TL_GUTTER:
+            width_all = self.timeline.get_allocated_width()
+            band_w = max(1, width_all - TL_GUTTER - 8)
+            fraction = min(1.0, max(0.0, (event.x - TL_GUTTER) / band_w))
+            self.playhead = int(fraction * (scene['length'] - 1))
+            self._ruler_drag = True
+            self._update_playhead()
+            self._scrub_frame()
+            return True
         if TL_STRIP_H <= event.y < TL_ROWS_TOP:
             for marker in scene['markers']:
                 marker_x = self._frame_to_x(marker['frame'])
@@ -3418,6 +3428,10 @@ class Animation(nbapp.AppWindow):
         self.canvas.queue_draw()
 
     def _restore_tool_hint(self):
+        if not hasattr(self, 'hint'):
+            # the dock builds before the status bar: the initial set_active
+            # fires this during construction, before there is a bar to write
+            return
         self.hint.set_text(_t(TOOL_HINTS[self.tool]))
 
     def _flash(self, message):
@@ -3928,6 +3942,8 @@ class Animation(nbapp.AppWindow):
             self._ruler_stepper.append((sx, sx + 22, delta if can else 0))
         for marker in scene['markers']:
             marker_x = self._frame_to_x(marker['frame'])
+            if marker_x < TL_GUTTER or marker_x > width_all:
+                continue
             cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
             cr.move_to(marker_x + .5, TL_STRIP_H + 2)
             cr.line_to(marker_x + .5, TL_ROWS_TOP - 2)
@@ -3938,23 +3954,15 @@ class Animation(nbapp.AppWindow):
             cr.close_path()
             cr.fill()
 
-        # --- layer rows: a named gutter, the active row washed ------------
+        # --- layer rows: bars clipped to the sheet, the gutter painted
+        # after, so a scrolled-off bar can never bury a row's name --------
+        cr.save()
+        cr.rectangle(TL_GUTTER, TL_ROWS_TOP, width_all - TL_GUTTER,
+                     (LAYER_MAX + 2) * TL_ROW_H)
+        cr.clip()
         for display_row, layer_index in enumerate(reversed(range(len(layers)))):
             layer = layers[layer_index]
             y = TL_ROWS_TOP + display_row * TL_ROW_H
-            if layer_index == self.layer_i:
-                cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
-                cr.rectangle(0, y, TL_GUTTER, TL_ROW_H - 1)
-                cr.fill()
-            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
-            cr.move_to(0, y + TL_ROW_H - .5)
-            cr.line_to(width_all, y + TL_ROW_H - .5)
-            cr.stroke()
-            cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
-            label = layer['name'][:10]
-            if layer.get('mouth_slots'):
-                label += ' M'
-            _show_text(cr, 8, y + 15, label, 11)
             for run in layer['runs']:
                 left = self._frame_to_x(run['start'])
                 width = max(1, run['len'] * step)
@@ -3989,12 +3997,6 @@ class Animation(nbapp.AppWindow):
         cr.fill()
         for row, sound in enumerate(scene['sounds']):
             y = sound_top + row * TL_ROW_H
-            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
-            cr.move_to(0, y + TL_ROW_H - .5)
-            cr.line_to(width_all, y + TL_ROW_H - .5)
-            cr.stroke()
-            cr.set_source_rgb(110 / 255, 105 / 255, 94 / 255)
-            _show_text(cr, 8, y + 15, _t('Sound') + ' %d' % (row + 1), 11)
             if not sound:
                 continue
             left = self._frame_to_x(sound['start'])
@@ -4035,6 +4037,58 @@ class Animation(nbapp.AppWindow):
             cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
             _show_text(cr, TL_GUTTER + 24, sound_top + 15,
                        _t('Add a sound from the Sound menu.'), 11)
+
+        cr.restore()
+        # second pass: the gutter — row hairlines, washes, names — above
+        # anything the sheet drew
+        for display_row, layer_index in enumerate(reversed(range(len(layers)))):
+            layer = layers[layer_index]
+            y = TL_ROWS_TOP + display_row * TL_ROW_H
+            if layer_index == self.layer_i:
+                cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+                cr.rectangle(0, y, TL_GUTTER, TL_ROW_H - 1)
+                cr.fill()
+            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            cr.move_to(0, y + TL_ROW_H - .5)
+            cr.line_to(width_all, y + TL_ROW_H - .5)
+            cr.stroke()
+            cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+            label = layer['name'][:10]
+            if layer.get('mouth_slots'):
+                label += ' M'
+            _show_text(cr, 8, y + 15, label, 11)
+        sound_top_pass = TL_ROWS_TOP + LAYER_MAX * TL_ROW_H
+        for row in range(SOUND_ROWS):
+            y = sound_top_pass + row * TL_ROW_H
+            cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+            cr.rectangle(0, y, TL_GUTTER, TL_ROW_H - 1)
+            cr.fill()
+            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            cr.move_to(0, y + TL_ROW_H - .5)
+            cr.line_to(width_all, y + TL_ROW_H - .5)
+            cr.stroke()
+            cr.set_source_rgb(110 / 255, 105 / 255, 94 / 255)
+            _show_text(cr, 8, y + 15, _t('Sound') + ' %d' % (row + 1), 11)
+
+        # --- the extent band: the whole scene as one strip, the visible
+        # window bracketed, so a long scene always says where you are ------
+        band_y = TL_ROWS_TOP + (LAYER_MAX + 2) * TL_ROW_H + 2
+        band_w = width_all - TL_GUTTER - 8
+        length = max(1, scene['length'])
+        cr.set_source_rgb(222 / 255, 212 / 255, 194 / 255)
+        cr.rectangle(TL_GUTTER, band_y, band_w, 4)
+        cr.fill()
+        visible = max(1, (width_all - TL_GUTTER) // step)
+        left = TL_GUTTER + band_w * self.view_origin / length
+        span = max(6, band_w * min(visible, length) / length)
+        cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
+        cr.rectangle(left, band_y, min(span, band_w), 4)
+        cr.fill()
+        cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+        ph_x = TL_GUTTER + band_w * self.playhead / length
+        cr.rectangle(ph_x - 1, band_y - 1, 3, 6)
+        cr.fill()
+        self._extent_band = (band_y - 3, band_y + 7)
 
         # --- the playhead, through every band -----------------------------
         x = self._frame_to_x(self.playhead)
