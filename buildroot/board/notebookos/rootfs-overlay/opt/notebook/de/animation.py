@@ -882,8 +882,11 @@ def frame_key(doc, scene, frame):
             key.append((c.id, take_index(r, frame, len(c.takes), doc.boil_every), r['dx'], r['dy'], c.version))
     return tuple(key)
 
-def composite(doc, scene, frame):
-    out = surface(*doc.canvas, white=True)
+def composite(doc, scene, frame, paper=True):
+    """The frame as the film shows it. `paper=False` leaves the ground
+    transparent, which is what an onion skin needs: a neighbouring frame
+    carrying its own opaque paper would simply hide the frame beneath it."""
+    out = surface(*doc.canvas, white=paper)
     ctx = cairo.Context(out)
     ctx.set_antialias(cairo.ANTIALIAS_NONE)
     for l in scene['layers']:
@@ -3898,6 +3901,27 @@ class Animation(nbapp.AppWindow):
                 self._commit_change()
                 self._start_peak_worker(scene['sounds'][row])
 
+    def _onion_surface(self, scene, frame, tint):
+        """A neighbouring frame's ink, tinted, on a transparent ground."""
+        key = (self.scene_i, frame, tint,
+               frame_key(self.doc, scene, frame))
+        cached = getattr(self, '_onion_cache', {}).get(key)
+        if cached is not None:
+            return cached
+        base = composite(self.doc, scene, frame, paper=False)
+        ctx = cairo.Context(base)
+        ctx.set_antialias(cairo.ANTIALIAS_NONE)
+        ctx.set_operator(cairo.OPERATOR_ATOP)
+        red, green, blue = _rgb255(tint)
+        ctx.set_source_rgb(red / 255, green / 255, blue / 255)
+        ctx.paint()
+        if not hasattr(self, '_onion_cache'):
+            self._onion_cache = {}
+        if len(self._onion_cache) > 12:
+            self._onion_cache.clear()
+        self._onion_cache[key] = base
+        return base
+
     def _draw_canvas(self, w, cr):
         cr.set_antialias(cairo.ANTIALIAS_NONE)
         self._ensure_canvas_pointer_events()
@@ -3916,21 +3940,25 @@ class Animation(nbapp.AppWindow):
         cr.save()
         cr.translate(x, y)
         cr.scale(scale, scale)
-        if self.onion:
-            neighbours = [self.playhead - 1]
-            if self.onion == 2:
-                neighbours.append(self.playhead + 1)
-            for frame in neighbours:
-                if not 0 <= frame < scene['length']:
-                    continue
-                onion = composite(self.doc, scene, frame)
-                cr.set_source_surface(onion)
-                cr.get_source().set_filter(cairo.FILTER_NEAREST)
-                cr.paint_with_alpha(.25)
         cr.set_source_surface(s)
         cr.get_source().set_filter(cairo.FILTER_NEAREST if scale >= 1
                                    else cairo.FILTER_BILINEAR)
         cr.paint()
+        # Onion skins ride ON TOP of the frame, not under it: the frame
+        # carries opaque paper, so anything beneath it is invisible (which
+        # is what this feature did before). Previous is signage red, next
+        # is the green, both washed — so past and future are told apart at
+        # a glance, which is the entire point.
+        if self.onion:
+            skins = [(self.playhead - 1, '#C8341E')]
+            if self.onion == 2:
+                skins.append((self.playhead + 1, '#7FA98C'))
+            for frame, tint in skins:
+                if not 0 <= frame < scene['length']:
+                    continue
+                cr.set_source_surface(self._onion_surface(scene, frame, tint))
+                cr.get_source().set_filter(cairo.FILTER_NEAREST)
+                cr.paint_with_alpha(.35)
         # the paper's cut edge: one hairline, so the canvas sits ON the mat
         cr.set_line_width(1 / scale)
         cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)

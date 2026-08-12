@@ -962,6 +962,26 @@ def dialog_limits_family():
     check("F2 block selection copies every layer it covers",
           covered == {0, 1, 2} and width_frames == 6, sorted(covered))
 
+    # §8's onion skin: neighbours ride ON TOP (the frame carries opaque
+    # paper, so anything beneath it is invisible) and are TINTED, or past
+    # and future cannot be told apart — which is the whole point.
+    onion_doc = animation.AnimationDocument(canvas=(80, 60))
+    onion_scene = onion_doc.scenes[0]
+    onion_sheet = animation.Sheet(onion_doc)
+    for index in range(2):
+        made = onion_doc.add_cel("o%d" % index)
+        animation.stamp(made.decoded(0), 20 + index * 30, 30, 8, "round",
+                        animation.px4("#1A1916"))
+        made.version += 1
+        onion_sheet.stamp(0, animation.make_run(made.id, index, 1))
+    solid = animation.composite(onion_doc, onion_scene, 0, paper=True)
+    clear = animation.composite(onion_doc, onion_scene, 0, paper=False)
+    corner_solid = pixel(solid, 0, 0)
+    corner_clear = pixel(clear, 0, 0)
+    check("F1 composite can leave the ground transparent for onion skins",
+          corner_solid != animation.CLEAR4 and corner_clear == animation.CLEAR4,
+          "%r vs %r" % (corner_solid, corner_clear))
+
     check("F9 menu New Scene disabled at cap", capped_rows["New Scene"] is None)
 
     document = animation.AnimationDocument(canvas=(160, 120))
