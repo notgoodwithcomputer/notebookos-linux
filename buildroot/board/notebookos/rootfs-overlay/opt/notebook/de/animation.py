@@ -1231,6 +1231,8 @@ class Animation(nbapp.AppWindow):
                                  Gdk.EventMask.BUTTON_RELEASE_MASK |
                                  Gdk.EventMask.POINTER_MOTION_MASK)
         self.timeline.connect('button-press-event', self._timeline_press)
+        self.timeline.set_has_tooltip(True)
+        self.timeline.connect('query-tooltip', self._timeline_tooltip)
         self.timeline.connect('motion-notify-event', self._timeline_motion)
         self.timeline.connect('button-release-event', self._timeline_release)
         root.pack_start(self.timeline, False, False, 0)
@@ -2036,6 +2038,26 @@ class Animation(nbapp.AppWindow):
                 return
         self.selection = None
 
+    def _timeline_tooltip(self, _widget, x, y, _keyboard, tip):
+        """Drawn controls still introduce themselves: the transport and the
+        scene cards answer hover the way real buttons would."""
+        if y >= TL_STRIP_H:
+            return False
+        names = {'prev': _t('Previous frame'), 'next': _t('Next frame'),
+                 'loop': _t('Loop'), 'onion': _t('Onion Skin'),
+                 'mouths': _t('Stamp Mouths'),
+                 'playstop': _t('Stop') if self._playing else _t('Play')}
+        for left, right, action in getattr(self, '_transport', []):
+            if left <= x <= right:
+                tip.set_text(names.get(action, ''))
+                return True
+        for left, right, index in getattr(self, '_scene_cards', []):
+            if left <= x <= right:
+                tip.set_text(_t('New Scene') if index == 'add'
+                             else self.doc.scenes[index]['name'])
+                return True
+        return False
+
     def _timeline_press(self, _widget, event):
         self.timeline.grab_focus()
         if event.y < TL_STRIP_H:
@@ -2084,6 +2106,9 @@ class Animation(nbapp.AppWindow):
             return True
         frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
         self.playhead = min(scene['length'] - 1, frame)
+        if event.y < TL_ROWS_TOP:
+            # dragging along the ruler scrubs; the press already lands here
+            self._ruler_drag = True
         row = int((event.y - TL_ROWS_TOP) // TL_ROW_H)
         if 0 <= row < len(scene['layers']):
             self.layer_i = len(scene['layers']) - row - 1
@@ -2091,6 +2116,11 @@ class Animation(nbapp.AppWindow):
             if run:
                 self.selection = (self.layer_i, run['start'],
                                   run['start'] + run['len'])
+                # a held press on the bar begins a move-in-time drag; the
+                # undo frame is taken lazily, on the first real movement
+                self._run_drag = {'layer': self.layer_i, 'run': run,
+                                  'anchor': frame, 'origin': run['start'],
+                                  'moved': False}
             self._selected_sound = None
             self._refresh_layers()
         sound_row = int((event.y - (TL_ROWS_TOP + LAYER_MAX * TL_ROW_H)) // TL_ROW_H)
@@ -2125,6 +2155,41 @@ class Animation(nbapp.AppWindow):
         return True
 
     def _timeline_motion(self, _widget, event):
+        if getattr(self, '_ruler_drag', False):
+            scene = self.doc.scenes[self.scene_i]
+            frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
+            frame = min(scene['length'] - 1, frame)
+            if frame != self.playhead:
+                self.playhead = frame
+                self._update_playhead()
+                self._scrub_frame()
+            return True
+        drag = getattr(self, '_run_drag', None)
+        if drag is not None:
+            scene = self.doc.scenes[self.scene_i]
+            frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
+            target = max(0, min(scene['length'] - drag['run']['len'],
+                                drag['origin'] + frame - drag['anchor']))
+            run = drag['run']
+            if target != run['start']:
+                others = [r for r in scene['layers'][drag['layer']]['runs']
+                          if r is not run]
+                clear = all(r['start'] + r['len'] <= target or
+                            r['start'] >= target + run['len'] for r in others)
+                if clear:
+                    if not drag['moved']:
+                        # one undo frame per gesture, taken before the first
+                        # movement lands (the snapshot-before-mutation law)
+                        keep = run['start']
+                        run['start'] = drag['origin']
+                        self._snapshot(_t('Move Exposure'))
+                        run['start'] = keep
+                        drag['moved'] = True
+                    run['start'] = target
+                    self.selection = (drag['layer'], target,
+                                      target + run['len'])
+                    self.timeline.queue_draw()
+            return True
         if not hasattr(self, '_sound_drag'):
             return False
         row, mode, anchor, before = self._sound_drag
@@ -2149,11 +2214,24 @@ class Animation(nbapp.AppWindow):
         return True
 
     def _timeline_release(self, _widget, _event):
+        handled = False
+        if getattr(self, '_ruler_drag', False):
+            self._ruler_drag = False
+            handled = True
+        drag = getattr(self, '_run_drag', None)
+        if drag is not None:
+            if drag['moved']:
+                scene = self.doc.scenes[self.scene_i]
+                scene['layers'][drag['layer']]['runs'].sort(
+                    key=lambda r: r['start'])
+                self._commit_change()
+            self._run_drag = None
+            handled = True
         if hasattr(self, '_sound_drag'):
             del self._sound_drag
             self._mark_dirty()
-            return True
-        return False
+            handled = True
+        return handled
 
     def _remove_sound(self, *_):
         if not self._selected_sound:
