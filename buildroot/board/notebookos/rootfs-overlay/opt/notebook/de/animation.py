@@ -10,6 +10,8 @@ import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 gi.require_version('GdkPixbuf', '2.0')
+gi.require_version('Pango', '1.0')
+gi.require_version('PangoCairo', '1.0')
 from gi.repository import Gtk, Gdk, GLib, GdkPixbuf, Pango, PangoCairo
 import nbapp
 import nbicons
@@ -26,6 +28,16 @@ SCENE_FRAME_MAX, PROJECT_FRAME_MAX = (4800, 43200)
 TAKE_MAX, SOUND_ROWS = (5, 2)
 UNDO_DEPTH, HISTORY_BYTES = (200, 96 * 1024 * 1024)
 ZOOM_STEPS = (1 / 8, 1 / 6, 1 / 4, 1 / 3, 1 / 2, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32)
+
+# Timeline geometry, in one place. A gutter names every row, the ruler
+# numbers the frames, the strip carries the scene cards and the transport.
+# Frame 0 begins at TL_GUTTER on every band, and every press/motion handler
+# shares these numbers with the draw code.
+TL_GUTTER = 92
+TL_STRIP_H = 36
+TL_RULER_H = 26
+TL_ROW_H = 22
+TL_ROWS_TOP = TL_STRIP_H + TL_RULER_H
 PATTERNS = ('solid', 'checker', 'sparse')
 NB_HOME = os.environ.get('NB_HOME', os.path.expanduser('~'))
 DOCS_DIR = os.path.join(NB_HOME, 'Documents')
@@ -1084,6 +1096,8 @@ class Animation(nbapp.AppWindow):
         self._flash_timer = 0
         self._alive = True
         self._cache = FrameLRU()
+        self._scene_thumbs = {}
+        self._cel_thumbs = {}
         self._playing = False
         self._tick = 0
         self._reports = []
@@ -1192,6 +1206,7 @@ class Animation(nbapp.AppWindow):
         side.pack_start(self.takes_box, False, False, 6)
         side.pack_start(Gtk.Label(label=_t('Layers'), xalign=0), False, False, 8)
         self.layer_list = Gtk.ListBox()
+        self.layer_list.connect('row-selected', self._layer_row_selected)
         side.pack_start(self.layer_list, False, False, 0)
         layer_actions = Gtk.Box(homogeneous=True)
         for label, callback in (('+', self._add_layer), ('-', self._delete_layer),
@@ -1310,8 +1325,18 @@ class Animation(nbapp.AppWindow):
         self.palette_area.connect('query-tooltip', self._swatch_tooltip)
         self.palette_area.get_accessible().set_name(_t('Colour swatches'))
         dock.pack_start(self.palette_area, False, False, 0)
-        self.colour_name = Gtk.Label(label=self.color, xalign=0)
-        dock.pack_start(self.colour_name, False, False, 2)
+        # The chosen colour as a thing you can see, not a hex code: a chip
+        # plus the swatch's composed name (Illustrator's vocabulary).
+        chip_row = Gtk.Box(spacing=6)
+        self.colour_chip = Gtk.DrawingArea()
+        self.colour_chip.set_size_request(24, 24)
+        self.colour_chip.connect('draw', self._draw_colour_chip)
+        chip_row.pack_start(self.colour_chip, False, False, 0)
+        self.colour_name = Gtk.Label(label=self._colour_label(self.color),
+                                     xalign=0)
+        self.colour_name.set_ellipsize(Pango.EllipsizeMode.END)
+        chip_row.pack_start(self.colour_name, True, True, 0)
+        dock.pack_start(chip_row, False, False, 2)
 
     def _swatch_cell(self, x, y):
         sw, gap = self._swatch_geom
@@ -1424,9 +1449,32 @@ class Animation(nbapp.AppWindow):
                    key=lambda item: sum((x - y) ** 2
                                         for x, y in zip((r, g, b), _rgb255(item))))
 
+    def _colour_label(self, colour):
+        """The swatch's composed name when the colour is on the board, else
+        the honest hex (the eyedropper can pick anything)."""
+        upper = colour.upper()
+        for index, hex_ in enumerate(PALETTE):
+            if hex_.upper() == upper:
+                return self._palette_name(index)
+        return upper
+
+    def _draw_colour_chip(self, area, cr):
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        r, g, b = _rgb255(self.color)
+        cr.set_source_rgb(r / 255, g / 255, b / 255)
+        cr.rectangle(0, 0, area.get_allocated_width(),
+                     area.get_allocated_height())
+        cr.fill()
+        cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+        cr.rectangle(.5, .5, area.get_allocated_width() - 1,
+                     area.get_allocated_height() - 1)
+        cr.stroke()
+        return False
+
     def _choose_colour(self, _button, colour):
         self.color = self._snap_colour(colour)
-        self.colour_name.set_text(self.color)
+        self.colour_name.set_text(self._colour_label(self.color))
+        self.colour_chip.queue_draw()
 
     def _palette_add(self, *_):
         if self.color in self.doc.palette or len(self.doc.palette) >= 16:
@@ -1447,7 +1495,7 @@ class Animation(nbapp.AppWindow):
     def _palette_lock(self, button):
         self._snapshot(_t('Palette Lock'))
         self.doc.palette_only = button.get_active()
-        self.color = self._snap_colour(self.color)
+        self._choose_colour(None, self.color)
         self._mark_dirty()
 
     def _refresh_project_palette(self):
@@ -1460,15 +1508,54 @@ class Animation(nbapp.AppWindow):
             self.project_palette_box.pack_start(button, False, False, 0)
         self.project_palette_box.show_all()
 
+    def _cel_thumb_surface(self, cel):
+        """A 44x33 picture of take 0, cached per cel version — the library
+        navigates by pictures, not by names."""
+        cached = self._cel_thumbs.get(cel.id)
+        if cached is not None and cached[0] == cel.version:
+            return cached[1]
+        thumb = cairo.ImageSurface(cairo.FORMAT_ARGB32, 44, 33)
+        ctx = cairo.Context(thumb)
+        ctx.set_source_rgb(1, 1, 1)
+        ctx.paint()
+        ctx.scale(44 / cel.w, 33 / cel.h)
+        try:
+            ctx.set_source_surface(cel.decoded(0), 0, 0)
+            ctx.paint()
+        except Exception:
+            pass
+        self._cel_thumbs[cel.id] = (cel.version, thumb)
+        return thumb
+
     def _refresh_lists(self):
         for child in self.cel_list.get_children():
             self.cel_list.remove(child)
+        if not self.doc.cels:
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            hint = Gtk.Label(label=_t('Drawings appear here as you draw.'),
+                             xalign=0)
+            hint.set_line_wrap(True)
+            hint.get_style_context().add_class('animation-muted')
+            row.add(hint)
+            self.cel_list.add(row)
         for cel in self.doc.cels:
             row = Gtk.ListBoxRow()
-            row.add(Gtk.Label(label=cel.name + '  ' +
-                              (_t('%d take%s') % (len(cel.takes),
-                                                  's' if len(cel.takes) != 1
-                                                  else '')), xalign=0))
+            box = Gtk.Box(spacing=8)
+            picture = Gtk.Image.new_from_surface(self._cel_thumb_surface(cel))
+            box.pack_start(picture, False, False, 2)
+            words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            name = Gtk.Label(label=cel.name, xalign=0)
+            name.set_ellipsize(Pango.EllipsizeMode.END)
+            words.pack_start(name, False, False, 0)
+            takes = Gtk.Label(label=(_t('%d take%s') %
+                                     (len(cel.takes),
+                                      's' if len(cel.takes) != 1 else '')),
+                              xalign=0)
+            takes.get_style_context().add_class('animation-muted')
+            words.pack_start(takes, False, False, 0)
+            box.pack_start(words, True, True, 0)
+            row.add(box)
             row.cel_id = cel.id
             self.cel_list.add(row)
         self._refresh_layers()
@@ -1479,6 +1566,7 @@ class Animation(nbapp.AppWindow):
         for child in self.layer_list.get_children():
             self.layer_list.remove(child)
         layers = self.doc.scenes[self.scene_i]['layers']
+        active_row = None
         for index in reversed(range(len(layers))):
             layer = layers[index]
             row = Gtk.ListBoxRow()
@@ -1498,7 +1586,20 @@ class Animation(nbapp.AppWindow):
             row.add(box)
             row.layer_index = index
             self.layer_list.add(row)
+            if index == self.layer_i:
+                active_row = row
         self.layer_list.show_all()
+        if active_row is not None:
+            self.layer_list.select_row(active_row)
+
+    def _layer_row_selected(self, _list, row):
+        """Clicking a layer row makes it the drawing target — the selected
+        row IS the statement of where the next stroke lands."""
+        if row is None or not hasattr(row, 'layer_index'):
+            return
+        if self.layer_i != row.layer_index:
+            self.layer_i = row.layer_index
+            self.timeline.queue_draw()
 
     def _toggle_layer(self, button, index):
         self._snapshot(_t('Layer Visibility'))
@@ -1541,6 +1642,7 @@ class Animation(nbapp.AppWindow):
 
     def _commit_change(self):
         self._cache.clear()
+        self._scene_thumbs.clear()
         self._mark_dirty()
         self._refresh_lists()
         self.canvas.queue_draw()
@@ -1640,8 +1742,8 @@ class Animation(nbapp.AppWindow):
         if self.tool == 'picker':
             frame = composite(self.doc, self.doc.scenes[self.scene_i], self.playhead)
             pixel = pix_at(frame, *point)
-            self.color = self._snap_colour('#%02X%02X%02X' %
-                                           (pixel[2], pixel[1], pixel[0]))
+            self._choose_colour(None, '#%02X%02X%02X' %
+                                (pixel[2], pixel[1], pixel[0]))
             self.tool = self.previous_tool
             return True
         self._snapshot(_t('Draw'))
@@ -1725,18 +1827,53 @@ class Animation(nbapp.AppWindow):
 
     def _timeline_press(self, _widget, event):
         self.timeline.grab_focus()
-        if event.y < 40 and event.x > self.timeline.get_allocated_width() - 150:
-            self._toggle_stamp_mouths()
-            return True
-        if event.y < 36:
+        if event.y < TL_STRIP_H:
+            for left, right, action in getattr(self, '_transport', []):
+                if left <= event.x <= right:
+                    if action == 'mouths':
+                        self._toggle_stamp_mouths()
+                    elif action == 'playstop':
+                        if self._playing:
+                            self._stop_playback()
+                        else:
+                            self._start_playback()
+                    elif action == 'prev':
+                        self.playhead = max(0, self.playhead - 1)
+                        self._update_playhead()
+                        self._scrub_frame()
+                    elif action == 'next':
+                        scene = self.doc.scenes[self.scene_i]
+                        self.playhead = min(scene['length'] - 1,
+                                            self.playhead + 1)
+                        self._update_playhead()
+                        self._scrub_frame()
+                    elif action == 'loop':
+                        self.loop = not self.loop
+                        self.timeline.queue_draw()
+                    elif action == 'onion':
+                        self._cycle_onion()
+                        self.timeline.queue_draw()
+                    return True
             for left, right, index in getattr(self, '_scene_cards', []):
                 if left <= event.x <= right:
-                    self._switch_scene(index)
+                    if index == 'add':
+                        self._new_scene()
+                    else:
+                        self._switch_scene(index)
                     return True
-        frame = max(0, int((event.x - 20) // self.column_width))
+            return True
         scene = self.doc.scenes[self.scene_i]
+        if event.x < TL_GUTTER and event.y >= TL_ROWS_TOP:
+            # the gutter is the row's name: clicking it chooses the row
+            row = int((event.y - TL_ROWS_TOP) // TL_ROW_H)
+            if 0 <= row < len(scene['layers']):
+                self.layer_i = len(scene['layers']) - row - 1
+                self._refresh_layers()
+                self.timeline.queue_draw()
+            return True
+        frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
         self.playhead = min(scene['length'] - 1, frame)
-        row = int((event.y - 62) // 22)
+        row = int((event.y - TL_ROWS_TOP) // TL_ROW_H)
         if 0 <= row < len(scene['layers']):
             self.layer_i = len(scene['layers']) - row - 1
             run = run_at(scene['layers'][self.layer_i]['runs'], self.playhead)
@@ -1744,7 +1881,8 @@ class Animation(nbapp.AppWindow):
                 self.selection = (self.layer_i, run['start'],
                                   run['start'] + run['len'])
             self._selected_sound = None
-        sound_row = int((event.y - (62 + LAYER_MAX * 22)) // 22)
+            self._refresh_layers()
+        sound_row = int((event.y - (TL_ROWS_TOP + LAYER_MAX * TL_ROW_H)) // TL_ROW_H)
         if 0 <= sound_row < SOUND_ROWS:
             sound = scene['sounds'][sound_row]
             if sound:
@@ -1755,7 +1893,7 @@ class Animation(nbapp.AppWindow):
                 if start <= frame < start + frames:
                     self._selected_sound = (self.scene_i, sound_row)
                     self.selection = None
-                    dot_x = 20 + (start + frames) * self.column_width - 8
+                    dot_x = TL_GUTTER + (start + frames) * self.column_width - 8
                     if abs(event.x - dot_x) <= 8:
                         self._snapshot(_t('Mute Sound'))
                         sound['mute'] = not sound.get('mute', False)
@@ -1780,7 +1918,7 @@ class Animation(nbapp.AppWindow):
             return False
         row, mode, anchor, before = self._sound_drag
         sound = self.doc.scenes[self.scene_i]['sounds'][row]
-        frame = max(0, int((event.x - 20) // self.column_width))
+        frame = max(0, int((event.x - TL_GUTTER) // self.column_width))
         delta = frame - anchor
         spf = SPF[self.doc.fps]
         if mode == 'move':
@@ -2596,6 +2734,7 @@ class Animation(nbapp.AppWindow):
         scale = self.zoom
         x = (w.get_allocated_width() - self.doc.canvas[0] * scale) / 2
         y = (w.get_allocated_height() - self.doc.canvas[1] * scale) / 2
+        cr.save()
         cr.translate(x, y)
         cr.scale(scale, scale)
         if self.onion:
@@ -2633,84 +2772,282 @@ class Animation(nbapp.AppWindow):
             cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
             cr.rectangle(0, 0, self.doc.canvas[0], self.doc.canvas[1])
             cr.stroke()
+        cr.restore()
+        if not any(l['runs'] for l in scene['layers']):
+            # the first thing a new person sees: one honest sentence, gone
+            # the moment they draw
+            hint = _t('Draw here. Each drawing becomes a frame.')
+            layout = _pango_layout(cr, hint, 13)
+            text_w = layout.get_pixel_size()[0]
+            cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
+            _show_text(cr, (w.get_allocated_width() - text_w) / 2,
+                       w.get_allocated_height() / 2 + 60, hint, 13)
         return False
+
+    def _draw_mark_box(self, cr, x, y, kind, active=False, dim=False):
+        """One drawn transport button: a 30x28 letterpress box with a mark.
+
+        Marks are painted, not styled, so they exist on every rendering path
+        (Illustrator's _draw_mark rule); the active state is the wash fill the
+        Stamp Mouths box already used.
+        """
+        w_, h_ = 30, 28
+        if active:
+            cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+            cr.rectangle(x, y, w_, h_)
+            cr.fill()
+        cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+        cr.rectangle(x + .5, y + .5, w_, h_)
+        cr.stroke()
+        ink = (154 / 255, 148 / 255, 132 / 255) if dim else (26 / 255, 25 / 255, 22 / 255)
+        cr.set_source_rgb(*ink)
+        cx, cy = x + w_ / 2, y + h_ / 2
+        cr.set_line_width(1.6)
+        if kind == 'prev':
+            cr.move_to(cx + 4, cy - 6); cr.line_to(cx - 4, cy)
+            cr.line_to(cx + 4, cy + 6); cr.close_path(); cr.fill()
+            cr.rectangle(cx - 7, cy - 6, 2, 12); cr.fill()
+        elif kind == 'next':
+            cr.move_to(cx - 4, cy - 6); cr.line_to(cx + 4, cy)
+            cr.line_to(cx - 4, cy + 6); cr.close_path(); cr.fill()
+            cr.rectangle(cx + 5, cy - 6, 2, 12); cr.fill()
+        elif kind == 'play':
+            cr.move_to(cx - 4, cy - 7); cr.line_to(cx + 6, cy)
+            cr.line_to(cx - 4, cy + 7); cr.close_path(); cr.fill()
+        elif kind == 'stop':
+            cr.rectangle(cx - 5, cy - 5, 10, 10); cr.fill()
+        elif kind == 'loop':
+            cr.new_sub_path()
+            cr.arc(cx, cy, 6, math.pi * .25, math.pi * 1.75)
+            cr.stroke()
+            tip_x = cx + 6 * math.cos(math.pi * .25)
+            tip_y = cy + 6 * math.sin(math.pi * .25)
+            cr.move_to(tip_x + 3, tip_y - 3); cr.line_to(tip_x - 3, tip_y - 2)
+            cr.line_to(tip_x + 1, tip_y + 3); cr.close_path(); cr.fill()
+        elif kind == 'onion':
+            cr.rectangle(cx - 7, cy - 6, 9, 11); cr.stroke()
+            cr.rectangle(cx - 2, cy - 3, 9, 11); cr.stroke()
+            for dot in range(self.onion):
+                cr.arc(cx - 3 + dot * 6, cy + 11, 1.5, 0, math.tau)
+                cr.fill()
+
+    def _scene_thumb(self, index):
+        """A tiny frame-0 composite for a scene card, cached until an edit."""
+        cached = self._scene_thumbs.get(index)
+        if cached is not None:
+            return cached
+        try:
+            frame = composite(self.doc, self.doc.scenes[index], 0)
+        except Exception:
+            return None
+        thumb = cairo.ImageSurface(cairo.FORMAT_ARGB32, 36, 27)
+        ctx = cairo.Context(thumb)
+        ctx.scale(36 / self.doc.canvas[0], 27 / self.doc.canvas[1])
+        ctx.set_source_surface(frame, 0, 0)
+        ctx.paint()
+        self._scene_thumbs[index] = thumb
+        return thumb
 
     def _draw_timeline(self, w, cr):
         cr.set_antialias(cairo.ANTIALIAS_NONE)
+        width_all = w.get_allocated_width()
         cr.set_source_rgb(252 / 255, 251 / 255, 248 / 255)
         cr.paint()
-        cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
         scene = self.doc.scenes[self.scene_i]
-        _show_text(cr, 20, 24, _t('Scenes'))
-        # The scene strip: one card per scene (name + length), the active
-        # card washed, click-to-switch hit rects remembered for the press
-        # handler. Cards are the visible structure the strip promised.
+        layers = scene['layers']
+        cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+        _show_text(cr, 8, 24, _t('Scenes'))
+
+        # --- the transport: real drawn buttons with real hit targets -------
+        self._transport = []
+        bx = width_all - 4
+        for kind, action in (('mouths', 'mouths'), ('onion', 'onion'),
+                             ('loop', 'loop'), ('next', 'next'),
+                             ('playstop', 'playstop'), ('prev', 'prev')):
+            if kind == 'mouths':
+                box_w = 116
+                bx -= box_w
+                cr.rectangle(bx + .5, 4.5, box_w, 28)
+                if self.stamp_mouths:
+                    cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+                    cr.fill_preserve()
+                cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+                cr.stroke()
+                cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+                _show_text(cr, bx + 8, 23, _t('Stamp Mouths'), 11)
+                self._transport.append((bx, bx + box_w, action))
+                bx -= 6
+            else:
+                bx -= 30
+                mark = kind
+                active = False
+                if kind == 'playstop':
+                    mark = 'stop' if self._playing else 'play'
+                elif kind == 'loop':
+                    active = self.loop
+                elif kind == 'onion':
+                    active = self.onion > 0
+                self._draw_mark_box(cr, bx, 4, mark, active=active)
+                self._transport.append((bx, bx + 30, action))
+                bx -= 4
+        cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+        readout = self.readout.get_text()
+        layout = _pango_layout(cr, readout, 12)
+        text_w = layout.get_pixel_size()[0]
+        _show_text(cr, bx - 8 - text_w, 24, readout)
+
+        # --- the scene strip: cards with pictures, then the + card --------
         x = 84
         self._scene_cards = []
-        limit = w.get_allocated_width() - 340
+        limit = bx - 12 - text_w - 40
         for index, entry in enumerate(self.doc.scenes):
-            label = '%s  %d' % (entry['name'][:14], entry['length'])
-            width = 12 + 7 * len(label)
-            if x + width > limit:
+            name = entry['name'][:12]
+            layout = _pango_layout(cr, name, 11)
+            name_w = layout.get_pixel_size()[0]
+            card_w = 42 + name_w + 10
+            if x + card_w > limit:
+                cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
                 _show_text(cr, x, 24, '…')
                 break
             if index == self.scene_i:
                 cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
-                cr.rectangle(x, 6, width, 24)
+                cr.rectangle(x, 3, card_w, 30)
                 cr.fill()
+            thumb = self._scene_thumb(index)
+            if thumb is not None:
+                cr.save()
+                cr.translate(x + 3, 4)
+                cr.set_source_surface(thumb)
+                cr.paint()
+                cr.restore()
             cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
-            cr.rectangle(x + .5, 6.5, width, 24)
+            cr.rectangle(x + 2.5, 3.5, 37, 28)
+            cr.stroke()
+            cr.rectangle(x + .5, 2.5, card_w, 31)
             cr.stroke()
             cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
-            _show_text(cr, x + 6, 24, label)
-            self._scene_cards.append((x, x + width, index))
-            x += width + 6
-        _show_text(cr, w.get_allocated_width() - 320, 24,
-                   (_t('Loop') if self.loop else _t('Play')) + '  ' +
-                   self.readout.get_text())
-        cr.rectangle(w.get_allocated_width() - 150, 4, 146, 28)
-        if self.stamp_mouths:
-            cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
-            cr.fill_preserve()
-        cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
-        cr.stroke()
-        _show_text(cr, w.get_allocated_width() - 142, 23, _t('Stamp Mouths'))
-        top = 62
-        for display_row, layer_index in enumerate(reversed(range(len(scene['layers'])))):
-            layer = scene['layers'][layer_index]
-            y = top + display_row * 22
+            _show_text(cr, x + 44, 22, name, 11)
+            self._scene_cards.append((x, x + card_w, index))
+            x += card_w + 6
+        at_cap = len(self.doc.scenes) >= SCENE_MAX
+        if x + 30 <= limit:
             cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
-            cr.move_to(0, y + 21)
-            cr.line_to(w.get_allocated_width(), y + 21)
+            cr.rectangle(x + .5, 2.5, 30, 31)
             cr.stroke()
-            for run in layer['runs']:
-                left = 20 + run['start'] * self.column_width
-                width = max(1, run['len'] * self.column_width)
+            ink = (154, 148, 132) if at_cap else (26, 25, 22)
+            cr.set_source_rgb(ink[0] / 255, ink[1] / 255, ink[2] / 255)
+            cr.rectangle(x + 14, 11, 2, 14)
+            cr.fill()
+            cr.rectangle(x + 8, 17, 14, 2)
+            cr.fill()
+            if not at_cap:
+                self._scene_cards.append((x, x + 30, 'add'))
+
+        # --- the ruler: numbered frames, marker flags, honest zero --------
+        cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+        cr.move_to(0, TL_ROWS_TOP - .5)
+        cr.line_to(width_all, TL_ROWS_TOP - .5)
+        cr.stroke()
+        step = self.column_width
+        major = self.doc.fps
+        frame = 0
+        while True:
+            px = TL_GUTTER + frame * step
+            if px > width_all:
+                break
+            if frame % major == 0:
+                cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
+                cr.move_to(px + .5, TL_ROWS_TOP - 10)
+                cr.line_to(px + .5, TL_ROWS_TOP - 1)
+                cr.stroke()
+                _show_text(cr, px + 3, TL_ROWS_TOP - 8, str(frame), 9)
+            elif frame % 4 == 0:
+                cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+                cr.move_to(px + .5, TL_ROWS_TOP - 5)
+                cr.line_to(px + .5, TL_ROWS_TOP - 1)
+                cr.stroke()
+            frame += 4
+        for marker in scene['markers']:
+            marker_x = TL_GUTTER + marker['frame'] * step
+            cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+            cr.move_to(marker_x + .5, TL_STRIP_H + 2)
+            cr.line_to(marker_x + .5, TL_ROWS_TOP - 2)
+            cr.stroke()
+            cr.move_to(marker_x, TL_STRIP_H + 2)
+            cr.line_to(marker_x + 8, TL_STRIP_H + 5)
+            cr.line_to(marker_x, TL_STRIP_H + 8)
+            cr.close_path()
+            cr.fill()
+
+        # --- layer rows: a named gutter, the active row washed ------------
+        for display_row, layer_index in enumerate(reversed(range(len(layers)))):
+            layer = layers[layer_index]
+            y = TL_ROWS_TOP + display_row * TL_ROW_H
+            if layer_index == self.layer_i:
                 cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
-                cr.rectangle(left, y + 2, width, 18)
+                cr.rectangle(0, y, TL_GUTTER, TL_ROW_H - 1)
                 cr.fill()
+            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            cr.move_to(0, y + TL_ROW_H - .5)
+            cr.line_to(width_all, y + TL_ROW_H - .5)
+            cr.stroke()
+            cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+            label = layer['name'][:10]
+            if layer.get('mouth_slots'):
+                label += ' M'
+            _show_text(cr, 8, y + 15, label, 11)
+            for run in layer['runs']:
+                left = TL_GUTTER + run['start'] * step
+                width = max(1, run['len'] * step)
+                cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+                cr.rectangle(left, y + 2, width, TL_ROW_H - 4)
+                cr.fill()
+                cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+                cr.rectangle(left + .5, y + 2.5, width, TL_ROW_H - 4)
+                cr.stroke()
                 cel = self.doc.cel(run['cel'])
                 cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
                 if width >= 42:
                     _show_text(cr, left + 3, y + 15,
-                               cel.name if cel else _t('Missing drawing'))
+                               cel.name if cel else _t('Missing drawing'), 11)
                 if run.get('take', 0) == 0:
-                    _show_text(cr, left + width - 10, y + 15, '~')
-        sound_top = top + LAYER_MAX * 22
+                    _show_text(cr, left + width - 10, y + 15, '~', 11)
+        gutter_hairline = TL_GUTTER - .5
+        cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+        cr.move_to(gutter_hairline, TL_STRIP_H)
+        cr.line_to(gutter_hairline, TL_ROWS_TOP + (LAYER_MAX + 2) * TL_ROW_H)
+        cr.stroke()
+        if not any(l['runs'] for l in layers):
+            cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
+            _show_text(cr, TL_GUTTER + 24,
+                       TL_ROWS_TOP + TL_ROW_H * 2 - 6,
+                       _t('Your drawings line up here in time.'), 12)
+
+        # --- sound rows: tinted band, named gutter, waveforms -------------
+        sound_top = TL_ROWS_TOP + LAYER_MAX * TL_ROW_H
+        cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
+        cr.rectangle(0, sound_top, width_all, 2 * TL_ROW_H)
+        cr.fill()
         for row, sound in enumerate(scene['sounds']):
-            y = sound_top + row * 22
+            y = sound_top + row * TL_ROW_H
+            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            cr.move_to(0, y + TL_ROW_H - .5)
+            cr.line_to(width_all, y + TL_ROW_H - .5)
+            cr.stroke()
+            cr.set_source_rgb(110 / 255, 105 / 255, 94 / 255)
+            _show_text(cr, 8, y + 15, _t('Sound') + ' %d' % (row + 1), 11)
             if not sound:
                 continue
-            left = 20 + sound['start'] * self.column_width
+            left = TL_GUTTER + sound['start'] * step
             duration = max(0, sound.get('duration_smp', 0) -
                            sound.get('in_smp', 0) - sound.get('out_smp', 0))
             frames = max(1, math.ceil(duration / SPF[self.doc.fps]))
-            width = max(self.column_width, frames * self.column_width)
+            width = max(step, frames * step)
             if sound.get('_decode_error') or not os.path.exists(sound['path']):
                 cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
             else:
                 cr.set_source_rgb(127 / 255, 169 / 255, 140 / 255)
-            cr.rectangle(left, y + 2, width, 18)
+            cr.rectangle(left, y + 2, width, TL_ROW_H - 4)
             cr.fill()
             try:
                 peaks = array.array('h')
@@ -2727,32 +3064,33 @@ class Animation(nbapp.AppWindow):
             except Exception:
                 pass
             cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
-            _show_text(cr, left + 3, y + 15, os.path.basename(sound['path']))
+            if width >= 60:
+                _show_text(cr, left + 3, y + 15,
+                           os.path.basename(sound['path'])[:24], 11)
             cr.arc(left + width - 8, y + 11, 3, 0, math.tau)
             if sound.get('mute'):
                 cr.fill()
             else:
                 cr.stroke()
-        for marker in scene['markers']:
-            marker_x = 20 + marker['frame'] * self.column_width
-            cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
-            cr.move_to(marker_x, 42)
-            cr.line_to(marker_x, 60)
-            cr.stroke()
-            # a small flag so a marker reads as a placed thing, not a glitch
-            cr.move_to(marker_x, 42)
-            cr.line_to(marker_x + 8, 45)
-            cr.line_to(marker_x, 48)
-            cr.close_path()
-            cr.fill()
-        x = 20 + self.playhead * self.column_width
+        if not any(scene['sounds']):
+            cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
+            _show_text(cr, TL_GUTTER + 24, sound_top + 15,
+                       _t('Add a sound from the Sound menu.'), 11)
+
+        # --- the playhead, through every band -----------------------------
+        x = TL_GUTTER + self.playhead * step
         cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
-        cr.rectangle(x, 40, 1, 190)
+        cr.rectangle(x, TL_STRIP_H + 2, 1,
+                     TL_ROWS_TOP - TL_STRIP_H - 2 + (LAYER_MAX + 2) * TL_ROW_H)
+        cr.fill()
+        cr.move_to(x - 4, TL_STRIP_H + 2)
+        cr.line_to(x + 5, TL_STRIP_H + 2)
+        cr.line_to(x + .5, TL_STRIP_H + 8)
+        cr.close_path()
         cr.fill()
         if w.has_focus():
             cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
-            cr.rectangle(.5, .5, w.get_allocated_width() - 1,
-                         w.get_allocated_height() - 1)
+            cr.rectangle(.5, .5, width_all - 1, w.get_allocated_height() - 1)
             cr.stroke()
         return False
 
