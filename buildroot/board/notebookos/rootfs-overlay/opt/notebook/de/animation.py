@@ -4034,7 +4034,13 @@ class Animation(nbapp.AppWindow):
                              ('loop', 'loop'), ('next', 'next'),
                              ('playstop', 'playstop'), ('prev', 'prev')):
             if kind == 'mouths':
-                box_w = 116
+                # The box fits its OWN text: 'Stamp Mouths' is 116px in
+                # English and half again in Greek, and drawn text has no
+                # widget to ellipsize — ellipsis_sweep inspects Labels, so
+                # a fixed box would cut this where no gate could see it.
+                mouth_text = _t('Stamp Mouths')
+                mouth_layout = _pango_layout(cr, mouth_text, 11)
+                box_w = max(116, mouth_layout.get_pixel_size()[0] + 36)
                 bx -= box_w
                 cr.rectangle(bx + .5, 4.5, box_w, 28)
                 if self.stamp_mouths:
@@ -4044,7 +4050,7 @@ class Animation(nbapp.AppWindow):
                 cr.stroke()
                 cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
                 self._draw_mark_box(cr, bx + 1, 4, 'mouths')
-                _show_text(cr, bx + 26, 23, _t('Stamp Mouths'), 11)
+                _show_text(cr, bx + 26, 23, mouth_text, 11)
                 self._transport.append((bx, bx + box_w, action))
                 bx -= 6
             else:
