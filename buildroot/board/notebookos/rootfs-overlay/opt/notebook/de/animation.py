@@ -2871,7 +2871,15 @@ class Animation(nbapp.AppWindow):
         self._follow_playhead()
         seconds, frame = divmod(self.playhead, self.doc.fps)
         minutes, seconds = divmod(seconds, 60)
-        self.readout.set_text('%d:%02d+%02d' % (minutes, seconds, frame))
+        # position AND the scene's length: a film-maker's first question is
+        # "how long is this?", and the answer was previously only inside the
+        # export card. Digits and a slash, so no string needs translating.
+        total = max(0, scene['length'] - 1)
+        end_seconds, end_frame = divmod(total, self.doc.fps)
+        end_minutes, end_seconds = divmod(end_seconds, 60)
+        self.readout.set_text('%d:%02d+%02d / %d:%02d+%02d'
+                              % (minutes, seconds, frame,
+                                 end_minutes, end_seconds, end_frame))
         self.scene_status.set_text((_t('%d fps') % self.doc.fps) + '   ' +
                                    (_t('Scene %d of %d') %
                                     (self.scene_i + 1, len(self.doc.scenes))))
@@ -2883,8 +2891,11 @@ class Animation(nbapp.AppWindow):
             for x in (previous_x, current_x):
                 self.timeline.queue_draw_area(int(x) - 6, 0, 18, height)
             width = self.timeline.get_allocated_width()
-            # the transport readout, and the extent band's whole row
-            self.timeline.queue_draw_area(width - 380, 0, 240, TL_STRIP_H)
+            # the transport readout, and the extent band's whole row. The
+            # rect must cover where the readout STARTS: it carries
+            # position / length now, so it reaches further left than the
+            # first version of this optimisation assumed.
+            self.timeline.queue_draw_area(width - 470, 0, 330, TL_STRIP_H)
             self.timeline.queue_draw_area(
                 0, TL_ROWS_TOP + (LAYER_MAX + 2) * TL_ROW_H, width, 10)
         else:
