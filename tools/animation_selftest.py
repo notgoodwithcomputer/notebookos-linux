@@ -946,6 +946,22 @@ def dialog_limits_family():
     capped = menu_fake(animation.SCENE_MAX)
     capped_rows = dict(row for row in animation.Animation.menu_items(capped, "Scene")
                        if row != animation.nbapp.SEP)
+    # §5's block selection is a RECTANGLE of sheet: shift extends across
+    # frames and layers, and every layer in it is copied and cleared.
+    block_doc = animation.AnimationDocument(canvas=(160, 120))
+    block_scene = block_doc.scenes[0]
+    block_scene["layers"].append(animation.new_layer("B"))
+    block_scene["layers"].append(animation.new_layer("C"))
+    block_sheet = animation.Sheet(block_doc)
+    for layer_index in range(3):
+        made = block_doc.add_cel("c%d" % layer_index)
+        block_sheet.stamp(layer_index, animation.make_run(made.id, 0, 6))
+    block_sheet.copy_block([0, 1, 2], 0, 6)
+    width_frames, spans = block_sheet.clipboard
+    covered = {row[0] for row in spans}
+    check("F2 block selection copies every layer it covers",
+          covered == {0, 1, 2} and width_frames == 6, sorted(covered))
+
     check("F9 menu New Scene disabled at cap", capped_rows["New Scene"] is None)
 
     document = animation.AnimationDocument(canvas=(160, 120))

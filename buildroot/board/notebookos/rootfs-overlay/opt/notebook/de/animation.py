@@ -2654,11 +2654,30 @@ class Animation(nbapp.AppWindow):
             self._ruler_drag = True
         row = int((event.y - TL_ROWS_TOP) // TL_ROW_H)
         if 0 <= row < len(scene['layers']):
-            self.layer_i = len(scene['layers']) - row - 1
+            shift = bool(event.state & Gdk.ModifierType.SHIFT_MASK)
+            hit_layer = len(scene['layers']) - row - 1
+            if shift and self.selection:
+                # a rectangle of sheet: from the anchor to here, across
+                # frames AND layers (spec §5's block selection)
+                anchor_layer, anchor_start, anchor_end = self.selection
+                lo = min(anchor_layer, hit_layer)
+                hi = max(anchor_layer, hit_layer)
+                start = min(anchor_start, frame)
+                end = max(anchor_end, frame + 1)
+                self.selection = (anchor_layer, start, end)
+                self.selection_layers = (lo, hi)
+                self._selected_sound = None
+                self._refresh_layers()
+                self._update_playhead()
+                return True
+            self.layer_i = hit_layer
             run = run_at(scene['layers'][self.layer_i]['runs'], self.playhead)
             if run:
                 self.selection = (self.layer_i, run['start'],
                                   run['start'] + run['len'])
+                self.selection_layers = (self.layer_i, self.layer_i)
+            else:
+                self.selection_layers = None
                 # a held press on the bar begins a move-in-time drag; the
                 # undo frame is taken lazily, on the first real movement
                 self._run_drag = {'layer': self.layer_i, 'run': run,
@@ -2937,16 +2956,27 @@ class Animation(nbapp.AppWindow):
     def _clear_exposure(self, *_):
         if not self.selection:
             return
-        layer, start, end = self.selection
+        _layer, start, end = self.selection
         self._snapshot(_t('Clear Exposure'))
-        self.sheet.clear(layer, start, end)
+        for index in self._selected_layers():
+            self.sheet.clear(index, start, end)
         self.selection = None
+        self.selection_layers = None
         self._commit_change()
+
+    def _selected_layers(self):
+        """Every layer the block covers — one, unless Shift widened it."""
+        if not self.selection:
+            return []
+        if self.selection_layers:
+            lo, hi = self.selection_layers
+            return list(range(lo, hi + 1))
+        return [self.selection[0]]
 
     def _copy_selection(self, *_):
         if self.selection:
-            layer, start, end = self.selection
-            self.sheet.copy_block([layer], start, end)
+            _layer, start, end = self.selection
+            self.sheet.copy_block(self._selected_layers(), start, end)
 
     def _cut_selection(self, *_):
         self._copy_selection()
@@ -4272,6 +4302,23 @@ class Animation(nbapp.AppWindow):
             _show_text(cr, TL_GUTTER + 24, sound_top + 15,
                        _t('Add a sound from the Sound menu.'), 11)
 
+        # the block a person selected, drawn as the rectangle it is — the
+        # sheet said nothing about selection before this
+        if self.selection:
+            _anchor, sel_start, sel_end = self.selection
+            layers_in_block = self._selected_layers()
+            left = self._frame_to_x(sel_start)
+            right = self._frame_to_x(sel_end)
+            for index in layers_in_block:
+                if not 0 <= index < len(layers):
+                    continue
+                display = len(layers) - index - 1
+                y = TL_ROWS_TOP + display * TL_ROW_H
+                cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+                cr.set_line_width(1)
+                cr.rectangle(left + .5, y + 1.5,
+                             max(2, right - left) - 1, TL_ROW_H - 4)
+                cr.stroke()
         cr.restore()
         # second pass: the gutter — row hairlines, washes, names — above
         # anything the sheet drew
