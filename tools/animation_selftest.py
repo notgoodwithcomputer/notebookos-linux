@@ -648,6 +648,7 @@ def history_app(document=None):
     app._mark_dirty = lambda: None
     app._history_apply = types.MethodType(animation.Animation._history_apply, app)
     app._snapshot = types.MethodType(animation.Animation._snapshot, app)
+    app._trim_history = types.MethodType(animation.Animation._trim_history, app)
     return app
 
 
@@ -707,6 +708,57 @@ def undo_family():
     app._snapshot("New branch")
     check("F8 undo depth trims oldest and new op clears redo",
           depth_ok and redo_present and not app._redo)
+
+    # The depth cap is a COUNT, and a document snapshot grows with the film:
+    # 200 frames of a cap-sized project is measured in hundreds of megabytes
+    # on hardware chosen for being small. The SIZE cap is what a large
+    # project gets instead. Tested by lowering the ceiling rather than by
+    # building a hundred megabytes of fixture: the contract under test is
+    # "the bound is enforced", not the value of the constant.
+    heavy = animation.AnimationDocument(canvas=(160, 120))
+    noise = random.Random(11)
+    for _ in range(2):
+        cel = heavy.add_cel()
+        image = animation.surface(160, 120)
+        for y in range(120):
+            for x in range(160):
+                animation.write_pixel(image, x, y,
+                                      "#%06X" % noise.randrange(0xFFFFFF))
+        cel.takes = [image]
+    app_heavy = history_app(heavy)
+    one_frame = len(app_heavy.doc.bytes())
+    original_bound = animation.HISTORY_BYTES
+    animation.HISTORY_BYTES = one_frame * 5
+    try:
+        for _ in range(40):
+            app_heavy._snapshot("heavy")
+        kept = sum(len(frame[2]) for frame in app_heavy._undo)
+        bounded = (kept <= animation.HISTORY_BYTES and
+                   1 <= len(app_heavy._undo) < 40)
+    finally:
+        animation.HISTORY_BYTES = original_bound
+    check("F8 undo history stays inside its byte bound", bounded,
+          "kept=%d frames %.2fMB" % (len(app_heavy._undo), kept / 1048576))
+
+    graded_bound, bound_dir = module_mutant(
+        "F8-bound",
+        [("        while total > HISTORY_BYTES and len(self._undo) > 1:",
+          "        while False and len(self._undo) > 1:")])
+    mutant_app = types.SimpleNamespace()
+    mutant_app._undo = []
+    mutant_app._redo = []
+    mutant_app.scene_i = 0
+    mutant_app.doc = graded_bound.AnimationDocument.parse(
+        copy.deepcopy(heavy.serial()))[0]
+    mutant_app._trim_history = types.MethodType(
+        graded_bound.Animation._trim_history, mutant_app)
+    graded_bound.HISTORY_BYTES = one_frame * 5
+    for _ in range(40):
+        graded_bound.Animation._snapshot(mutant_app, "heavy")
+    leaked = sum(len(frame[2]) for frame in mutant_app._undo)
+    mutant("F8 unbounded history caught", leaked > graded_bound.HISTORY_BYTES,
+           "%.2fMB" % (leaked / 1048576))
+    shutil.rmtree(bound_dir)
 
     graded, scratch = module_mutant(
         "F8-late-snapshot",

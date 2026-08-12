@@ -4288,6 +4288,24 @@ class Animation(nbapp.AppWindow):
         self._undo.append((label, self.scene_i, self.doc.bytes()))
         self._undo = self._undo[-UNDO_DEPTH:]
         self._redo.clear()
+        self._trim_history()
+
+    def _trim_history(self):
+        """Hold the history inside HISTORY_BYTES by dropping the OLDEST
+        frames first.
+
+        UNDO_DEPTH alone is a count, not a size: a document snapshot grows
+        with the film, so 200 frames of a cap-sized project is measured in
+        gigabytes on a machine chosen for low-spec hardware. Depth is what
+        a small project gets; this is what a large one gets instead. The
+        most recent frame always survives — an undo that cannot undo the
+        last thing done would be worse than a short history."""
+        total = sum(len(frame[2]) for frame in self._undo)
+        total += sum(len(frame[2]) for frame in self._redo)
+        while total > HISTORY_BYTES and len(self._undo) > 1:
+            total -= len(self._undo.pop(0)[2])
+        while total > HISTORY_BYTES and self._redo:
+            total -= len(self._redo.pop(0)[2])
 
     def _history_apply(self, redo):
         src = self._redo if redo else self._undo
@@ -4296,6 +4314,7 @@ class Animation(nbapp.AppWindow):
             return False
         label, scene, raw = src.pop()
         dst.append((label, self.scene_i, self.doc.bytes()))
+        self._trim_history()
         self.doc, _ = AnimationDocument.parse(json.loads(raw))
         self.scene_i = min(scene, len(self.doc.scenes) - 1)
         self.sheet = Sheet(self.doc, self.scene_i)
