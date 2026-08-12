@@ -341,7 +341,10 @@ class Cel:
         d = dict(self._extra, id=self.id, name=self.name, takes=[png_b64(x) if isinstance(x, cairo.ImageSurface) else base64.b64encode(x).decode('ascii') if isinstance(x, bytes) else x for x in self.takes])
         return d
 
-def new_layer(name='Layer 1'):
+def new_layer(name=None):
+    if name is None:
+        # translated at creation, like scene names: the default is DATA
+        name = _t('Layer %d') % 1
     return {'name': name, 'visible': True, 'mouth_slots': None, 'runs': []}
 
 def new_scene(name='Scene 1', length=None, fps=12):
@@ -1501,7 +1504,7 @@ class Animation(nbapp.AppWindow):
         self._group_title(dock, 'Shapes')
         shapes = Gtk.Box(homogeneous=True)
         first = None
-        for shape, label in (('square', 'Square'), ('round', 'Round')):
+        for shape, label in (('square', 'Square tip'), ('round', 'Round tip')):
             button = self._mark_btn('tip-' + shape, label, self._set_shape,
                                     label=label, callback_arg=shape,
                                     group=first, radio=True)
@@ -1801,46 +1804,52 @@ class Animation(nbapp.AppWindow):
         return False
 
     def _refresh_lists(self):
-        for child in self.cel_list.get_children():
-            self.cel_list.remove(child)
-        if not self.doc.cels:
-            row = Gtk.ListBoxRow()
-            row.set_selectable(False)
-            hint = Gtk.Label(label=_t('The animation has no drawings. Drawing on the canvas makes one.'),
-                             xalign=0)
-            hint.set_line_wrap(True)
-            hint.get_style_context().add_class('animation-muted')
-            row.add(hint)
-            self.cel_list.add(row)
-        for cel in self.doc.cels:
-            row = Gtk.ListBoxRow()
-            box = Gtk.Box(spacing=8)
-            picture = Gtk.Image.new_from_surface(self._cel_thumb_surface(cel))
-            box.pack_start(picture, False, False, 2)
-            words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-            name = Gtk.Label(label=cel.name, xalign=0)
-            name.set_ellipsize(Pango.EllipsizeMode.END)
-            words.pack_start(name, False, False, 0)
-            takes = Gtk.Label(label=(_t('%d take%s') %
-                                     (len(cel.takes),
-                                      's' if len(cel.takes) != 1 else '')),
-                              xalign=0)
-            takes.get_style_context().add_class('animation-muted')
-            words.pack_start(takes, False, False, 0)
-            box.pack_start(words, True, True, 0)
-            row.add(box)
-            row.cel_id = cel.id
-            target = Gtk.TargetEntry.new('application/x-animation-cel',
-                                         Gtk.TargetFlags.SAME_APP, 0)
-            row.connect('drag-begin', lambda *_a: self._cel_list_release(None, None))
-            row.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target],
-                                Gdk.DragAction.COPY)
-            row.connect('drag-data-get', self._cel_drag_data_get, cel.id)
-            row.connect('drag-begin', self._cel_drag_begin, cel)
-            self.cel_list.add(row)
+        signature = tuple((cel.id, cel.version, cel.name)
+                          for cel in self.doc.cels)
+        if signature != getattr(self, '_cel_list_signature', None):
+            self._cel_list_signature = signature
+            for child in self.cel_list.get_children():
+                self.cel_list.remove(child)
+            if not self.doc.cels:
+                row = Gtk.ListBoxRow()
+                row.set_selectable(False)
+                hint = Gtk.Label(label=_t('The animation has no drawings. Drawing on the canvas makes one.'),
+                                 xalign=0)
+                hint.set_line_wrap(True)
+                hint.get_style_context().add_class('animation-muted')
+                row.add(hint)
+                self.cel_list.add(row)
+            for cel in self.doc.cels:
+                row = Gtk.ListBoxRow()
+                box = Gtk.Box(spacing=8)
+                picture = Gtk.Image.new_from_surface(
+                    self._cel_thumb_surface(cel))
+                box.pack_start(picture, False, False, 2)
+                words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+                name = Gtk.Label(label=cel.name, xalign=0)
+                name.set_ellipsize(Pango.EllipsizeMode.END)
+                words.pack_start(name, False, False, 0)
+                takes = Gtk.Label(label=(_t('%d take%s') %
+                                         (len(cel.takes),
+                                          's' if len(cel.takes) != 1 else '')),
+                                  xalign=0)
+                takes.get_style_context().add_class('animation-muted')
+                words.pack_start(takes, False, False, 0)
+                box.pack_start(words, True, True, 0)
+                row.add(box)
+                row.cel_id = cel.id
+                target = Gtk.TargetEntry.new('application/x-animation-cel',
+                                             Gtk.TargetFlags.SAME_APP, 0)
+                row.connect('drag-begin',
+                            lambda *_a: self._cel_list_release(None, None))
+                row.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target],
+                                    Gdk.DragAction.COPY)
+                row.connect('drag-data-get', self._cel_drag_data_get, cel.id)
+                row.connect('drag-begin', self._cel_drag_begin, cel)
+                self.cel_list.add(row)
+            self.cel_list.show_all()
         self._refresh_layers()
         self._refresh_project_palette()
-        self.cel_list.show_all()
 
     def _cel_drag_data_get(self, _row, _context, selection, _info,
                            _time, cel_id):
@@ -1988,11 +1997,20 @@ class Animation(nbapp.AppWindow):
 
     def _commit_change(self):
         self._cache.clear()
-        self._scene_thumbs.clear()
+        stale = self._scene_thumbs.pop(self.scene_i, None)
+        if stale is not None:
+            self._scene_thumb_stale = (self.scene_i, stale)
+        self._scene_thumb_dirty = (self.scene_i, time.monotonic())
         self._mark_dirty()
         self._refresh_lists()
         self.canvas.queue_draw()
         self.timeline.queue_draw()
+
+    def _clear_scene_thumbs(self):
+        """Forget indexed scene chrome after structural scene changes."""
+        self._scene_thumbs.clear()
+        self._scene_thumb_dirty = None
+        self._scene_thumb_stale = None
 
     def menu_items(self, name):
         if name == 'File':
@@ -2518,7 +2536,7 @@ class Animation(nbapp.AppWindow):
                 elif target <= self.scene_i < card_drag['index']:
                     self.scene_i += 1
                 card_drag['index'] = target
-                self._scene_thumbs.clear()
+                self._clear_scene_thumbs()
                 self.sheet = Sheet(self.doc, self.scene_i)
                 self.timeline.queue_draw()
             return True
@@ -3057,6 +3075,7 @@ class Animation(nbapp.AppWindow):
         self._snapshot(_t('New Scene'))
         self.doc.scenes.insert(self.scene_i + 1,
                                new_scene(_t('Scene %d') % (len(self.doc.scenes) + 1), fps=self.doc.fps))
+        self._clear_scene_thumbs()
         self._switch_scene(self.scene_i + 1)
         self._commit_change()
 
@@ -3067,6 +3086,7 @@ class Animation(nbapp.AppWindow):
         duplicate = copy.deepcopy(self.doc.scenes[self.scene_i])
         duplicate['name'] = _t('%s copy') % duplicate['name']
         self.doc.scenes.insert(self.scene_i + 1, duplicate)
+        self._clear_scene_thumbs()
         self._switch_scene(self.scene_i + 1)
         self._commit_change()
 
@@ -3075,6 +3095,7 @@ class Animation(nbapp.AppWindow):
             return
         self._snapshot(_t('Delete Scene'))
         self.doc.scenes.pop(self.scene_i)
+        self._clear_scene_thumbs()
         self._switch_scene(min(self.scene_i, len(self.doc.scenes) - 1))
         self._commit_change()
 
@@ -3085,6 +3106,7 @@ class Animation(nbapp.AppWindow):
         self._snapshot(_t('Move Scene'))
         scenes = self.doc.scenes
         scenes[self.scene_i], scenes[target] = scenes[target], scenes[self.scene_i]
+        self._clear_scene_thumbs()
         self._switch_scene(target)
         self._commit_change()
 
@@ -3697,10 +3719,21 @@ class Animation(nbapp.AppWindow):
             cr.stroke()
 
     def _scene_thumb(self, index):
-        """A tiny frame-0 composite for a scene card, cached until an edit."""
+        """Return a scene card thumb, coalescing stroke-burst rebuilds.
+
+        This is comics' timestamp debounce idiom: no timer runs on the hot
+        drawing path.  During a 600 ms burst the previous active thumbnail is
+        good chrome; the first later request rebuilds it from the document.
+        """
         cached = self._scene_thumbs.get(index)
         if cached is not None:
             return cached
+        dirty = getattr(self, '_scene_thumb_dirty', None)
+        stale = getattr(self, '_scene_thumb_stale', None)
+        if dirty is not None and dirty[0] == index and \
+                time.monotonic() - dirty[1] < .6 and \
+                stale is not None and stale[0] == index:
+            return stale[1]
         try:
             frame = composite(self.doc, self.doc.scenes[index], 0)
         except Exception:
@@ -3711,6 +3744,9 @@ class Animation(nbapp.AppWindow):
         ctx.set_source_surface(frame, 0, 0)
         ctx.paint()
         self._scene_thumbs[index] = thumb
+        if dirty is not None and dirty[0] == index:
+            self._scene_thumb_dirty = None
+            self._scene_thumb_stale = None
         return thumb
 
     def _draw_timeline(self, w, cr):
