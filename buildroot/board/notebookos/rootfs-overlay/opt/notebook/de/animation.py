@@ -1766,6 +1766,79 @@ class Animation(nbapp.AppWindow):
     def _cel_row_selected(self, _list, row):
         self._library_cel = row.cel_id if (row is not None and
                                            hasattr(row, 'cel_id')) else None
+        self._refresh_takes()
+
+    def _takes_cel(self):
+        chosen = getattr(self, '_library_cel', None)
+        if chosen is not None:
+            cel = self.doc.cel(chosen)
+            if cel is not None:
+                return cel
+        return self._active_cel()
+
+    def _refresh_takes(self):
+        """The takes strip: the chosen drawing's variants as numbered
+        buttons, the active one held down — plus add-a-copy and remove.
+        This is how a boil is drawn by hand: add a take, rough over it."""
+        for child in self.takes_box.get_children():
+            self.takes_box.remove(child)
+        cel = self._takes_cel()
+        if cel is None:
+            return
+        active = min(self.active_take.get(cel.id, 0), len(cel.takes) - 1)
+        for index in range(len(cel.takes)):
+            button = Gtk.ToggleButton(label=str(index + 1))
+            button.set_active(index == active)
+            button.set_tooltip_text(_t('Choose Take'))
+
+            def _pick(b, cel_id=cel.id, i=index):
+                if not b.get_active():
+                    b.set_active(True)
+                    return
+                self.active_take[cel_id] = i
+                self._refresh_takes()
+                self.canvas.queue_draw()
+
+            button.connect('clicked', _pick)
+            self.takes_box.pack_start(button, False, False, 0)
+        add = Gtk.Button(label='+')
+        add.set_tooltip_text(_t('Add Take'))
+        add.set_sensitive(len(cel.takes) < TAKE_MAX)
+        add.connect('clicked', self._add_take)
+        self.takes_box.pack_start(add, False, False, 4)
+        remove = Gtk.Button(label='−')
+        remove.set_tooltip_text(_t('Remove Take'))
+        remove.set_sensitive(len(cel.takes) > 1)
+        remove.connect('clicked', self._remove_take)
+        self.takes_box.pack_start(remove, False, False, 0)
+        self.takes_box.show_all()
+
+    def _add_take(self, *_):
+        cel = self._takes_cel()
+        if cel is None or len(cel.takes) >= TAKE_MAX:
+            return
+        self._snapshot(_t('Add Take'))
+        source = cel.decoded(self.active_take.get(cel.id, 0))
+        copy_surface = surface(cel.w, cel.h)
+        ctx = cairo.Context(copy_surface)
+        ctx.set_operator(cairo.OPERATOR_SOURCE)
+        ctx.set_source_surface(source)
+        ctx.paint()
+        cel.takes.append(copy_surface)
+        self.active_take[cel.id] = len(cel.takes) - 1
+        cel.version += 1
+        self._commit_change()
+
+    def _remove_take(self, *_):
+        cel = self._takes_cel()
+        if cel is None or len(cel.takes) <= 1:
+            return
+        self._snapshot(_t('Remove Take'))
+        index = min(self.active_take.get(cel.id, 0), len(cel.takes) - 1)
+        cel.takes.pop(index)
+        self.active_take[cel.id] = max(0, index - 1)
+        cel.version += 1
+        self._commit_change()
 
     def _cel_in_use(self, cel_id):
         return any(run['cel'] == cel_id
@@ -1851,6 +1924,7 @@ class Animation(nbapp.AppWindow):
             self.cel_list.show_all()
         self._refresh_layers()
         self._refresh_project_palette()
+        self._refresh_takes()
 
     def _cel_drag_data_get(self, _row, _context, selection, _info,
                            _time, cel_id):
