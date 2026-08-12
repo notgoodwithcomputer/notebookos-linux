@@ -2129,6 +2129,16 @@ class Animation(nbapp.AppWindow):
                 ('Insert Frames…', self._insert_prompt),
                 ('Remove Frames…', self._remove_prompt),
                 nbapp.SEP,
+                (('Stop    Space' if self._playing else 'Play    Space'),
+                 self._toggle_playback),
+                ('Loop', self._toggle_loop),
+                ('Stamp Mouths', self._toggle_stamp_mouths),
+                nbapp.SEP,
+                ('Previous Frame    ,', self._step_back),
+                ('Next Frame    .', self._step_forward),
+                ('First Frame    Home', self._go_start),
+                ('Last Frame    End', self._go_end),
+                nbapp.SEP,
                 ('Add Marker    M', self._marker_prompt),
             ]
         if name == 'Scene':
@@ -2144,6 +2154,13 @@ class Animation(nbapp.AppWindow):
                  else None),
                 ('Delete Scene', self._delete_scene if len(self.doc.scenes) > 1 else None),
                 nbapp.SEP,
+                ('Previous Scene    Page Up',
+                 (lambda: self._switch_scene(self.scene_i - 1))
+                 if self.scene_i else None),
+                ('Next Scene    Page Down',
+                 (lambda: self._switch_scene(self.scene_i + 1))
+                 if self.scene_i + 1 < len(self.doc.scenes) else None),
+                nbapp.SEP,
                 ('Move Scene Left', (lambda: self._move_scene(-1)) if self.scene_i else None),
                 ('Move Scene Right', (lambda: self._move_scene(1)) if self.scene_i + 1 < len(self.doc.scenes) else None),
                 ('Rename Scene…', self._rename_scene_prompt),
@@ -2158,12 +2175,31 @@ class Animation(nbapp.AppWindow):
                  if (getattr(self, '_library_cel', None) is not None and
                      not self._cel_in_use(self._library_cel)) else None),
                 ('Choose Take…', self._choose_take_prompt),
+                ('Add Take',
+                 self._add_take
+                 if (self._takes_cel() is not None and
+                     len(self._takes_cel().takes) < TAKE_MAX) else None),
+                ('Remove Take',
+                 self._remove_take
+                 if (self._takes_cel() is not None and
+                     len(self._takes_cel().takes) > 1) else None),
                 ('Add Wobble Takes…', self._wobble_prompt),
                 ('Recolor Drawing to Palette', self._recolor_cel if self.doc.palette else None),
                 ('Place Image…', self._place_image),
             ]
         if name == 'Layer':
-            return [('Rename Layer…', self._rename_layer_prompt),
+            layers = self.doc.scenes[self.scene_i]['layers']
+            return [('New Layer',
+                     self._add_layer if len(layers) < LAYER_MAX else None),
+                    ('Delete Layer',
+                     self._delete_layer if len(layers) > 1 else None),
+                    ('Move Layer Up',
+                     self._raise_layer
+                     if self.layer_i < len(layers) - 1 else None),
+                    ('Move Layer Down',
+                     self._lower_layer if self.layer_i > 0 else None),
+                    nbapp.SEP,
+                    ('Rename Layer…', self._rename_layer_prompt),
                     ('Mouth Slots…', self._mouth_slots_prompt),
                     ('Mouth from Loudness…', self._mouth_loudness_prompt)]
         if name == 'Sound':
@@ -3198,6 +3234,35 @@ class Animation(nbapp.AppWindow):
             markers.append({'frame': self.playhead, 'text': text})
             markers.sort(key=lambda marker: marker['frame'])
         self._commit_change()
+
+    def _toggle_playback(self, *_):
+        if self._playing:
+            self._stop_playback()
+        else:
+            self._start_playback()
+
+    def _toggle_loop(self, *_):
+        self.loop = not self.loop
+        self.timeline.queue_draw()
+
+    def _step_back(self, *_):
+        self.playhead = max(0, self.playhead - 1)
+        self._update_playhead()
+        self._scrub_frame()
+
+    def _step_forward(self, *_):
+        scene = self.doc.scenes[self.scene_i]
+        self.playhead = min(scene['length'] - 1, self.playhead + 1)
+        self._update_playhead()
+        self._scrub_frame()
+
+    def _go_start(self, *_):
+        self.playhead = 0
+        self._update_playhead()
+
+    def _go_end(self, *_):
+        self.playhead = self.doc.scenes[self.scene_i]['length'] - 1
+        self._update_playhead()
 
     def _project_frames(self):
         """Every frame the film currently holds, across all its scenes."""
