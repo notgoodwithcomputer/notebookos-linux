@@ -1231,9 +1231,16 @@ class Animation(nbapp.AppWindow):
         self.layer_list.connect('row-activated', lambda *_a: self._rename_layer_prompt())
         side.pack_start(self.layer_list, False, False, 0)
         layer_actions = Gtk.Box(homogeneous=True)
-        for label, callback in (('+', self._add_layer), ('-', self._delete_layer),
-                                ('↑', self._raise_layer), ('↓', self._lower_layer)):
+        # A glyph is not a name: GTK derives the accessible name from the
+        # label, so '+' reads to a screen reader as "plus". Each of these
+        # says what it DOES, in the tooltip and to assistive technology.
+        for label, tip, callback in (('+', 'New Layer', self._add_layer),
+                                     ('-', 'Delete Layer', self._delete_layer),
+                                     ('↑', 'Move Layer Up', self._raise_layer),
+                                     ('↓', 'Move Layer Down', self._lower_layer)):
             button = Gtk.Button(label=label)
+            button.set_tooltip_text(_t(tip))
+            button.get_accessible().set_name(_t(tip))
             button.connect('clicked', callback)
             layer_actions.pack_start(button, True, True, 0)
         side.pack_start(layer_actions, False, False, 0)
@@ -1269,8 +1276,12 @@ class Animation(nbapp.AppWindow):
         status.pack_start(self.readout, False, False, 8)
         status.pack_start(self.scene_status, False, False, 8)
         zoom_out = Gtk.Button(label='−')
+        zoom_out.set_tooltip_text(_t('Zoom Out'))
+        zoom_out.get_accessible().set_name(_t('Zoom Out'))
         zoom_out.connect('clicked', lambda *_: self._zoom_step(-1))
         zoom_in = Gtk.Button(label='+')
+        zoom_in.set_tooltip_text(_t('Zoom In'))
+        zoom_in.get_accessible().set_name(_t('Zoom In'))
         zoom_in.connect('clicked', lambda *_: self._zoom_step(1))
         zoom_fit = Gtk.Button(label=_t('Fit'))
         zoom_fit.connect('clicked', lambda *_: self._fit_canvas())
@@ -1790,6 +1801,7 @@ class Animation(nbapp.AppWindow):
             button = Gtk.ToggleButton(label=str(index + 1))
             button.set_active(index == active)
             button.set_tooltip_text(_t('Choose Take'))
+            button.get_accessible().set_name(_t('Choose Take'))
 
             def _pick(b, cel_id=cel.id, i=index):
                 if not b.get_active():
@@ -1803,11 +1815,13 @@ class Animation(nbapp.AppWindow):
             self.takes_box.pack_start(button, False, False, 0)
         add = Gtk.Button(label='+')
         add.set_tooltip_text(_t('Add Take'))
+        add.get_accessible().set_name(_t('Add Take'))
         add.set_sensitive(len(cel.takes) < TAKE_MAX)
         add.connect('clicked', self._add_take)
         self.takes_box.pack_start(add, False, False, 4)
         remove = Gtk.Button(label='−')
         remove.set_tooltip_text(_t('Remove Take'))
+        remove.get_accessible().set_name(_t('Remove Take'))
         remove.set_sensitive(len(cel.takes) > 1)
         remove.connect('clicked', self._remove_take)
         self.takes_box.pack_start(remove, False, False, 0)

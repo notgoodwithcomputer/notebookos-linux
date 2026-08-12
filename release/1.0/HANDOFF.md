@@ -1,3 +1,24 @@
+- **2026-08-12 (govorimo) · BUILD-TRAIN REQUEST — next ISO spin carries
+  Govorimo automatically; two notes for whoever runs it:** (1) run
+  `make -C buildroot ffmpeg-dirclean` first (the standing x264 note from
+  2026-08-12), then the usual rm-images + mkrelease; (2) post-build.sh now
+  REQUIRES `vendor/govorimo/govorimod` (static musl, present in tree;
+  rebuild with `tools/build_govorimod.sh`) and FAILS the build without it —
+  deliberate, so the OS can never ship the app without its daemon. After
+  boot: `pgrep govorimod` + the app's rail says "No radio attached" on a
+  dongle-less guest (honest state); an on-guest two-daemon wire demo is
+  `GOVORIMO_SOCKET=/tmp/b.sock govorimod --state-dir /tmp/b --radio
+  wire:demo &` + a second app instance pointed at it. Antenna-day runbook:
+  docs/GOVORIMO.md.
+- **2026-08-12 (govorimo) · tasks.py View menu ships ENGLISH in 16
+  languages** (pre-existing, tasks-lane file): its `mk()` prefixes labels
+  with "•  "/"    ", and nbi18n's _lookup has suffix/upper/format
+  transforms but NO PREFIX transform, so `_t("•  Today")` misses and
+  falls back to English (measured under NB_LANG=de: '•  Today' comes back
+  verbatim while 'Today' -> 'Heute'). Every marked-active menu item in any
+  app using this pattern is untranslated. Fix is either a prefix transform
+  in nbi18n (campaign) or dropping the mark (what Govorimo's View menu does
+  — the rail already shows the active surface).
 # Cross-lane handoffs — newest on top. Format: date · from → to · item.
 
 - **2026-08-10 · batch-0810 → motion · self_attr_audit: 4 findings in your
@@ -1711,3 +1732,22 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   before the next mkrelease (the libdrm-dirclean class from the HiDPI run),
   then both Animation's and Video Editor's encoder probes pick libx264 up
   with no app changes. Sample-film cut stands; respin deferred by user.
+
+- **2026-08-12 (animation → campaign) · TAB TRAVERSAL IS A PLATFORM
+  QUESTION, measured not guessed.** Constitution VII §1 wants tab order to
+  follow reading order. Walking `child_focus(TAB_FORWARD)` over a REAL
+  mapped window on :0 yields exactly ONE stop ("Back to Finder") for
+  animation — and the identical result for `illustrator` and `writer`,
+  which is the control that matters: this is how `nbapp.AppWindow`'s
+  chain behaves OS-wide, not an Animation defect. Animation is not worse
+  than the platform, so this lane is not "fixing" it. If the campaign
+  wants real Tab traversal, it is one change in nbapp's window/content
+  structure benefiting all 42 apps, and the probe above is the
+  ready-made measurement. Recorded rather than claimed either way.
+- **Accessible names in animation are now complete** (same session): the
+  four layer buttons, the takes strip, and the zoom stepper were
+  glyph-labelled ('+', '−', '↑', '↓'), which GTK reports as an accessible
+  name while telling a screen-reader user nothing. All carry tooltips +
+  `get_accessible().set_name()` now. NOTE FOR ANY a11y GATE: a detector
+  that accepts "a name is present" passes these — it must require a
+  MEANINGFUL name (>1 char, alphabetic). My first probe passed them all.
