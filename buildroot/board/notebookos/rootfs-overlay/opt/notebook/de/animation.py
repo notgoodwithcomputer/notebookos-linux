@@ -96,6 +96,8 @@ CSS = b"""
 .animation-muted { color: #9A9484; }
 .animation-row { border-bottom: 1px solid #C9C4B6; }
 .animation-row:checked, .animation-selected { background: #EAE3D2; }
+.animation-slot-tile { padding: 2px; }
+.animation-slot-badge { background: #FCFBF8; color: #1A1916; font-size: 11px; padding: 0 3px; border: 1px solid #C9C4B6; }
 .animation-prompt { background: #FCFBF8; border: 1px solid #C9C4B6; padding: 24px; }
 .animation-focus { border: 1px solid #C8341E; }
 .animation-saved { color: #7FA98C; }
@@ -1940,8 +1942,182 @@ class Animation(nbapp.AppWindow):
         top = (allocation.height - height * scale) / 2
         return (int((event.x - left) // scale), int((event.y - top) // scale))
 
+    def _canvas_footprint_runs(self):
+        """Return the exact row runs the next canvas stamp will write.
+
+        This follows Illustrator's brush-footprint mechanism: the chrome and
+        byte writer share ``brush_runs``, so the pointer cannot promise pixels
+        different from those the tool changes.
+        """
+        if self.tool in ('select', 'picker'):
+            return ()
+        shape = 'round' if self.tool == 'brush' else self.shape
+        return brush_runs(self.size, shape)
+
+    def _canvas_footprint_rect(self, point=None):
+        """Return a widget-coordinate damage box for a footprint."""
+        point = getattr(self, '_canvas_cursor', None) if point is None else point
+        runs = self._canvas_footprint_runs()
+        if point is None or not runs:
+            return None
+        dx0 = min(run[1] for run in runs)
+        dx1 = max(run[2] for run in runs)
+        dy0 = min(run[0] for run in runs)
+        dy1 = max(run[0] for run in runs)
+        allocation = self.canvas.get_allocation()
+        width, height = self.doc.canvas
+        left = (allocation.width - width * self.zoom) / 2
+        top = (allocation.height - height * self.zoom) / 2
+        x = left + (point[0] + dx0) * self.zoom
+        y = top + (point[1] + dy0) * self.zoom
+        w = (dx1 - dx0 + 1) * self.zoom
+        h = (dy1 - dy0 + 1) * self.zoom
+        return (math.floor(x) - 2, math.floor(y) - 2,
+                math.ceil(w) + 5, math.ceil(h) + 5)
+
+    def _damage_canvas_footprints(self, old_point=None):
+        """Invalidate only the old and new pointer chrome rectangles."""
+        for rect in (self._canvas_footprint_rect(old_point),
+                     self._canvas_footprint_rect()):
+            if rect is not None:
+                self.canvas.queue_draw_area(*rect)
+
+    @staticmethod
+    def _brush_outline(runs):
+        """Trace Illustrator's row-convex brush boundary as one polygon."""
+        rows = sorted(runs)
+        if not rows:
+            return ()
+        if any(b[0] != a[0] + 1 for a, b in zip(rows, rows[1:])):
+            return ()
+        left = []
+        right = []
+        for dy, dx0, _dx1 in rows:
+            left.extend(((dx0, dy), (dx0, dy + 1)))
+        for dy, _dx0, dx1 in reversed(rows):
+            right.extend(((dx1 + 1, dy + 1), (dx1 + 1, dy)))
+        return tuple(left) + tuple(right)
+
+    def _draw_canvas_footprint(self, cr, scale):
+        """Paint a hard signage-red outline around the next stamp."""
+        point = getattr(self, '_canvas_cursor', None)
+        runs = self._canvas_footprint_runs()
+        if point is None or not runs:
+            return
+        outline = self._brush_outline(runs)
+        if not outline:
+            return
+        cr.save()
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        x0, y0 = outline[0]
+        half = 0.5 / scale
+        cr.move_to(point[0] + x0 + half, point[1] + y0 + half)
+        for x, y in outline[1:]:
+            cr.line_to(point[0] + x + half, point[1] + y + half)
+        cr.close_path()
+        cr.set_line_width(1 / scale)
+        cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+        cr.stroke()
+        cr.restore()
+
+    def _opaque_bounds(self, cel, take):
+        """Cache the alpha bounds of a cel take by identity and version."""
+        cache = getattr(self, '_opaque_bounds_cache', None)
+        if cache is None:
+            cache = self._opaque_bounds_cache = {}
+        key = (cel.id, cel.version, take)
+        if key in cache:
+            return cache[key]
+        surface_take = cel.decoded(take)
+        surface_take.flush()
+        data = surface_take.get_data()
+        stride = surface_take.get_stride()
+        left = cel.w
+        top = cel.h
+        right = -1
+        bottom = -1
+        for y in range(cel.h):
+            row = y * stride
+            for x in range(cel.w):
+                if data[row + x * 4 + 3]:
+                    left = min(left, x)
+                    top = min(top, y)
+                    right = max(right, x)
+                    bottom = max(bottom, y)
+        bounds = None if right < left else (left, top,
+                                             right - left + 1,
+                                             bottom - top + 1)
+        cache[key] = bounds
+        return bounds
+
+    def _selected_canvas_bounds(self):
+        """Resolve the selected run's current-take opaque bounds."""
+        if not self.selection or self.selection[0] != self.layer_i:
+            return None
+        layer_index, start, end = self.selection
+        layer = self.doc.scenes[self.scene_i]['layers'][layer_index]
+        frame = min(max(self.playhead, start), end - 1)
+        run = run_at(layer['runs'], frame)
+        if run is None:
+            return None
+        cel = self.doc.cel(run['cel'])
+        if cel is None:
+            return None
+        take = take_index(run, frame, len(cel.takes), self.doc.boil_every)
+        bounds = self._opaque_bounds(cel, take)
+        if bounds is None:
+            return None
+        return (bounds[0] + run.get('dx', 0),
+                bounds[1] + run.get('dy', 0), bounds[2], bounds[3])
+
+    def _sync_canvas_cursor(self):
+        """Apply Illustrator's canvas cursor vocabulary to the GDK window."""
+        window = self.canvas.get_window()
+        if window is None:
+            return
+        # Illustrator uses a crosshair over its pixel canvas. Animation keeps
+        # the system arrow for Select and uses that crosshair for every tool
+        # that addresses a canvas pixel, including the eyedropper.
+        name = 'default' if self.tool == 'select' else 'crosshair'
+        try:
+            window.set_cursor(Gdk.Cursor.new_from_name(
+                self.canvas.get_display(), name))
+        except Exception:
+            window.set_cursor(None)
+
+    def _ensure_canvas_pointer_events(self):
+        """Install enter/leave tracking without widening the dock/build edit."""
+        if getattr(self, '_canvas_pointer_events_ready', False):
+            return
+        self._canvas_pointer_events_ready = True
+        self.canvas.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK |
+                               Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.canvas.connect('enter-notify-event', self._canvas_enter)
+        self.canvas.connect('leave-notify-event', self._canvas_leave)
+
+    def _canvas_enter(self, _widget, event):
+        old = getattr(self, '_canvas_cursor', None)
+        point = self._canvas_point(event)
+        if 0 <= point[0] < self.doc.canvas[0] and \
+                0 <= point[1] < self.doc.canvas[1]:
+            self._canvas_cursor = point
+        self._sync_canvas_cursor()
+        self._damage_canvas_footprints(old)
+        return False
+
+    def _canvas_leave(self, _widget, _event):
+        old = getattr(self, '_canvas_cursor', None)
+        self._canvas_cursor = None
+        self._damage_canvas_footprints(old)
+        window = self.canvas.get_window()
+        if window is not None:
+            window.set_cursor(None)
+        return False
+
     def _canvas_press(self, _widget, event):
+        self._ensure_canvas_pointer_events()
         self.canvas.grab_focus()
+        self._sync_canvas_cursor()
         point = self._canvas_point(event)
         if not (0 <= point[0] < self.doc.canvas[0] and
                 0 <= point[1] < self.doc.canvas[1]):
@@ -1976,6 +2152,12 @@ class Animation(nbapp.AppWindow):
 
     def _canvas_motion(self, _widget, event):
         point = self._canvas_point(event)
+        old_cursor = getattr(self, '_canvas_cursor', None)
+        inside = (0 <= point[0] < self.doc.canvas[0] and
+                  0 <= point[1] < self.doc.canvas[1])
+        self._canvas_cursor = point if inside else None
+        self._sync_canvas_cursor()
+        self._damage_canvas_footprints(old_cursor)
         if getattr(self, '_drawing', False):
             for x, y in _line_points(self._draw_last[0], self._draw_last[1],
                                      point[0], point[1]):
@@ -1998,6 +2180,7 @@ class Animation(nbapp.AppWindow):
         return False
 
     def _canvas_release(self, _widget, _event):
+        self._sync_canvas_cursor()
         if getattr(self, '_drawing', False):
             self._drawing = False
             self._edit_cel.version += 1
@@ -2096,6 +2279,16 @@ class Animation(nbapp.AppWindow):
                     return True
             return True
         scene = self.doc.scenes[self.scene_i]
+        if TL_STRIP_H <= event.y < TL_ROWS_TOP:
+            for left, right, delta in getattr(self, '_ruler_stepper', []):
+                if left <= event.x <= right:
+                    if delta:
+                        widths = (3, 6, 12, 24)
+                        index = widths.index(self.column_width) \
+                            if self.column_width in widths else 1
+                        self.column_width = widths[index + delta]
+                        self.timeline.queue_draw()
+                    return True
         if event.x < TL_GUTTER and event.y >= TL_ROWS_TOP:
             # the gutter is the row's name: clicking it chooses the row
             row = int((event.y - TL_ROWS_TOP) // TL_ROW_H)
@@ -2384,6 +2577,51 @@ class Animation(nbapp.AppWindow):
                 widget.set_active(initial)
                 widget.connect('toggled',
                                lambda item, k=key: state.__setitem__(k, item.get_active()))
+            elif kind == 'slots-picker':
+                # Every drawing as a clickable picture. Clicking adds the
+                # drawing as the NEXT mouth slot (its slot number badges the
+                # thumb); clicking a chosen one removes it. The order of
+                # clicks IS the slot order — no numbers to type.
+                widget = Gtk.FlowBox()
+                widget.set_selection_mode(Gtk.SelectionMode.NONE)
+                widget.set_max_children_per_line(6)
+                for cel in self.doc.cels:
+                    tile = Gtk.Button()
+                    tile.set_relief(Gtk.ReliefStyle.NONE)
+                    tile.get_style_context().add_class('animation-slot-tile')
+                    stack = Gtk.Overlay()
+                    stack.add(Gtk.Image.new_from_surface(
+                        self._cel_thumb_surface(cel)))
+                    badge = Gtk.Label()
+                    badge.set_halign(Gtk.Align.START)
+                    badge.set_valign(Gtk.Align.START)
+                    badge.get_style_context().add_class('animation-slot-badge')
+                    stack.add_overlay(badge)
+                    tile.add(stack)
+                    tile.set_tooltip_text(cel.name)
+
+                    def _tile_toggle(_b, cel_id=cel.id, badge=badge,
+                                     k=key, st=state):
+                        chosen = list(st[k])
+                        if cel_id in chosen:
+                            chosen.remove(cel_id)
+                        elif len(chosen) < 8:
+                            chosen.append(cel_id)
+                        st[k] = chosen
+                        for child, lbl in getattr(self, '_prompt_badges', []):
+                            ident = getattr(child, '_slot_cel', None)
+                            lbl.set_text(
+                                str(chosen.index(ident) + 1)
+                                if ident in chosen else '')
+
+                    tile._slot_cel = cel.id
+                    if not hasattr(self, '_prompt_badges'):
+                        self._prompt_badges = []
+                    self._prompt_badges.append((tile, badge))
+                    badge.set_text(str(state[key].index(cel.id) + 1)
+                                   if cel.id in state[key] else '')
+                    tile.connect('clicked', _tile_toggle)
+                    widget.add(tile)
             elif kind == 'meter':
                 widget = Gtk.ProgressBar()
                 widget.set_size_request(180, 18)
@@ -2465,6 +2703,7 @@ class Animation(nbapp.AppWindow):
         callback(snapshot)
 
     def _close_prompt(self):
+        self._prompt_badges = []
         if self._prompt_layer is None:
             return
         self._overlay.remove(self._prompt_layer)
@@ -2674,21 +2913,19 @@ class Animation(nbapp.AppWindow):
         self._commit_change()
 
     def _mouth_slots_prompt(self, *_):
+        if not self.doc.cels:
+            self._flash(_t('The animation has no drawings. Drawing on the canvas makes one.'))
+            return
         slots = self.doc.scenes[self.scene_i]['layers'][self.layer_i].get('mouth_slots')
-        text = ','.join(str(value) for value in (slots or []))
-        self._overlay_prompt('Mouth Slots…', [('slots', 'Drawing numbers', text, 'text')],
+        self._overlay_prompt('Mouth Slots…',
+                             [('slots', 'Drawings', list(slots or []),
+                               'slots-picker')],
                              'Set Slots', self._mouth_slots_apply,
                              'Slot 1 plays when quiet.')
 
     def _mouth_slots_apply(self, state):
         known = {cel.id for cel in self.doc.cels}
-        try:
-            slots = [int(value.strip()) for value in state['slots'].split(',')
-                     if value.strip()][:8]
-        except ValueError:
-            return
-        if any(value not in known for value in slots):
-            return
+        slots = [value for value in state['slots'] if value in known][:8]
         self._snapshot(_t('Mouth Slots'))
         self.doc.scenes[self.scene_i]['layers'][self.layer_i]['mouth_slots'] = slots or None
         self._commit_change()
@@ -3016,6 +3253,8 @@ class Animation(nbapp.AppWindow):
 
     def _draw_canvas(self, w, cr):
         cr.set_antialias(cairo.ANTIALIAS_NONE)
+        self._ensure_canvas_pointer_events()
+        self._sync_canvas_cursor()
         if not self._fitted:
             self._fit_canvas()
         scene = self.doc.scenes[self.scene_i]
@@ -3056,6 +3295,15 @@ class Animation(nbapp.AppWindow):
                 cr.move_to(0, py)
                 cr.line_to(self.doc.canvas[0], py)
             cr.stroke()
+        selected = self._selected_canvas_bounds()
+        if selected is not None:
+            cr.set_antialias(cairo.ANTIALIAS_NONE)
+            cr.set_line_width(1 / scale)
+            cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
+            cr.rectangle(selected[0], selected[1],
+                         selected[2], selected[3])
+            cr.stroke()
+        self._draw_canvas_footprint(cr, scale)
         if w.has_focus():
             cr.set_line_width(2 / scale)
             cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)
@@ -3256,6 +3504,26 @@ class Animation(nbapp.AppWindow):
                 cr.line_to(px + .5, TL_ROWS_TOP - 1)
                 cr.stroke()
             frame += 4
+        # column-width stepper at the ruler's right end: wider or tighter
+        # frames, the way the artist wants to read time
+        widths = (3, 6, 12, 24)
+        self._ruler_stepper = []
+        for offset, (mark, delta) in enumerate((('-', -1), ('+', 1))):
+            sx = width_all - 52 + offset * 26
+            sy = TL_STRIP_H + 3
+            index = widths.index(self.column_width) if self.column_width in widths else 1
+            can = (0 <= index + delta < len(widths))
+            cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+            cr.rectangle(sx + .5, sy + .5, 22, TL_RULER_H - 7)
+            cr.stroke()
+            ink = (26, 25, 22) if can else (154, 148, 132)
+            cr.set_source_rgb(ink[0] / 255, ink[1] / 255, ink[2] / 255)
+            cr.rectangle(sx + 6, sy + (TL_RULER_H - 7) / 2, 10, 2)
+            cr.fill()
+            if mark == '+':
+                cr.rectangle(sx + 10, sy + (TL_RULER_H - 7) / 2 - 4, 2, 10)
+                cr.fill()
+            self._ruler_stepper.append((sx, sx + 22, delta if can else 0))
         for marker in scene['markers']:
             marker_x = TL_GUTTER + marker['frame'] * step
             cr.set_source_rgb(200 / 255, 52 / 255, 30 / 255)

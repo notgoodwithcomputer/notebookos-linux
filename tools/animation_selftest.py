@@ -841,14 +841,18 @@ def dialog_limits_family():
 
         others = [app.doc.add_cel() for _ in range(2)]
         app._mouth_slots_prompt()
-        entries = []
+        tiles = []
         _find_widgets(app._prompt_layer,
-                      lambda w: isinstance(w, Gtk.Entry) and
-                      not isinstance(w, Gtk.SpinButton), entries)
-        slots_open = app._prompt_layer is not None and entries
+                      lambda w: isinstance(w, Gtk.Button) and
+                      hasattr(w, "_slot_cel"), tiles)
+        by_cel = {tile._slot_cel: tile for tile in tiles}
         wanted = [cel.id, others[0].id, others[1].id]
+        slots_open = (app._prompt_layer is not None and
+                      all(v in by_cel for v in wanted))
         if slots_open:
-            entries[0].set_text(",".join(str(v) for v in wanted))
+            # the picker's contract: click order IS slot order
+            for value in wanted:
+                by_cel[value].clicked()
         slots_applied = slots_open and press("Set Slots")
         layer_slots = app.doc.scenes[0]["layers"][0].get("mouth_slots")
         check("F9 dialog-driven Mouth Slots card assigns the layer",
