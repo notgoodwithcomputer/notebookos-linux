@@ -2620,7 +2620,9 @@ class Animation(nbapp.AppWindow):
                 # clicks IS the slot order — no numbers to type.
                 widget = Gtk.FlowBox()
                 widget.set_selection_mode(Gtk.SelectionMode.NONE)
+                widget.set_min_children_per_line(3)
                 widget.set_max_children_per_line(6)
+                widget.set_size_request(320, -1)
                 for cel in self.doc.cels:
                     tile = Gtk.Button()
                     tile.set_relief(Gtk.ReliefStyle.NONE)
@@ -2688,7 +2690,8 @@ class Animation(nbapp.AppWindow):
                 widget = Gtk.Entry(text=str(initial))
                 widget.connect('changed',
                                lambda item, k=key: state.__setitem__(k, item.get_text()))
-            row.pack_start(widget, False, False, 0)
+            expand = isinstance(kind, str) and kind == 'slots-picker'
+            row.pack_start(widget, expand, expand, 0)
             card.pack_start(row, False, False, 0)
         if note:
             quiet = Gtk.Label(label=_t(note), xalign=0)
