@@ -2283,6 +2283,14 @@ class Animation(nbapp.AppWindow):
             return True
         scene = self.doc.scenes[self.scene_i]
         if TL_STRIP_H <= event.y < TL_ROWS_TOP:
+            for marker in scene['markers']:
+                marker_x = TL_GUTTER + marker['frame'] * self.column_width
+                if abs(event.x - marker_x) <= 6:
+                    self.playhead = marker['frame']
+                    self._update_playhead()
+                    if event.type == Gdk.EventType._2BUTTON_PRESS:
+                        self._marker_prompt()
+                    return True
             for left, right, delta in getattr(self, '_ruler_stepper', []):
                 if left <= event.x <= right:
                     if delta:
@@ -2877,17 +2885,30 @@ class Animation(nbapp.AppWindow):
             self._undo.pop()
 
     def _marker_prompt(self, *_):
-        self._overlay_prompt('Marker', [('text', 'Name', '', 'text')],
-                             'Add', self._marker_apply)
+        markers = self.doc.scenes[self.scene_i]['markers']
+        existing = next((m for m in markers if m['frame'] == self.playhead),
+                        None)
+        self._overlay_prompt('Marker',
+                             [('text', 'Name',
+                               existing['text'] if existing else '', 'text')],
+                             'Add', self._marker_apply,
+                             'An empty name removes the marker.'
+                             if existing else None)
 
     def _marker_apply(self, state):
-        self._snapshot(_t('Add Marker'))
         markers = self.doc.scenes[self.scene_i]['markers']
         old = next((m for m in markers if m['frame'] == self.playhead), None)
-        if old:
-            old['text'] = state['text']
+        text = state['text'].strip()
+        if old and not text:
+            self._snapshot(_t('Remove Marker'))
+            markers.remove(old)
+        elif old:
+            self._snapshot(_t('Add Marker'))
+            old['text'] = text
         else:
-            markers.append({'frame': self.playhead, 'text': state['text']})
+            # a nameless marker is a beat flag; adding one is still an add
+            self._snapshot(_t('Add Marker'))
+            markers.append({'frame': self.playhead, 'text': text})
             markers.sort(key=lambda marker: marker['frame'])
         self._commit_change()
 
