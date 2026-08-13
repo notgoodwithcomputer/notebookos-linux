@@ -30,6 +30,9 @@ sys.path.insert(0, str(DE))
 import cairo  # noqa: E402
 import animation  # noqa: E402
 
+CLIP_SKIP = '                if left > clip_x1 or left + width + 1 < clip_x0:\n                    continue'
+CLIP_BLIND = '                if False:\n                    continue'
+
 PASSES: list[str] = []
 FAILS: list[str] = []
 SKIPS: list[tuple[str, str]] = []
@@ -1920,6 +1923,44 @@ def sheet_paint_family():
         app._draw_timeline(app.timeline, cairo.Context(surface))
         surface.flush()
         return bytes(surface.get_data())
+
+    # the same law for the clip: what GTK invalidates during playback is two
+    # thin strips, and skipping work outside them must not change a pixel
+    clipped, scratch_clip = module_mutant("F20-noclip", [(CLIP_SKIP, CLIP_BLIND)])
+    aware, _keep_c = loaded(animation)
+    blind, _keep_d = loaded(clipped)
+    rows_h = animation.TL_ROWS_TOP + (animation.LAYER_MAX + 2) * animation.TL_ROW_H
+
+    def under_clip(app, rects):
+        area = app.timeline.get_allocation()
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                     max(1, area.width), max(1, area.height))
+        context = cairo.Context(surface)
+        for rect in rects:
+            context.rectangle(*rect)
+        context.clip()
+        app._draw_timeline(app.timeline, context)
+        surface.flush()
+        return bytes(surface.get_data())
+
+    wide = aware.timeline.get_allocation().width
+    shapes = {
+        "playback strips": [(300, 0, 18, rows_h + 12),
+                            (wide - 470, 0, 330, animation.TL_STRIP_H)],
+        "cuts a bar in half": [(400, animation.TL_ROWS_TOP, 9, 60)],
+        "one pixel column": [(517, 0, 1, rows_h)],
+        "the gutter edge": [(animation.TL_GUTTER - 2, 0, 5, rows_h)],
+    }
+    clip_same = {}
+    for tag, rects in shapes.items():
+        for at in (0, 5, 137):
+            aware.view_origin = blind.view_origin = at
+            clip_same["%s@%d" % (tag, at)] = (under_clip(aware, rects) ==
+                                              under_clip(blind, rects))
+    check("F20 skipping what the clip excludes changes no pixel inside it",
+          all(clip_same.values()),
+          [tag for tag, ok in clip_same.items() if not ok])
+    shutil.rmtree(scratch_clip)
 
     graded, scratch = module_mutant(
         "F20-nocull",

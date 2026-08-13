@@ -4761,6 +4761,11 @@ class Animation(nbapp.AppWindow):
         # non-overlapping (F2), so the right-hand edge can stop the loop.
         seen_from = self.view_origin
         seen_to = self.view_origin + max(1, (width_all - TL_GUTTER) // step) + 1
+        # During playback GTK invalidates two thin strips around the
+        # playhead rather than the sheet, but the handler still built every
+        # bar and laid out every name before cairo threw the work away.
+        # Read the clip and skip what cannot land inside it.
+        clip_x0, _clip_y0, clip_x1, _clip_y1 = cr.clip_extents()
         for display_row, layer_index in enumerate(reversed(range(len(layers)))):
             layer = layers[layer_index]
             y = TL_ROWS_TOP + display_row * TL_ROW_H
@@ -4775,6 +4780,8 @@ class Animation(nbapp.AppWindow):
                     break
                 left = self._frame_to_x(run['start'])
                 width = max(1, run['len'] * step)
+                if left > clip_x1 or left + width + 1 < clip_x0:
+                    continue
                 cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
                 cr.rectangle(left, y + 2, width, TL_ROW_H - 4)
                 cr.fill()
