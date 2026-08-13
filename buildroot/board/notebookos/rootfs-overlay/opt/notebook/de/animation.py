@@ -4113,16 +4113,37 @@ class Animation(nbapp.AppWindow):
     def _record_prompt(self, *_):
         project = os.path.splitext(os.path.basename(self.doc_path or 'animation'))[0]
         take = 1
-        while True:
-            destination = os.path.join(MUSIC_DIR,
-                                       project + ' take %d.wav' % take)
-            if not os.path.exists(destination):
-                break
+        while os.path.exists(os.path.join(MUSIC_DIR,
+                                          project + ' take %d.wav' % take)):
             take += 1
         self._overlay_prompt('Record Sound…',
-                             [('destination', 'Destination', destination, 'text')],
+                             [('name', 'Name', project + ' take %d' % take,
+                               'text')],
                              'Record', self._record_apply,
                              'The recording is saved in Music.')
+
+    def _recording_path(self, name):
+        """Where a recording named in the card lands.
+
+        The card asks for a NAME. An entry holding the whole path is
+        unreadable at that width — it showed the folder and truncated the
+        filename, which is the only part someone chose — and an entry that
+        takes a path takes one that points anywhere. A recording is user
+        work, so a name already in use gets a number rather than an
+        overwrite."""
+        clean = os.path.basename((name or '').strip())
+        if clean.lower().endswith('.wav'):
+            clean = clean[:-4]
+        clean = clean.strip(' .')
+        if not clean:
+            clean = os.path.splitext(
+                os.path.basename(self.doc_path or 'animation'))[0] or 'sound'
+        destination = os.path.join(MUSIC_DIR, clean + '.wav')
+        spare = 2
+        while os.path.exists(destination):
+            destination = os.path.join(MUSIC_DIR, '%s %d.wav' % (clean, spare))
+            spare += 1
+        return destination
 
     def _record_apply(self, state):
         """Start Sequencer's arecord stdout-to-wave pump, copied by behaviour."""
@@ -4130,8 +4151,8 @@ class Animation(nbapp.AppWindow):
         if not arecord:
             self._flash(_t('Sound recording is not available.'))
             return
-        destination = state['destination']
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        destination = self._recording_path(state.get('name'))
+        os.makedirs(MUSIC_DIR, exist_ok=True)
         device_args = []
         try:
             import nbaudio
@@ -4170,7 +4191,7 @@ class Animation(nbapp.AppWindow):
         self._overlay_prompt('Recording',
                              [('meter', 'Input level', 0, 'meter')],
                              'Stop', lambda _state: self._stop_recording(),
-                             destination)
+                             os.path.basename(destination))
 
     def _record_level(self, peak):
         if self._alive and hasattr(self, '_record_meter'):
@@ -4188,7 +4209,13 @@ class Animation(nbapp.AppWindow):
             scene = self.doc.scenes[self.scene_i]
             row = next((index for index, item in enumerate(scene['sounds'])
                         if item is None), None)
-            if row is not None:
+            if row is None:
+                # The recording is on disk either way. Saying so is the
+                # difference between a full scene and a broken feature.
+                self._flash(_t('Every sound row in this scene is full. The '
+                               'recording is in Music as “%s”.')
+                            % os.path.basename(self._record_path))
+            else:
                 stat_result = os.stat(self._record_path)
                 scene['sounds'][row] = {
                     'path': self._record_path, 'start': self.playhead,

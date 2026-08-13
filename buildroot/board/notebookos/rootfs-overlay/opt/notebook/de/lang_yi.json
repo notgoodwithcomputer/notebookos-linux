@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "יעדע קאָפּיע גייט אַרײַן אין איר אייגענער פּאַפּקע מיט אַ דאַטע, אַזוי אַז אַן עלטערע זיכערקאָפּיע ווערט קיין מאָל נישט איבערגעשריבן. גאָרנישט וואָס ליגט שוין אויפֿן שטעקל ווערט געביטן אָדער אַרויסגענומען. כּדי שפּעטער עפּעס צוריקצולייגן, עפֿנט דאָס שטעקל אין זוכער און שלעפּט עס אַריבער.",
  "Every day": "יעדן טאָג",
  "Every month": "יעדן חודש",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "אַלע קלאַנג־רייען פֿון דער סצענע זײַנען פֿול. די רעקאָרדירונג ליגט אין מוזיק ווי “%s”.",
  "Every take in turn": "יעדער וואַריאַנט נאָך אַנאַנד",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "יעדער וואַריאַנט נאָך אַנאַנד האַלט די צייכענונג אין באַוועגונג. אַ פֿעסטער וואַריאַנט האַלט זי שטיל.",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "יעדע פּליטקע אין דעם דאָזיקן סעט ווערט אָפּגעשניטן צו %(new)d × %(new)d פּיקסלען. וואָס עס איז געצייכנט אויסערהאַלב יענעם קוואַדראַט גייט פֿאַרלוירן.",

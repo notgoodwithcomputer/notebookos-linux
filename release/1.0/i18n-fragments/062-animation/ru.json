@@ -46,6 +46,7 @@
  "Duplicate Drawing": "Дублировать рисунок",
  "Duplicate Drawing    D": "Дублировать рисунок    D",
  "Duplicate Scene": "Дублировать сцену",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "Все звуковые дорожки этой сцены заняты. Запись лежит в Музыке под названием «%s».",
  "Every take in turn": "Каждый дубль по очереди",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "Каждый дубль по очереди держит рисунок в движении. Закреплённый дубль оставляет его неподвижным.",
  "Everything": "Всё",

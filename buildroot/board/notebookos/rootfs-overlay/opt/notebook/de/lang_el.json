@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "Κάθε αντίγραφο πάει σε δικό του φάκελο με ημερομηνία, οπότε ένα παλιότερο αντίγραφο δεν σβήνεται ποτέ. Τίποτα από όσα υπάρχουν ήδη στο στικάκι δεν αλλάζει και δεν αφαιρείται. Για να επαναφέρετε κάτι αργότερα, ανοίξτε το στικάκι στον Εξερευνητή και σύρετέ το πίσω.",
  "Every day": "Κάθε ημέρα",
  "Every month": "Κάθε μήνα",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "Όλες οι σειρές ήχου αυτής της σκηνής είναι γεμάτες. Η ηχογράφηση βρίσκεται στη Μουσική ως “%s”.",
  "Every take in turn": "Κάθε παραλλαγή με τη σειρά",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "Κάθε παραλλαγή με τη σειρά κρατά το σχέδιο σε κίνηση. Μια σταθερή παραλλαγή το κρατά ακίνητο.",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "Κάθε πλακίδιο σε αυτό το σύνολο περικόπτεται σε %(new)d × %(new)d εικονοστοιχεία. Ό,τι είναι σχεδιασμένο έξω από αυτό το τετράγωνο χάνεται.",

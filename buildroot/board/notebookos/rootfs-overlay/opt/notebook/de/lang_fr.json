@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "Chaque copie va dans son propre dossier daté, de sorte qu'une sauvegarde plus ancienne n'est jamais écrasée. Rien de ce qui se trouve déjà sur la clé n'est modifié ni supprimé. Pour récupérer quelque chose plus tard, ouvrez la clé dans Finder et faites-le glisser.",
  "Every day": "Chaque jour",
  "Every month": "Chaque mois",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "Toutes les pistes son de cette scène sont occupées. L’enregistrement est dans Musique sous « %s ».",
  "Every take in turn": "Chaque variante à tour de rôle",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "Chaque variante à tour de rôle garde le dessin en mouvement. Une variante fixe le garde immobile.",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "Chaque tuile de cet ensemble est rognée à %(new)d × %(new)d pixels. Tout ce qui est dessiné hors de ce carré est perdu.",

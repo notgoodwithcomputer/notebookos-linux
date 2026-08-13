@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "हर कॉपी अपनी अलग, तारीख़ वाली फ़ोल्डर में जाती है, इसलिए पुराना बैकअप कभी नहीं मिटता। स्टिक पर जो पहले से है, उसमें कोई छेड़छाड़ नहीं होती। बाद में कुछ वापस लाना हो, तो स्टिक को फ़ाइंडर में खोलें और खींचकर ले आएं।",
  "Every day": "हर दिन",
  "Every month": "हर महीने",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "इस दृश्य की सभी ध्वनि पंक्तियां भरी हैं। रिकॉर्डिंग संगीत में “%s” के रूप में है।",
  "Every take in turn": "हर प्रति बारी-बारी से",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "हर प्रति बारी-बारी से चित्र को चलता रखती है। तय प्रति उसे स्थिर रखती है।",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "इस सेट की हर टाइल %(new)d × %(new)d पिक्सल पर क्रॉप हो जाएगी। उस वर्ग के बाहर जो कुछ बना है, वह चला जाएगा।",

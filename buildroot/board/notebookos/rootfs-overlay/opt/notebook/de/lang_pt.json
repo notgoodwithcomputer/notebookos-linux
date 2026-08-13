@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "Cada cópia vai para uma pasta com a sua data, por isso uma cópia antiga nunca é escrita por cima. Nada do que já está na pen é alterado ou apagado. Para repor alguma coisa mais tarde, abra a pen no Explorador e arraste-a de volta.",
  "Every day": "Todos os dias",
  "Every month": "Todos os meses",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "Todas as linhas de som desta cena estão ocupadas. A gravação está em Música como “%s”.",
  "Every take in turn": "Cada variante à vez",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "Cada variante à vez mantém o desenho em movimento. Uma variante fixa mantém-no parado.",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "Cada mosaico deste conjunto é recortado para %(new)d × %(new)d pixels. Tudo o que estiver desenhado fora desse quadrado perde-se.",

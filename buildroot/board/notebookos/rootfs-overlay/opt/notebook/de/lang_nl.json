@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "Elke kopie komt in een eigen map met datum, dus een oudere back-up wordt nooit overschreven. Wat al op de stick staat, blijft ongemoeid. Wil je later iets terugzetten, open de stick dan in Finder en sleep het terug.",
  "Every day": "Elke dag",
  "Every month": "Elke maand",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "Alle geluidsrijen van deze scène zijn bezet. De opname staat in Muziek als ‘%s’.",
  "Every take in turn": "Elke variant om de beurt",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "Elke variant om de beurt houdt de tekening in beweging. Een vaste variant houdt de tekening stil.",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "Elke tegel in deze set wordt bijgesneden tot %(new)d × %(new)d pixels. Alles wat buiten dat vierkant is getekend, gaat verloren.",

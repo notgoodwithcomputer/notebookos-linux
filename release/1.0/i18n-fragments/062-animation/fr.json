@@ -46,6 +46,7 @@
  "Duplicate Drawing": "Dupliquer le dessin",
  "Duplicate Drawing    D": "Dupliquer le dessin    D",
  "Duplicate Scene": "Dupliquer la scène",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "Toutes les pistes son de cette scène sont occupées. L’enregistrement est dans Musique sous « %s ».",
  "Every take in turn": "Chaque variante à tour de rôle",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "Chaque variante à tour de rôle garde le dessin en mouvement. Une variante fixe le garde immobile.",
  "Everything": "Tout",

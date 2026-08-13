@@ -46,6 +46,7 @@
  "Duplicate Drawing": "复制这张画",
  "Duplicate Drawing    D": "复制这张画    D",
  "Duplicate Scene": "复制场景",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "这个场景的声音行都已占满。录音以“%s”存在音乐中。",
  "Every take in turn": "依次播放每个变体",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "依次播放每个变体让画面持续晃动。固定变体则让它静止。",
  "Everything": "全部",

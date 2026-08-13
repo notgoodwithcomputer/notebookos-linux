@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "복사할 때마다 날짜가 붙은 폴더에 들어가므로 예전 백업이 덮어써지지 않습니다. USB 메모리에 원래 있던 것은 바뀌거나 지워지지 않습니다. 나중에 되돌리려면 파인더에서 USB 메모리를 열고 끌어다 놓으세요.",
  "Every day": "매일",
  "Every month": "매달",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "이 장면의 소리 줄이 모두 찼습니다. 녹음은 음악에 “%s”(으)로 있습니다.",
  "Every take in turn": "변형을 차례로",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "변형을 차례로 보여 주면 그림이 계속 움직입니다. 변형을 고정하면 멈춥니다.",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "이 세트의 모든 타일이 %(new)d × %(new)d 픽셀로 잘립니다. 그 정사각형 밖에 그린 것은 사라집니다.",

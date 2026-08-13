@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "Her kopya, tarihini taşıyan kendi klasörüne gider; böylece eski bir yedeğin üzerine hiç yazılmaz. Bellekte zaten duran hiçbir şey değişmez ya da silinmez. Sonradan bir şeyi geri koymak için belleği Dosyalar'da açıp sürükleyin.",
  "Every day": "Her gün",
  "Every month": "Her ay",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "Bu sahnenin bütün ses satırları dolu. Kayıt, Müzik içinde “%s” adıyla duruyor.",
  "Every take in turn": "Sırayla her varyant",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "Sırayla her varyant çizimi hareketli tutar. Sabit bir varyant onu durdurur.",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "Bu setteki her karo %(new)d × %(new)d piksele kırpılır. O karenin dışına çizilen her şey kaybolur.",

@@ -1368,10 +1368,74 @@ def control_range_family():
         animation.Animation._wobble_prompt = real
 
 
+def recording_family():
+    """A recording is user work: it must land somewhere findable, it must
+    not overwrite an earlier one, and if it cannot join the film the app
+    has to say so — a silent return is indistinguishable from a feature
+    that does not work."""
+    if not gtk_available():
+        skip("F13 recording", "no display")
+        return
+    app = animation.Animation()
+    os.makedirs(animation.MUSIC_DIR, exist_ok=True)
+
+    inside = {}
+    for typed in ("../../etc/passwd", "/tmp/elsewhere", "   ", ".hidden",
+                  "take.wav"):
+        landed = app._recording_path(typed)
+        inside[typed] = (os.path.dirname(landed) == animation.MUSIC_DIR and
+                         os.path.basename(landed).endswith(".wav") and
+                         not os.path.basename(landed).startswith("."))
+    check("F13 a typed name stays a name and lands in Music",
+          all(inside.values()), inside)
+
+    taken = os.path.join(animation.MUSIC_DIR, "occupied.wav")
+    open(taken, "wb").close()
+    spared = app._recording_path("occupied")
+    check("F13 a name already in use never overwrites the recording there",
+          spared != taken and not os.path.exists(spared), spared)
+
+    def stop_with_full_rows(app):
+        scene = app.doc.scenes[app.scene_i]
+        for row in range(len(scene["sounds"])):
+            scene["sounds"][row] = {"path": "busy", "start": 0}
+        app._record_path = os.path.join(animation.MUSIC_DIR, "orphan.wav")
+        open(app._record_path, "wb").close()
+        app._record_process = types.SimpleNamespace(
+            terminate=lambda: None, wait=lambda timeout=0: None)
+        said = []
+        spoken = app._flash
+        app._flash = lambda text, *a, **k: said.append(text)
+        try:
+            app._stop_recording()
+        finally:
+            app._flash = spoken
+        return said
+
+    said = stop_with_full_rows(app)
+    check("F13 a recording that cannot join the film says where it went",
+          len(said) == 1 and "orphan.wav" in said[0], said)
+
+    real = animation.Animation._stop_recording
+    try:
+        def mute(self):
+            process = getattr(self, "_record_process", None)
+            if not process:
+                return
+            del self._record_process
+        animation.Animation._stop_recording = mute
+        quiet = stop_with_full_rows(animation.Animation())
+        mutant("F13 a recording that vanishes without a word is caught",
+               not quiet, quiet)
+    finally:
+        animation.Animation._stop_recording = real
+
+
 dialog_limits_family()
 workflow_family()
 thumbnail_family()
 control_range_family()
+recording_family()
 
 total = len(PASSES) + len(FAILS) + len(SKIPS) + len(MUTANTS) + len(UNCAUGHT_MUTANTS)
 print("TALLY total=%d passed=%d failed=%d skipped=%d mutants-caught=%d mutants-uncaught=%d" %

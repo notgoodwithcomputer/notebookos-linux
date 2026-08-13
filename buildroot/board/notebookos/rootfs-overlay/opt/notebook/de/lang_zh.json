@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "每次复制都放进各自带日期的文件夹，所以旧的备份永远不会被覆盖。U 盘上原有的内容不会被修改或删除。以后要取回东西，在 Finder 中打开 U 盘拖回来即可。",
  "Every day": "每天",
  "Every month": "每月",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "这个场景的声音行都已占满。录音以“%s”存在音乐中。",
  "Every take in turn": "依次播放每个变体",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "依次播放每个变体让画面持续晃动。固定变体则让它静止。",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "这个图块集中的每个图块都会被裁剪到 %(new)d × %(new)d 像素。画在那个方块之外的内容会丢失。",

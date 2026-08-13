@@ -1187,6 +1187,7 @@
  "Every copy goes into its own dated folder, so an older backup is never written over. Nothing already on the stick is changed or removed. To put something back later, open the stick in Finder and drag it across.": "Svaka kopija ide u sopstvenu fasciklu sa datumom, pa se starija rezervna kopija nikada ne prepisuje. Ništa što je već na USB-u ne menja se niti briše. Da biste nešto kasnije vratili, otvorite USB u Finderu i prevucite ga.",
  "Every day": "Svaki dan",
  "Every month": "Svaki mjesec",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "Svi zvučni redovi ove scene su popunjeni. Snimak je u Muzici pod nazivom „%s“.",
  "Every take in turn": "Svaka varijanta redom",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "Svaka varijanta redom drži crtež u pokretu. Stalna varijanta ga drži mirnim.",
  "Every tile in this set is cropped to %(new)d × %(new)d pixels. Anything drawn outside that square is lost.": "Svaka pločica u ovom skupu izrezuje se na %(new)d × %(new)d piksela. Sve nacrtano izvan tog kvadrata gubi se.",
