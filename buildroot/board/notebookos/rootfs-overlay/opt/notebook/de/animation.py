@@ -1433,6 +1433,12 @@ class Animation(nbapp.AppWindow):
         status = Gtk.Box()
         self.hint = Gtk.Label(label=_t('Drag to draw. Square tip, hard edges.'), xalign=0)
         self.readout = Gtk.Label(label='0:00+00')
+        # "position / length": two runs of digits either side of a slash.
+        # In a right-to-left session the pair reorders and the film reads
+        # as though it were eleven seconds long and playing at zero — the
+        # transport draws the same figures with cairo and keeps them in
+        # order, so the two disagreed on screen.
+        self.readout.set_direction(Gtk.TextDirection.LTR)
         self.scene_status = Gtk.Label(label='')
         self.zoom_label = Gtk.Label(label='100%')
         self.save_chip = Gtk.Label(label=_t('Saved'))
