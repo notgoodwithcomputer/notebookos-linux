@@ -3169,8 +3169,182 @@ def ordering_family():
     shutil.rmtree(scratch)
 
 
+def library_and_palette_family():
+    """The drawing library's own gestures, and the project palette.
+
+    The library's press-and-hold says in its own docstring that a look
+    costs nothing and changes nothing — a claim nothing had ever tested.
+    The palette buttons and the recolour all edit the document and all
+    have to be undoable."""
+    if not gtk_available():
+        skip("F30 library and palette", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+
+    kept = animation.STORE_FILE + ".library-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    app.sheet = animation.Sheet(app.doc, 0)
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+    animation.write_pixel(cel.decoded(0), 4, 4, "#C8341E")
+    cel.version += 1
+    app._refresh_lists()
+    # get_row_at_y answers from the ALLOCATION, so an unrealised list has no
+    # row at any height and press-and-hold would look like it does nothing
+    child = app.get_child()
+    app.remove(child)
+    stage = Gtk.OffscreenWindow()
+    stage.set_size_request(1024, 722)
+    stage.add(child)
+    stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    rows = [r for r in app.cel_list.get_children() if hasattr(r, "cel_id")]
+    row_y = rows[0].get_allocation().y + 4 if rows else 4
+    check("F30 the library lists the film's drawings", len(rows) == 1,
+          len(rows))
+
+    # press and hold: a look costs nothing
+    untouched = app.doc.bytes()
+    press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    press.x, press.y, press.button = 4, row_y, 1
+    app._cel_list_press(app.cel_list, press)
+    looking = getattr(app, "_preview_cel", None)
+    release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+    release.x, release.y, release.button = 4, row_y, 1
+    app._cel_list_release(app.cel_list, release)
+    check("F30 press and hold shows a drawing, and letting go puts it back",
+          looking == cel.id and getattr(app, "_preview_cel", None) is None,
+          (looking, getattr(app, "_preview_cel", None)))
+    check("F30 and looking at a drawing changes nothing in the film",
+          app.doc.bytes() == untouched)
+
+    # the row hands its identity to a drag
+    app._cel_row_selected(app.cel_list, rows[0])
+    picked = getattr(app, "_library_cel", None)
+    carried = []
+
+    class Parcel:
+        def set_text(self, text, _length):
+            carried.append(text)
+
+    app._cel_drag_data_get(rows[0], None, Parcel(), 0, 0, cel.id)
+    check("F30 a row knows which drawing it is, and a drag carries that",
+          picked == cel.id and carried == [str(cel.id)], (picked, carried))
+
+    # double-clicking a row asks for a new name
+    app._close_prompt()
+    app._cel_row_activated(app.cel_list, rows[0])
+    named = app._prompt_layer is not None
+    app._close_prompt()
+    check("F30 opening a row asks what to call the drawing", named)
+
+    # the project palette
+    steps = {}
+
+    def undoable(tag, act):
+        before = app.doc.bytes()
+        act()
+        moved = app.doc.bytes() != before
+        app.history.undo()
+        steps[tag] = moved and app.doc.bytes() == before
+
+    app._choose_colour(None, "#C8341E")
+    undoable("add a colour", app._palette_add)
+    app._palette_add()
+    undoable("remove a colour", app._palette_remove)
+    check("F30 adding and removing a palette colour both undo cleanly",
+          all(steps.values()), steps)
+
+    # a colour already in the palette is not added twice
+    app.doc.palette = ["#C8341E"]
+    app._choose_colour(None, "#C8341E")
+    app._palette_add()
+    check("F30 the same colour is not added to the palette twice",
+          app.doc.palette == ["#C8341E"], app.doc.palette)
+
+    # recolouring a drawing to the palette edits pixels, and undoes
+    app.doc.palette = ["#1A1916"]
+    app.playhead = 0
+    before = app.doc.bytes()
+    app._recolor_cel()
+    recoloured = app.doc.bytes() != before
+    app.history.undo()
+    check("F30 recolouring a drawing to the palette is a change you can undo",
+          recoloured and app.doc.bytes() == before, recoloured)
+
+    # takes come and go within their bounds. Undo REPLACES app.doc by
+    # re-parsing it, so the cel object held above belongs to a document
+    # that no longer exists — ask the live one for it again.
+    live = app.doc.cel(cel.id) or app.doc.cels[0]
+    app._library_cel = live.id
+    counts = [len(live.takes)]
+    for _ in range(animation.TAKE_MAX + 2):
+        app._add_take()
+    counts.append(len(live.takes))
+    for _ in range(animation.TAKE_MAX + 2):
+        app._remove_take()
+    counts.append(len(live.takes))
+    check("F30 takes stop at the cap on the way up and at one on the way down",
+          counts[1] == animation.TAKE_MAX and counts[2] == 1, counts)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F30-look-costs-something",
+        [("    def _cel_list_release(self, _widget, _event):\n"
+          "        if getattr(self, '_preview_cel', None) is not None:",
+          "    def _cel_list_release(self, _widget, _event):\n"
+          "        if False:")])
+    stuck = graded.Animation()
+    stuck.doc = graded.AnimationDocument(canvas=(160, 120))
+    stuck.scene_i = stuck.layer_i = stuck.playhead = 0
+    stuck.sheet = graded.Sheet(stuck.doc, 0)
+    other, _ = stuck.sheet.ensure_drawing(0, 0)
+    stuck._refresh_lists()
+    stuck_child = stuck.get_child()
+    stuck.remove(stuck_child)
+    stuck_stage = Gtk.OffscreenWindow()
+    stuck_stage.set_size_request(1024, 722)
+    stuck_stage.add(stuck_child)
+    stuck_stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    stuck_rows = [r for r in stuck.cel_list.get_children()
+                  if hasattr(r, "cel_id")]
+    stuck_press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    stuck_press.x = 4
+    stuck_press.y = (stuck_rows[0].get_allocation().y + 4) if stuck_rows else 4
+    stuck_press.button = 1
+    stuck._cel_list_press(stuck.cel_list, stuck_press)
+    stuck._cel_list_release(stuck.cel_list, release)
+    mutant("F30 a preview that never lets go is caught",
+           getattr(stuck, "_preview_cel", None) is not None)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+library_and_palette_family()
 ordering_family()
 card_effect_family()
 selection_family()
