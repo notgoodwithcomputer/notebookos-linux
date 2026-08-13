@@ -58,7 +58,7 @@ NOT_A_GATE = re.compile(r"(shots?|shot)\.py$|^(appshot|controlshot|dialogshot|"
                         r"uishot|crop|i18n_shot|gbasdk_shots|language_shots)\.py$")
 # Anything needing hardware, a network, or many minutes.
 SLOW_OR_HARDWARE = {
-    "boot_test", "drive_proof", "bt_guest_check",
+    "boot_test", "drive_proof",
 }
 # Gates that are not *_selftest.py. EXPLICITLY NAMED, not globbed: several
 # *_check / *_sweep tools in this directory want arguments or produce reports
@@ -72,11 +72,35 @@ CHECK_GATES = [
     "anchored_term_check", "ascii_css_check", "button_contrast_check",
     "catalog_dialect_check", "catalog_script_check", "css_parse_check",
     "data_stress_sweep", "dead_setting_check", "ellipsis_sweep",
-    "frame_pacing_check", "grid_check", "image_capability_check",
+    "frame_pacing_check", "grid_check",
+    # §E4 check 5 (no diagonal travel). Separate from grid_check because that
+    # one owns the STATIC constants and is edited whenever a sidebar
+    # converges, while this reads the MOTION inventory — two ratchets with two
+    # burn-downs in one file is how a ledger ends up with an edit conflict.
+    "grid_e4_travel_check", "grid_e4_hairline_check",
+    # The MEASURED rail gate. grid_check's rail scan greps for constants named
+    # SIDEBAR_W/PANEL_W/DOCK_W/RAIL_W, so four apps whose width is inline or
+    # computed were never checked at all. This one constructs each app and
+    # measures where content actually starts.
+    "rail_measured_check", "grid_e4_rest_check", "image_capability_check",
+    # The code-vs-catalog half of i18n. i18n_check grades the catalog it is
+    # given and reported 17 x 100% while three strings added that morning
+    # were missing from every language — a key nobody wrote down is not a
+    # key it iterates over. This one starts from what the source can SAY.
+    "i18n_source_coverage",
     "jargon_sweep",
     "language_content_check", "menu_conformance_check", "minsize_sweep",
-    "motion_inventory_check", "picom_conf_check", "rtl_check",
-    "self_attr_audit", "term_consistency_check", "voice_check",
+    "motion_inventory_check", "page_switch_consistency_check",
+    "picom_conf_check", "rtl_check",
+    "self_attr_audit", "term_consistency_check", "theme_transition_check",
+    # Drives each Article G transition and reads its real frame trace. It is
+    # the gate that caught GrowCard arriving on the wrong token, which no
+    # selftest had pinned — motion_inventory_check only reads the RECORDED
+    # pacing, so without this in the run nothing re-measures it. Exits non-zero
+    # only when a MEASURED verdict leaves its band; incomplete coverage is
+    # reported, not failed.
+    "transition_pacing_probe",
+    "voice_check",
 ]
 PER_TEST_TIMEOUT = 300
 # Suites that legitimately need longer. A timeout reported as a failure is a
