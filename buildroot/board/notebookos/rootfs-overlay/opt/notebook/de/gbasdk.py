@@ -47,6 +47,7 @@ import subprocess
 import tempfile
 
 import nbapp
+import nbjobs
 import nbpicker
 import nbicons
 import gbabuild
@@ -784,6 +785,9 @@ class GbaSdk(nbapp.AppWindow):
         # step); structural edits bracket themselves with checkpoint/commit.
         self.undo = nbapp.UndoHistory(self._snapshot, self._restore,
                                       typing_label=_t("Paint"))
+        # Compiles run OFF this thread (see _build_async); the owner closes
+        # with the window so a landing build can never paint a dead widget.
+        self.jobs = nbjobs.JobOwner(name="gbasdk")
 
         body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         body.set_vexpand(True)
@@ -4132,28 +4136,67 @@ class GbaSdk(nbapp.AppWindow):
             self._flash(_t("A game needs an object and a room before it runs"))
             return
         problems = gbabuild.check_project(self.proj)
+        if problems:
+            # The same gate Export runs (audit #7): code that will be
+            # SKIPPED deserves a stop and a choice, not a flash that
+            # disappears the moment the emulator covers this window.
+            go_on = [False]
+            self._card(
+                "cartridge",
+                _t("One thing to fix") if len(problems) == 1
+                else _t("%d things to fix") % len(problems),
+                [_t("These lines of code will be skipped, so the game will "
+                    "not do what you meant:")] + problems[:6],
+                primary=_t("Go Back and Fix"),
+                secondary=(_t("Play Anyway"),
+                           lambda: go_on.__setitem__(0, True)))
+            if not go_on[0]:
+                return
         self._save_autosave()
         outdir = os.path.join(tempfile.gettempdir(), "nbgba-play")
-        self._flash(_t("Compiling…"))
-        while Gtk.events_pending():
-            Gtk.main_iteration_do(False)
-        try:
-            ok, rom, log = gbabuild.build_rom(copy.deepcopy(self.proj), outdir)
-        except Exception as exc:                            # noqa: BLE001
-            ok, rom, log = False, None, str(exc)
-        self._last_log = log or ""
-        if not ok or not rom:
-            # Stay visible and say so. Hiding behind an emulator that never
-            # opened is how a build failure looks like the machine freezing.
-            self._flash(_t("This game did not build. Build \u25b8 Build "
-                           "Details says why."))
+
+        def done(ok, rom, log):
+            self._last_log = log or ""
+            if not ok or not rom:
+                # Stay visible and say so. Hiding behind an emulator that
+                # never opened is how a build failure looks like the
+                # machine freezing.
+                self._flash(_t("This game did not build. Build \u25b8 Build "
+                               "Details says why."))
+                return
+            self._launch_emulator(rom)
+
+        self._build_async(copy.deepcopy(self.proj), outdir, done)
+
+    def _build_async(self, proj, outdir, on_done, multiboot=False):
+        """Run gbabuild.build_rom on a worker thread and land the result on
+        the main loop. Inline, the compiler froze this window for 45-85
+        seconds on the shipped machine — behind whatever card was open, with
+        every menu dead (audit #9). One build at a time; the flash says a
+        second request was turned away rather than silently dropping it."""
+        if getattr(self, "_building", False):
+            self._flash(_t("A build is already running…"))
             return
-        if problems:
-            self._flash(_t("Playing, with one thing that will not work")
-                        if len(problems) == 1 else
-                        _t("Playing, with %d things that will not work")
-                        % len(problems))
-        self._launch_emulator(rom)
+        self._building = True
+        self._flash(_t("Compiling…"))
+
+        def work(_job):
+            return gbabuild.build_rom(proj, outdir, multiboot=multiboot)
+
+        def landed(result):
+            self._building = False
+            try:
+                ok, rom, log = result
+            except Exception:                               # noqa: BLE001
+                ok, rom, log = False, None, str(result)
+            on_done(ok, rom, log)
+
+        def failed(error):
+            self._building = False
+            on_done(False, None, str(error))
+
+        self.jobs.start("build", work, on_done=landed, on_error=failed,
+                        policy=nbjobs.REJECT)
 
     def _launch_emulator(self, rom):
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -6464,7 +6507,8 @@ class GbaSdk(nbapp.AppWindow):
                else _t("Game")}
         save_type = str(data.get("save_type") or "sram").strip().lower()
         out["save_type"] = save_type if save_type in (
-            "sram", "flash64", "flash128") else "sram"
+            "sram", "flash64", "flash128",
+            "eeprom512", "eeprom8k") else "sram"
 
         sprites = []
         for rec in self._records(data.get("sprites")):
@@ -6744,11 +6788,19 @@ class GbaSdk(nbapp.AppWindow):
                 data = json.load(fh)
         except Exception:
             return
+        if not isinstance(data, dict):
+            # Valid JSON in a shape this app cannot own (a bare scalar, a
+            # list): move the person's bytes ASIDE before the first autosave
+            # can write a blank project over them — the class that destroyed
+            # a scalar store on the second open+close (audit #3).
+            nbapp.quarantine_unrecognized(path)
+            return
         try:
             proj, lost = self._sane_project(data)
         except Exception:
             return
         if proj is None:
+            nbapp.quarantine_unrecognized(path)
             return
         self.proj = proj
         # Something was dropped. The previous behaviour was to say nothing at
@@ -6761,6 +6813,10 @@ class GbaSdk(nbapp.AppWindow):
             GLib.source_remove(self._layout_save_timer)
             self._layout_save_timer = None
         self._save_autosave()
+        try:
+            self.jobs.close()
+        except Exception:                                   # noqa: BLE001
+            pass
         return False
 
     # ================= undo =================
@@ -6938,8 +6994,6 @@ class GbaSdk(nbapp.AppWindow):
                 ("Open Project…", self._file_open),
                 nbapp.SEP,
                 ("Save Project As…", self._file_save_as),
-                (_acc("Build & Play", "Ctrl+R"), self._file_play),
-                (_acc("Build & Export…", "Ctrl+B"), self._file_export),
                 ("Export for a Link Cable…", self._file_export_mb),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
@@ -6990,8 +7044,13 @@ class GbaSdk(nbapp.AppWindow):
                 ("Hardware", lambda: self._open_help("reg_interrupts")),
             ]
         if name == "Build":
+            # Build & Play lived only in the FILE menu while the app's own
+            # flash said "Build & Play to try it" — a person looked HERE and
+            # found no way to play. The build actions live in Build.
             return [
+                (_acc("Build & Play", "Ctrl+R"), self._file_play),
                 (_acc("Build & Export…", "Ctrl+B"), self._file_export),
+                nbapp.SEP,
                 ("What This Game Costs…", self._show_budget),
                 ("Build Details…",
                  lambda: self._show_log(getattr(self, "_last_log", "")
@@ -7014,7 +7073,9 @@ class GbaSdk(nbapp.AppWindow):
                        True, True, 0)
         combo = Gtk.ComboBoxText()
         for key, label in (("sram", "SRAM"), ("flash64", "Flash 64 KB"),
-                           ("flash128", "Flash 128 KB")):
+                           ("flash128", "Flash 128 KB"),
+                           ("eeprom512", "EEPROM 512 B"),
+                           ("eeprom8k", "EEPROM 8 KB")):
             combo.append(key, _t(label))
         combo.set_active_id(self.proj.get("save_type") or "sram")
         self._project_save_type = combo
@@ -7039,7 +7100,12 @@ class GbaSdk(nbapp.AppWindow):
         A brand-new, untouched project is not worth asking about; a project with
         rooms, sprites or events in it is."""
         p = getattr(self, "proj", None) or {}
-        for key in ("rooms", "sprites", "tiles", "events", "scripts", "sounds"):
+        # The REAL resource keys of a project dict — the old list named
+        # "tiles"/"events", which are not top-level lists, so a project
+        # holding only tilesets, objects or tables read as empty and New/
+        # Open replaced it without asking (audit #5).
+        for key in ("sprites", "tilesets", "sounds", "objects",
+                    "rooms", "scripts", "tables"):
             try:
                 if p.get(key):
                     return True
@@ -7305,6 +7371,11 @@ class GbaSdk(nbapp.AppWindow):
                                   patterns=("*.gbaproj", "*.json"))
         if not path:
             return
+        # The same confirmation New and the example take: opening REPLACES
+        # the current project and the next autosave writes over its store —
+        # this was the one door with no question in front of it (audit #1).
+        if not self._ok_to_discard(_t("Open another project?")):
+            return
         try:
             # Three things can be picked and all three are one project: a
             # bundle directory, the project.json inside one, or a single-file
@@ -7542,36 +7613,45 @@ class GbaSdk(nbapp.AppWindow):
             patterns=("*" + ext,), default_ext=ext)
         if not path:
             return
-        self._flash(_t("Compiling…"))
         outdir = os.path.join(tempfile.gettempdir(), "nbgba-export")
-        # A COPY. The compiler has no business writing to the open document, and
-        # the app autosaves whatever it finds there — which is how private build
-        # keys ended up inside every saved .gbaproj.
-        ok, gba, log = gbabuild.build_rom(copy.deepcopy(self.proj), outdir,
-                                          multiboot=multiboot)
-        self._last_log = log
-        if not ok:
-            self._flash(_t("Export failed"))
-            self._card("cartridge", _t("The game could not be built"),
-                       [self._failure_reason(log),
-                        _t("Nothing was saved. The project is unchanged.")],
-                       secondary=(_t("Show the Details"),
-                                  lambda: self._show_log(log)))
-            return
-        try:
-            shutil.copyfile(gba, path)
-        except Exception as e:
-            self._flash(_t("Export failed"))
-            # The build itself worked; what failed was writing the file out.
-            # Say that as a sentence, and never hand the reader the raw
-            # exception — it names a path and an errno, neither of which is
-            # something they can do anything with.
-            self._card("cartridge", _t("The game could not be saved"),
-                       [_t("The game was built, but it could not be written "
-                           "to %s. The folder may be full, or on a stick that "
-                           "cannot be written to. Try saving it somewhere "
-                           "else.") % os.path.basename(path)])
-            return
+
+        # A COPY. The compiler has no business writing to the open document,
+        # and the app autosaves whatever it finds there — which is how private
+        # build keys ended up inside every saved .gbaproj. The build itself
+        # runs OFF this thread (_build_async): inline it froze the window for
+        # the whole compile, behind the just-dismissed picker.
+        def done(ok, gba, log):
+            self._last_log = log
+            if not ok:
+                self._flash(_t("Export failed"))
+                self._card("cartridge", _t("The game could not be built"),
+                           [self._failure_reason(log),
+                            _t("Nothing was saved. The project is "
+                               "unchanged.")],
+                           secondary=(_t("Show the Details"),
+                                      lambda: self._show_log(log)))
+                return
+            try:
+                shutil.copyfile(gba, path)
+            except Exception:
+                self._flash(_t("Export failed"))
+                # The build itself worked; what failed was writing the file
+                # out. Say that as a sentence, and never hand the reader the
+                # raw exception — it names a path and an errno, neither of
+                # which is something they can do anything with.
+                self._card("cartridge", _t("The game could not be saved"),
+                           [_t("The game was built, but it could not be "
+                               "written to %s. The folder may be full, or on "
+                               "a stick that cannot be written to. Try "
+                               "saving it somewhere else.")
+                            % os.path.basename(path)])
+                return
+            self._export_finish(path, log)
+
+        self._build_async(copy.deepcopy(self.proj), outdir, done,
+                          multiboot=multiboot)
+
+    def _export_finish(self, path, log):
         name = os.path.basename(path)
         self._flash(_t("Exported %s") % name)
         # The whole point of the app just happened — say where the game is and

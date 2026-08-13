@@ -97,6 +97,26 @@ def pump(n=400):
         i += 1
 
 
+def pump_build(app, timeout=240):
+    """Builds now run OFF the GTK thread (_build_async): drive the loop
+    until the worker lands its result, the way the live window does. The
+    assertions after a build are unchanged — only the waiting is new."""
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    while _t.monotonic() < deadline:
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        GLib.MainContext.default().iteration(False)
+        if not getattr(app, "_building", False):
+            for _ in range(30):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+                GLib.MainContext.default().iteration(False)
+            return True
+        _t.sleep(0.02)
+    return False
+
+
 def btn(x, y, b=1, motion=False):
     """A synthesised pointer event for a canvas handler."""
     e = Gdk.EventButton()
@@ -1419,7 +1439,7 @@ gbabuild.build_rom = (lambda model, outdir, runtime_dir=RUNTIME,
                       toolchain_dir=TOOLCHAIN, **kw:
                       _real_build(model, outdir, runtime_dir, toolchain_dir,
                                   **kw))
-w._file_export()
+w._file_export(); pump_build(w)
 pump()
 if gcc:
     check("Compile & Export saves the .gba where the user chose",
@@ -1713,7 +1733,7 @@ if gcc:
                          "warps": [], "tiles": [0] * 600}]})
     nbpicker.save_file = lambda *a, **k: os.path.join(HOME, "Documents", "W.gba")
     wc._cards = []
-    wc._file_export()
+    wc._file_export(); pump_build(wc)
     _said = " ".join(l for _t_, ls in wc._cards for l in ls).lower()
     check("a build that compiled with a warning says the compiler had a remark",
           "remark" in _said, wc._cards)
@@ -1734,10 +1754,10 @@ nbpicker.save_file = lambda *a, **k: os.path.join(HOME, "Documents", "f.gba")
 _real_build2 = gbabuild.build_rom
 try:
     gbabuild.build_rom = lambda *a, **k: (False, None, "cc1: fatal error: boom")
-    _cards_seen.clear(); _wf._file_export(); pump()
+    _cards_seen.clear(); _wf._file_export(); pump_build(_wf); pump()
     _failed = list(_cards_seen)
     gbabuild.build_rom = lambda *a, **k: (True, "/nonexistent/never.gba", "")
-    _cards_seen.clear(); _wf._file_export(); pump()
+    _cards_seen.clear(); _wf._file_export(); pump_build(_wf); pump()
     _unsaved = list(_cards_seen)
 finally:
     gbabuild.build_rom = _real_build2
@@ -1767,7 +1787,7 @@ def _big(nframes):
 wb = app(_big(17))                      # 17 x 64 tiles = 1088, cap is 1024
 wb._yes = False                         # "Go Back and Fix"
 wb._cards = []
-wb._file_export()
+wb._file_export(); pump_build(wb)
 _said = " ".join(l for _t_, ls in wb._cards for l in ls).lower()
 check("exporting a game too big for the console says which budget is over",
       "sprite tiles" in _said, wb._cards)
@@ -1777,7 +1797,7 @@ wb.destroy()
 
 wb = app(_big(16))                      # exactly the cap: not over
 wb._cards = []
-wb._file_export()
+wb._file_export(); pump_build(wb)
 _said = " ".join(l for _t_, ls in wb._cards for l in ls).lower()
 check("a project that exactly fits is not called over",
       "sprite tiles" not in _said, wb._cards)
@@ -1792,7 +1812,7 @@ w = app()
 w.proj = {"name": "Empty", "sprites": [], "sounds": [], "tilesets": [],
           "objects": [], "rooms": [], "start_room": None}
 w._cards = []
-w._file_export()
+w._file_export(); pump_build(w)
 # Anchored on the EXPLANATION, not on the verb in the title: this check used
 # to look for "compile" and went red when the app settled on one word for the
 # action ("Build"), which was a rename, not a regression.
@@ -2495,7 +2515,7 @@ _hidden = []
 _pl.hide = lambda: _hidden.append(1)
 
 _pl._new_project()
-_pl._file_play()
+_pl._file_play(); pump_build(_pl)
 pump()
 check("a game with no object or room does not try to play",
       not _launched, str(_launched))
@@ -2506,7 +2526,7 @@ check("...and does not hide behind an emulator that never opened",
 _pl._file_example()
 _bad = gbabuild.build_rom
 gbabuild.build_rom = lambda *a, **k: (False, None, "deliberate failure")
-_pl._file_play()
+_pl._file_play(); pump_build(_pl)
 pump()
 gbabuild.build_rom = _bad
 check("a game that does not compile stays visible", not _hidden and not _launched)
@@ -2515,7 +2535,7 @@ check("...and keeps the log so Build Details can explain",
 
 # A good build hands off, with the ROM as the argument.
 gbabuild.build_rom = lambda m, o, **k: (True, os.path.join(o, "game.gba"), "ok")
-_pl._file_play()
+_pl._file_play(); pump_build(_pl)
 pump()
 gbabuild.build_rom = _bad
 gbabuild.build_rom = _real_build
@@ -2662,8 +2682,15 @@ pump()
 _mb_items = [i[0] for i in app().menu_items("File") if i is not nbapp.SEP]
 check("a link-cable export is offered in the File menu",
       any("Link Cable" in lab for lab in _mb_items), str(_mb_items))
+# The cartridge export moved HOME to the Build menu (with Build & Play,
+# which the app's own flash points at); the link-cable entry stays in
+# File. Separateness is now two distinct commands in their own menus.
+_bd_items = [i[0] for i in app().menu_items("Build") if i is not nbapp.SEP]
 check("...and it is a separate entry from the cartridge export",
-      len([lab for lab in _mb_items if "Export" in lab]) >= 2, str(_mb_items))
+      any("Export" in lab for lab in _bd_items)
+      and not any("Link Cable" in lab for lab in _bd_items), str(_bd_items))
+check("Build & Play is offered where the flash points, in the Build menu",
+      any("Build & Play" in lab for lab in _bd_items), str(_bd_items))
 check("build_rom takes a multiboot option",
       "multiboot" in _real_build.__code__.co_varnames)
 check("...and it changes the file that comes out",

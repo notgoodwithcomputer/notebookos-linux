@@ -228,9 +228,14 @@ def scan_class(module, node):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             info.defines.add(stmt.name)
         elif isinstance(stmt, ast.Assign):
+            # Walk the targets rather than matching bare Names: a class-level
+            # `_A, _B = x, y` defines BOTH, and matching only ast.Name made
+            # the audit manufacture "never defined" findings against correct
+            # tuple-unpacked constants (finder._NAV_ON/_NAV_OFF).
             for t in stmt.targets:
-                if isinstance(t, ast.Name):
-                    info.defines.add(t.id)
+                for leaf in ast.walk(t):
+                    if isinstance(leaf, ast.Name):
+                        info.defines.add(leaf.id)
         elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
             info.defines.add(stmt.target.id)
     # __slots__ declares attributes too.
