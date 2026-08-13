@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import wave
 
@@ -2513,8 +2514,135 @@ def close_guard_family():
     shutil.rmtree(scratch)
 
 
+def export_outcome_family():
+    """What the app says when an export ends, three ways.
+
+    Coverage said the whole export flow had never run here. Driving it
+    found the app reporting "Completed" for an export somebody had just
+    cancelled, naming a file that did not exist — and reporting a failure
+    by pasting ffmpeg's stderr, memory address and all, into a label that
+    cannot wrap."""
+    if not gtk_available():
+        skip("F25 export outcomes", "no display")
+        return
+    from gi.repository import Gtk
+
+    kept = animation.STORE_FILE + ".export-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    scene = app.doc.scenes[0]
+    scene["length"] = 40
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+    app._refresh_lists()
+    frames, specs = app._export_range("scene")
+    # _export_apply makes this; these checks call _export_start directly
+    os.makedirs(animation.VIDEOS_DIR, exist_ok=True)
+    state = {"kind": "video", "range": "scene", "name": "outcome",
+             "size": (160, 120), "native": False, "gif_scale": 1}
+
+    def run_export(exporter, then=None):
+        """Start an export whose worker is `exporter`, and settle."""
+        real = animation.export_video
+        animation.export_video = exporter
+        path = os.path.join(animation.VIDEOS_DIR, "outcome.mp4")
+        try:
+            app._export_start(state, frames, specs, path)
+            if then:
+                then()
+            for _ in range(500):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+                if not any(w.is_alive() for w in app._workers):
+                    break
+                time.sleep(0.01)
+            for _ in range(60):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+        finally:
+            animation.export_video = real
+            app._close_prompt()
+        return app.hint.get_text(), path
+
+    def stopped(*_a, **_k):
+        raise InterruptedError()
+
+    def broken(*_a, **_k):
+        raise RuntimeError("[libx264 @ 0x55d3a] height not divisible by 2")
+
+    def fine(document, chosen, path, *_a, **_k):
+        open(path, "wb").write(b"not really a movie")
+
+    said, path = run_export(stopped)
+    check("F25 an export somebody stopped does not report success",
+          "stop" in said.lower() and "complet" not in said.lower(), said)
+    check("F25 and it leaves no half-written movie behind",
+          not os.path.exists(path), path)
+
+    said, path = run_export(broken)
+    check("F25 a failed export says so in a sentence, not in ffmpeg's words",
+          "libx264" not in said and "0x" not in said and
+          len(said.split()) < 12 and said.endswith("."), said)
+    check("F25 and it does not leave the broken file in Videos",
+          not os.path.exists(path), path)
+
+    said, path = run_export(fine)
+    check("F25 a finished export names the file, not its whole path",
+          "outcome.mp4" in said and "/" not in said, said)
+    if os.path.exists(path):
+        os.unlink(path)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    # the bug as it was: a stop swallowed into the success path
+    graded, scratch = module_mutant(
+        "F25-stop-reads-as-done",
+        [("                outcome = 'stopped'", "                outcome = None")])
+    other = graded.Animation()
+    other.doc.scenes[0]["length"] = 40
+    other.sheet.ensure_drawing(0, 0)
+    other._refresh_lists()
+    other_frames, other_specs = other._export_range("scene")
+    real = graded.export_video
+    graded.export_video = stopped
+    try:
+        other._export_start(state, other_frames, other_specs,
+                            os.path.join(graded.VIDEOS_DIR, "mutant.mp4"))
+        for _ in range(500):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+            if not any(w.is_alive() for w in other._workers):
+                break
+            time.sleep(0.01)
+        for _ in range(60):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+    finally:
+        graded.export_video = real
+        other._close_prompt()
+    lied = other.hint.get_text()
+    mutant("F25 a stopped export reported as completed is caught",
+           "complet" in lied.lower(), lied)
+    other._alive = False
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+export_outcome_family()
 close_guard_family()
 accelerator_family()
 destructive_family()

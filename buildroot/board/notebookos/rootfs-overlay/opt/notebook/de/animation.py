@@ -5382,7 +5382,7 @@ class Animation(nbapp.AppWindow):
             GLib.idle_add(self._export_progress, generation, value)
 
         def work():
-            error = None
+            outcome = None
             try:
                 if state['kind'] == 'video':
                     export_video(self.doc, frames, path, state['size'][0],
@@ -5394,9 +5394,13 @@ class Animation(nbapp.AppWindow):
                 else:
                     export_png_frames(self.doc, frames, path, self._cancel,
                                       progress)
-            except Exception as exception:
-                error = str(exception)
-            GLib.idle_add(self._export_finished, generation, path, error)
+            except InterruptedError:
+                # Stopping on purpose is not a failure, and str() of this
+                # is the empty string — which read as success.
+                outcome = 'stopped'
+            except Exception:
+                outcome = 'failed'
+            GLib.idle_add(self._export_finished, generation, path, outcome)
 
         worker = threading.Thread(target=work, daemon=True)
         self._workers.append(worker)
@@ -5414,13 +5418,25 @@ class Animation(nbapp.AppWindow):
         self._cancel.set()
         self.hint.set_text(_t('Cancelling…'))
 
-    def _export_finished(self, generation, path, error):
+    def _export_finished(self, generation, path, outcome):
         if not self._alive or generation != self._worker_generation:
             return False
-        if error:
-            self.hint.set_text(error)
+        if outcome and os.path.isfile(path):
+            # A half-written movie is worse than none: it plays for a
+            # second and stops, and it sits in Videos looking finished.
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if outcome == 'stopped':
+            self.hint.set_text(_t('Export stopped.'))
+        elif outcome:
+            # What ffmpeg says here is a codec name and a memory address,
+            # in English, on a line this label cannot wrap. The person
+            # needs the outcome; the detail is in the exporter's log.
+            self.hint.set_text(_t('The export could not be finished.'))
         else:
-            self.hint.set_text(_t('Completed: %s') % path)
+            self.hint.set_text(_t('Completed: %s') % os.path.basename(path))
         if self._prompt_layer is not None:
             self._close_prompt()
         return False
