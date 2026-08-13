@@ -1868,12 +1868,113 @@ def library_family():
     shutil.rmtree(scratch)
 
 
+def sheet_paint_family():
+    """Painting the sheet must cost the WINDOW, not the scene, and must
+    draw exactly what painting all of it would.
+
+    A 1200-frame scene with 894 exposures laid out a Pango run for every
+    one of them and took 53ms a repaint — over Article VIII B2's 50ms, on
+    the path that runs every time the playhead moves. Culling to the
+    visible window is only allowed if the sheet looks identical, and the
+    first attempt did not: a run ending exactly at the left edge still
+    draws its right border on the gutter hairline."""
+    if not gtk_available():
+        skip("F20 sheet paint", "no display")
+        return
+    from gi.repository import Gtk
+
+    def loaded(module):
+        app = module.Animation()
+        for _ in range(40):
+            app.doc.add_cel("Drawing %d" % (len(app.doc.cels) + 1))
+        scene = app.doc.scenes[0]
+        scene["length"] = 900
+        while len(scene["layers"]) < module.LAYER_MAX:
+            scene["layers"].append(
+                module.new_layer("Layer %d" % (len(scene["layers"]) + 1)))
+        app.sheet = module.Sheet(app.doc, 0)
+        for index in range(len(scene["layers"])):
+            at = index                       # stagger across the edges
+            while at < scene["length"] - 10:
+                scene["layers"][index]["runs"].append(
+                    module.make_run(app.doc.cels[at % 40].id, at, 7))
+                at += 9
+        app._refresh_lists()
+        app._update_playhead()
+        child = app.get_child()
+        app.remove(child)
+        off = Gtk.OffscreenWindow()
+        off.set_size_request(1024, 722)
+        off.add(child)
+        off.show_all()
+        for _ in range(40):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+        return app, off
+
+    def sheet_bytes(app, origin):
+        area = app.timeline.get_allocation()
+        app.view_origin = origin
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                     max(1, area.width), max(1, area.height))
+        app._draw_timeline(app.timeline, cairo.Context(surface))
+        surface.flush()
+        return bytes(surface.get_data())
+
+    graded, scratch = module_mutant(
+        "F20-nocull",
+        [("""                if run['start'] + run['len'] < seen_from:
+                    continue
+                if run['start'] > seen_to:
+                    break""",
+          """                if False:
+                    continue
+                if False:
+                    break""")])
+    culled, _keep_a = loaded(animation)
+    whole, _keep_b = loaded(graded)
+    # 7 is where a run ends exactly on the edge for this stagger
+    positions = (0, 7, 200, 449, 890)
+    same = {at: sheet_bytes(culled, at) == sheet_bytes(whole, at)
+            for at in positions}
+    check("F20 the culled sheet is the same picture as the whole sheet",
+          all(same.values()), [at for at, ok in same.items() if not ok])
+
+    def frames_touched(module, app):
+        drawn = []
+        real = module.Animation._frame_to_x
+
+        def counted(self, frame):
+            drawn.append(frame)
+            return real(self, frame)
+        module.Animation._frame_to_x = counted
+        try:
+            sheet_bytes(app, 400)
+        finally:
+            module.Animation._frame_to_x = real
+        return len(drawn)
+
+    exposures = sum(len(layer["runs"])
+                    for layer in culled.doc.scenes[0]["layers"])
+    budget = exposures // 2
+    touched = frames_touched(animation, culled)
+    check("F20 painting the sheet touches the window, not the whole scene",
+          touched < budget, (touched, exposures))
+    # the same measurement against the build that paints everything: the
+    # check above has to be able to fail, not merely to pass
+    everything = frames_touched(graded, whole)
+    mutant("F20 painting every exposure in the scene is caught",
+           everything >= budget, (everything, budget))
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 workflow_family()
 first_run_family()
 dock_reach_family()
 scene_strip_family()
 library_family()
+sheet_paint_family()
 thumbnail_family()
 control_range_family()
 recording_family()

@@ -4753,10 +4753,26 @@ class Animation(nbapp.AppWindow):
         cr.rectangle(TL_GUTTER, TL_ROWS_TOP, width_all - TL_GUTTER,
                      (LAYER_MAX + 2) * TL_ROW_H)
         cr.clip()
+        # Only the exposures the window can actually show. Cairo would clip
+        # the rest, but the work still happens: a 1200-frame scene with 894
+        # exposures laid out a Pango run for every one of them and took 53ms
+        # a repaint, over the 50ms Article VIII B2 allows, on the path that
+        # runs every time the playhead moves. Runs are kept sorted and
+        # non-overlapping (F2), so the right-hand edge can stop the loop.
+        seen_from = self.view_origin
+        seen_to = self.view_origin + max(1, (width_all - TL_GUTTER) // step) + 1
         for display_row, layer_index in enumerate(reversed(range(len(layers)))):
             layer = layers[layer_index]
             y = TL_ROWS_TOP + display_row * TL_ROW_H
             for run in layer['runs']:
+                # `<` not `<=`: a run ending exactly at the left edge still
+                # draws its right border on the gutter hairline, and culling
+                # it rubbed that line out. Proved by comparing the culled
+                # and unculled sheets pixel for pixel.
+                if run['start'] + run['len'] < seen_from:
+                    continue
+                if run['start'] > seen_to:
+                    break
                 left = self._frame_to_x(run['start'])
                 width = max(1, run['len'] * step)
                 cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
