@@ -53,15 +53,30 @@ with the commit that closes them.
   "e" button on the DEFAULT Applications view). Fix design: leading "…"
   pill per animation scene-strip precedent. finder.py now COMMITTED clean
   (7b95eea9) so this is a normal edit now.
-- Board: tiles end 44-77px short of the pinned column at 1920/1366 (3
-  board_selftest reds, pre-existing) — first screen on wide monitors.
-- Journal board tile greets a fresh system with a red X "Not written" —
-  alarm language on day zero; siblings use gentle grey. widgets.py edit.
+- FIXED b8f1a012: board tiles pack flush against the pinned column (a
+  content tile's hexpand bubbled into the grid; pinned hexpand=False;
+  board_selftest 101/101, its first full pass) + Journal day-zero shows
+  the gentle empty state instead of the red cross.
 - Comics: export/zine run synchronously on the UI thread (~10s guest);
   give them the animation-style worker card. Lower priority than it was.
 - sequencer/settings/writer toy-font rows: writer with fonts session;
   sequencer/settings are reasoned keeps (digits / fixed-English test page).
 - packages[el]: tightest minsize in OS (13px/35px slack) — preventive.
+
+## FIXED IN THE AGGREGATE TRIAGE (b9e3c9a6)
+- Finder read only the bare-list removed-apps store: one uninstall un-hid
+  every removed app OS-wide. REAL consumer bug a byte-pinned suite nearly
+  laundered; suite now proves the store through Finder's own reader.
+- Novel froze on Ctrl+Y after undoing a chapter delete (place_cursor never
+  returned mid-restore; caret now lands one idle later, both sites).
+- 52 Serbian Disc-Burner strings arrived in Cyrillic vs the sr-Latin law —
+  transliterated. ja called Music 音楽 in one string — ミュージック now.
+- ellipsis_sweep 0 cuts OS-wide (comics dock geometry + 11px tool names;
+  composer hints shortened x3). govorimolib speaks "the radio service".
+- govorimo hairlines reviewed into the E4 ledger; page-switch debt entry;
+  board_settle rewritten to pin the REMOVED settle (red-proved);
+  document_safety/performance_ux stop pinning single spellings; packages
+  suites drive the real prefs writer (getattr-hardened app-side).
 
 ## OPEN — OS-wide sweeps not yet run at the new bar
 - Remaining ~38 apps: real-use drive-through each (task #6). Order by
