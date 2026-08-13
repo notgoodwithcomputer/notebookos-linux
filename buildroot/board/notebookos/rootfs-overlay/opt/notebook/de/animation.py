@@ -39,6 +39,14 @@ TL_STRIP_H = 36
 TL_RULER_H = 26
 TL_ROW_H = 22
 TL_ROWS_TOP = TL_STRIP_H + TL_RULER_H
+# Thumbnails frame the ink, not the sheet. A mouth drawn 15x1 in the middle
+# of a 320x240 cel is a tenth of a pixel tall scaled whole-canvas, and the
+# mouths are precisely the drawings someone has to tell apart to fill the
+# slots. The margin gives the shape air; the zoom cap keeps a speck a speck.
+THUMB_W = 44
+THUMB_H = 33
+THUMB_PAD = .15
+THUMB_ZOOM_MAX = 6.
 PATTERNS = ('solid', 'checker', 'sparse')
 _HEX = re.compile(r'^#[0-9A-Fa-f]{6}$')
 NB_HOME = os.environ.get('NB_HOME', os.path.expanduser('~'))
@@ -1861,19 +1869,54 @@ class Animation(nbapp.AppWindow):
             self.project_palette_box.pack_start(button, False, False, 0)
         self.project_palette_box.show_all()
 
+    def _thumb_frame(self, cel):
+        """The part of a cel worth showing at thumbnail size.
+
+        Framing the whole sheet renders every mouth in the film as the same
+        invisible speck, so the slot picker asks a person to choose between
+        pictures they cannot see. Frame the ink instead, keeping the aspect
+        so a shape stays its own shape."""
+        bounds = self._opaque_bounds(cel, 0)
+        if not bounds:
+            return (0., 0., float(cel.w), float(cel.h))
+        x, y, w, h = [float(v) for v in bounds]
+        pad = max(1., max(w, h) * THUMB_PAD)
+        x, y, w, h = x - pad, y - pad, w + pad * 2, h + pad * 2
+        least_w, least_h = THUMB_W / THUMB_ZOOM_MAX, THUMB_H / THUMB_ZOOM_MAX
+        if w < least_w:
+            x, w = x - (least_w - w) / 2, least_w
+        if h < least_h:
+            y, h = y - (least_h - h) / 2, least_h
+        if w >= cel.w:
+            x, w = 0., float(cel.w)
+        else:
+            x = max(0., min(x, cel.w - w))
+        if h >= cel.h:
+            y, h = 0., float(cel.h)
+        else:
+            y = max(0., min(y, cel.h - h))
+        return (x, y, w, h)
+
     def _cel_thumb_surface(self, cel):
         """A 44x33 picture of take 0, cached per cel version — the library
         navigates by pictures, not by names."""
         cached = self._cel_thumbs.get(cel.id)
         if cached is not None and cached[0] == cel.version:
             return cached[1]
-        thumb = cairo.ImageSurface(cairo.FORMAT_ARGB32, 44, 33)
+        thumb = cairo.ImageSurface(cairo.FORMAT_ARGB32, THUMB_W, THUMB_H)
         ctx = cairo.Context(thumb)
         ctx.set_source_rgb(1, 1, 1)
         ctx.paint()
-        ctx.scale(44 / cel.w, 33 / cel.h)
+        fx, fy, fw, fh = self._thumb_frame(cel)
+        scale = min(THUMB_W / fw, THUMB_H / fh)
+        ctx.translate((THUMB_W - fw * scale) / 2., (THUMB_H - fh * scale) / 2.)
+        ctx.scale(scale, scale)
+        ctx.translate(-fx, -fy)
         try:
             ctx.set_source_surface(cel.decoded(0), 0, 0)
+            # magnified, a drawing shows its own pixels — this is a pixel app
+            ctx.get_source().set_filter(cairo.FILTER_NEAREST if scale >= 1
+                                        else cairo.FILTER_GOOD)
             ctx.paint()
         except Exception:
             pass
@@ -2421,7 +2464,12 @@ class Animation(nbapp.AppWindow):
         cr.restore()
 
     def _opaque_bounds(self, cel, take):
-        """Cache the alpha bounds of a cel take by identity and version."""
+        """Cache the alpha bounds of a cel take by identity and version.
+
+        The scan reads each row as one byte slice and lets lstrip/rstrip
+        find its edges: a 320x240 cel is 76,800 Python steps walked pixel
+        by pixel, and every drawing in the library now needs this to frame
+        its thumbnail."""
         cache = getattr(self, '_opaque_bounds_cache', None)
         if cache is None:
             cache = self._opaque_bounds_cache = {}
@@ -2438,12 +2486,14 @@ class Animation(nbapp.AppWindow):
         bottom = -1
         for y in range(cel.h):
             row = y * stride
-            for x in range(cel.w):
-                if data[row + x * 4 + 3]:
-                    left = min(left, x)
-                    top = min(top, y)
-                    right = max(right, x)
-                    bottom = max(bottom, y)
+            alpha = bytes(data[row + 3:row + cel.w * 4:4])
+            lit = alpha.lstrip(b'\x00')
+            if not lit:
+                continue
+            top = min(top, y)
+            bottom = y
+            left = min(left, len(alpha) - len(lit))
+            right = max(right, len(alpha.rstrip(b'\x00')) - 1)
         bounds = None if right < left else (left, top,
                                              right - left + 1,
                                              bottom - top + 1)
@@ -3160,6 +3210,28 @@ class Animation(nbapp.AppWindow):
                     stack.add_overlay(badge)
                     tile.add(stack)
                     tile.set_tooltip_text(cel.name)
+                    tile.get_accessible().set_name(cel.name)
+
+                    # Framing the ink makes the mouths legible but drops
+                    # where each one sat on the sheet, and two characters'
+                    # mouths draw alike. Say the name of whatever the
+                    # pointer or the focus ring is on.
+                    def _tile_name(_w, _e=None, name=cel.name):
+                        note_label = getattr(self, '_prompt_note', None)
+                        if note_label is not None:
+                            note_label.set_text(name)
+                        return False
+
+                    def _tile_unname(_w, _e=None):
+                        note_label = getattr(self, '_prompt_note', None)
+                        if note_label is not None:
+                            note_label.set_text(_t(note) if note else '')
+                        return False
+
+                    tile.connect('enter-notify-event', _tile_name)
+                    tile.connect('leave-notify-event', _tile_unname)
+                    tile.connect('focus-in-event', _tile_name)
+                    tile.connect('focus-out-event', _tile_unname)
 
                     def _tile_toggle(_b, cel_id=cel.id, badge=badge,
                                      k=key, st=state):
@@ -3171,16 +3243,21 @@ class Animation(nbapp.AppWindow):
                         st[k] = chosen
                         for child, lbl in getattr(self, '_prompt_badges', []):
                             ident = getattr(child, '_slot_cel', None)
-                            lbl.set_text(
-                                str(chosen.index(ident) + 1)
-                                if ident in chosen else '')
+                            numbered = ident in chosen
+                            lbl.set_text(str(chosen.index(ident) + 1)
+                                         if numbered else '')
+                            # an empty badge is a mystery box on every tile
+                            lbl.set_visible(numbered)
 
                     tile._slot_cel = cel.id
                     if not hasattr(self, '_prompt_badges'):
                         self._prompt_badges = []
                     self._prompt_badges.append((tile, badge))
+                    numbered = cel.id in state[key]
                     badge.set_text(str(state[key].index(cel.id) + 1)
-                                   if cel.id in state[key] else '')
+                                   if numbered else '')
+                    badge.set_no_show_all(not numbered)
+                    badge.set_visible(numbered)
                     tile.connect('clicked', _tile_toggle)
                     widget.add(tile)
             elif kind == 'meter':
@@ -3217,10 +3294,13 @@ class Animation(nbapp.AppWindow):
                                                         'mouth-preview', 'meter')
             row.pack_start(widget, expand, expand, 0)
             card.pack_start(row, False, False, 0)
+        self._prompt_note = None
         if note:
             quiet = Gtk.Label(label=_t(note), xalign=0)
+            quiet.set_ellipsize(Pango.EllipsizeMode.END)
             quiet.get_style_context().add_class('animation-muted')
             card.pack_start(quiet, False, False, 0)
+            self._prompt_note = quiet
         actions = Gtk.Box(homogeneous=True)
         cancel = Gtk.Button(label=_t('Cancel'))
         accept = Gtk.Button(label=_t(apply_label))

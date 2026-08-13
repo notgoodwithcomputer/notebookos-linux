@@ -1212,8 +1212,97 @@ def workflow_family():
         shutil.rmtree(home, ignore_errors=True)
 
 
+def thumbnail_family():
+    """A thumbnail is the only description of a drawing the slot picker
+    gives, so it has to carry a legible picture of every drawing — not
+    just of the ones that happen to fill the sheet."""
+    if not gtk_available():
+        skip("F11 thumbnails", "no display")
+        return
+    app = animation.Animation()
+    counter = [900]
+
+    def mark(w, h, at=(150, 120), cw=320, ch=240):
+        """A cel with one filled rectangle, the way a mouth is drawn."""
+        counter[0] += 1
+        face = animation.surface(cw, ch)
+        if w and h:
+            ctx = cairo.Context(face)
+            ctx.set_source_rgb(0, 0, 0)
+            ctx.rectangle(at[0], at[1], w, h)
+            ctx.fill()
+        return animation.Cel(counter[0], "mark", [face], cw, ch)
+
+    def ink_pixels(cel):
+        surface = app._cel_thumb_surface(cel)
+        surface.flush()
+        data, stride = surface.get_data(), surface.get_stride()
+        lit = 0
+        for y in range(animation.THUMB_H):
+            row = y * stride
+            for x in range(animation.THUMB_W):
+                pixel = data[row + x * 4:row + x * 4 + 3]
+                if min(pixel) < 200:
+                    lit += 1
+        return lit
+
+    # the shapes a lip-sync slot actually has to choose between
+    shapes = {"shut": mark(15, 1), "narrow": mark(15, 5), "wide": mark(17, 11)}
+    lit = {name: ink_pixels(cel) for name, cel in shapes.items()}
+    check("F11 thumbnail of a small drawing carries visible ink",
+          min(lit.values()) >= 24, lit)
+    check("F11 thumbnail tells the three mouth shapes apart",
+          lit["shut"] < lit["narrow"] < lit["wide"], lit)
+
+    sheet = mark(320, 240, at=(0, 0))
+    frame = app._thumb_frame(sheet)
+    check("F11 a drawing that fills the sheet is framed unchanged",
+          frame == (0., 0., 320., 240.), frame)
+    blank = mark(0, 0)
+    check("F11 an empty drawing frames the whole sheet, and draws nothing",
+          app._thumb_frame(blank) == (0., 0., 320., 240.) and
+          ink_pixels(blank) == 0)
+
+    # the fast row-slice scan must agree with the pixel walk it replaced
+    agreed = []
+    rng = random.Random(62014)
+    for _ in range(12):
+        counter[0] += 1
+        face = animation.surface(40, 30)
+        ctx = cairo.Context(face)
+        ctx.set_source_rgb(0, 0, 0)
+        for _dot in range(rng.randrange(0, 5)):
+            ctx.rectangle(rng.randrange(0, 40), rng.randrange(0, 30), 1, 1)
+            ctx.fill()
+        cel = animation.Cel(counter[0], "probe", [face], 40, 30)
+        face.flush()
+        data, stride = face.get_data(), face.get_stride()
+        left, top, right, bottom = 40, 30, -1, -1
+        for y in range(30):
+            row = y * stride
+            for x in range(40):
+                if data[row + x * 4 + 3]:
+                    left, top = min(left, x), min(top, y)
+                    right, bottom = max(right, x), max(bottom, y)
+        walked = (None if right < left else
+                  (left, top, right - left + 1, bottom - top + 1))
+        agreed.append(app._opaque_bounds(cel, 0) == walked)
+    check("F11 row-slice bounds agree with a pixel-by-pixel walk",
+          all(agreed), agreed)
+
+    real = animation.Animation._thumb_frame
+    try:
+        animation.Animation._thumb_frame = (
+            lambda self, cel: (0., 0., float(cel.w), float(cel.h)))
+        mutant("F11 framing the whole sheet is caught",
+               ink_pixels(mark(15, 1)) < 24)
+    finally:
+        animation.Animation._thumb_frame = real
+
+
 dialog_limits_family()
 workflow_family()
+thumbnail_family()
 
 total = len(PASSES) + len(FAILS) + len(SKIPS) + len(MUTANTS) + len(UNCAUGHT_MUTANTS)
 print("TALLY total=%d passed=%d failed=%d skipped=%d mutants-caught=%d mutants-uncaught=%d" %
