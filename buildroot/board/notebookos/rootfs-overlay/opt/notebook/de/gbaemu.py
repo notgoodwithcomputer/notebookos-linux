@@ -172,9 +172,14 @@ class GbaEmu(nbapp.AppWindow):
 
         outer.pack_start(self._controller_bar(), False, False, 0)
 
-        self._scan_roms()
-        self._render_library()
-        self._render_controllers()
+        # First paint beats first scan: even the bounded walk belongs after
+        # the window is on screen, not between construct and map.
+        def _first_scan():
+            self._scan_roms()
+            self._render_library()
+            self._render_controllers()
+            return False
+        GLib.idle_add(_first_scan)
 
         # A ROM passed on the command line (Finder double-click) plays at once.
         rompath = next((a for a in sys.argv[1:]
@@ -230,11 +235,22 @@ class GbaEmu(nbapp.AppWindow):
 
     # ================= library =================
     def _scan_roms(self):
-        """Scan Home (recursively; hidden dirs skipped) for real ROM files."""
+        """Scan Home (recursively; hidden dirs skipped) for real ROM files.
+
+        BOUNDED: the walk itself is capped by directories visited and by
+        wall time, because MAX_ROMS only capped what was FOUND — on a home
+        with a big mounted tree and few ROMs the old walk traversed
+        everything, on the GTK thread, and the app hung at open (audit
+        #10). Look for New Games reruns the same bounded scan."""
         found = []
         seen = set()
+        deadline = time.monotonic() + 2.5
+        dirs_left = 4000
         try:
             for root, dirs, files in os.walk(HOME):
+                dirs_left -= 1
+                if dirs_left <= 0 or time.monotonic() > deadline:
+                    raise StopIteration
                 dirs[:] = [d for d in dirs if not d.startswith(".")]
                 for f in files:
                     ext = os.path.splitext(f)[1].lower()

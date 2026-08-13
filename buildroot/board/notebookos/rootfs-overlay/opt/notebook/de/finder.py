@@ -153,15 +153,27 @@ APP_MODULES = {
     "Meal Planner": "mealplanner", "E-book Reader": "ebook",
     "Calculator": "calculator", "Accounting": "accounting",
     "Bill Tracker": "bills", "Contacts": "contacts",
-    "Illustrator": "illustrator", "Sequencer": "sequencer",
+    "Govorimo": "govorimo",
+    "Illustrator": "illustrator", "Comics": "comics", "Animation": "animation", "Sequencer": "sequencer",
+    "Composer": "composer",
     "Video Editor": "video", "Media Viewer": "media", "Music": "music",
     "Packages": "packages", "2048": "g2048",
     "GBA Emulator": "gbaemu", "GBA SDK": "gbasdk", "Language": "language",
     "Maps": "maps", "Workout": "workout",
     "Terminal": "terminal", "Settings": "settings",
     "System Monitor": "sysmon", "Install Notebook OS": "installer",
-    "USB Writer": "usbwriter",
+    "USB Writer": "usbwriter", "Disc Burner": "burner",
 }
+
+
+def _is_virtual_app(rel, name):
+    """Whether `name` is one of the synthetic rows in Applications.
+
+    A suffix alone is not enough: a user can keep an ordinary file named
+    ``Calculator.app`` anywhere else, and Get Info must stat that real file.
+    """
+    return (rel == "Applications" and name.endswith(".app")
+            and name[:-4] in APP_MODULES)
 
 # a few app modules have no same-named glyph in nbicons — alias to a fitting one
 # (an unaliased name with no glyph falls back to a featureless square, which is
@@ -192,6 +204,7 @@ FILE_APPS = {
     ".mp4": "media", ".m4v": "media", ".mkv": "media", ".mov": "media",
     ".webm": "media", ".avi": "media",
     ".txt": "writer", ".md": "writer", ".writer": "writer",
+    ".comic": "comics", ".anim": "animation",
     ".epub": "ebook", ".pdf": "ebook",
     # audio files carry a music icon and 'Audio' Kind, so double-click must
     # honour that affordance: hand the path to the Music app (it accepts/scans
@@ -207,7 +220,15 @@ FILE_APPS = {
 # choice (settings.json 'default_apps': {ext: module}), so a stale or
 # hand-edited entry can never route a file to an app that would silently
 # ignore it — novel/academic, for instance, open only their own JSON formats.
-FILE_OPENERS = {"writer", "ebook", "media", "music", "screenplay", "gbaemu"}
+FILE_OPENERS = {"writer", "ebook", "media", "music", "screenplay", "gbaemu",
+                "comics", "animation"}
+
+def _hidden_modules():
+    """Modules withheld from every launch surface while their app is hidden.
+    Derived, not listed twice: HIDDEN_APPS names apps, launch routes speak in
+    modules, and this is the one translation between them."""
+    return {APP_MODULES[n] for n in HIDDEN_APPS if n in APP_MODULES}
+
 
 # human "Kind" descriptor per app (matches the design's KIND column)
 APP_KIND = {
@@ -225,8 +246,10 @@ APP_KIND = {
     # to do it. Same Kind because that is where a person looks for either.
     "Accounting": "Finance", "Bill Tracker": "Finance",
     "Contacts": "Utility",
-    "Illustrator": "Graphics",
-    "Sequencer": "Audio", "Video Editor": "Video",
+    # Chat over LoRa radio; "Messaging" is where a person looks for talk.
+    "Govorimo": "Messaging",
+    "Illustrator": "Graphics", "Comics": "Cartooning", "Animation": "Cartooning",
+    "Sequencer": "Audio", "Composer": "Audio", "Video Editor": "Video",
     "Media Viewer": "Media", "Music": "Music", "Packages": "System",
     "2048": "Game", "GBA Emulator": "Game", "GBA SDK": "Development",
     "Language": "Education", "Maps": "Reference",
@@ -234,6 +257,10 @@ APP_KIND = {
     "Terminal": "Utility",
     "Settings": "System", "System Monitor": "System",
     "Install Notebook OS": "System", "USB Writer": "System",
+    # "Media" rather than "System": USB Writer makes install media, which is a
+    # system errand, but a person opens this one to make a music CD or a film
+    # DVD. The Kind says what it is for, not which shelf the code sits on.
+    "Disc Burner": "Media",
 }
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -595,6 +622,10 @@ class Crumbs(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.get_style_context().add_class("crumbbar")
         self._text = ""
+        # The trail as (label, target) pairs, so the next set_trail can tell
+        # which components are NEW. None until the first paint, which is what
+        # keeps the bar from staging itself when the Finder opens.
+        self._pills = None
 
     def get_text(self):
         return self._text
@@ -620,6 +651,23 @@ class Crumbs(Gtk.Box):
         self._text = root_label + "".join("  ›  " + lbl for lbl, _ in trail)
         pills = [(root_label, "" if root_label == "Home" else "/")] + list(trail)
         last = len(pills) - 1
+        # nbmotion-inventory: finder.open-folder
+        # The trail is rebuilt on EVERY navigation, so a pill that was already
+        # on screen must not restage: only the components DEEPER than the one
+        # the person came from are new, and only those open. The shared prefix
+        # is compared on (label, target) — target alone would treat a rename as
+        # a move, and label alone would confuse two folders of the same name in
+        # different parents.
+        shared = 0
+        if self._pills is not None:
+            for old, new in zip(self._pills, pills):
+                if old != new:
+                    break
+                shared += 1
+        else:
+            shared = len(pills)     # first paint: the bar arrives whole
+        self._pills = list(pills)
+        opening = []
         for i, (label, target) in enumerate(pills):
             btn = Gtk.Button(label=label)
             btn.set_relief(Gtk.ReliefStyle.NONE)
@@ -628,10 +676,40 @@ class Crumbs(Gtk.Box):
             if i == last:
                 ctx.add_class("active")
             btn.connect("clicked", lambda _w, t=target: on_load(t))
-            self.pack_start(btn, False, False, 0)
+            if i < shared:
+                self.pack_start(btn, False, False, 0)
+                continue
+            try:
+                rev = Gtk.Revealer()
+                rev.set_reveal_child(False)
+                rev.add(btn)
+                self.pack_start(rev, False, False, 0)
+                opening.append(rev)
+            except Exception:                                     # noqa: BLE001
+                # A crumb you cannot click is a navigation you cannot undo, so
+                # the pill is packed plainly if the Revealer will not build.
+                self.pack_start(btn, False, False, 0)
         self.show_all()
         # after the new pills have been sized, not before
         GLib.idle_add(self._scroll_to_end)
+        for n, rev in enumerate(opening):
+            try:
+                # SLIDE_RIGHT: the bar GROWS rightward into the space the new
+                # component needs, instead of jumping to its full width and
+                # fading a pill into it. Re-scroll when the LAST one lands --
+                # _scroll_to_end above runs while the pill is still opening, so
+                # it measures a bar narrower than the final one and would leave
+                # the folder you just opened out of view.
+                nbtransitions.reveal(
+                    rev, True, direction=nbtransitions.SLIDE_RIGHT,
+                    duration=nbtransitions.SURFACE_IN,
+                    on_done=((lambda _ok: self._scroll_to_end())
+                             if n == len(opening) - 1 else None))
+            except Exception:                                     # noqa: BLE001
+                try:
+                    rev.set_reveal_child(True)
+                except Exception:                                 # noqa: BLE001
+                    pass
 
 
 class Finder(Gtk.Window):
@@ -722,6 +800,12 @@ class Finder(Gtk.Window):
         self._app_flag_monitor = None          # Gio monitor, cancelled on destroy
         self._places = {}                      # rel -> {"sel": rel path, "scroll"}
         self._nav_dir = nbtransitions.NONE     # direction of the current move
+        # Opening a folder is an ARRIVAL, not a history move, so it must not be
+        # stamped into _nav_dir: restores_place() reads that same value and
+        # would put the person back on a remembered row instead of at the top of
+        # the folder they just opened. The slide direction and "is this a
+        # return?" are two different questions and get two different signals.
+        self._nav_enter = False                # one-shot: slide the next load in
         self._filter = ""                      # live search filter (substring)
         self._wide = []                        # search hits from the rest of Home
         self._wide_gen = 0                     # stamp: a stale scan can't land
@@ -866,13 +950,12 @@ class Finder(Gtk.Window):
         self.iconview.get_style_context().add_class("filegrid")
         self.iconview.connect("item-activated", self._on_open_grid)
 
-        # nbmotion-inventory: system.app-launch
-        # The transform half of the launch: the clicked icon's rectangle
-        # grows into the window as a paper card (PAGE, arrival easing) drawn
-        # OVER everything by a draw-after hook, holds while the app maps
-        # beneath it, and retracts to the icon if the launch dies unmapped.
-        # Pure paint on the toplevel — no widget moves, no allocation
-        # animates (F2); damage follows the card's rectangle (F1).
+        # The growing launch card was RETIRED 2026-08-09 (design owner: a simple
+        # fade, not a growing paper card). The transform half of system.app-launch
+        # now lives in nbapp — the app fades itself in on first map. The _zoom_*
+        # state and its draw-after hook below are left INERT (never started; the
+        # draw handler returns at once) rather than deleted, so the launch-
+        # continuity path that still calls _zoom_clear/_zoom_retract stays valid.
         self._zoom = None
         self._zoom_v = 0.0
         self._zoom_active = False
@@ -1323,9 +1406,78 @@ class Finder(Gtk.Window):
             b.connect("clicked", cb)
         return b
 
+    # How many distinct colours a nav-icon tween may render. nbicons caches
+    # surfaces in an UNBOUNDED dict keyed partly on colour, so tweening a
+    # continuous colour would add a cache entry per frame, for the life of the
+    # process, on a control the person uses constantly. Quantising the tween
+    # caps the damage at this many extra surfaces per icon, forever.
+    _NAV_TWEEN_STEPS = 5
+    _NAV_ON, _NAV_OFF = "#3A362E", "#B3AD9E"
+
+    @staticmethod
+    def _img_mapped(btn):
+        """Whether this button's icon is actually on screen. Never raises: a
+        partially-built or torn-down button must still get its colour."""
+        try:
+            return bool(btn._img.get_mapped())
+        except Exception:                                         # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _mix_hex(a, b, t):
+        """`a` toward `b` by `t`, both "#rrggbb"."""
+        av = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+        bv = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+        return "#%02x%02x%02x" % tuple(
+            int(round(x + (y - x) * t)) for x, y in zip(av, bv))
+
     def _set_nav(self, btn, name, on):
+        # nbmotion-inventory: app.any-toggle
+        # Back/Forward change enabled state on EVERY navigation, and the icon is
+        # a pre-rendered cairo SURFACE, not a styled node -- so the theme's 90ms
+        # feedback spring reaches the button's own colours and cannot reach the
+        # glyph inside it. Left alone the button eases while the arrow in it
+        # SNAPS. The colour is therefore tweened here, on the same token, so the
+        # control changes as one thing.
         btn.set_sensitive(on)
-        nbicons.set_image(btn._img, name, 18, "#3A362E" if on else "#B3AD9E")
+        target = self._NAV_ON if on else self._NAV_OFF
+        was = getattr(btn, "_nav_on", None)
+        if (was is None or was == on or nbmotion is None
+                or nbmotion.policy(nbmotion.FEEDBACK) <= 0
+                or not self._img_mapped(btn)):
+            # First paint, no real change, a still machine, or a button that is
+            # not on screen: land at once. This is the instant-EQUIVALENT path
+            # (F4), not a lesser one.
+            # THE MAPPED GUARD IS A CORRECTNESS ONE, not an optimisation: frames
+            # are delivered by the widget's frame clock, so an UNMAPPED button
+            # can start a tween that never ticks — leaving the arrow at its OLD
+            # colour, i.e. showing the wrong enabled state, indefinitely. A
+            # button nobody can see has nothing to animate anyway.
+            nbicons.set_image(btn._img, name, 18, target)
+            btn._nav_on = on
+            return
+        btn._nav_on = on
+        start = self._NAV_OFF if on else self._NAV_ON
+        steps = self._NAV_TWEEN_STEPS
+
+        def _frame(v):
+            # Quantised, and 1.0 always lands EXACTLY on target: a control left
+            # a shade off its end colour reads as a rendering fault.
+            q = round(max(0.0, min(1.0, v)) * steps) / steps
+            try:
+                nbicons.set_image(btn._img, name, 18,
+                                  self._mix_hex(start, target, q))
+            except Exception:                                     # noqa: BLE001
+                pass
+
+        try:
+            nbmotion.animate(btn._img, _frame, 0.0, 1.0,
+                             duration=nbmotion.FEEDBACK,
+                             easing=nbmotion.MOVE,
+                             on_done=lambda _ok: _frame(1.0))
+        except Exception:                                         # noqa: BLE001
+            # A tween that will not start must not cost the button its state.
+            nbicons.set_image(btn._img, name, 18, target)
 
     def _navbar(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1544,12 +1696,39 @@ class Finder(Gtk.Window):
                 pass
         self._app_flag_monitor = None
 
-    def _fill_sidebar(self):
+    def _sb_pack(self, row, arriving_now, opening):
+        """Pack one Devices row, collecting a Revealer for any row that is
+        ARRIVING so the caller can open it after show_all().
+
+        Only a genuinely new volume opens. The whole column is rebuilt on every
+        change, so revealing every row would animate rows the person is already
+        looking at — a plugged stick would make the entire sidebar restage
+        itself, which is the flash this is here to remove, not a fix for it.
+        If the Revealer cannot be built the row is packed plainly: a drive that
+        is plugged in has to APPEAR, and the motion is decoration on top of
+        that, never a condition of it."""
+        if arriving_now:
+            try:
+                rev = Gtk.Revealer()
+                rev.set_reveal_child(False)
+                rev.add(row)
+                self._sb.pack_start(rev, False, False, 0)
+                opening.append(rev)
+                return
+            except Exception:                                     # noqa: BLE001
+                pass
+        self._sb.pack_start(row, False, False, 0)
+
+    def _fill_sidebar(self, arriving=()):
+        """Rebuild the Devices/Places column. `arriving` names mount points that
+        were not present at the last fill — a stick just plugged in — and those
+        rows OPEN down the column instead of appearing already there."""
         for c in self._sb.get_children():
             self._sb.remove(c)
         self._sb_rows = []                     # rebuilt below by _sb_row
         devs = self._devices()
         self._mounts_sig = tuple(d[2] for d in devs)
+        opening = []                  # Revealers to run once the rows are shown
         self._sb.pack_start(self._sb_header("Devices"), False, False, 0)
         for label, icon, rel in devs:
             # removable volumes (mounted under /media) get an Eject button so the
@@ -1568,13 +1747,31 @@ class Finder(Gtk.Window):
                 ej.add(nbicons.image("eject", 13, "#6E695E"))
                 ej.connect("clicked", lambda _b, m=rel: self._eject(m))
                 hb.pack_start(ej, False, False, 6)
-                self._sb.pack_start(hb, False, False, 0)
+                self._sb_pack(hb, rel in arriving, opening)
             else:
-                self._sb.pack_start(self._sb_row(label, icon, rel), False, False, 0)
+                self._sb_pack(self._sb_row(label, icon, rel),
+                              rel in arriving, opening)
         self._sb.pack_start(self._sb_header("Places"), False, False, 0)
         for label, icon, rel in PLACES:
             self._sb.pack_start(self._sb_row(label, icon, rel), False, False, 0)
         self._sb.show_all()
+        # nbmotion-inventory: finder.sidebar-reveal
+        # A volume that has just been mounted opens into the column it belongs
+        # to (SLIDE_DOWN along the sidebar's own edge, SURFACE_IN). show_all()
+        # has to run FIRST: a Revealer whose child was never shown has nothing
+        # to slide. Instant-EQUIVALENT — under policy-still nbtransitions.reveal
+        # sets the child revealed with no animation — and if a reveal raises,
+        # the row is forced visible, because a drive that failed to animate must
+        # still be a drive the person can click.
+        for rev in opening:
+            try:
+                nbtransitions.reveal(rev, True,
+                                     duration=nbtransitions.SURFACE_IN)
+            except Exception:                                     # noqa: BLE001
+                try:
+                    rev.set_reveal_child(True)
+                except Exception:                                 # noqa: BLE001
+                    pass
 
     def _eject(self, mnt):
         # Leave the volume first if we're viewing it (an open cwd makes it busy),
@@ -1634,8 +1831,12 @@ class Finder(Gtk.Window):
         if getattr(self, "_closed", False):
             return False
         try:
-            if tuple(d[2] for d in self._devices()) != self._mounts_sig:
-                self._fill_sidebar()
+            sig = tuple(d[2] for d in self._devices())
+            if sig != self._mounts_sig:
+                # Which volumes are NEW since the last fill: only those open.
+                # Worked out here, before _fill_sidebar overwrites _mounts_sig.
+                arriving = set(sig) - set(self._mounts_sig or ())
+                self._fill_sidebar(arriving=arriving)
         except Exception:
             pass
         if (getattr(self, "rel", None) == "Applications"
@@ -1910,17 +2111,25 @@ class Finder(Gtk.Window):
         if direction == nbtransitions.NONE and rel == getattr(self, "rel", None):
             direction = nbtransitions.CROSSFADE
         self._nav_dir = nbtransitions.NONE     # consumed; the next move sets it
+        entering = self._nav_enter
+        self._nav_enter = False                # consumed; the next open sets it
         # Capture the outgoing listing BEFORE anything changes it, so a
-        # Back/Forward move can slide it off (finder.navigate-*). Only real
-        # directional moves slide, and only when motion is live -- otherwise the
-        # snapshot render would be wasted on an instant swap.
+        # Back/Forward move -- or a step INTO a folder -- can slide it off
+        # (finder.navigate-* / finder.open-folder). Stepping in travels the same
+        # way as Forward, which makes Back its exact inverse: the listing you
+        # opened leaves the way it arrived. Only real directional moves slide,
+        # and only when motion is live -- otherwise the snapshot render would be
+        # wasted on an instant swap.
         pending_slide = None
-        if (direction in (nbtransitions.BACK, nbtransitions.FORWARD)
-                and nbmotion.policy(nbtransitions.PAGE) > 0):
+        sign = 0.0
+        if direction == nbtransitions.BACK:
+            sign = 1.0
+        elif direction == nbtransitions.FORWARD or entering:
+            sign = -1.0
+        if sign and nbmotion.policy(nbtransitions.PAGE) > 0:
             _snap = self._snapshot_content()
             if _snap is not None:
-                pending_slide = (_snap,
-                                 1.0 if direction == nbtransitions.BACK else -1.0)
+                pending_slide = (_snap, sign)
         # a real navigation clears any active search; a search-driven reload
         # keeps it (keep_filter=True).
         if not keep_filter and self._filter:
@@ -4130,13 +4339,17 @@ class Finder(Gtk.Window):
         return False
 
     # ---- get info ----
-    def _dir_size(self, path):
+    def _dir_size(self, path, cancel=None):
         # total bytes under a folder (files only; symlinks not followed), with a
         # soft cap so Get Info on a huge tree can't hang the UI.
         total = 0
         files = 0
         for root, _dirs, names in os.walk(path):
+            if cancel is not None and cancel.is_set():
+                break
             for nm in names:
+                if cancel is not None and cancel.is_set():
+                    return total, files
                 files += 1
                 try:
                     total += os.lstat(os.path.join(root, nm)).st_size
@@ -4154,11 +4367,18 @@ class Finder(Gtk.Window):
         if size_val is None:
             return
         alive = {"open": True}
-        dlg.connect("destroy", lambda *_: alive.__setitem__("open", False))
+        cancel = threading.Event()
+
+        def closed(*_args):
+            alive["open"] = False
+            cancel.set()
+
+        dlg.connect("destroy", closed)
 
         def work():
-            total, _n = self._dir_size(path)
-            GLib.idle_add(self._apply_dir_size, alive, size_val, total, items)
+            total, _n = self._dir_size(path, cancel)
+            if not cancel.is_set():
+                GLib.idle_add(self._apply_dir_size, alive, size_val, total, items)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -4237,12 +4457,24 @@ class Finder(Gtk.Window):
         is_dir = model.get_value(it, 5)
         kind = model.get_value(it, 8)
         path = self.abspath(model.get_value(it, 4))
-        try:
-            st = os.stat(path)
-        except OSError:
-            self._flash_status(_t("Could not read '%s'") % name)
-            return
-        if is_dir:
+        virtual_app = _is_virtual_app(self.rel, name)
+        if virtual_app:
+            # Applications is an APP_MODULES-backed catalogue, not a directory
+            # of launcher files. There is no byte count, mtime, or disk path to
+            # stat truthfully; show the virtual location and unknown fields.
+            shown_name = display_name(name, model.get_value(it, 4))
+            size_txt = "—"
+            modified = "—"
+            path = _t("Applications")
+            st = None
+        else:
+            shown_name = name
+            try:
+                st = os.stat(path)
+            except OSError:
+                self._flash_status(_t("Could not read '%s'") % name)
+                return
+        if is_dir and not virtual_app:
             try:
                 items = len(os.listdir(path))
             except OSError:
@@ -4253,20 +4485,21 @@ class Finder(Gtk.Window):
             # finishes (see _compute_dir_size). The item count is a single
             # listdir, so it's known right away.
             size_txt = _t("Calculating…  ·  %d items") % items
-        else:
+        elif not virtual_app:
             size_txt = "%s  ·  %s bytes" % (human(st.st_size),
                                             format(st.st_size, ","))
-        try:
-            modified = _t(time.strftime("%d %b %Y, %H:%M",
-                                        time.localtime(st.st_mtime)))
-        except ValueError:
-            modified = "—"
+        if not virtual_app:
+            try:
+                modified = _t(time.strftime("%d %b %Y, %H:%M",
+                                            time.localtime(st.st_mtime)))
+            except ValueError:
+                modified = "—"
         icon = "folder" if is_dir else self._icon_for(name)
         # nbmotion-inventory: finder.get-info
         anchor = self._selected_row_anchor()
         dlg, size_val = self._show_info_dialog(
-            name, icon, kind, size_txt, modified, path, anchor)
-        if is_dir:
+            shown_name, icon, kind, size_txt, modified, path, anchor)
+        if is_dir and not virtual_app:
             self._compute_dir_size(dlg, path, items, size_val)
 
     def _show_info_dialog(self, name, icon, kind, size_txt, modified, path,
@@ -4274,6 +4507,12 @@ class Finder(Gtk.Window):
         # The card grows from its row (Article B) via _present_card_from,
         # rather than a modal dialog appearing from nowhere. The content
         # column below is unchanged; only the presentation moved.
+        if getattr(self, "_info_card", None) is not None:
+            close = getattr(self, "_info_close", None)
+            if close is not None:
+                close()
+            self._info_card = None
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         box.get_style_context().add_class("finderinfobox")
         # header: the item's own glyph, its name, and its kind
@@ -4332,7 +4571,6 @@ class Finder(Gtk.Window):
         btnrow.set_halign(Gtk.Align.END)
         done = Gtk.Button(label=_t("Done"))
         done.get_style_context().add_class("finderinfobtn")
-        done.connect("clicked", lambda *_: self._info_close())
         btnrow.pack_start(done, False, False, 0)
         box.pack_start(btnrow, False, False, 0)
         box.show_all()
@@ -4340,6 +4578,19 @@ class Finder(Gtk.Window):
         # landing and returns the card handle (emits destroy on close, so
         # _compute_dir_size's liveness watch is unchanged).
         card = self._present_card_from(box, anchor)
+        # Bind this button to THIS card's close function. A later Get Info
+        # replaces self._info_close; an old button finishing its retract must
+        # never close the newer card instead.
+        card_close = self._info_close
+        done.connect("clicked", lambda *_: card_close())
+        self._info_card = card
+
+        def card_gone(*_args):
+            if getattr(self, "_info_card", None) is card:
+                self._info_card = None
+                self._info_close = None
+
+        card.connect("destroy", card_gone)
         card.connect("key-press-event", self._info_key)
         # The values are selectable so a path can be copied — but that also makes
         # them focusable, and GTK focused the first one on open and selected all
@@ -4425,6 +4676,13 @@ class Finder(Gtk.Window):
             self._flash_status(_t("'%s' no longer exists") % display_name(name))
             return
         if os.path.isdir(full):
+            # nbmotion-inventory: finder.open-folder
+            # Stepping into a folder slides the outgoing listing off to the
+            # left, the way Forward travels, so Back is its exact inverse. The
+            # flag is deliberately NOT stamped into _nav_dir: an open is an
+            # ARRIVAL and must still land at the top of the new folder, which
+            # is what restores_place() reads that value to decide.
+            self._nav_enter = True
             self.load(rel)
         elif name.endswith(".app"):
             self.launch_app(name[:-4])
@@ -4462,7 +4720,14 @@ class Finder(Gtk.Window):
                     chosen = c
         except (OSError, ValueError, TypeError):
             pass
-        return chosen or FILE_APPS.get(ext)
+        mod = chosen or FILE_APPS.get(ext)
+        # A hidden app is withheld from EVERY launch surface, not only the
+        # Applications folder: a document routed to it reads as having no app
+        # until the app is unhidden (hidden_apps_selftest catches the
+        # half-hide this closes).
+        if mod in _hidden_modules():
+            return None
+        return mod
 
     def launch_app(self, display_name, file_arg=None):
         mod = APP_MODULES.get(display_name)
@@ -4511,7 +4776,10 @@ class Finder(Gtk.Window):
             self._launch_beacon = os.path.join(
                 nbapp.APP_DIR, "%d.mapped" % proc.pid)
             self._launch_deadline = time.monotonic() + 8.0
-            self._zoom_begin(mod)
+            # No growing launch card any more (removed 2026-08-09 on the design
+            # owner's direction): the app fades itself in calmly on first map
+            # (nbapp system.app-launch). Launch CONTINUITY is unchanged — the
+            # Finder holds the screen until the app's .mapped beacon below.
             GLib.timeout_add(60, self._launch_watch)
             GLib.child_watch_add(proc.pid, self._app_exited)
         else:
