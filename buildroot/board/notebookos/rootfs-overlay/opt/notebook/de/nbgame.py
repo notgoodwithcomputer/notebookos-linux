@@ -251,6 +251,20 @@ class GameSession:
             if ctrl or not self._embedded:
                 self.stop()
                 return True
+        # Any OTHER key arriving HERE while a game is embedded means the X
+        # input focus is on the stage, not the game — the player is pressing
+        # the D-pad and nothing is happening. Hand the focus straight back.
+        # (The press that landed here is spent, but every following one
+        # reaches the game; without this, arrows stayed dead until exit.)
+        if self._embedded and self._embed_win and self._x is not None:
+            try:
+                dpy = self._x.XOpenDisplay(None)
+                self._x.XSetInputFocus(dpy, self._embed_win, RevertToParent,
+                                       CurrentTime)
+                self._x.XSync(dpy, 0)
+                self._x.XCloseDisplay(dpy)
+            except Exception:
+                pass
         return False
 
     # ---- launch + embed ---------------------------------------------------
@@ -384,16 +398,32 @@ class GameSession:
             self._log("embedded window %d (found via %s), %dx%d at %d,%d"
                       % (win, how, gw, gh, x, y))
             self._set_banner("Press  Ctrl + Esc  to exit")
-            # re-assert map/raise/focus a few times: this guards the race where
-            # matchbox is still settling the stacking AND catches vbam swapping
-            # its window out from under us (see _reassert).
-            for delay in (400, 1200, 2500, 5000):
-                GLib.timeout_add(delay, self._reassert)
+            # re-assert map/raise/focus REPEATEDLY for the whole session: the
+            # old four one-shots ended at 5s, but under TCG vbam settles its
+            # real window (and the video mode swaps it) well after that, and
+            # anything that steals focus later left the D-pad dead with no
+            # way back. A 2s tick is invisible in cost and self-heals both.
+            GLib.timeout_add(400, self._reassert)
+            self._reassert_id = GLib.timeout_add(2000, self._reassert_tick)
         except Exception as e:
             self._log("reparent failed: %r (retrying)" % e)
             self._embed_tries += 1
             return self._embed_tries < 40
         return False       # embedded: stop the embed loop
+
+    def _reassert_tick(self):
+        """The repeating form of _reassert: keep going until the session ends
+        (or the embed restarts, which re-arms a fresh tick)."""
+        if self._done:
+            self._reassert_id = 0
+            return False
+        keep = self._reassert()
+        if keep is False and not self._embedded:
+            # _reassert handed control back to the embed loop; it will start
+            # a new tick when it re-embeds.
+            self._reassert_id = 0
+            return False
+        return True
 
     def _reassert(self):
         """Re-map/raise the embedded game, and catch a window SDL swapped out.
@@ -491,7 +521,7 @@ class GameSession:
         if self._done:
             return False
         self._done = True
-        for src in ("_poll_id", "_embed_id"):
+        for src in ("_poll_id", "_embed_id", "_reassert_id"):
             sid = getattr(self, src, 0)
             if sid:
                 try:
