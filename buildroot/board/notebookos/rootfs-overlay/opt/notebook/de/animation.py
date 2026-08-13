@@ -2065,6 +2065,13 @@ class Animation(nbapp.AppWindow):
                 hint = Gtk.Label(label=_t('The animation has no drawings. Drawing on the canvas makes one.'),
                                  xalign=0)
                 hint.set_line_wrap(True)
+                # The first sentence someone reads in this app ran into the
+                # right edge of the screen: the row gave it the panel's
+                # whole width and every drawing row beside it has margins.
+                hint.set_margin_start(4)
+                hint.set_margin_end(10)
+                hint.set_margin_top(4)
+                hint.set_margin_bottom(4)
                 hint.get_style_context().add_class('animation-muted')
                 row.add(hint)
                 self.cel_list.add(row)

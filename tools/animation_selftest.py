@@ -917,6 +917,12 @@ def menu_fake(scene_count=1):
     return fake
 
 
+def _all(root):
+    out = []
+    _find_widgets(root, lambda _w: True, out)
+    return out
+
+
 def _find_widgets(root, predicate, out):
     if predicate(root):
         out.append(root)
@@ -1573,8 +1579,74 @@ def ellipsis_promise_family():
     shutil.rmtree(scratch)
 
 
+def first_run_family():
+    """The screen someone meets before they have made anything.
+
+    It is the only place the app explains itself, and its sentences have to
+    sit inside the panel that holds them — the drawings hint was given the
+    panel's whole width and its last glyph landed on the final pixel column
+    of the screen."""
+    if not gtk_available():
+        skip("F16 first run", "no display")
+        return
+    from gi.repository import Gtk
+    # A first run means no session to restore. Animation() reopens the last
+    # film when one is remembered, so a shared NB_HOME makes this fixture
+    # something else entirely — it came up holding three drawings.
+    # A launch with no file resumes the last film from the store, which is
+    # what it should do — so a first run is the case where no store exists.
+    # NB_HOME cannot be moved here: the module bound its paths at import.
+    kept = animation.STORE_FILE + ".first-run-check"
+    resumes = os.path.exists(animation.STORE_FILE)
+    if resumes:
+        os.rename(animation.STORE_FILE, kept)
+    try:
+        app = animation.Animation()
+    finally:
+        if resumes:
+            os.replace(kept, animation.STORE_FILE)
+    app._refresh_lists()
+    check("F16 a first run opens on an empty film",
+          not app.doc.cels and app.doc_path is None,
+          (len(app.doc.cels), app.doc_path))
+    hints = []
+    _find_widgets(app.cel_list,
+                  lambda w: isinstance(w, Gtk.Label) and
+                  "no drawings" in (w.get_text() or ""), hints)
+    check("F16 an empty film says so where the drawings would be", len(hints) == 1)
+    if hints:
+        hint = hints[0]
+        check("F16 and that sentence is not pressed against the panel edge",
+              hint.get_margin_end() >= 4 and hint.get_margin_start() >= 2,
+              (hint.get_margin_start(), hint.get_margin_end()))
+        check("F16 it wraps rather than demanding the width of one line",
+              hint.get_line_wrap() and
+              hint.get_preferred_width().minimum_width < 120,
+              hint.get_preferred_width().minimum_width)
+
+    graded, scratch = module_mutant(
+        "F16-flush",
+        [("                hint.set_margin_end(10)", "                pass")])
+    if resumes:
+        os.rename(animation.STORE_FILE, kept)
+    try:
+        other = graded.Animation()
+    finally:
+        if resumes:
+            os.replace(kept, animation.STORE_FILE)
+    other._refresh_lists()
+    found = []
+    _find_widgets(other.cel_list,
+                  lambda w: isinstance(w, Gtk.Label) and
+                  "no drawings" in (w.get_text() or ""), found)
+    mutant("F16 a hint flush against the panel edge is caught",
+           bool(found) and found[0].get_margin_end() < 4)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 workflow_family()
+first_run_family()
 thumbnail_family()
 control_range_family()
 recording_family()
