@@ -33,14 +33,41 @@ VIDEO_FULL_FLAG = "/tmp/nb-video-fullscreen"
 import xshape
 import nbapp  # for nudge_paint (swrast scanout flush) + version/pretty name
 from nbi18n import _t  # panel menu labels (Finder/File/Edit/View/Label) translate
-# The shared motion engine, for the panel-menu drop (PAPER-PHYSICS G1).
-# Never fatal: a panel that cannot animate must still open its menus.
-try:
-    import nbmotion
-except Exception:                                                 # noqa: BLE001
-    nbmotion = None
+# The panel is MOTION-EXEMPT: the menu bar stays static across the OS, and its
+# dropdowns appear and leave at rest (design owner's direction, 2026-08-10 —
+# the G1 drop-from-the-title arrival is retired; see motion_inventory
+# system.panel-menu-open/close). Nothing here animates, so no nbmotion.
 
 PANEL_H = 46
+# The dropdown card's corner radius — must match .sysmenu's border-radius in
+# the CSS below. The X shape mask is built of rectangles only, so the rounded
+# corners are cut as one-pixel rows (menu_shape_rects): everything the arc
+# excludes shows the DESKTOP, exactly like the CSS paints it. Without this the
+# window's opaque papertone host fill (no alpha — force_opaque_visual) showed
+# as solid notches behind the card's rounded corners.
+MENU_SHAPE_RADIUS = 12
+
+
+def menu_shape_rects(rect, radius):
+    """A rounded rectangle as X shape rows: a full-width middle band plus
+    per-row corner slices whose insets follow the arc. Pure math, so the
+    selftest can prove the silhouette without an X server."""
+    x, y, w, h = rect
+    r = max(0, min(int(radius), w // 2, h // 2))
+    if r <= 0:
+        return [rect]
+    rows = []
+    for dy in range(r):
+        v = r - dy - 0.5                     # pixel-row centre vs arc centre
+        s = (r * r - v * v) ** 0.5
+        inset = int(round(r - s))
+        rw = w - 2 * inset
+        if rw > 0:
+            rows.append((x + inset, y + dy, rw, 1))            # top corners
+            rows.append((x + inset, y + h - 1 - dy, rw, 1))    # bottom corners
+    if h > 2 * r:
+        rows.append((x, y + r, w, h - 2 * r))                  # middle band
+    return rows
 # An open dropdown auto-dismisses after this many seconds of NO interaction —
 # a safety net that also reverts the whole-screen input shape if a menu is left
 # hanging. Pointer movement over the menu restarts the timer (_menu_activity),
@@ -147,15 +174,6 @@ class Panel(Gtk.Window):
         self._menu_for = None        # which bar button opened it
         self._menu_rect = None       # (x, y, w, h) of the open menu
         self._menu_timeout = None
-        # The drop-from-the-title arrival (PAPER-PHYSICS G1): the menu is
-        # PLACED at its final rectangle immediately — shape, stacking and
-        # input all settle once — and only the PAINT travels: a draw-handler
-        # translate slides the content down inside its own clip. Position is
-        # never animated (Article F2), damage is the menu's rectangle only.
-        self._menu_anim = None       # live nbmotion.Damaged, if animating
-        self._menu_anim_v = 1.0      # 0 = tucked under the bar, 1 = at rest
-        self._menu_rise = 0          # px of travel for this menu
-        self._menu_closing = False   # a retract is in flight
         self._menu_active_at = 0      # monotonic us of the last menu interaction
         self._nudge_sources = []     # GLib timeout ids for pending paint nudges
         self._nudge_pending = False  # an open menu is awaiting its first paint
@@ -328,8 +346,12 @@ class Panel(Gtk.Window):
             return
         xid = win.get_xid()
         bar = (0, 0, self.screen_w, PANEL_H)
-        # bounding shape: only the bar (+ open menu) is drawn on screen
-        visible = [bar] + ([self._menu_rect] if self._menu_rect else [])
+        # bounding shape: only the bar (+ open menu) is drawn on screen. The
+        # menu is clipped to its ROUNDED silhouette, not its rectangle, so
+        # the desktop shows through behind the card's rounded corners.
+        visible = [bar]
+        if self._menu_rect:
+            visible += menu_shape_rects(self._menu_rect, MENU_SHAPE_RADIUS)
         xshape.combine(xid, visible, xshape.SHAPE_BOUNDING)
         # input shape: while a menu is open, take the whole screen so a click
         # outside the menu dismisses it; otherwise only the bar, so clicks
@@ -522,39 +544,9 @@ class Panel(Gtk.Window):
         self._menu_timeout = GLib.timeout_add_seconds(
             MENU_IDLE_TIMEOUT_S, self._menu_idle)
 
-        # nbmotion-inventory: system.panel-menu-open
-        self._menu_closing = False
-        self._menu_anim_v = 1.0
-        if nbmotion is not None:
-            # A short damped settle, not a float: the content arrives from
-            # the title's baseline and comes to rest on its own rule. The
-            # draw handler translates; Damaged invalidates only the strip
-            # the slide sweeps. Instant-equivalence: under Reduced Motion
-            # animate_to lands synchronously and this whole block is one
-            # extra draw of the final frame.
-            self._menu_rise = min(18, nat.height)
-            menu.connect("draw", self._menu_arrival_draw)
-            self._menu_anim_v = 0.0
-
-            def _arrive(v):
-                self._menu_anim_v = v
-
-            self._menu_anim = nbmotion.Damaged(
-                widget=self,
-                rect_for=lambda v, x=bx, w=nat.width, h=nat.height:
-                    (x, PANEL_H - (1.0 - v) * self._menu_rise, w, h),
-                on_frame=_arrive,
-                duration=nbmotion.SURFACE_IN, easing=nbmotion.ARRIVE)
-            self._menu_anim.animate_to(1.0)
-
-    def _menu_arrival_draw(self, _menu, cr):
-        # Slide the menu's PAINT down its column while it arrives (and back
-        # up while it retracts). The widget's clip does the masking, so the
-        # content emerges from under the bar exactly along its own edge.
-        dy = -(1.0 - self._menu_anim_v) * self._menu_rise
-        if dy:
-            cr.translate(0, dy)
-        return False
+        # The menu appears AT REST — no arrival animation. The drop-from-the-
+        # title settle that lived here was retired 2026-08-10 on the design
+        # owner's direction: the menu bar is motion-exempt.
 
     def _menu_allocated(self, _w, alloc):
         rect = (alloc.x, alloc.y, alloc.width, alloc.height)
@@ -600,36 +592,22 @@ class Panel(Gtk.Window):
         return False
 
     def _menu_close(self, *_):
-        # nbmotion-inventory: system.panel-menu-close
-        # Retract to the title (G1) and remove on arrival. Every dismiss
-        # path — click-away, Escape, the idle timeout, an item activating —
-        # comes through here and gets the same departure. A second close
-        # while the retract is in flight, or a shell without the engine,
-        # removes immediately; under Reduced Motion animate_to completes
-        # synchronously, so the remove happens before this returns.
+        # Every dismiss path — click-away, Escape, the idle timeout, an item
+        # activating — comes through here, and the menu leaves AT ONCE: the
+        # retract-to-the-title departure was retired 2026-08-10 with the
+        # arrival (the menu bar is motion-exempt).
         if self._menu_timeout is not None:
             GLib.source_remove(self._menu_timeout)
             self._menu_timeout = None
         self._cancel_nudges()
         if self._menu is None:
             return False
-        if nbmotion is None or self._menu_anim is None or self._menu_closing:
-            return self._menu_remove()
-        self._menu_closing = True
-        self._menu_anim.animate_to(
-            0.0, duration=nbmotion.SURFACE_OUT, easing=nbmotion.DEPART,
-            on_done=lambda _ok: self._menu_remove())
-        return False
+        return self._menu_remove()
 
     def _menu_remove(self, *_):
         if self._menu_timeout is not None:
             GLib.source_remove(self._menu_timeout)
             self._menu_timeout = None
-        if self._menu_anim is not None:
-            self._menu_anim.cancel()
-            self._menu_anim = None
-        self._menu_closing = False
-        self._menu_anim_v = 1.0
         if self._menu is not None:
             self.fixed.remove(self._menu)
             if self._menu_for is not None:
@@ -1309,7 +1287,7 @@ CSS = b"""
 /* Gtk.Menu popup: the menu node AND its decoration/window paint paper so no
    black or theme-grey shows at the popup's edges under the compositor. */
 menu.sysmenu, menu.sysmenu decoration, .sysmenu {
-           background: #F8F7F2; border: 1px solid #C9C4B6;
+           background: #F8F7F2; border: 1px solid #C9C4B6; border-radius: 12px;
            padding: 4px 0; box-shadow: 3px 3px 0 rgba(26,25,22,0.15); }
 menu.sysmenu menuitem { padding: 0; }
 .sysmenu-item { padding: 6px 24px 6px 16px; margin: 0; border-radius: 0;
