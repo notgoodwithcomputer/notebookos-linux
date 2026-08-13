@@ -1300,9 +1300,78 @@ def thumbnail_family():
         animation.Animation._thumb_frame = real
 
 
+def control_range_family():
+    """A control must not offer values its own apply refuses.
+
+    A slider whose travel runs past the clamp behind it has a dead stretch
+    that silently does nothing, which is indistinguishable from a broken
+    feature — the same shape as the threshold sliders that were too small
+    to drag."""
+    if not gtk_available():
+        skip("F12 control ranges", "no display")
+        return
+    from gi.repository import Gtk
+    app = animation.Animation()
+
+    def scales():
+        found = []
+        _find_widgets(app._prompt_layer,
+                      lambda w: isinstance(w, Gtk.Scale), found)
+        return [(round(w.get_adjustment().get_lower(), 4),
+                 round(w.get_adjustment().get_upper(), 4)) for w in found]
+
+    app.sheet.ensure_drawing(0, 0)
+    app._wobble_prompt()
+    strength = scales()
+    app._close_prompt()
+    # the clamp _wobble_apply enforces, read off the source it is written in
+    source = MODULE_SOURCE.read_text(encoding="utf-8")
+    clamped = "min(1.8, max(.7, state['strength']))" in source
+    check("F12 the wobble slider travels exactly as far as its clamp allows",
+          strength == [(.7, 1.8)] and clamped, strength)
+
+    scene = app.doc.scenes[0]
+    scene["layers"][0]["mouth_slots"] = [app.doc.add_cel().id for _ in range(3)]
+    home = Path(os.environ["NB_HOME"])
+    tone = home / "loud.wav"
+    with wave.open(str(tone), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        handle.writeframes(array.array("h", [0] * 48000).tobytes())
+    scene["sounds"][0] = {"path": str(tone), "start": 0, "mute": False}
+    app._mouth_loudness_prompt()
+    thresholds = scales()
+    opened = app._prompt_layer is not None
+    app._close_prompt()
+    # loudness is an RMS in 0..1, so travel above 1 can never be crossed
+    check("F12 loudness thresholds stop where loudness itself stops",
+          opened and thresholds == [(0., 1.), (0., 1.)], thresholds)
+
+    real = animation.Animation._wobble_prompt
+
+    def blunt(self, *_):
+        if not self._active_cel():
+            return
+        self._overlay_prompt('Add Wobble Takes…',
+                             [('takes', 'Takes (3 or 5)', 3, 'int'),
+                              ('strength', 'Strength', 1.1, 'float')],
+                             'Add Wobble Takes', self._wobble_apply)
+    try:
+        animation.Animation._wobble_prompt = blunt
+        app._wobble_prompt()
+        loose = scales()
+        app._close_prompt()
+        mutant("F12 a slider wider than its clamp is caught",
+               loose != [(.7, 1.8)], loose)
+    finally:
+        animation.Animation._wobble_prompt = real
+
+
 dialog_limits_family()
 workflow_family()
 thumbnail_family()
+control_range_family()
 
 total = len(PASSES) + len(FAILS) + len(SKIPS) + len(MUTANTS) + len(UNCAUGHT_MUTANTS)
 print("TALLY total=%d passed=%d failed=%d skipped=%d mutants-caught=%d mutants-uncaught=%d" %

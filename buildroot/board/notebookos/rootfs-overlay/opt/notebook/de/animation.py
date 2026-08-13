@@ -108,6 +108,9 @@ CSS = b"""
 .animation-row:checked, .animation-selected { background: #EAE3D2; }
 .animation-slot-tile { padding: 2px; }
 .animation-slot-badge { background: #FCFBF8; color: #1A1916; font-size: 11px; padding: 0 3px; border: 1px solid #C9C4B6; }
+.animation-take-option { background: transparent; border: 1px solid transparent; padding: 2px 4px; }
+.animation-take-option:checked { background: #EFEBE0; border: 1px solid #C8341E; }
+.animation-take-option label { color: inherit; }
 .animation-prompt { background: #FCFBF8; border: 1px solid #C9C4B6; padding: 24px; }
 .animation-focus { border: 1px solid #C8341E; }
 .animation-saved { color: #7FA98C; }
@@ -1898,9 +1901,18 @@ class Animation(nbapp.AppWindow):
         return (x, y, w, h)
 
     def _cel_thumb_surface(self, cel):
-        """A 44x33 picture of take 0, cached per cel version — the library
-        navigates by pictures, not by names."""
-        cached = self._cel_thumbs.get(cel.id)
+        """A 44x33 picture of take 0 — the library navigates by pictures,
+        not by names."""
+        return self._take_thumb_surface(cel, 0)
+
+    def _take_thumb_surface(self, cel, take=0):
+        """One take at thumbnail size.
+
+        Every take of a drawing is framed the same way. Framing each one to
+        its own ink would slide the wobble back into place and render five
+        identical pictures — and the wobble is exactly what someone
+        choosing a take is choosing between."""
+        cached = self._cel_thumbs.get((cel.id, take))
         if cached is not None and cached[0] == cel.version:
             return cached[1]
         thumb = cairo.ImageSurface(cairo.FORMAT_ARGB32, THUMB_W, THUMB_H)
@@ -1913,14 +1925,14 @@ class Animation(nbapp.AppWindow):
         ctx.scale(scale, scale)
         ctx.translate(-fx, -fy)
         try:
-            ctx.set_source_surface(cel.decoded(0), 0, 0)
+            ctx.set_source_surface(cel.decoded(take), 0, 0)
             # magnified, a drawing shows its own pixels — this is a pixel app
             ctx.get_source().set_filter(cairo.FILTER_NEAREST if scale >= 1
                                         else cairo.FILTER_GOOD)
             ctx.paint()
         except Exception:
             pass
-        self._cel_thumbs[cel.id] = (cel.version, thumb)
+        self._cel_thumbs[(cel.id, take)] = (cel.version, thumb)
         return thumb
 
     def _cel_row_selected(self, _list, row):
@@ -3166,14 +3178,29 @@ class Animation(nbapp.AppWindow):
         card.pack_start(Gtk.Label(label=_t(title), xalign=0), False, False, 0)
         for key, label, initial, kind in rows:
             row = Gtk.Box(spacing=8)
-            row.pack_start(Gtk.Label(label=_t(label), xalign=0), True, True, 0)
+            # a row whose control wants width gets it: the name of the
+            # control does not need to grow, and splitting the row evenly
+            # is what truncated the take names and shrank the sliders
+            head = kind[0] if isinstance(kind, tuple) else kind
+            expand = head in ('slots-picker', 'float', 'mouth-preview',
+                              'meter', 'take-picker')
+            name = Gtk.Label(label=_t(label), xalign=0)
+            # beside a tall control the name is a heading, not a floating word
+            name.set_valign(Gtk.Align.START)
+            row.pack_start(name, not expand, not expand, 0)
             if kind == 'int':
                 widget = Gtk.SpinButton.new_with_range(1, SCENE_FRAME_MAX, 1)
                 widget.set_value(initial)
                 widget.connect('value-changed',
                                lambda item, k=key: state.__setitem__(k, item.get_value_as_int()))
-            elif kind == 'float':
-                widget = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 2, .01)
+            elif head == 'float':
+                # A control must not offer a value its own apply refuses:
+                # a threshold dragged past what a sound can reach, or a
+                # strength the clamp silently pulls back, reads as a dead
+                # stretch of slider that does nothing.
+                low, high = (kind[1], kind[2]) if isinstance(kind, tuple) else (0., 2.)
+                widget = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
+                                                  low, high, .01)
                 # a slider you cannot drag is not a control: without a width
                 # the prompt's row packing collapsed these to a stub, and the
                 # thresholds are the whole point of the loudness card
@@ -3260,6 +3287,39 @@ class Animation(nbapp.AppWindow):
                     badge.set_visible(numbered)
                     tile.connect('clicked', _tile_toggle)
                     widget.add(tile)
+            elif kind == 'take-picker':
+                # Choosing a take is choosing between pictures, so show the
+                # pictures. Cycling belongs in the list: it is what a run
+                # does by default, and a card that could only name fixed
+                # takes left a run that had been fixed unable to cycle again.
+                widget = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+                widget.set_size_request(300, -1)
+                cel = self._active_cel()
+                first = None
+                for value in range(0, (len(cel.takes) if cel else 1) + 1):
+                    option = Gtk.RadioButton.new_from_widget(first)
+                    if first is None:
+                        first = option
+                    option.set_mode(False)
+                    option.get_style_context().add_class('animation-take-option')
+                    line = Gtk.Box()
+                    if cel is not None:
+                        line.pack_start(Gtk.Image.new_from_surface(
+                            self._take_thumb_surface(cel, max(0, value - 1))),
+                            False, False, 4)
+                    words = Gtk.Label(
+                        label=(_t('Every take in turn') if not value
+                               else _t('Take %d') % value), xalign=0)
+                    words.set_ellipsize(Pango.EllipsizeMode.END)
+                    line.pack_start(words, True, True, 4)
+                    option.add(line)
+                    option.set_active(value == initial)
+                    option.connect(
+                        'toggled',
+                        lambda item, k=key, v=value: (
+                            state.__setitem__(k, v) if item.get_active()
+                            else None))
+                    widget.pack_start(option, False, False, 0)
             elif kind == 'meter':
                 widget = Gtk.ProgressBar()
                 widget.set_size_request(180, 18)
@@ -3290,8 +3350,6 @@ class Animation(nbapp.AppWindow):
                 widget = Gtk.Entry(text=str(initial))
                 widget.connect('changed',
                                lambda item, k=key: state.__setitem__(k, item.get_text()))
-            expand = isinstance(kind, str) and kind in ('slots-picker', 'float',
-                                                        'mouth-preview', 'meter')
             row.pack_start(widget, expand, expand, 0)
             card.pack_start(row, False, False, 0)
         self._prompt_note = None
@@ -3692,8 +3750,15 @@ class Animation(nbapp.AppWindow):
         cel = self._active_cel()
         if not cel:
             return
-        self._overlay_prompt('Choose Take…', [('take', 'Take', 1, 'int')],
-                             'Choose', self._choose_take_apply)
+        run = run_at(self.doc.scenes[self.scene_i]['layers'][self.layer_i]['runs'],
+                     self.playhead)
+        current = int(run.get('take', 0)) if run else 0
+        self._overlay_prompt(
+            'Choose Take…',
+            [('take', 'Take', min(current, len(cel.takes)), 'take-picker')],
+            'Choose', self._choose_take_apply,
+            note='Every take in turn keeps the drawing moving. '
+                 'A fixed take holds it still.')
 
     def _choose_take_apply(self, state):
         run = run_at(self.doc.scenes[self.scene_i]['layers'][self.layer_i]['runs'],
@@ -3702,7 +3767,7 @@ class Animation(nbapp.AppWindow):
             return
         cel = self.doc.cel(run['cel'])
         self._snapshot(_t('Choose Take'))
-        run['take'] = max(1, min(len(cel.takes), state['take']))
+        run['take'] = max(0, min(len(cel.takes), state['take']))
         self._commit_change()
 
     def _active_cel(self):
@@ -3715,7 +3780,8 @@ class Animation(nbapp.AppWindow):
             return
         self._overlay_prompt('Add Wobble Takes…',
                              [('takes', 'Takes (3 or 5)', 3, 'int'),
-                              ('strength', 'Strength', 1.1, 'float'),
+                              ('strength', 'Strength', 1.1,
+                               ('float', .7, 1.8)),
                               ('preview', 'Preview', None,
                                'wobble-preview')],
                              'Add Wobble Takes', self._wobble_apply)
@@ -3820,8 +3886,8 @@ class Animation(nbapp.AppWindow):
             self._flash(_t('Add or unmute a sound before making mouths from loudness.'))
             return
         self._overlay_prompt('Mouth from Loudness…',
-                             [('quiet', 'Quiet', .10, 'float'),
-                              ('loud', 'Loud', .45, 'float'),
+                             [('quiet', 'Quiet', .10, ('float', 0., 1.)),
+                              ('loud', 'Loud', .45, ('float', 0., 1.)),
                               ('preview', 'Preview', None, 'mouth-preview')],
                              'Apply', self._mouth_loudness_apply)
 
