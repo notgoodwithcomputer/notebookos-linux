@@ -617,9 +617,17 @@ def verify_project(document, project, expected_frames):
           (project.name, frame_count, frame_count / document.fps))
 
 
+UNVERIFIED = []
+
+
 def probe(path):
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
+        # Remembered, not forgotten: without this the run prints every
+        # export line, checks NOTHING about the files, and still ends in an
+        # unqualified PASS. The machine this ships to may well be one that
+        # has no ffprobe.
+        UNVERIFIED.append(path.name)
         print("SKIP FFPROBE %s - ffprobe is absent" % path.name)
         return None
     result = subprocess.run(
@@ -663,13 +671,29 @@ def export_piece(label, document, frames, output, audio_specs):
         animation.export_video(document, frames, str(video_path), 640, 480,
                                audio_specs=audio_specs)
         result = probe(video_path)
-        probe(gif)
         if result:
             duration, video = result
             if abs(duration - 30.0) > 1 / 24:
                 raise AssertionError("buttercup mp4 duration %.3f" % duration)
             if video["r_frame_rate"] != "24/1":
                 raise AssertionError("buttercup mp4 rate is " + video["r_frame_rate"])
+        # The gif is the piece this genre actually ships. Its probe line was
+        # printed and thrown away, which reads exactly like verification and
+        # is not: a gif at the wrong rate or a third of the size would have
+        # passed this benchmark every time.
+        animated = probe(gif)
+        if animated:
+            duration, picture = animated
+            if abs(duration - 30.0) > 1 / 12:
+                raise AssertionError("buttercup gif duration %.3f" % duration)
+            if picture["r_frame_rate"] != "12/1":
+                raise AssertionError("buttercup gif rate is " +
+                                     picture["r_frame_rate"])
+            wide, high = document.canvas
+            if (int(picture["width"]), int(picture["height"])) != (wide * 3, high * 3):
+                raise AssertionError("buttercup gif is %sx%s, expected %dx%d" %
+                                     (picture["width"], picture["height"],
+                                      wide * 3, high * 3))
 
 
 def main():
@@ -709,7 +733,12 @@ def main():
             raise AssertionError("buttercup first and last frames differ")
         verify_project(document, project, 360)
         export_piece("B", document, frames, args.out, audio_specs)
-    print("PASS BENCHMARK " + args.piece)
+    if UNVERIFIED:
+        print("PASS BENCHMARK %s - BUILT BUT UNVERIFIED: %s (ffprobe absent, "
+              "so no duration, rate or size was checked)"
+              % (args.piece, ", ".join(sorted(set(UNVERIFIED)))))
+    else:
+        print("PASS BENCHMARK " + args.piece)
 
 
 if __name__ == "__main__":
