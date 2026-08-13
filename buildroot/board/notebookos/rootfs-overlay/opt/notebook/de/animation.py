@@ -4,6 +4,7 @@ The model and raster helpers are deliberately usable without a display.  Gst
 and ffmpeg are discovered only when playback/export is requested.
 """
 import array, base64, collections, copy, io, json, math, os, random
+import re
 import shutil, struct, subprocess, sys, tempfile, threading, time, wave, zlib
 import cairo
 import gi
@@ -39,6 +40,7 @@ TL_RULER_H = 26
 TL_ROW_H = 22
 TL_ROWS_TOP = TL_STRIP_H + TL_RULER_H
 PATTERNS = ('solid', 'checker', 'sparse')
+_HEX = re.compile(r'^#[0-9A-Fa-f]{6}$')
 NB_HOME = os.environ.get('NB_HOME', os.path.expanduser('~'))
 DOCS_DIR = os.path.join(NB_HOME, 'Documents')
 MUSIC_DIR = os.path.join(NB_HOME, 'Music')
@@ -1210,6 +1212,7 @@ class Animation(nbapp.AppWindow):
                     # the title is how a person knows WHICH film they are in
                     self.set_title(_t('Animation') + ' - ' +
                                    os.path.basename(resolved))
+            self._restore_session(self.doc._extra.pop('session', None))
         self.sheet = Sheet(self.doc)
         self._build()
         for scene in self.doc.scenes:
@@ -1220,6 +1223,46 @@ class Animation(nbapp.AppWindow):
                     self._start_peak_worker(sound)
         self.connect('delete-event', self._on_delete)
         self.connect('destroy', self._on_destroy)
+
+    def _restore_session(self, session):
+        """Put the person back where they were, or somewhere sane.
+
+        Every value is clamped against the film as it is NOW: a scene that
+        was deleted, a layer that no longer exists or a frame past the end
+        must land somewhere valid rather than raising on the first repaint.
+        """
+        if not isinstance(session, dict):
+            return
+        scenes = self.doc.scenes
+        self.scene_i = max(0, min(len(scenes) - 1,
+                                  int(session.get('scene', 0) or 0)))
+        scene = scenes[self.scene_i]
+        self.sheet = Sheet(self.doc, self.scene_i)
+        self.playhead = max(0, min(scene['length'] - 1,
+                                   int(session.get('frame', 0) or 0)))
+        self.layer_i = max(0, min(len(scene['layers']) - 1,
+                                  int(session.get('layer', 0) or 0)))
+        self.view_origin = max(0, min(scene['length'] - 1,
+                                      int(session.get('origin', 0) or 0)))
+        tool = session.get('tool')
+        if any(tool == name for name, _label, _key in TOOLS):
+            self.tool = self.previous_tool = tool
+        colour = session.get('colour')
+        if isinstance(colour, str) and _HEX.match(colour or ''):
+            self.color = colour
+        size = session.get('size')
+        if isinstance(size, int) and 1 <= size <= 192:
+            self.size = size
+        columns = session.get('columns')
+        if columns in (3, 6, 12, 24):
+            self.column_width = columns
+        onion = session.get('onion')
+        if onion in (0, 1, 2):
+            self.onion = onion
+        zoom = session.get('zoom')
+        if isinstance(zoom, (int, float)) and zoom in ZOOM_STEPS:
+            self.zoom = zoom
+            self._fitted = True
 
     def _build(self):
         provider = Gtk.CssProvider()
@@ -4706,6 +4749,15 @@ class Animation(nbapp.AppWindow):
             payload = self.doc.serial()
             payload['doc_path'] = (_portable_path(self.doc_path)
                                    if self.doc_path else None)
+            # Where the person was working, not merely what they were
+            # working on (Article III §3). Dropping a film-maker back at
+            # scene 1 frame 0 of a twenty-scene film loses their place.
+            payload['session'] = {
+                'scene': self.scene_i, 'frame': self.playhead,
+                'layer': self.layer_i, 'zoom': self.zoom,
+                'origin': self.view_origin, 'tool': self.tool,
+                'colour': self.color, 'size': self.size,
+                'columns': self.column_width, 'onion': self.onion}
             os.makedirs(os.path.dirname(STORE_FILE), exist_ok=True)
             nbapp.atomic_write_json(STORE_FILE, payload)
             self._dirty = False

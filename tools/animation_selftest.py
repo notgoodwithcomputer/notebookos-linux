@@ -576,6 +576,35 @@ def store_family():
                                                           "remembered.anim"),
           str(restored._extra)[:60])
 
+    # Session restoration must survive a film that CHANGED since it was
+    # written: a scene deleted, a layer removed, a frame past the end.
+    # Every value is clamped against the film as it is now.
+    class _Restorer:
+        pass
+    restorer = _Restorer()
+    restorer.doc = animation.AnimationDocument(canvas=(160, 120))
+    restorer.doc.scenes[0]["length"] = 24
+    restorer.previous_tool = "pencil"
+    restorer.tool = "pencil"
+    restorer.color = "#1A1916"
+    restorer.size = 3
+    restorer.column_width = 6
+    restorer.onion = 0
+    restorer.zoom = 1
+    restorer._fitted = False
+    animation.Animation._restore_session(restorer, {
+        "scene": 99, "frame": 9999, "layer": 42, "zoom": "huge",
+        "tool": "nonsense", "colour": "not-a-colour", "size": -5,
+        "columns": 7, "onion": 9})
+    scene = restorer.doc.scenes[restorer.scene_i]
+    check("F7 a stale session clamps instead of raising",
+          0 <= restorer.scene_i < len(restorer.doc.scenes) and
+          0 <= restorer.playhead < scene["length"] and
+          0 <= restorer.layer_i < len(scene["layers"]) and
+          restorer.tool == "pencil" and restorer.color == "#1A1916",
+          "scene=%d frame=%d layer=%d" % (restorer.scene_i, restorer.playhead,
+                                          restorer.layer_i))
+
     damaged = copy.deepcopy(raw)
     damaged["cels"][0]["takes"] = [base64.b64encode(b"not png").decode("ascii")]
     parsed_damaged, damaged_reports = animation.AnimationDocument.parse(damaged)
