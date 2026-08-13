@@ -1061,6 +1061,23 @@ def dialog_limits_family():
           corner_solid != animation.CLEAR4 and corner_clear == animation.CLEAR4,
           "%r vs %r" % (corner_solid, corner_clear))
 
+    # An onion skin exists to show CHANGE: a neighbour holding the same
+    # drawing (most of any held exposure) adds nothing and only washes out
+    # the frame being worked on, so the frame key decides.
+    held_doc = animation.AnimationDocument(canvas=(60, 40))
+    held_scene = held_doc.scenes[0]
+    held_sheet = animation.Sheet(held_doc)
+    held_cel = held_doc.add_cel("held")
+    held_sheet.stamp(0, animation.make_run(held_cel.id, 0, 5))
+    same = (animation.frame_key(held_doc, held_scene, 1) ==
+            animation.frame_key(held_doc, held_scene, 2))
+    moved_cel = held_doc.add_cel("moved")
+    held_sheet.clear(0, 3, 5)
+    held_sheet.stamp(0, animation.make_run(moved_cel.id, 3, 2))
+    differs = (animation.frame_key(held_doc, held_scene, 2) !=
+               animation.frame_key(held_doc, held_scene, 3))
+    check("F1 a held frame and its neighbour share one frame key", same and differs)
+
     check("F9 menu New Scene disabled at cap", capped_rows["New Scene"] is None)
 
     document = animation.AnimationDocument(canvas=(160, 120))

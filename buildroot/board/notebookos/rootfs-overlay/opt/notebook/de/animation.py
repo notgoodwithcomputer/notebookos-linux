@@ -4100,8 +4100,14 @@ class Animation(nbapp.AppWindow):
             skins = [(self.playhead - 1, '#C8341E')]
             if self.onion == 2:
                 skins.append((self.playhead + 1, '#7FA98C'))
+            here = frame_key(self.doc, scene, self.playhead)
             for frame, tint in skins:
                 if not 0 <= frame < scene['length']:
+                    continue
+                # An onion skin exists to show CHANGE. A neighbour holding
+                # the same drawing — which is most of a held exposure — adds
+                # nothing and only washes out the frame being worked on.
+                if frame_key(self.doc, scene, frame) == here:
                     continue
                 cr.set_source_surface(self._onion_surface(scene, frame, tint))
                 cr.get_source().set_filter(cairo.FILTER_NEAREST)
