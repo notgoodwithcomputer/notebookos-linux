@@ -4566,17 +4566,50 @@ class Animation(nbapp.AppWindow):
         x = 84
         self._scene_cards = []
         limit = bx - 12 - text_w - 40
-        for index, entry in enumerate(self.doc.scenes):
+
+        def _card_width(index):
+            name = self.doc.scenes[index]['name'][:12]
+            return 42 + _pango_layout(cr, name, 11).get_pixel_size()[0] + 10
+
+        # The strip always began at scene 1, so a film longer than the bar
+        # is wide hid the scene you were IN — no card, no highlight, nothing
+        # to point at. The benchmark film has 21 scenes and five fit. Start
+        # wherever keeps the current scene on the bar.
+        mark_w = _pango_layout(cr, '…', 12).get_pixel_size()[0] + 8
+        # Keep the add-a-scene card's room out of the cards' budget: it used
+        # to appear or vanish depending on which scene you stood on, and a
+        # control that comes and goes by position is not a control.
+        at_cap = len(self.doc.scenes) >= SCENE_MAX
+        if not at_cap:
+            limit -= 36
+        first = 0
+        while True:
+            span = 84 + (mark_w if first else 0)
+            last = first
+            for index in range(first, len(self.doc.scenes)):
+                width_i = _card_width(index)
+                if span + width_i > limit:
+                    break
+                span += width_i + 6
+                last = index
+            if last >= self.scene_i or first >= self.scene_i:
+                break
+            first += 1
+        if first:
+            # earlier scenes exist behind this mark
+            cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+            _show_text(cr, x, 24, '…')
+            x += mark_w
+        for index in range(first, len(self.doc.scenes)):
+            entry = self.doc.scenes[index]
             name = entry['name'][:12]
-            layout = _pango_layout(cr, name, 11)
-            name_w = layout.get_pixel_size()[0]
-            card_w = 42 + name_w + 10
+            card_w = _card_width(index)
             if x + card_w > limit:
                 # the strip is full: say so, and step past the mark so the
                 # add-a-scene card cannot land on top of it
                 cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
                 _show_text(cr, x, 24, '…')
-                x += _pango_layout(cr, '…', 12).get_pixel_size()[0] + 8
+                x += mark_w
                 break
             if index == self.scene_i:
                 cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
@@ -4598,7 +4631,8 @@ class Animation(nbapp.AppWindow):
             _show_text(cr, x + 44, 22, name, 11)
             self._scene_cards.append((x, x + card_w, index))
             x += card_w + 6
-        at_cap = len(self.doc.scenes) >= SCENE_MAX
+        if not at_cap:
+            limit += 36
         if x + 30 <= limit:
             cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
             cr.rectangle(x + .5, 2.5, 30, 31)

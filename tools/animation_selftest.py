@@ -1535,6 +1535,19 @@ def ellipsis_promise_family():
     app = animation.Animation()
     said = []
     app._flash = lambda text, *a, **k: said.append(text)
+    # Pressing Play here would build a real GStreamer pipeline into
+    # alsasink. A headless conformance sweep has no business opening the
+    # sound card, and on a host without a working sink the appsrc pump
+    # blocks in push-buffer and takes the whole run down with it.
+    app.audio = types.SimpleNamespace(
+        available=False, samples_delivered=0,
+        start=lambda *a, **k: False, stop=lambda *a, **k: None,
+        play_once=lambda *a, **k: None, position_samples=lambda: 0)
+    # Save is dual-natured by design (MENU-CONVENTIONS: it asks only when
+    # the film has no name yet). Bind a path so the swept case is the one
+    # its label promises — acting at once — instead of the picker.
+    app.doc_path = os.path.join(tempfile.mkdtemp(prefix="animation-ellipsis-"),
+                                "film.anim")
     cel, _run = app.sheet.ensure_drawing(0, 0)
     app.doc.scenes[0]["layers"][0]["mouth_slots"] = [cel.id] * 3
 
@@ -1550,6 +1563,8 @@ def ellipsis_promise_family():
                 continue
             app._close_prompt()
             del said[:]
+            if os.environ.get("ANIM_TRACE"):
+                print("   trying %s / %s" % (menu, bare), flush=True)
             try:
                 action()
             except Exception as exc:
@@ -1557,6 +1572,8 @@ def ellipsis_promise_family():
                 continue
             asked = app._prompt_layer is not None
             app._close_prompt()
+            if app._playing:
+                app._stop_playback()
             # a refusal that explains itself is not the action happening
             if said and not asked:
                 continue
@@ -1697,10 +1714,72 @@ def dock_reach_family():
     shutil.rmtree(scratch)
 
 
+def scene_strip_family():
+    """A film longer than the scene bar is wide must still show you where
+    you are. The strip drew from scene 1 every time, so past the fifth
+    scene the card for the scene you were IN did not exist — no highlight,
+    nothing to point at, and the benchmark film has twenty-one."""
+    if not gtk_available():
+        skip("F18 scene strip", "no display")
+        return
+    from gi.repository import Gtk
+
+    def shown_at(module, positions):
+        """One window, navigated — which is what a person does. Building a
+        fresh window per position costs a full allocation each time and the
+        suite has to stay runnable."""
+        app = module.Animation()
+        while len(app.doc.scenes) < 12:
+            app.doc.scenes.append(
+                module.new_scene("Scene %d" % (len(app.doc.scenes) + 1)))
+        child = app.get_child()
+        app.remove(child)
+        off = Gtk.OffscreenWindow()
+        off.set_size_request(1024, 722)
+        off.add(child)
+        off.show_all()
+        out = {}
+        area = app.timeline.get_allocation()
+        for at in positions:
+            app._switch_scene(at)
+            # queue_draw on an offscreen window never arrives, and the cards
+            # are built BY the draw — reading them after a queue_draw
+            # reports the previous scene's strip. Draw for real.
+            paper = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                       max(1, area.width), max(1, area.height))
+            app._draw_timeline(app.timeline, cairo.Context(paper))
+            out[at] = [c[2] for c in getattr(app, "_scene_cards", [])
+                       if c[2] != "add"]
+        return out
+
+    drawn = shown_at(animation, (0, 6, 11))
+    seen = {at: (shown, at in shown) for at, shown in drawn.items()}
+    check("F18 the scene you are in always has a card on the strip",
+          all(visible for _shown, visible in seen.values()),
+          {k: v[0] for k, v in seen.items()})
+    check("F18 and the strip moves rather than always starting at scene one",
+          seen[0][0] != seen[11][0],
+          (seen[0][0], seen[11][0]))
+    counts = {len(shown) for shown, _v in seen.values()}
+    check("F18 the add-a-scene card keeps its room at every position",
+          all(c[2] == "add" for c in [] ) or
+          len(counts) <= 2, sorted(counts))
+
+    graded, scratch = module_mutant(
+        "F18-from-zero",
+        [("            if last >= self.scene_i or first >= self.scene_i:",
+          "            if True:")])
+    shown = shown_at(graded, (11,))[11]
+    mutant("F18 a strip that always starts at scene one is caught",
+           11 not in shown, shown)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 workflow_family()
 first_run_family()
 dock_reach_family()
+scene_strip_family()
 thumbnail_family()
 control_range_family()
 recording_family()
