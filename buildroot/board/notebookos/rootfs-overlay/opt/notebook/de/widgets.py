@@ -6,9 +6,9 @@ The board fills the desktop under the floating Finder as a TWO-ROW grid that
 covers the whole area, with nothing clustered in a corner and no hole in it:
 
     +--------+--------+--------+----------+----------+
-    | Classes|Homework|  Meals |          |          |
+    |Schedule|Homework|  Meals |          |          |
     +--------+--------+--------+ Calendar |  Tasks   |
-    | Workout|Journal |Accounts|          |          |
+    | Workout|Journal | Bills  |          |          |
     +--------+--------+--------+----------+----------+
 
   * SIX app tiles, all exactly the same size, in a 3x2 grid on the left.
@@ -74,7 +74,7 @@ try:
     import nbmotion
 except Exception:                                                 # noqa: BLE001
     nbmotion = None
-from nbi18n import _t  # noqa: E402
+from nbi18n import _t, ltr  # noqa: E402
               # size (never a hardcoded 1920x1080) for sizing this board.
 
 # cairo draws the task checkbox and the Workout set dots as flat vectors (see
@@ -107,12 +107,16 @@ CFG_DIR = os.path.join(HOME, ".config", "notebook")
 TASKS_FILE = os.path.join(CFG_DIR, "tasks.json")        # shared flat task list
 WORKOUT_FILE = os.path.join(CFG_DIR, "workout.json")    # Workout app
 CAL_FILE = os.path.join(CFG_DIR, "calendar.json")       # Calendar app's events
+# The Calendar app's named calendars ([{name, color}]): the Schedule tile's
+# day chart paints each event's spine in its calendar's colour, so the tile and
+# the app agree at a glance about which event is which.
+CALS_FILE = os.path.join(CFG_DIR, "calendars.json")
 BOARD_FILE = os.path.join(CFG_DIR, "widgets.json")      # which tiles are on
 ACADEMICS_FILE = os.path.join(CFG_DIR, "academics.json")  # classes + homework
 # The same store under the name it had when the app was called Academic Notes.
 # The app itself reads this as a fallback (academics.LEGACY_FILE); the board has
-# to as well, or on a machine that upgraded, the Classes and Homework tiles sit
-# there showing "No classes" over a term the user can plainly see in the app.
+# to as well, or on a machine that upgraded, the Schedule and Homework tiles
+# sit there empty over a term the user can plainly see in the app.
 ACADEMICS_LEGACY = os.path.join(CFG_DIR, "academic.json")
 JOURNAL_FILE = os.path.join(CFG_DIR, "journal.json")
 ACCOUNTING_FILE = os.path.join(CFG_DIR, "accounting.json")
@@ -138,39 +142,51 @@ NOVEL_FILE = os.path.join(CFG_DIR, "novel.json")           # Novel
 #
 # The first six are what a new machine ships with (see TILE_DEFAULT_ON); the
 # rest are there to be chosen.
-TILE_ORDER = ("academics", "homework", "meals",
+TILE_ORDER = ("schedule", "homework", "meals",
               "workout", "journal", "bills",
               "accounting", "birthdays", "reading", "language", "novel")
-TILE_APP = {"academics": "academics", "homework": "academics",
+TILE_APP = {"schedule": "calendar", "homework": "academics",
             "meals": "mealplanner", "workout": "workout",
             "journal": "journal", "bills": "bills",
             "accounting": "accounting", "birthdays": "contacts",
             "reading": "ebook", "language": "language", "novel": "novel"}
 # The view the app should open ON, so clicking the Homework tile lands on
-# Homework instead of dropping you in the app to go and find it.
-TILE_ARG = {"academics": "schedule", "homework": "homework"}
+# Homework instead of dropping you in the app to go and find it. The Schedule
+# tile IS the Calendar day chart, so it opens the Calendar on the Day view.
+TILE_ARG = {"schedule": "day", "homework": "homework"}
 # The app a tile belongs to, for its tooltip. NOT the tile's own title: a tile
-# called "Classes" opens Academics, and "Open Classes" names something that is
-# not a thing you can open.
-TILE_APP_NAME = {"academics": "Academics", "homework": "Academics",
+# called "Schedule" opens the Calendar, and "Open Schedule" names something
+# that is not a thing you can open.
+TILE_APP_NAME = {"schedule": "Calendar", "homework": "Academics",
                  "meals": "Meal Planner", "workout": "Workout",
                  "journal": "Journal", "bills": "Bill Tracker",
                  "accounting": "Accounting", "birthdays": "Contacts",
                  "reading": "E-book Reader", "language": "Language",
                  "novel": "Novel"}
 # English source strings; nbi18n translates them at _t() like any other label.
-TILE_TITLE = {"academics": "Classes", "homework": "Homework",
+TILE_TITLE = {"schedule": "Schedule", "homework": "Homework",
               "meals": "Meals", "workout": "Workout",
               "journal": "Journal", "bills": "Bills",
               "accounting": "Accounting", "birthdays": "Birthdays",
               "reading": "Reading", "language": "Language",
               "novel": "Novel"}
+# Stored tile ids this build has renamed. Applied wherever widgets.json is
+# READ (board_order / board_state), never written back by the board itself:
+# Widget Settings persists the new name on its next save, and a store that is
+# never re-saved keeps working forever. Without this, the rename would read as
+# the tile vanishing from an upgraded desktop -- switched off by nobody, with
+# nothing on screen saying why.
+#
+# "academics" was the Classes tile: today's Academics timetable. It became the
+# Schedule tile -- the Calendar day chart, classes included -- so the stored
+# switch and position carry over to the tile that took its place.
+TILE_ALIAS = {"academics": "schedule"}
 # SIX ON, THE REST OFF, AND THE GRID IS EXACTLY FULL. Not "every tile on": the
 # board has six slots, so shipping more than six switched on would leave some
 # of them undrawable, and shipping fewer leaves a hole in a fixed grid.
 #
 # Which six is a judgement about a machine nobody has used yet, so it is the
-# six that need no setting up to say something true: a term timetable, what is
+# six that need no setting up to say something true: today's schedule, what is
 # owed, today's meals, today's sets, whether today has been written. Accounting
 # is held back because Bills is on -- same subject, but only one of the two has
 # a DEADLINE, and a reminder tile is for what has to be done and by when. The
@@ -178,7 +194,7 @@ TILE_TITLE = {"academics": "Classes", "homework": "Homework",
 # to someone who uses that app: a reader, a learner, a novelist, someone who
 # keeps birthdays. Widget Settings draws the board while the switches are
 # flipped, so swapping any of it is one click and no guesswork.
-SHIPPED_TILES = ("academics", "homework", "meals",
+SHIPPED_TILES = ("schedule", "homework", "meals",
                  "workout", "journal", "bills")
 TILE_DEFAULT_ON = {tid: tid in SHIPPED_TILES for tid in TILE_ORDER}
 
@@ -195,6 +211,10 @@ def board_order(data):
     stored = data.get("order") if isinstance(data, dict) else None
     if isinstance(stored, list):
         for tid in stored:
+            # An order written before a tile was renamed still places the tile
+            # that took its name's place (see TILE_ALIAS); the first mention
+            # wins if a hand edit somehow names both.
+            tid = TILE_ALIAS.get(tid, tid)
             if tid in TILE_DEFAULT_ON and tid not in seen:
                 seen.add(tid)
                 out.append(tid)
@@ -241,6 +261,13 @@ def board_state(data):
     on = dict(TILE_DEFAULT_ON)
     tiles = data.get("tiles") if isinstance(data, dict) else None
     if isinstance(tiles, dict):
+        # A switch saved under a tile's old name still drives the tile that
+        # took its place (see TILE_ALIAS) -- unless the store also names the
+        # new id, which is then the later word and wins.
+        tiles = dict(tiles)
+        for old, new in TILE_ALIAS.items():
+            if old in tiles and new not in tiles:
+                tiles[new] = tiles[old]
         for tid in TILE_ORDER:
             if tid in tiles:
                 on[tid] = bool(tiles[tid])
@@ -251,9 +278,9 @@ def board_state(data):
     if isinstance(tiles, dict) and "bills" not in tiles:
         on, order = adopt_bills(on, order)
     return on, order
-# Cards with a FIXED, small number of rows (today's three meals; today's
-# classes). Their rows expand to share the card, and are set a size larger,
-# instead of huddling at the top under a block of blank paper.
+# Cards with a FIXED, small number of rows (today's three meals). Their rows
+# expand to share the card, and are set a size larger, instead of huddling at
+# the top under a block of blank paper.
 FILL_TILES = ("meals",)
 # What a card says when its reader has nothing to report. Two lines in the same
 # shape as a card with data -- the state, then where the data is entered, naming
@@ -261,7 +288,10 @@ FILL_TILES = ("meals",)
 # rather than one per reader, so the empty board can be read at once; a reader
 # with nothing to say returns None and gets these.
 TILE_EMPTY = {
-    "academics": ("No classes", "Add classes in Academics"),
+    # The same first line the pinned calendar card's TODAY section uses for an
+    # empty day: the two describe the same day on the same board, and must not
+    # say it in two different ways.
+    "schedule": ("Nothing scheduled today", "Add events in Calendar"),
     "homework": ("No assignments", "Add assignments in Academics"),
     "meals": ("No meals planned", "Plan meals in Meal Planner"),
     "workout": ("No exercises", "Add exercises in Workout"),
@@ -296,11 +326,6 @@ WEEKDAYS = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
 # never touch strftime("%-d") (a glibc-only flag) or the stdlib-shadowed
 # calendar module.
 WD_ABBR = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-# Monday-first, matching academics.DAY_NAMES (and the same source strings, so
-# the translations the catalogs already carry for the Academics app are the
-# ones the Classes tile uses).
-DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-             "Saturday", "Sunday")
 # mealplanner.MEALS / MEAL_NAMES, restated so a tile can name a meal without
 # importing the app just to read a label (the plan itself IS read through
 # mealplanner.read_plan, which owns the parsing).
@@ -561,13 +586,37 @@ def _minutes(hhmm):
     return h * 60 + m if 0 <= h < 24 and 0 <= m < 60 else None
 
 
-def _fmt_time(hhmm):
-    mins = _minutes(hhmm)
-    return "" if mins is None else "%02d:%02d" % (mins // 60, mins % 60)
+# Spine fallbacks for the Schedule chart, matching the colours the Calendar
+# app itself falls back to (calendar._cal_color): a class that never chose a
+# colour paints in the reserved Classes-calendar tone, an event whose calendar
+# cannot be found paints in the unknown-name grey. The two screens describe
+# the same day and must not disagree about which thing is which.
+_RGB_CLASS = (0x6E / 255.0, 0x69 / 255.0, 0x5E / 255.0)
+_RGB_EVENT = (0x9A / 255.0, 0x94 / 255.0, 0x84 / 255.0)
+# What the chart draws when the day holds only all-day events: the same band
+# the Calendar day view shows over an empty clock. Bounded hours, because with
+# no timed event there is nothing to size a window from.
+_SCHEDULE_DEFAULT_WINDOW = (8 * 60, 18 * 60)
 
 
-def _classes_for_day(classes, weekday):
-    """Clean one weekday's meetings into drawable schedule records."""
+def _schedule_rgb(color, fallback):
+    """"#RRGGBB" -> (r, g, b) floats. Anything else -- these colours come out
+    of stores anyone can hand-edit -- keeps the given fallback."""
+    s = str(color or "")
+    if len(s) == 7 and s[0] == "#":
+        try:
+            return tuple(int(s[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+        except ValueError:
+            pass
+    return fallback
+
+
+def _schedule_classes_for_day(classes, weekday):
+    """Clean one weekday's class meetings into drawable schedule records.
+
+    The same expansion the Calendar app applies to the Academics store
+    (calendar._load_class_events), reduced to a single day: the timetable is a
+    weekly pattern, so today's chart wants today's weekday, nothing more."""
     out = []
     for cls in classes if isinstance(classes, list) else []:
         if not isinstance(cls, dict):
@@ -575,6 +624,7 @@ def _classes_for_day(classes, weekday):
         name = cls.get("name") or cls.get("label")
         if not name:
             continue
+        rgb = _schedule_rgb(cls.get("color"), _RGB_CLASS)
         meets = cls.get("meets") if isinstance(cls.get("meets"), list) else []
         for meet in meets:
             if not isinstance(meet, dict) or meet.get("day") != weekday:
@@ -586,13 +636,44 @@ def _classes_for_day(classes, weekday):
             if end is None or end <= start:
                 end = min(24 * 60, start + 60)
             out.append({"start": start, "end": end, "name": str(name),
-                        "room": str(meet.get("room") or cls.get("room") or "")})
+                        "where": str(meet.get("room") or cls.get("room") or ""),
+                        "rgb": rgb})
     return sorted(out, key=lambda event: (event["start"], event["end"],
                                           event["name"]))
 
 
-def _classes_window(events):
-    """Whole-hour span with one hour of context around today's classes."""
+def _schedule_events_for_day(events, ymd, cal_colors):
+    """One day of the board's normalized Calendar read (see _load_events),
+    split into (timed, all_day) drawable schedule records.
+
+    Mirrors the Calendar app's own reading of a record (calendar._norm_event):
+    a missing or unparseable start means 09:00, an end at or before its start
+    means an hour -- so a record the Calendar draws on its clock is never
+    silently absent from the miniature of that clock."""
+    timed, allday = [], []
+    for e in events if isinstance(events, list) else []:
+        if not isinstance(e, dict) or e.get("ymd") != ymd:
+            continue
+        rgb = _schedule_rgb(
+            cal_colors.get(str(e.get("cal") or "")) if isinstance(
+                cal_colors, dict) else None, _RGB_EVENT)
+        name = str(e.get("title") or "")
+        if e.get("all_day"):
+            allday.append({"name": name, "rgb": rgb})
+            continue
+        start = e.get("start_min")
+        start = 9 * 60 if start is None else max(0, min(24 * 60, start))
+        end = e.get("end_min")
+        end = -1 if end is None else min(24 * 60, end)
+        if end <= start:
+            end = min(24 * 60, start + 60)
+        timed.append({"start": start, "end": end, "name": name,
+                      "where": str(e.get("where") or ""), "rgb": rgb})
+    return timed, allday
+
+
+def _schedule_window(events):
+    """Whole-hour span with one hour of context around the timed day."""
     if not events:
         return None
     first = min(event["start"] for event in events)
@@ -601,15 +682,15 @@ def _classes_window(events):
         24 * 60, ((last + 59) // 60 + 1) * 60)
 
 
-def _classes_block_geometry(start, end, window_start, window_end, height):
-    """Proportional (top, height) for a meeting in a bounded time window."""
+def _schedule_block_geometry(start, end, window_start, window_end, height):
+    """Proportional (top, height) for an event in a bounded time window."""
     span = max(1.0, float(window_end - window_start))
     top = (max(window_start, start) - window_start) * float(height) / span
     bottom = (min(window_end, end) - window_start) * float(height) / span
     return top, max(1.0, bottom - top)
 
 
-def _classes_collision_lanes(events):
+def _schedule_collision_lanes(events):
     """Return copies carrying lane/lane_count for each overlapping run."""
     result = []
     run = []
@@ -644,16 +725,16 @@ def _classes_collision_lanes(events):
     return result
 
 
-def _classes_now_position(now_minutes, window_start, window_end, school_day,
-                          height):
-    """Y for the now rule, or None outside a populated school-day window."""
-    if not school_day or not window_start <= now_minutes <= window_end:
+def _schedule_now_position(now_minutes, window_start, window_end, populated,
+                           height):
+    """Y for the now rule, or None outside a populated day's window."""
+    if not populated or not window_start <= now_minutes <= window_end:
         return None
     return ((now_minutes - window_start) * float(height) /
             max(1.0, float(window_end - window_start)))
 
 
-def _classes_text_layout(cr, text, size, bold=False):
+def _schedule_text_layout(cr, text, size, bold=False):
     layout = PangoCairo.create_layout(cr)
     font = Pango.FontDescription("Nimbus Sans")
     font.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
@@ -664,11 +745,11 @@ def _classes_text_layout(cr, text, size, bold=False):
     return layout
 
 
-def _classes_show_text(cr, x, baseline, text, size, width, bold=False):
-    """Classes-tile Pango baseline helper; never use cairo's toy text API."""
+def _schedule_show_text(cr, x, baseline, text, size, width, bold=False):
+    """Schedule-tile Pango baseline helper; never use cairo's toy text API."""
     if width <= 2:
         return
-    layout = _classes_text_layout(cr, text, size, bold)
+    layout = _schedule_text_layout(cr, text, size, bold)
     layout.set_width(int(width * Pango.SCALE))
     cr.move_to(x, baseline - layout.get_baseline() / Pango.SCALE)
     PangoCairo.show_layout(cr, layout)
@@ -846,19 +927,38 @@ class _Dots(Gtk.DrawingArea):
         return False
 
 
-class _ClassesSchedule(Gtk.DrawingArea):
-    """The Calendar day view reduced to one non-scrolling board tile."""
+class _ScheduleChart(Gtk.DrawingArea):
+    """The Calendar day view reduced to one non-scrolling board tile: the
+    all-day band above the clock, then the timed day on a bounded hour axis.
+    Every block's spine carries its event's own colour -- its calendar's, or a
+    mirrored class's colour from Academics -- so this chart and the Calendar
+    agree at a glance about which thing is which."""
 
     GUTTER = 43
+    BAND_ROW = 15         # one all-day line: a 3px spine and a 9.5px title
+    BAND_MAX = 2          # band lines before the tail collapses to "+N more"
+    BAND_GAP = 4          # air between the band and the first hour rule
 
-    def __init__(self, events, window, now_minutes):
+    def __init__(self, events, window, now_minutes, allday=()):
         super().__init__()
-        self.events = _classes_collision_lanes(events)
+        self.events = _schedule_collision_lanes(events)
+        self.allday = [a for a in allday if isinstance(a, dict)]
         self.window = window
         self.now_minutes = now_minutes
         self.set_vexpand(True)
         self.set_hexpand(True)
         self.connect("draw", self._draw)
+
+    def _band_rows(self):
+        """The all-day lines to draw: every one when they fit the cap, else
+        the first, with the rest summed into the board's own "+N more" tail --
+        a band that grew with its data would eat the clock beneath it."""
+        if len(self.allday) <= self.BAND_MAX:
+            return [(a["name"], a["rgb"], False) for a in self.allday]
+        head = [(a["name"], a["rgb"], False)
+                for a in self.allday[:self.BAND_MAX - 1]]
+        more = len(self.allday) - (self.BAND_MAX - 1)
+        return head + [(ltr(_t("+%d more") % more), None, True)]
 
     def _draw(self, _area, cr):
         try:
@@ -866,47 +966,77 @@ class _ClassesSchedule(Gtk.DrawingArea):
             height = self.get_allocated_height()
             if width <= self.GUTTER + 8 or height <= 0:
                 return False
+            top = 0
+            for name, rgb, quiet in self._band_rows():
+                x = self.GUTTER + 3
+                if quiet:
+                    cr.set_source_rgb(*_GREY)
+                    _schedule_show_text(cr, x + 5, top + 11, name, 9,
+                                        width - x - 9)
+                else:
+                    cr.set_source_rgb(0.902, 0.886, 0.831)
+                    cr.rectangle(x, top + 1, width - x - 2, self.BAND_ROW - 3)
+                    cr.fill()
+                    cr.set_source_rgb(*rgb)
+                    cr.rectangle(x, top + 1, 3, self.BAND_ROW - 3)
+                    cr.fill()
+                    cr.set_source_rgb(*_INK)
+                    _schedule_show_text(cr, x + 7, top + 11, name, 9.5,
+                                        width - x - 11, True)
+                top += self.BAND_ROW
+            if top:
+                top += self.BAND_GAP
             start, end = self.window
             span = max(1, end - start)
+            clock_h = max(1, height - top)
+            # Hour rules at every hour while an hour is tall enough to label;
+            # a packed window (or a short panel) doubles the step instead of
+            # letting 9px labels shingle over each other.
+            step = 60
+            while step < 24 * 60 and clock_h * step / float(span) < 13:
+                step *= 2
             cr.set_line_width(1)
-            for minute in range(start, end + 1, 60):
-                y = (minute - start) * height / float(span)
+            for minute in range(start, end + 1, step):
+                y = top + (minute - start) * clock_h / float(span)
                 cr.set_source_rgb(0.843, 0.824, 0.773)  # board hairline
                 cr.move_to(self.GUTTER, y + 0.5)
                 cr.line_to(width, y + 0.5)
                 cr.stroke()
                 if minute < end:
                     cr.set_source_rgb(*_GREY)
-                    _classes_show_text(cr, 0, y + 11,
-                                       "%02d:00" % (minute // 60), 9,
-                                       self.GUTTER - 7)
+                    _schedule_show_text(cr, 0, y + 11,
+                                        "%02d:%02d" % (minute // 60,
+                                                       minute % 60), 9,
+                                        self.GUTTER - 7)
             content_w = width - self.GUTTER
             for event in self.events:
-                top, block_h = _classes_block_geometry(
-                    event["start"], event["end"], start, end, height)
+                block_top, block_h = _schedule_block_geometry(
+                    event["start"], event["end"], start, end, clock_h)
+                block_top += top
                 lanes = max(1, event["lane_count"])
                 lane_w = max(1.0, (content_w - 5) / lanes)
                 x = self.GUTTER + 3 + event["lane"] * lane_w
                 block_w = max(1.0, lane_w - 2)
-                # Calendar's quiet colour wash + solid class-colour spine,
-                # translated into the board's neutral papertone idiom.
+                # Calendar's quiet colour wash + solid colour spine, in the
+                # board's papertone idiom.
                 cr.set_source_rgb(0.902, 0.886, 0.831)
-                cr.rectangle(x, top + 1, block_w, max(1, block_h - 2))
+                cr.rectangle(x, block_top + 1, block_w, max(1, block_h - 2))
                 cr.fill()
-                cr.set_source_rgb(*_GOOD)
-                cr.rectangle(x, top + 1, 3, max(1, block_h - 2))
+                cr.set_source_rgb(*event["rgb"])
+                cr.rectangle(x, block_top + 1, 3, max(1, block_h - 2))
                 cr.fill()
                 pad = 7 if block_w >= 70 else 5
                 cr.set_source_rgb(*_INK)
-                _classes_show_text(cr, x + pad, top + 13, event["name"],
-                                   10.5, block_w - pad - 4, True)
-                if block_h >= 28 and event["room"]:
+                _schedule_show_text(cr, x + pad, block_top + 13, event["name"],
+                                    10.5, block_w - pad - 4, True)
+                if block_h >= 28 and event["where"]:
                     cr.set_source_rgb(0.431, 0.412, 0.369)
-                    _classes_show_text(cr, x + pad, top + 25, event["room"],
-                                       9, block_w - pad - 4)
-            now_y = _classes_now_position(self.now_minutes, start, end,
-                                          bool(self.events), height)
+                    _schedule_show_text(cr, x + pad, block_top + 25,
+                                        event["where"], 9, block_w - pad - 4)
+            now_y = _schedule_now_position(self.now_minutes, start, end,
+                                           bool(self.events), clock_h)
             if now_y is not None:
+                now_y += top
                 cr.set_source_rgb(0.784, 0.204, 0.118)  # board signage red
                 cr.set_line_width(1.5)
                 cr.move_to(self.GUTTER - 3, now_y)
@@ -1047,22 +1177,13 @@ class Widgets(Gtk.Window):
         col.pack_start(self._cal_card, True, True, 0)   # ... calendar beneath
         self._rebuild_tiles()
 
-        # nbmotion-inventory: system.desktop-board-appearing
-        # The board's arrival (G1): cards settle in, staggered along their
-        # columns. ONE linear Scalar carries the whole board; each card's own
-        # progress is a clamped remap of it, offset by its column and eased
-        # on arrival — many short damped settles from one driver, no timers.
-        # A card's PAINT is translated 12px up until its progress lands
-        # (draw-handler translate inside its clip: allocation never animates,
-        # F2), and each frame invalidates only the cards still moving.
-        self._settle_v = 1.0
-        self._settle = None
-        self._settle_cards = []      # (widget, column) for every card
-        for card, colidx in ((_tasks, TILE_COLS), (self._cal_card, TILE_COLS)):
-            card.connect("draw", self._card_settle_draw)
-            card._nb_col = colidx
-            self._settle_cards.append(card)
-        self.connect("map-event", self._on_board_map)
+        # The desktop board does NOT animate. Its cards change from AMBIENT
+        # sources the user did not act on here — a store monitor firing, an app
+        # closing and the board remapping — and animating an ambient change is
+        # exactly the motion the design forbids (no motion the user did not
+        # cause). The board simply appears, and updates in place. (Removed the
+        # board-settle transition 2026-08-09 on the design owner's direction:
+        # it ran on every return from a closed app and read as buggy.)
 
         GLib.timeout_add(2000, self._ensure_mapped)
         GLib.timeout_add(6000, self._ensure_mapped)
@@ -1088,7 +1209,7 @@ class Widgets(Gtk.Window):
         self._reload_pending = 0
         for path in (BOARD_FILE, WORKOUT_FILE, ACADEMICS_FILE, ACADEMICS_LEGACY,
                      JOURNAL_FILE, ACCOUNTING_FILE, MEALS_FILE, TASKS_FILE,
-                     CAL_FILE):
+                     CAL_FILE, CALS_FILE):
             try:
                 mon = Gio.File.new_for_path(path).monitor_file(
                     Gio.FileMonitorFlags.NONE, None)
@@ -1110,70 +1231,8 @@ class Widgets(Gtk.Window):
         # header and TODAY agenda stay correct if the OS runs across midnight.
         GLib.timeout_add_seconds(60, self._check_day_rollover)
 
-    # -- the settle-in (G1: system.board-settle) --------------------------
-    _SETTLE_RISE = 12                # px of travel: a short damped arrival
-    _SETTLE_STAG = 0.05              # s between column starts
-
-    def _settle_t(self, col):
-        """A card's own progress: a clamped remap of the one global value,
-        offset by its column, eased on arrival. Columns start left to right;
-        every card lands exactly on 1."""
-        v = self._settle_v
-        if v >= 1.0 or nbmotion is None:
-            return 1.0
-        dur = nbmotion.SURFACE_IN / 1000.0
-        total = dur + self._SETTLE_STAG * TILE_COLS
-        t = (v * total - col * self._SETTLE_STAG) / dur
-        if t <= 0.0:
-            return 0.0
-        if t >= 1.0:
-            return 1.0
-        return nbmotion.ease_out(t)
-
-    def _card_settle_draw(self, card, cr):
-        t = self._settle_t(getattr(card, "_nb_col", 0))
-        if t < 1.0:
-            cr.translate(0, -(1.0 - t) * self._SETTLE_RISE)
-        return False
-
-    def _on_board_map(self, *_a):
-        """The board's arrival — first map at session start, and every
-        return from a closed app (_poll_home's show_all remaps us)."""
-        self._settle_run()
-        return False
-
-    def _settle_run(self):
-        if nbmotion is None:
-            self._settle_v = 1.0
-            return
-        if self._settle is None:
-            self._settle = nbmotion.Scalar(
-                widget=self, value=1.0, on_frame=self._settle_frame,
-                duration=int((nbmotion.SURFACE_IN / 1000.0 +
-                              self._SETTLE_STAG * TILE_COLS) * 1000),
-                easing=nbmotion.LINEAR)
-        self._settle_v = 0.0
-        self._settle.jump_to(0.0)
-        self._settle.animate_to(1.0)
-
-    def _settle_frame(self, v):
-        self._settle_v = v
-        # Invalidate only the cards still travelling (F1): each one's strip,
-        # grown by the rise, in window coordinates.
-        # Every card's strip, every frame of the settle: a card that lands
-        # needs one more paint AT rest, and eight card strips are still a
-        # fraction of the window (never a full-window invalidation).
-        for card in self._settle_cards:
-            try:
-                at = card.translate_coordinates(self, 0, 0)
-                if at is None:
-                    continue
-                alloc = card.get_allocation()
-                self.queue_draw_area(
-                    at[0], at[1] - self._SETTLE_RISE - 2,
-                    alloc.width, alloc.height + self._SETTLE_RISE + 4)
-            except Exception:                                     # noqa: BLE001
-                pass
+    # (The board-settle transition was removed 2026-08-09: the desktop board
+    # does not animate — see the note in __init__.)
 
     def _stay_down(self, *_a):
         """Re-assert the desktop layer. keep-below is a request the WM may
@@ -1431,10 +1490,6 @@ class Widgets(Gtk.Window):
         order = getattr(self, "board_order", None) or list(TILE_ORDER)
         on = [tid for tid in order
               if self.board.get(tid)][:TILE_COLS * TILE_ROWS]
-        # Tiles are recreated on every rebuild; the two right-column cards
-        # (column index TILE_COLS) persist. Keep those, re-hook the rest.
-        self._settle_cards = [c for c in getattr(self, "_settle_cards", [])
-                              if getattr(c, "_nb_col", None) == TILE_COLS]
         for slot, tid in enumerate(on):
             try:
                 tile = self._tile(tid)
@@ -1442,9 +1497,6 @@ class Widgets(Gtk.Window):
                 continue        # never a hole AND never a crash: see _tile_card
             self._tilegrid.attach(tile, slot % TILE_COLS, slot // TILE_COLS,
                                   1, 1)
-            tile._nb_col = slot % TILE_COLS
-            tile.connect("draw", self._card_settle_draw)
-            self._settle_cards.append(tile)
         self._tilegrid.show_all()
 
     # -- one tile ------------------------------------------------------------
@@ -1499,11 +1551,11 @@ class Widgets(Gtk.Window):
         """One app tile: the same card as Tasks and the calendar, with the app's
         name in the header, its summary on the right, and its content rows
         beneath."""
-        if tid == "academics":
-            return self._classes_tile()
+        if tid == "schedule":
+            return self._schedule_tile()
         meta, rows, cta, empty = self._tile_content(tid)
         card, body = self._card_shell(_t(TILE_TITLE[tid]), meta)
-        card.set_size_request(self._tile_w, -1)
+        card.set_size_request(self._tile_w, self._tile_h)
 
         # Height budget: the card is exactly one grid cell tall and cannot
         # scroll, so work out what fits BEFORE laying anything out.
@@ -1567,27 +1619,30 @@ class Widgets(Gtk.Window):
         return self._clickable(card, TILE_APP[tid], TILE_ARG.get(tid),
                                _t("Open %s") % _t(TILE_APP_NAME[tid]))
 
-    def _classes_tile(self):
-        """Classes as the Calendar day schedule in the existing card shell."""
+    def _schedule_tile(self):
+        """The Schedule tile: the Calendar day chart in the existing card
+        shell -- today's events and the classes the Calendar mirrors from
+        Academics, on one clock. Clicking it opens the Calendar on the Day
+        view it miniatures."""
         try:
-            schedule = self._read_classes_schedule()
+            model = self._read_schedule_model()
         except Exception:
-            schedule = None
-        card, body = self._card_shell(_t(TILE_TITLE["academics"]),
-                                      _t("Today") if schedule else "")
-        card.set_size_request(self._tile_w, -1)
-        if schedule:
-            events, window, now_minutes = schedule
-            body.pack_start(_ClassesSchedule(events, window, now_minutes),
+            model = None
+        card, body = self._card_shell(_t(TILE_TITLE["schedule"]),
+                                      _t("Today") if model else "")
+        card.set_size_request(self._tile_w, self._tile_h)
+        if model:
+            timed, allday, window, now_minutes = model
+            body.pack_start(_ScheduleChart(timed, window, now_minutes, allday),
                             True, True, 0)
         else:
-            state, action = TILE_EMPTY["academics"]
+            state, action = TILE_EMPTY["schedule"]
             block = self._cta_block(_t(state), _t(action))
             block.set_valign(Gtk.Align.CENTER)
             body.pack_start(block, True, True, 0)
-        return self._clickable(card, TILE_APP["academics"],
-                               TILE_ARG.get("academics"),
-                               _t("Open %s") % _t(TILE_APP_NAME["academics"]))
+        return self._clickable(card, TILE_APP["schedule"],
+                               TILE_ARG.get("schedule"),
+                               _t("Open %s") % _t(TILE_APP_NAME["schedule"]))
 
     def _card_shell(self, title, meta, strong=False):
         """(card, body) -- the header row every card on this board shares."""
@@ -1821,7 +1876,7 @@ class Widgets(Gtk.Window):
     def _more_row(count):
         row = Gtk.Box()
         row.get_style_context().add_class("moretail")
-        more = Gtk.Label(label=_t("+%d more") % count, xalign=0)
+        more = Gtk.Label(label=ltr(_t("+%d more") % count), xalign=0)
         more.get_style_context().add_class("moretext")
         more.set_ellipsize(Pango.EllipsizeMode.END)
         more.set_max_width_chars(1)
@@ -1896,67 +1951,75 @@ class Widgets(Gtk.Window):
 
     # -- readers -------------------------------------------------------------
 
-    def _read_classes_schedule(self, now=None):
-        """Today's safe, drawable Classes schedule, or None when empty."""
-        data = self._read_store(self._academics_store())
+    @staticmethod
+    def _calendar_colors():
+        """Calendar name -> colour, out of calendars.json. Tolerates every
+        shape that store has been seen in (a bare list, a {"calendars": [...]}
+        wrapper, an object keyed by name -- see calendar._norm_calendars) and
+        never raises: a colour that cannot be found only costs a spine its
+        hue, never the tile its place."""
+        try:
+            with open(CALS_FILE) as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            inner = data.get("calendars")
+            if not isinstance(inner, list):
+                inner = next((v for v in data.values() if isinstance(v, list)),
+                             list(data.values()))
+            data = inner
+        # The calendar a fresh install ships with, present even before the
+        # Calendar app has ever saved its store: tasks.py stamps quick-added
+        # events "Personal", and they must not paint as an unknown grey here.
+        # Mirrors calendar.DEFAULT_CAL -- restated rather than imported, the
+        # same arrangement _fmt_money has with accounting._money.
+        colors = {"Personal": "#4A5E73"}
+        for item in data if isinstance(data, list) else []:
+            if isinstance(item, dict) and item.get("name"):
+                colors[str(item["name"])] = str(item.get("color") or "")
+        return colors
+
+    def _read_schedule_model(self, now=None):
+        """Today's drawable day chart -- (timed, all-day, window, now in
+        minutes) -- or None when the day is empty.
+
+        The chart is the Calendar day view in miniature, so it holds what the
+        Calendar's would: today's events from calendar.json plus the classes
+        the Calendar mirrors out of the Academics store (its mirror is rebuilt
+        from academics.json on every load and never written to calendar.json
+        -- see calendar._load_class_events -- so this tile expands today's
+        line of the same weekly pattern itself)."""
         if now is None:
             now = time.localtime()
-        events = _classes_for_day(self._as_list(data.get("classes")),
-                                  now.tm_wday)
-        window = _classes_window(events)
-        if not events or window is None:
-            return None
-        return events, window, now.tm_hour * 60 + now.tm_min
-
-    def _read_academics(self):
-        """TODAY'S TIMETABLE, one row per class: when it starts, what it is and
-        where. A day with nothing on falls forward to the next day that has
-        something, because a blank card on a Sunday is a card that answers the
-        wrong question -- what someone wants then is what Monday holds.
-
-        academics.json holds classes as {"name"|"label", "room", "meets":
-        [{"day": 0-6 Monday-first, "start": "HH:MM", "room"}]} -- a WEEKLY
-        pattern, not dated occurrences."""
         data = self._read_store(self._academics_store())
-        classes = [c for c in self._as_list(data.get("classes"))
-                   if isinstance(c, dict) and (c.get("name") or c.get("label"))]
-        if not classes:
+        timed = _schedule_classes_for_day(self._as_list(data.get("classes")),
+                                          now.tm_wday)
+        events, allday = _schedule_events_for_day(
+            getattr(self, "events", []),
+            (now.tm_year, now.tm_mon, now.tm_mday), self._calendar_colors())
+        timed = sorted(timed + events,
+                       key=lambda e: (e["start"], e["end"], e["name"]))
+        if not timed and not allday:
             return None
-        now = time.localtime()
-        byday = {}
-        for c in classes:
-            for m in self._as_list(c.get("meets")):
-                if not isinstance(m, dict):
-                    continue
-                day, start = m.get("day"), _minutes(m.get("start"))
-                if start is None or not isinstance(day, int) \
-                        or not 0 <= day <= 6:
-                    continue
-                byday.setdefault(day, []).append(
-                    (start, str(c.get("name") or c.get("label")),
-                     str(m.get("room") or c.get("room") or ""),
-                     _fmt_time(m.get("start"))))
-        if not byday:
+        window = _schedule_window(timed) or _SCHEDULE_DEFAULT_WINDOW
+        return timed, allday, window, now.tm_hour * 60 + now.tm_min
+
+    def _read_schedule(self):
+        """The day chart said in the board's row contract: one row per event
+        -- when it starts, what it is, where it happens -- leading with the
+        all-day band the way the Calendar day view does. The tile itself draws
+        _schedule_tile's chart; this is the same model spoken in rows, so the
+        two can never tell different stories about the same day."""
+        model = self._read_schedule_model()
+        if model is None:
             return None
-        # today first, then forward through the week to the next day that has
-        # anything at all.
-        for ahead in range(0, 8):
-            day = (now.tm_wday + ahead) % 7
-            if byday.get(day):
-                break
-        else:                                   # pragma: no cover - byday is set
-            return None
-        todays = sorted(byday[day])
-        if ahead == 0:
-            meta = _t("Today")
-        elif ahead == 1:
-            meta = _t("Tomorrow")
-        else:
-            meta = _t(DAY_NAMES[day])
-        mins_now = now.tm_hour * 60 + now.tm_min
-        rows = [(at, name, room, ahead == 0 and start < mins_now)
-                for start, name, room, at in todays]
-        return meta, rows, None
+        timed, allday, _window, now_min = model
+        rows = [(None, e["name"], "", False) for e in allday]
+        rows += [("%02d:%02d" % (e["start"] // 60, e["start"] % 60),
+                  e["name"], e["where"], e["start"] < now_min)
+                 for e in timed]
+        return _t("Today"), rows, None
 
     def _read_homework(self):
         """The assignment list, read like the Tasks list beside it: a checkbox
@@ -2343,11 +2406,15 @@ class Widgets(Gtk.Window):
 
     def _load_events(self):
         """Read the Calendar app's shared event store (calendar.json:
-        [{date, start, end, title, cal}, ...]). Returns normalized events
-        {ymd:(y,m,d), start_min:int|None, time:'HH:MM', title:str}. Dates are
-        parsed by plain int split -- NEVER import calendar / time.strptime (the
-        DE's calendar.py shadows the stdlib module on PYTHONPATH). A missing /
-        unreadable / empty store yields []. Never raises."""
+        [{date, start, end, title, cal, ...}, ...]). Returns normalized events
+        {ymd:(y,m,d), start_min/end_min:int|None, time:'HH:MM', title:str,
+        cal:str, where:str, all_day:bool} for the agenda card and the Schedule
+        tile's day chart. A cancelled occurrence (a repeating event's skipped
+        week) is not on the calendar the Calendar app shows, so it must not be
+        on this board either. Dates are parsed by plain int split -- NEVER
+        import calendar / time.strptime (the DE's calendar.py shadows the
+        stdlib module on PYTHONPATH). A missing / unreadable / empty store
+        yields []. Never raises."""
         try:
             with open(CAL_FILE) as fh:
                 data = json.load(fh)
@@ -2357,15 +2424,19 @@ class Widgets(Gtk.Window):
             return []
         out = []
         for item in data:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or item.get("cancelled"):
                 continue
             ymd = self._parse_iso(item.get("date"))
             if ymd is None:
                 continue
             start_min = self._start_minutes(item.get("start"))
             out.append({"ymd": ymd, "start_min": start_min,
+                        "end_min": self._start_minutes(item.get("end")),
                         "time": self._fmt_hhmm(start_min),
-                        "title": str(item.get("title", ""))})
+                        "title": str(item.get("title", "")),
+                        "cal": str(item.get("cal", "") or ""),
+                        "where": str(item.get("location", "") or ""),
+                        "all_day": bool(item.get("all_day", False))})
         return out
 
     @staticmethod
@@ -2811,7 +2882,7 @@ class Widgets(Gtk.Window):
                         self._clickable(row, "calendar", today_iso,
                                         _t("Open Calendar")), False, False, 0)
                 if hidden:
-                    more = Gtk.Label(label=_t("+%d more") % hidden, xalign=0)
+                    more = Gtk.Label(label=ltr(_t("+%d more") % hidden), xalign=0)
                     more.get_style_context().add_class("agempty")
                     more.set_ellipsize(Pango.EllipsizeMode.END)
                     more.set_max_width_chars(1)
