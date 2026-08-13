@@ -2694,7 +2694,9 @@ class Comics(nbapp.AppWindow):
                 Gdk.KEY_w: "bubble", Gdk.KEY_n: "panel"}
         if not ctrl and ev.keyval in keys:
             self._set_tool(keys[ev.keyval]); return True
-        return False
+        # The base ladder (Esc leaves, Ctrl+W/Q close) must stay reachable —
+        # returning False here killed every one of those keys in this app.
+        return super()._on_key(_w, ev)
 
     def _nudge(self,dx,dy):
         if not self.selection:return False
