@@ -396,7 +396,13 @@ class AnimationDocument:
         return next((c for c in self.cels if c.id == id_), None)
 
     def serial(self):
-        return dict(self._extra, format=FORMAT, app='animation', canvas=list(self.canvas), fps=self.fps, boil_every=self.boil_every, palette=self.palette, palette_only=self.palette_only, cels=[c.serial() for c in self.cels], scenes=copy.deepcopy(self.scenes))
+        scenes = copy.deepcopy(self.scenes)
+        for scene in scenes:
+            scene['sounds'] = [
+                (dict(sound, path=_portable_path(sound['path']))
+                 if sound else None)
+                for sound in scene.get('sounds', [])]
+        return dict(self._extra, format=FORMAT, app='animation', canvas=list(self.canvas), fps=self.fps, boil_every=self.boil_every, palette=self.palette, palette_only=self.palette_only, cels=[c.serial() for c in self.cels], scenes=scenes)
 
     def bytes(self):
         return json.dumps(self.serial(), sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
@@ -446,6 +452,8 @@ class AnimationDocument:
                 sounds = list(s.get('sounds', []))[:2] + [None, None]
                 sounds = sounds[:2]
                 for snd in sounds:
+                    if snd:
+                        snd['path'] = _resolve_path(snd.get('path', ''))
                     if snd and (not os.path.exists(snd.get('path', ''))):
                         reports.append(_t('A sound file is missing: %s') % snd.get('path', ''))
                 scenes.append(dict(s, name=str(s.get('name', _t('Scene'))), length=length, layers=layers or [new_layer()], sounds=sounds, markers=list(s.get('markers', []))))
@@ -453,6 +461,32 @@ class AnimationDocument:
                 reports.append(_t('One damaged scene was replaced.'))
         known = {'format', 'app', 'canvas', 'fps', 'boil_every', 'palette', 'palette_only', 'cels', 'scenes'}
         return (cls(canvas, fps, max(1, int(raw.get('boil_every', 2))), raw.get('palette', [])[:16], raw.get('palette_only', False), cels, scenes or [new_scene()], {k: v for k, v in raw.items() if k not in known}), reports)
+
+def _portable_path(path):
+    """A sound's path as the FILE should carry it.
+
+    Sounds are referenced, not embedded (spec §7), so a film that names
+    /home/ben/Music/take.wav loses its audio the moment the project moves
+    to a stick or a different home. A path inside NB_HOME is stored
+    relative to it, which makes a whole home portable; anything outside
+    stays absolute, because there is nothing else honest to say about it.
+    """
+    try:
+        inside = os.path.relpath(path, NB_HOME)
+    except ValueError:
+        return path
+    if inside.startswith(os.pardir) or os.path.isabs(inside):
+        return path
+    return inside
+
+
+def _resolve_path(path):
+    """The in-memory form: always absolute, so every existence check,
+    decode and export sees a real file."""
+    if not path or os.path.isabs(path):
+        return path
+    return os.path.join(NB_HOME, path)
+
 
 def save_document(doc, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)

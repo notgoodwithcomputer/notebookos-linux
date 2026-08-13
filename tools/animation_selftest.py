@@ -551,6 +551,20 @@ def store_family():
     check("F7 a compacted take decodes back to the same pixels",
           image_bytes(painted.decoded(0)) == original_ink)
 
+    # A film references its sounds rather than embedding them (§7), so the
+    # stored path decides whether the film survives being moved. Inside the
+    # home it is stored RELATIVE and resolved on load; outside it stays
+    # absolute, because there is nothing else honest to say about it.
+    inside = os.path.join(animation.NB_HOME, "Music", "take.wav")
+    outside = "/somewhere/else/take.wav"
+    check("F7 a sound inside the home is stored portably",
+          animation._portable_path(inside) == os.path.join("Music", "take.wav") and
+          animation._portable_path(outside) == outside,
+          animation._portable_path(inside))
+    check("F7 a stored relative path resolves back to a real location",
+          animation._resolve_path(os.path.join("Music", "take.wav")) == inside and
+          animation._resolve_path(outside) == outside)
+
     damaged = copy.deepcopy(raw)
     damaged["cels"][0]["takes"] = [base64.b64encode(b"not png").decode("ascii")]
     parsed_damaged, damaged_reports = animation.AnimationDocument.parse(damaged)
