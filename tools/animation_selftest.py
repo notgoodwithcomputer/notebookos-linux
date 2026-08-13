@@ -3578,8 +3578,159 @@ def stamping_family():
     shutil.rmtree(scratch)
 
 
+def serial_freshness_family():
+    """A drawing's saved bytes must be the drawing that is on screen.
+
+    Cel.serial() re-encodes only what changed, because a snapshot
+    serialises the whole film and a snapshot is taken for every brush
+    stroke. That cache also writes the FILE, so the one way it could hurt
+    someone is by serving bytes from before their last edit. This does not
+    enumerate the paths that draw — it checks the invariant, by comparing
+    the cache against a fresh encoding after each one."""
+    if not gtk_available():
+        skip("F33 saved bytes match the drawing", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+
+    kept = animation.STORE_FILE + ".serial-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    app.sheet = animation.Sheet(app.doc, 0)
+    app.tool = "pencil"
+    app._refresh_lists()
+    child = app.get_child()
+    app.remove(child)
+    stage = Gtk.OffscreenWindow()
+    stage.set_size_request(1024, 722)
+    stage.add(child)
+    stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    allocation = app.canvas.get_allocation()
+    middle = (allocation.width / 2, allocation.height / 2)
+
+    def stroke(offset=0):
+        press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+        press.x, press.y, press.button = middle[0] + offset, middle[1], 1
+        app._canvas_press(app.canvas, press)
+        for step in range(6):
+            motion = Gdk.Event.new(Gdk.EventType.MOTION_NOTIFY)
+            motion.x = middle[0] + offset + step
+            motion.y = middle[1] + step
+            app._canvas_motion(app.canvas, motion)
+        release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+        release.x, release.y, release.button = middle[0] + offset, middle[1], 1
+        app._canvas_release(app.canvas, release)
+
+    def stale():
+        """Any drawing whose cached bytes are not what it holds now."""
+        return [cel.name for cel in app.doc.cels
+                if cel.serial()["takes"] != cel.encoded_afresh()]
+
+    stroke()
+    cel = app._active_cel() or app.doc.cels[0]
+    check("F33 a drawing exists and holds ink after a stroke",
+          cel is not None and len(app.doc.cels) >= 1)
+    check("F33 the bytes a stroke would save are the bytes it drew", not stale(),
+          stale())
+
+    app.doc.bytes()          # fill the cache the way a snapshot does
+    stroke(offset=6)
+    check("F33 a second stroke is not hidden by the first one's cache",
+          not stale(), stale())
+
+    app._library_cel = cel.id
+    for act, tag in ((app._add_take, "adding a take"),
+                     (app._remove_take, "removing a take")):
+        app.doc.bytes()
+        act()
+        check("F33 %s leaves nothing stale" % tag, not stale(), stale())
+
+    app.doc.palette = ["#1A1916"]
+    app.doc.bytes()
+    app._recolor_cel()
+    check("F33 recolouring to the palette leaves nothing stale",
+          not stale(), stale())
+
+    app.doc.bytes()
+    app._wobble_apply({"takes": 3, "strength": 1.1})
+    check("F33 adding wobble takes leaves nothing stale", not stale(), stale())
+
+    # and the whole document round-trips through the cache
+    app.doc.bytes()
+    stroke(offset=12)
+    reopened, reports = animation.AnimationDocument.parse(
+        json.loads(app.doc.bytes().decode()))
+    same = (reopened is not None and
+            reopened.bytes() == app.doc.bytes())
+    check("F33 the film still reopens as itself with the cache in place",
+          same and not reports, reports)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F33-stroke-without-a-bump",
+        [("            self._edit_cel.version += 1", "            pass")])
+    forgetful = graded.Animation()
+    forgetful._flash = lambda *a, **k: None
+    forgetful.doc = graded.AnimationDocument(canvas=(160, 120))
+    forgetful.scene_i = forgetful.layer_i = forgetful.playhead = 0
+    forgetful.sheet = graded.Sheet(forgetful.doc, 0)
+    forgetful.tool = "pencil"
+    forgetful._refresh_lists()
+    lost_child = forgetful.get_child()
+    forgetful.remove(lost_child)
+    lost_stage = Gtk.OffscreenWindow()
+    lost_stage.set_size_request(1024, 722)
+    lost_stage.add(lost_child)
+    lost_stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    lost_middle = (forgetful.canvas.get_allocation().width / 2,
+                   forgetful.canvas.get_allocation().height / 2)
+    for offset in (0, 6):
+        press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+        press.x, press.y, press.button = lost_middle[0] + offset, lost_middle[1], 1
+        forgetful._canvas_press(forgetful.canvas, press)
+        for step in range(6):
+            motion = Gdk.Event.new(Gdk.EventType.MOTION_NOTIFY)
+            motion.x = lost_middle[0] + offset + step
+            motion.y = lost_middle[1] + step
+            forgetful._canvas_motion(forgetful.canvas, motion)
+        release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+        release.x, release.y, release.button = lost_middle[0], lost_middle[1], 1
+        forgetful._canvas_release(forgetful.canvas, release)
+        forgetful.doc.bytes()
+    left_behind = [c.name for c in forgetful.doc.cels
+                   if c.serial()["takes"] != c.encoded_afresh()]
+    mutant("F33 a stroke that never raises the version is caught",
+           bool(left_behind), left_behind)
+    forgetful._alive = False
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+serial_freshness_family()
 stamping_family()
 slide_and_onion_family()
 library_and_palette_family()

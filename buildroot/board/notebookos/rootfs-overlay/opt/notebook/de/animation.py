@@ -363,8 +363,34 @@ class Cel:
         return s
 
     def serial(self):
-        d = dict(self._extra, id=self.id, name=self.name, takes=[png_b64(x) if isinstance(x, cairo.ImageSurface) else base64.b64encode(x).decode('ascii') if isinstance(x, bytes) else x for x in self.takes])
-        return d
+        """The cel as plain data, re-encoding only what changed.
+
+        Every snapshot serialises the whole film, and a snapshot is taken
+        for each brush stroke — so PNG-encoding every take of every drawing
+        every time put a stroke at 92ms on a twenty-drawing film and 812ms on a
+        hundred and fifty, against a fifty-millisecond budget.
+
+        The cache is keyed on the version AND on the identity of the take
+        objects, so replacing a take invalidates it even without a bump.
+        The remaining way to serve stale bytes is to paint into an existing
+        take and not raise the version; F33 checks exactly that, on every
+        path that draws, by comparing this against a fresh encoding.
+        """
+        stamp = (self.version, tuple(id(take) for take in self.takes))
+        if getattr(self, '_serial_stamp', None) != stamp:
+            self._serial_takes = [
+                png_b64(x) if isinstance(x, cairo.ImageSurface)
+                else base64.b64encode(x).decode('ascii') if isinstance(x, bytes)
+                else x for x in self.takes]
+            self._serial_stamp = stamp
+        return dict(self._extra, id=self.id, name=self.name,
+                    takes=list(self._serial_takes))
+
+    def encoded_afresh(self):
+        """The same data with no cache in the way — the check's reference."""
+        return [png_b64(x) if isinstance(x, cairo.ImageSurface)
+                else base64.b64encode(x).decode('ascii') if isinstance(x, bytes)
+                else x for x in self.takes]
 
 def new_layer(name=None):
     if name is None:
