@@ -2762,7 +2762,11 @@ class Animation(nbapp.AppWindow):
         if self.playhead < self.view_origin:
             self.view_origin = self.playhead
         elif self.playhead >= self.view_origin + visible - 2:
-            self.view_origin = max(0, self.playhead - visible + 2)
+            # never past the frame being followed: before the sheet has a
+            # real width `visible` is 1, and the old arithmetic scrolled to
+            # frame 1 while the playhead sat on frame 0
+            self.view_origin = max(0, min(self.playhead,
+                                          self.playhead - visible + 2))
 
     def _edge_scroll(self, x):
         """Dragging near either edge walks the view along the sheet."""

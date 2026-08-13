@@ -2031,6 +2031,11 @@ def sheet_paint_family():
 
     def loaded(module):
         app = module.Animation()
+        # A fresh film, not whatever session the store remembered: this
+        # compares DRAWING, and it once failed because two builds restored
+        # sessions that differed by a single scroll position.
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
         for _ in range(40):
             app.doc.add_cel("Drawing %d" % (len(app.doc.cels) + 1))
         scene = app.doc.scenes[0]
@@ -2152,8 +2157,128 @@ def sheet_paint_family():
     shutil.rmtree(scratch)
 
 
+def destructive_family():
+    """Everything that removes work, and the undo behind each of them.
+
+    Coverage measured with a profile hook said none of these had ever run
+    under this suite: deleting a drawing, a layer or a scene, cutting a
+    selection, clearing exposures. Losing work is the worst thing this
+    program can do, so the standard here is byte-identity: the document
+    after undo must be the document before, exactly."""
+    if not gtk_available():
+        skip("F22 removing work", "no display")
+        return
+
+    kept = animation.STORE_FILE + ".destructive-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    scene = app.doc.scenes[0]
+    while len(scene["layers"]) < 3:
+        scene["layers"].append(
+            animation.new_layer("Layer %d" % (len(scene["layers"]) + 1)))
+    while len(app.doc.scenes) < 3:
+        app.doc.scenes.append(
+            animation.new_scene("Scene %d" % (len(app.doc.scenes) + 1)))
+    app.sheet = animation.Sheet(app.doc, 0)
+    exposed = app.doc.add_cel("On the sheet")
+    spare = app.doc.add_cel("Never used")
+    elsewhere = app.doc.add_cel("Used in scene 2")
+    scene["layers"][0]["runs"].append(animation.make_run(exposed.id, 0, 12))
+    scene["layers"][1]["runs"].append(animation.make_run(exposed.id, 20, 8))
+    app.doc.scenes[1]["layers"][0]["runs"].append(
+        animation.make_run(elsewhere.id, 0, 6))
+    app.layer_i = 0
+    app._refresh_lists()
+    app._update_playhead()
+
+    def undoes(tag, act):
+        """Act, insist something changed, undo, insist nothing did."""
+        before = app.doc.bytes()
+        act()
+        changed = app.doc.bytes() != before
+        app.history.undo()
+        return tag, changed, app.doc.bytes() == before
+
+    results = []
+    app._library_cel = spare.id
+    results.append(undoes("delete an unused drawing", app._delete_cel))
+    app.layer_i = 1
+    results.append(undoes("delete a layer", app._delete_layer))
+    app.scene_i = 1
+    results.append(undoes("delete a scene", lambda: app._delete_scene()))
+    app.scene_i = 0
+    app.sheet = animation.Sheet(app.doc, 0)
+    app.layer_i = 0
+    app.selection = (0, 0, 12)
+    app.selection_layers = (0, 0)
+    results.append(undoes("clear an exposure", app._clear_exposure))
+    app.selection = (0, 0, 12)
+    app.selection_layers = (0, 0)
+    results.append(undoes("cut a selection", app._cut_selection))
+    check("F22 every removal changes the film, and undo puts it back exactly",
+          all(did and back for _tag, did, back in results),
+          [(tag, did, back) for tag, did, back in results
+           if not (did and back)])
+
+    # the refusals: what must never be removable
+    guarded = {}
+    app._library_cel = exposed.id
+    before = app.doc.bytes()
+    app._delete_cel()
+    guarded["a drawing on the sheet"] = app.doc.bytes() == before
+    app._library_cel = elsewhere.id
+    before = app.doc.bytes()
+    app._delete_cel()
+    guarded["a drawing used in another scene"] = app.doc.bytes() == before
+    only = animation.Animation()
+    only.doc.scenes[0]["layers"] = [only.doc.scenes[0]["layers"][0]]
+    only.doc.scenes = [only.doc.scenes[0]]
+    only.layer_i = only.scene_i = 0
+    only.sheet = animation.Sheet(only.doc, 0)
+    before = only.doc.bytes()
+    only._delete_layer()
+    guarded["the last layer"] = only.doc.bytes() == before
+    only._delete_scene()
+    guarded["the last scene"] = only.doc.bytes() == before
+    check("F22 the film always keeps a layer, a scene, and any drawing in use",
+          all(guarded.values()),
+          [tag for tag, ok in guarded.items() if not ok])
+
+    for window in (app, only):
+        window._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(window, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(window, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F22-delete-in-use",
+        [("        if cel_id is None or self._cel_in_use(cel_id):",
+          "        if cel_id is None:")])
+    reckless = graded.Animation()
+    reckless.doc.scenes[0]["layers"][0]["runs"].append(
+        graded.make_run(reckless.doc.add_cel("Exposed").id, 0, 5))
+    reckless._library_cel = reckless.doc.cels[-1].id
+    was = len(reckless.doc.cels)
+    reckless._delete_cel()
+    mutant("F22 deleting a drawing the film is using is caught",
+           len(reckless.doc.cels) < was)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+destructive_family()
 workflow_family()
 first_run_family()
 dock_reach_family()
