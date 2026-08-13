@@ -1147,6 +1147,14 @@ class Widgets(Gtk.Window):
                                   column_spacing=BOARD_GAP,
                                   row_homogeneous=True,
                                   column_homogeneous=True)
+        # PINNED hexpand=False. Any tile whose content sets hexpand bubbles
+        # compute_expand up to this grid, and a GTK3 Box then splits the
+        # leftover width between the grid's cell and the pinned column's —
+        # the grid floated 66px off the left edge and the column lost its
+        # share, so the tiles stopped packing against the column (the three
+        # board_selftest reds at 1920/1366). The grid is fixed-width by
+        # design; only the column may expand.
+        self._tilegrid.set_hexpand(False)
         # Pinned to exactly three tile columns wide so the rounding left over
         # from dividing the panel into four is absorbed by the pinned column,
         # never by the tiles -- six tiles that differ by a pixel read as a
@@ -2299,6 +2307,15 @@ class Widgets(Gtk.Window):
         data = self._read_store(JOURNAL_FILE)
         entries = [e for e in self._as_list(data.get("entries"))
                    if isinstance(e, dict)]
+        if not entries:
+            # Day zero: no entry has EVER been written, so the streak
+            # question this mark asks ("did you write today?") is not live
+            # yet — and a signage-red cross was the first thing a fresh
+            # system said to its owner, while every sibling tile spoke
+            # gently. The shared empty state ("No entries / Write entries
+            # in Journal") says it the house way; the cross returns the
+            # day after the FIRST entry, when it means something.
+            return None
         today = nbapp.day_ordinal(time.strftime("%Y-%m-%d"))
         newest = None
         for e in entries:
