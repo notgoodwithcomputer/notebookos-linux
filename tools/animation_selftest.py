@@ -538,6 +538,19 @@ def store_family():
     check("F7 an unreadable take decodes to blank paper, never an exception",
           survived)
 
+    # Compaction puts cels back to bytes to keep a big film light. The only
+    # question that matters about it is whether a pixel can be lost, so:
+    # encode a painted take, decode it again, and demand it byte-identical.
+    keeper = animation.AnimationDocument(canvas=(80, 60))
+    painted = keeper.add_cel("keeper")
+    animation.stamp(painted.decoded(0), 30, 30, 10, "round",
+                    animation.px4("#C8341E"))
+    painted.version += 1
+    original_ink = image_bytes(painted.decoded(0))
+    painted.takes[0] = animation.png_b64(painted.decoded(0))   # compacted
+    check("F7 a compacted take decodes back to the same pixels",
+          image_bytes(painted.decoded(0)) == original_ink)
+
     damaged = copy.deepcopy(raw)
     damaged["cels"][0]["takes"] = [base64.b64encode(b"not png").decode("ascii")]
     parsed_damaged, damaged_reports = animation.AnimationDocument.parse(damaged)
