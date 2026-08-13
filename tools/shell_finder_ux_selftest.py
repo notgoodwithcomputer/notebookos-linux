@@ -62,12 +62,22 @@ def wiring_contract():
         "model.get_value(it, 4)",       # stable relative path, not row index/name
         "row[4] == selected",
         "self._dirgen.valid(token)",
-        "self._dirgen.close()",
         "self._nav_dir = nav_direction(old, self._hpos)",
         "self._clear_typeahead()",
     )
-    check(all(fragment in source for fragment in required),
-          "Finder wires stable selection, stale guards, direction and local Escape")
+    missing = [fragment for fragment in required if fragment not in source]
+    # Destroy must CLOSE the dirgen. The teardown was refactored to a
+    # getattr-guarded spelling (safe against destroy-mid-construction), so
+    # accept either form instead of pinning one exact source string — the
+    # navigation_state gate already learned this brittleness lesson.
+    closes = ("self._dirgen.close()" in source
+              or ('getattr(self, "_dirgen", None)' in source
+                  and "dirgen.close()" in source))
+    if not closes:
+        missing.append("dirgen.close() on destroy")
+    check(not missing,
+          "Finder wires stable selection, stale guards, direction and local Escape"
+          + ("" if not missing else " [missing: %s]" % ", ".join(missing)))
 
 
 if __name__ == "__main__":
