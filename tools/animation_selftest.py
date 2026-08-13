@@ -2640,8 +2640,129 @@ def export_outcome_family():
     shutil.rmtree(scratch)
 
 
+def dock_controls_family():
+    """The controls a person touches most, driven the way they touch them.
+
+    The colour palette is the reason the dock was reordered this session —
+    it is what a drawing app is used through — and the coverage hook said
+    every one of its handlers had never run: the swatch press, the cell
+    arithmetic, the hover name, the brush ramp, the tip and pattern
+    choices. A grid you pick colours from by pixel is exactly where an
+    off-by-one hides."""
+    if not gtk_available():
+        skip("F26 dock controls", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+
+    kept = animation.STORE_FILE + ".dock-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    swatch, gap = app._swatch_geom
+
+    def press_swatch(col, row, inset=1):
+        event = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+        event.x = col * (swatch + gap) + inset
+        event.y = row * (swatch + gap) + inset
+        event.button = 1
+        app._swatch_press(app.palette_area, event)
+        return app.color
+
+    # every swatch in the grid must hand back its own colour
+    wrong = []
+    for index in range(len(animation.PALETTE)):
+        col, row = index % 16, index // 16
+        got = press_swatch(col, row)
+        if got != animation.PALETTE[index]:
+            wrong.append((index, got, animation.PALETTE[index]))
+    check("F26 every swatch in the grid picks the colour drawn in it",
+          not wrong, wrong[:4])
+
+    # the gaps between swatches belong to nobody
+    app._choose_colour(None, animation.PALETTE[0])
+    before = app.color
+    missed = app._swatch_cell(swatch + 0.5, 0) is None
+    press_swatch(1, 0, inset=swatch)      # land in the gutter after a cell
+    check("F26 the gaps between swatches are not a colour",
+          missed and app.color == before, (missed, app.color, before))
+
+    named = app._palette_name(0)
+    check("F26 a swatch answers hover with a name, not a hex code",
+          bool(named) and not named.startswith("#"), named)
+
+    # the brush ramp: six cells, six sizes, in order
+    sizes = []
+    for left, width in app._ramp_cells():
+        event = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+        event.x = left + width / 2
+        event.y = 8
+        event.button = 1
+        app._brush_ramp_press(app.ramp_area, event)
+        sizes.append(app.size)
+    check("F26 the brush ramp sets the six sizes it draws, in order",
+          sizes == [1, 2, 3, 6, 12, 24], sizes)
+    check("F26 and the readout beside it says the size that was chosen",
+          app.size_lbl.get_text().startswith("24"), app.size_lbl.get_text())
+
+    # tip, pattern and mirror, through the real controls: these handlers
+    # read the state of the button that called them, so calling them
+    # directly tests something the dock does not do
+    def dock_button(name):
+        found = []
+        _find_widgets(app, lambda w: isinstance(w, Gtk.Button) and
+                      ((w.get_label() or "") == name or
+                       (w.get_tooltip_text() or "") == name), found)
+        return found[0] if found else None
+
+    picked = {}
+    for name, attribute, want in (("Round tip", "shape", "round"),
+                                  ("Square tip", "shape", "square"),
+                                  ("Checker", "pattern", "checker"),
+                                  ("Mirror left and right", "symx", True)):
+        button = dock_button(name)
+        if button is None:
+            picked[name] = "no such control"
+            continue
+        button.set_active(True)
+        picked[name] = getattr(app, attribute)
+        if picked[name] != want:
+            picked[name] = "%r, wanted %r" % (picked[name], want)
+        else:
+            picked[name] = True
+    check("F26 tip, pattern and mirror each set what they name",
+          all(value is True for value in picked.values()), picked)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F26-swatch-row-slip",
+        [("        index = row * 16 + col", "        index = row * 15 + col")])
+    slipped = graded.Animation()
+    event = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    event.x, event.y, event.button = 1, 2 * (swatch + gap) + 1, 1
+    slipped._swatch_press(slipped.palette_area, event)
+    mutant("F26 a palette that hands back the wrong swatch is caught",
+           slipped.color != graded.PALETTE[32], slipped.color)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+dock_controls_family()
 export_outcome_family()
 close_guard_family()
 accelerator_family()
