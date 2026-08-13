@@ -1344,10 +1344,29 @@ class Novel(nbapp.AppWindow):
         self._recount()
         buf = self.view.get_buffer()
         caret = min(max(0, state.get("_caret", 0)), buf.get_char_count())
-        buf.place_cursor(buf.get_iter_at_offset(caret))
+        self._place_caret_deferred(buf, caret)
         self._save_state()
         self._arm_pagestat()
         self._focus_editor()
+
+    def _place_caret_deferred(self, buf, offset):
+        """place_cursor, one idle later.
+
+        Synchronous placement inside an undo/redo restore parked GTK in a
+        place_cursor that never returned while the view was still
+        re-anchoring the just-swapped buffer (independent stack samples at
+        both call sites, all inside the C call; Ctrl+Y froze the app). By
+        idle time the view has settled. The guard keeps a stale idle from
+        poking a buffer the view no longer shows."""
+        def later():
+            try:
+                if buf is self.view.get_buffer():
+                    off = min(max(0, int(offset)), buf.get_char_count())
+                    buf.place_cursor(buf.get_iter_at_offset(off))
+            except Exception:
+                pass
+            return False
+        GLib.idle_add(later)
 
     def _restore(self, state):
         """Rebuild the chapter list + text buffers from a parsed state dict.
@@ -2228,11 +2247,11 @@ class Novel(nbapp.AppWindow):
 
     def _place_cursor_body(self, buf):
         """Drop the caret at the start of the body when a chapter is
-        activated, so the pill reads 'Body' and the writer can start typing."""
-        try:
-            buf.place_cursor(buf.get_start_iter())
-        except Exception:
-            pass
+        activated, so the pill reads 'Body' and the writer can start typing.
+
+        Deferred via _place_caret_deferred — see its docstring for the
+        freeze this dodges."""
+        self._place_caret_deferred(buf, 0)
 
     def _on_style(self, btn):
         """Open the Body / Heading / Quote paragraph-style dropdown beneath the

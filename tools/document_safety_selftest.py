@@ -126,7 +126,12 @@ def save_as_failure_rolls_back_identity():
           "failed Save As restores the prior path and title")
     check(doc._file_dirty and not doc.undo.saved,
           "failed Save As preserves dirty and saved-checkpoint state")
-    check(doc.flashes == ["Save failed"],
+    # The app moved from the fixed "Save failed" to nbapp.save_failure_reason
+    # sentences — pin the CONTRACT (exactly one flash, a real capitalised
+    # sentence, no exception text), not one spelling of it.
+    check(len(doc.flashes) == 1 and bool(doc.flashes[0])
+          and doc.flashes[0][0].isupper() and doc.flashes[0].endswith(".")
+          and "Error" not in doc.flashes[0] and "errno" not in doc.flashes[0],
           "failed Save As reports one plain-language failure")
 
 

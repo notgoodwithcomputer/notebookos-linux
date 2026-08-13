@@ -176,7 +176,7 @@ class DaemonLink:
         err = self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
         if cond & (GLib.IO_ERR | GLib.IO_HUP) or err != 0:
             self._teardown(fail_pending=False)
-            self._set_state(CONNECTING, os.strerror(err) if err else "no daemon")
+            self._set_state(CONNECTING, os.strerror(err) if err else "the radio service is not running")
             self._schedule_retry()
             return False
         self._in_watch = GLib.io_add_watch(
@@ -203,7 +203,7 @@ class DaemonLink:
             # A major mismatch is fatal by contract; retrying cannot fix it.
             self._teardown(fail_pending=True)
             self._set_state(MISMATCH,
-                            "govorimod speaks API %s and this app speaks %s"
+                            "the radio service and this app do not match (service %s, app %s)"
                             % (api, API_VERSION))
             return
         self.hello = result
@@ -234,7 +234,7 @@ class DaemonLink:
                     GLib.source_remove(src)
                 if on_done is not None:
                     self._guard(on_done, None,
-                                {"code": "gone", "message": "the daemon went away"})
+                                {"code": "gone", "message": "the radio service stopped"})
 
     def _lost(self, detail):
         self._teardown(fail_pending=True)
@@ -277,14 +277,14 @@ class DaemonLink:
     def _readable(self, _fd, cond):
         if cond & (GLib.IO_ERR | GLib.IO_HUP):
             self._in_watch = None
-            self._lost("the daemon went away")
+            self._lost("the radio service stopped")
             return False
         try:
             while True:
                 chunk = self._sock.recv(65536)
                 if not chunk:
                     self._in_watch = None
-                    self._lost("the daemon closed the socket")
+                    self._lost("the radio service closed the connection")
                     return False
                 self._buf += chunk
                 if len(chunk) < 65536:

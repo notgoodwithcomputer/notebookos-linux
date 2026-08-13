@@ -996,11 +996,16 @@ class Packages(nbapp.AppWindow):
 
     def _save_view_prefs(self):
         try:
+            # getattr, not bare reads: this writer also runs from the destroy
+            # handler, and a window torn down mid-construction (or a harness
+            # driving the store methods alone) has real state for none of the
+            # view fields yet. Losing a prefs write must never lose the
+            # removed-apps store riding in the same file.
             nbapp.atomic_write_json(self._removed_apps_path(), {
                 "removed": sorted(self._removed_apps),
-                "view": self.view,
-                "sort_field": self.sort_field,
-                "sort_desc": bool(self.sort_desc),
+                "view": getattr(self, "view", "installed"),
+                "sort_field": getattr(self, "sort_field", None),
+                "sort_desc": bool(getattr(self, "sort_desc", False)),
             })
         except (OSError, TypeError, ValueError) as exc:
             nbapp.save_failure_reason = str(exc)

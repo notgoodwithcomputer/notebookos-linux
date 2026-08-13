@@ -1202,6 +1202,13 @@ class Finder(Gtk.Window):
                 data = json.load(fh)
             if isinstance(data, list):
                 self._removed_apps = {str(x) for x in data}
+            elif isinstance(data, dict) and isinstance(data.get("removed"),
+                                                       list):
+                # Packages' store grew view prefs around the list (2026-08).
+                # Reading only the bare-list form meant one uninstall silently
+                # un-hid EVERY removed app here — the packages_removal gate
+                # caught the divergence.
+                self._removed_apps = {str(x) for x in data["removed"]}
         except (OSError, ValueError, TypeError):
             pass
         self._removed_apps_mtime = self._removed_apps_stamp()

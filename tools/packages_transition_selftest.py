@@ -47,7 +47,8 @@ def check(condition, message):
 
 
 with open(SOURCE, encoding="utf-8") as fh:
-    tree = ast.parse(fh.read(), SOURCE)
+    SRC = fh.read()
+tree = ast.parse(SRC, SOURCE)
 
 
 def calls(attr):
@@ -122,9 +123,15 @@ initial = [n for n in switches
 check(len(initial) == 1,
       "the opening view is established once, with an explicit NONE")
 if initial:
+    # View persistence (2026-08) made the opening switch carry self.view —
+    # restored from the store — rather than a constant. The first-run
+    # contract survives as the attribute's own initialiser: self.view is
+    # born "installed" before any prefs load can override it.
     opening = initial[0].args[0] if initial[0].args else None
-    check(isinstance(opening, ast.Constant) and opening.value == "installed",
-          "the app opens on Installed")
+    opens_attr = (isinstance(opening, ast.Attribute)
+                  and opening.attr == "view")
+    check(opens_attr and 'self.view = "installed"' in SRC,
+          "the app opens on the restored view, born Installed")
 
 # ---- _on_nav keeps its order: style, refresh, then switch -----------------
 nav = function("_on_nav")

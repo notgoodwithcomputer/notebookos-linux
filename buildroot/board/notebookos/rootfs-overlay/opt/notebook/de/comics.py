@@ -143,11 +143,11 @@ CSS = b"""
 .comics-mat { background: #DED4C2; }
 .comics-group { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
                  font-weight: 700; }
-.comics-toolbtn { min-height: 30px; padding: 0 8px; background: #FCFBF8;
+.comics-toolbtn { min-height: 30px; padding: 0 5px; background: #FCFBF8;
                   border: 1px solid #C9C4B6; border-radius: 8px;
                   box-shadow: none; }
 .comics-toolbtn:hover { background: #F4F2EC; }
-.comics-toolname { font-size: 12px; color: #1A1916; }
+.comics-toolname { font-size: 11px; color: #1A1916; }
 .comics-toolbtn.sel { background: #C8341E; border-color: #C8341E; }
 .comics-toolbtn.sel:hover { background: #B12C18; border-color: #B12C18; }
 .comics-toolbtn.sel .comics-toolname { color: #FCFBF8; font-weight: 600; }
@@ -1167,15 +1167,18 @@ class Comics(nbapp.AppWindow):
         dock_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         dock_sw.set_size_request(DOCK_W, -1)
         dock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        dock.set_border_width(12)
+        # 9px, not 12: the two-column tool grid needs every horizontal pixel
+        # for its longest translated names (el Eyedropper, ru Rectangle) —
+        # measured by ellipsis_sweep, which cut both at the old width.
+        dock.set_border_width(9)
         dock_sw.add(dock)
         lab = self._caption("Tools")
         lab.get_style_context().add_class("comics-group")
         dock.pack_start(lab, False, False, 0)
-        grid = Gtk.Grid(column_spacing=4, row_spacing=4)
+        grid = Gtk.Grid(column_spacing=3, row_spacing=4)
         self.tool_buttons = {}
         for i, (ident, name, key) in enumerate(TOOLS):
-            btn = Gtk.Button(); toolbox=Gtk.Box(spacing=5)
+            btn = Gtk.Button(); toolbox=Gtk.Box(spacing=3)
             btn.set_relief(Gtk.ReliefStyle.NONE); btn.get_style_context().add_class("comics-toolbtn")
             if ident in nbicons.ICONS: toolicon=nbicons.image(ident,15)
             else:

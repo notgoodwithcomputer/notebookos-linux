@@ -278,11 +278,15 @@ def test_novel():
     # --- delete a chapter, with its title ---
     w._on_new_chapter()
     b2 = w.chapters[w.active]["buffer"]
-    b2.set_text("A Winter Crossing\nThey left before dawn.")
+    b2.set_text("They left before dawn.")
+    # The title became its own control — manuscript content in an Entry in
+    # the old opening-heading position — no longer a specially-tagged first
+    # body line. Type it where the person does.
+    w.chapter_title.set_text("A Winter Crossing")
     w._on_change(b2)
     w.undo.flush()
     check("two chapters", len(w.chapters) == 2)
-    check("chapter titled from its heading line",
+    check("chapter titled from its title control",
           w.chapters[1]["title"] == "A Winter Crossing")
     w._delete_chapter(1)
     check("chapter deleted", len(w.chapters) == 1)

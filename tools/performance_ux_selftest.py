@@ -33,7 +33,10 @@ def contracts():
 
     check("_dir_reload_id" in finder and "source_remove(self._dir_reload_id)" in finder,
           "Finder coalesces directory monitor bursts to one owned source")
-    check("self._dirgen.valid(token)" in finder and "self._dirgen.close()" in finder,
+    closes = ("self._dirgen.close()" in finder
+              or ('getattr(self, "_dirgen", None)' in finder
+                  and "dirgen.close()" in finder))
+    check("self._dirgen.valid(token)" in finder and closes,
           "Finder drops stale reloads and retires them on close")
     check("def discover_printers_async" in printer and "owner.start(" in printer,
           "printer discovery returns through the shared background-job gate")

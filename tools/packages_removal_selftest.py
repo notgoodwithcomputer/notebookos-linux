@@ -12,6 +12,19 @@ SOURCE = os.path.join(DE, "packages.py")
 sys.path.insert(0, DE)
 
 import packages as pk  # noqa: E402
+import finder as fd  # noqa: E402
+
+
+def finder_reads(path):
+    """Parse the store exactly the way Finder's app-hiding does — the
+    cross-app contract this suite exists to protect. A byte-pin on one
+    spelling laundered a REAL divergence once: Packages moved to the dict
+    form while Finder read only the bare list, and every removed app
+    silently reappeared in Applications."""
+    probe = fd.Finder.__new__(fd.Finder)
+    probe._removed_apps_path = lambda: path
+    fd.Finder._load_removed_apps(probe)
+    return probe._removed_apps
 
 failures = []
 
@@ -29,11 +42,20 @@ class Harness(object):
     _set_app_removed = pk.Packages._set_app_removed
     _on_uninstall = pk.Packages._on_uninstall
     _on_restore = pk.Packages._on_restore
+    # The view-persistence work routed the removed-apps store through the
+    # app's shared prefs writer, so the stand-in borrows the REAL one and
+    # carries the state it persists — a hand-fed fake that stops at the
+    # method list reddens on defects that do not exist (the suite-fake
+    # fragility class).
+    _save_view_prefs = pk.Packages._save_view_prefs
 
     def __init__(self):
         self.sel = 0
         self._removed_apps = self._load_removed_apps()
         self.rebuilds = 0
+        self.view = "installed"
+        self.sort_field = None
+        self.sort_desc = False
 
     def _rebuild_detail(self):
         self.rebuilds += 1
@@ -63,8 +85,8 @@ def main():
         h._on_uninstall()
         with open(path, "rb") as fh:
             actual = fh.read()
-        check(actual == b'["Calendar", "Writer"]',
-              "Uninstall writes Finder's exact sorted JSON-list format",
+        check(finder_reads(path) == {"Calendar", "Writer"},
+              "Uninstall writes a store Finder's app-hiding actually reads",
               repr(actual))
         check(h._removed_apps == {"Calendar", "Writer"} and h.rebuilds == 1,
               "Uninstall updates state and the inspector immediately")
@@ -72,7 +94,7 @@ def main():
         h._on_restore()
         with open(path, "rb") as fh:
             actual = fh.read()
-        check(actual == b'["Calendar"]',
+        check(finder_reads(path) == {"Calendar"},
               "Restore removes only the selected display name", repr(actual))
 
         # A system package reaches the same internal method in this headless
