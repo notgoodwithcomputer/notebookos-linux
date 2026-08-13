@@ -648,6 +648,7 @@ nb_atan_q nb_bg_palette nb_bg_tile_count nb_bg_tiles nb_event_fn nb_font
 nb_font_w nb_fx nb_fx_prio nb_global nb_health nb_lives nb_note_freq
 nb_obj_palette nb_obj_tile_count nb_obj_tiles nb_object_count nb_objects
 nb_room_count nb_rooms nb_score nb_sin_q nb_sound_count nb_sounds
+nb_aff_tiles nb_aff_tile_count nb_aff_palette
 nb_sprite_count nb_sprites nb_sram_sig nb_save_type nb_save_sig nb_start_room nb_text_bank
 """.split())
 
@@ -963,6 +964,7 @@ class _Gen:
         self.w("const u16 nb_bg_tiles[] = { %s };"
                % (", ".join("0x%04X" % v for v in tiles) or "0x0000"))
         self.w("const int nb_bg_tile_count = %d;" % (len(tiles) // 16))
+        self._emit_affine_tiles()
         self.w("")
         self._emit_tile_solid(len(tiles) // 16)
 
@@ -1609,6 +1611,63 @@ class _Gen:
     # editor so the generator does not depend on the GUI module.
     COLUMN_C = {"int": "s32", "text": "const char*", "bool": "u8"}
 
+    def _emit_affine_tiles(self):
+        """The affine tileset: 8 bits per pixel, one byte a pixel, 64 bytes a
+        tile — four times the 4bpp tiles beside it, which is the price of an
+        affine layer's 256 colours and why this is a SEPARATE tileset rather
+        than a conversion of the room's own.
+
+        The frames arrive as 8x8 BGR555 pixel lists like every other tileset;
+        the colours are matched into one shared 256-entry palette. Emitted as
+        u16 pairs because that is what the runtime's DMA copy takes.
+        """
+        src = self.m.get("affine_tileset") or {}
+        frames = src.get("tiles") if isinstance(src, dict) else None
+        if not frames:
+            # All three symbols, always. The runtime's reference to the
+            # palette sits inside `if (nb_aff_tile_count > 0)`, which is a
+            # RUNTIME condition -- the linker still demands the symbol, so
+            # omitting it here failed every project WITHOUT an affine
+            # tileset while the one project with one linked fine.
+            self.w("const u16 nb_aff_tiles[] = { 0 };")
+            self.w("const int nb_aff_tile_count = 0;")
+            self.w("const u16 nb_aff_palette[256] = { 0 };")
+            self.w("")
+            return
+        pal = [TRANSPARENT & 0x7FFF]
+        index = {pal[0]: 0}
+        words, over = [], 0
+        for tile in frames[:256]:
+            px = list(tile)[:64] + [TRANSPARENT] * max(0, 64 - len(tile))
+            bytes_ = []
+            for c in px:
+                c &= 0x7FFF
+                if c not in index:
+                    if len(pal) < 256:
+                        index[c] = len(pal)
+                        pal.append(c)
+                    else:
+                        over += 1
+                        index[c] = 0
+                bytes_.append(index[c])
+            for k in range(0, 64, 2):
+                words.append(bytes_[k] | (bytes_[k + 1] << 8))
+        if over:
+            self._problem(_t("The affine tiles use more than 256 colours; "
+                             "%d pixels were left blank") % over)
+        if len(frames) > 256:
+            self._problem(_t("An affine tileset holds 256 tiles; %d were "
+                             "dropped") % (len(frames) - 256))
+        self.w("const u16 nb_aff_tiles[] = { %s };"
+               % ", ".join("0x%04X" % w for w in words))
+        self.w("const int nb_aff_tile_count = %d;" % (len(words) // 32))
+        # The affine layer reads the BG palette, so its colours go there --
+        # past entry 15, which the 4bpp tiles cannot reach anyway.
+        self.w("const u16 nb_aff_palette[256] = { %s };"
+               % ", ".join("0x%04X" % (pal[i] if i < len(pal) else 0)
+                           for i in range(256)))
+        self.w("")
+
     def _emit_name_constants(self):
         """Names for the things the editors made, so inline C can say them.
 
@@ -1881,6 +1940,7 @@ class _Gen:
         has_tiles = {}
         has_far = {}
         has_warps = {}
+        has_aff = {}
         for i, r in enumerate(self.rooms):
             insts = r.get("instances") or []
             self.w("static const nb_InstanceDef room_%d_insts[] = {" % i)
@@ -1898,6 +1958,24 @@ class _Gen:
                        (oi, _int(it.get("x")), _int(it.get("y"))))
             self.w("    { -1, 0, 0 },")
             self.w("};")
+            # An optional AFFINE ground layer: one 8-bit tile index per
+            # cell, 16x16 or 32x32. A room carrying one gives up its flat
+            # tile layer and its parallax layer -- mode 1 has two text
+            # backgrounds where mode 0 has four, and the runtime spends
+            # those on the dialogue panel and the text over it.
+            am = r.get("affine")
+            if am:
+                cells = 1024 if len(am) > 256 else 256
+                flat = [max(0, min(255, _int(t))) for t in am]
+                flat = (flat + [0] * cells)[:cells]
+                if r.get("tiles"):
+                    self._problem(
+                        _t("%s has both a flat tile layer and an affine "
+                           "one; only the affine layer will show")
+                        % (r.get("name") or r.get("id") or "A room"))
+                self.w("static const u8 room_%d_aff[] = { %s };"
+                       % (i, ", ".join(str(v) for v in flat)))
+                has_aff[i] = cells
             # optional BG tile layer: (w/8)*(h/8) tile indices, row-major, 0=empty
             tm = r.get("tiles")
             if tm:
@@ -1969,10 +2047,13 @@ class _Gen:
             far_div = max(1, min(8, _int(r.get("far_div"), 2)))
             edge_open = 1 if r.get("edge_open") else 0
             warp_ref = ("room_%d_warps" % i) if has_warps.get(i) else "0"
+            aff_ref = ("room_%d_aff" % i) if has_aff.get(i) else "0"
+            aff_size = 1 if has_aff.get(i) == 1024 else 0
             self.w("    { %d, %d, 0x%04X, %d, %d, room_%d_insts, %s, %s, %s, "
-                   "%d, %d, %s, %d }," %
+                   "%d, %d, %s, %d, %s, %d }," %
                    (w, h, bg, speed, n, i, tiles_ref, solid_ref, far_ref,
-                    far_div, edge_open, warp_ref, has_warps.get(i, 0)))
+                    far_div, edge_open, warp_ref, has_warps.get(i, 0),
+                    aff_ref, aff_size))
         if not self.rooms:
             self.w("    { 240, 160, 0x0000, 60, 0, 0, 0 },")
         self.w("};")
@@ -2059,12 +2140,15 @@ class _Gen:
         # the battery by SCANNING the ROM for one of these signature strings,
         # so exactly one may exist -- which is why the runtime no longer bakes
         # its SRAM string in and this is the only place one is written.
-        st = {"sram": 0, "flash64": 1, "flash128": 2}.get(
+        st = {"sram": 0, "flash64": 1, "flash128": 2,
+              "eeprom512": 3, "eeprom8k": 4}.get(
             str(self.m.get("save_type") or "sram").strip().lower())
         if st is None:
-            self._problem(_t("save_type must be sram, flash64 or flash128"))
+            self._problem(_t("save_type must be sram, flash64, flash128, "
+                             "eeprom512 or eeprom8k"))
             st = 0
-        sig = {0: "SRAM_V113", 1: "FLASH512_V131", 2: "FLASH1M_V102"}[st]
+        sig = {0: "SRAM_V113", 1: "FLASH512_V131", 2: "FLASH1M_V102",
+               3: "EEPROM_V122", 4: "EEPROM_V122"}[st]
         self.w("const int nb_save_type = %d;" % st)
         self.w('const char nb_save_sig[] __attribute__((used, aligned(4))) = "%s";'
                % sig)

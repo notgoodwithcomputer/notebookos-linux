@@ -119,7 +119,8 @@ import gbasdk                                              # noqa: E402
 _acts = [a for _g, grp in gbasdk.ACTION_GROUPS for a in grp]
 _refact = "\n".join(t.text() for t in gbahelp.reference_actions(
     gbasdk.ACTION_GROUPS, gbasdk.ACTION_DEFS, gbasdk.ACTION_TIPS,
-    gbasdk.CONTAINER_ACTIONS))
+    gbasdk.CONTAINER_ACTIONS,
+    presets=gbasdk.ACTION_PRESETS))
 _gone_a = [a for a in _acts if gbasdk.ACTION_LABEL[a] not in _refact]
 ok(not _gone_a, "every action in the palette is in the reference",
    "%d missing: %s" % (len(_gone_a), _gone_a[:6]))
@@ -418,6 +419,94 @@ if GCC:
            "%s is REJECTED as event code, which is why it is a script" % title)
 else:
     print("  SKIP recipe compilation (no arm-none-eabi-gcc in vendor-dl)")
+
+print("\n== course code blocks compile ==")
+# This gate is deliberately limited to authored Course C() blocks.  Derived
+# Engine-call signatures are declarations copied from runtime.h, while Recipes
+# have the scope-aware gate above.  A block is skipped only when it contains an
+# ellipsis token or is empty after whitespace; lone declarations still compile.
+# Those skips are printed and counted: an ordinary compiler failure must never
+# disappear into the incompleteness rule.
+_course_code = []
+for _topic in gbahelp.all_topics():
+    if _topic.section == "Course":
+        for _body_index, (_kind, _code) in enumerate(_topic.body):
+            if _kind == "code":
+                _course_code.append((_topic, _body_index, _code))
+
+_course_skipped = []
+_course_compiled = 0
+if GCC:
+    _course_tmp = tempfile.mkdtemp(prefix="gbahelp-course-")
+    # Generated projects supply these names around event fragments.  They are
+    # data/constant fixtures, never function declarations, so a misspelled or
+    # invented API still fails through -Werror=implicit-function-declaration.
+    _course_context = r'''
+#define OBJ_ENEMY 1
+#define OBJ_SPARK 2
+#define FACING_RIGHT 1
+#define FACING_LEFT 2
+#define FACING_IDLE 0
+#define ST_IDLE 0
+#define ST_WALK 1
+#define ANIM_WALK 1
+#define ANIM_IDLE 0
+static const u32 tiles[1] = { 0 };
+static const u32 gfx_town_tiles[1] = { 0 };
+static const u32 tile_words = 1;
+static s32 angle, speed, n, phase, x, y, total, count, dx, dy;
+static void idle_step(void) {}
+static void walk_step(void) {}
+'''
+    _file_scope = re.compile(
+        r"^\s*(?:(?:static\s+)?(?:const\s+)?[A-Za-z_]\w*(?:\s+|\s*\*\s*)+)"
+        r"[A-Za-z_]\w*\s*\([^;]*\)\s*(?:\{|;)", re.S)
+    for _topic, _body_index, _code in _course_code:
+        _ident = "%s[%d]" % (_topic.tid, _body_index)
+        if "..." in _code or not _code.strip():
+            _course_skipped.append((_ident, "ellipsis or empty block"))
+            continue
+        _src = os.path.join(_course_tmp, "%s_%d.c" %
+                            (_topic.tid, _body_index))
+        _has_function = re.search(
+            r"^\s*(?:static\s+)?[A-Za-z_]\w*(?:\s+|\s*\*\s*)+"
+            r"[A-Za-z_]\w*\s*\([^;]*\)\s*\{", _code, re.M) is not None
+        _is_file = _file_scope.match(_code) is not None or _has_function
+        with open(_src, "w", encoding="utf-8") as _fh:
+            _fh.write('#include "gba.h"\n#include "runtime.h"\n')
+            _fh.write(_course_context)
+            # Teaching code may name anything the editors could have made:
+            # the generator emits NB_OBJ_*/NB_SPR_*/NB_SND_*/NB_ROOM_*
+            # constants per project, so the harness grants whatever names the
+            # block uses. Zero is a valid index everywhere it could be used.
+            for _nc in sorted(set(re.findall(
+                    r"\bNB_(?:OBJ|SPR|SND|ROOM)_[A-Z0-9_]+", _code))):
+                _fh.write("#define %s 0\n" % _nc)
+            if _is_file:
+                _fh.write("\n" + _code + "\n")
+            else:
+                _fh.write("\nvoid course_block_%s(Instance *self) {\n%s\n}\n"
+                          % (_body_index, _code))
+        _result = subprocess.run(
+            [GCC, "-mcpu=arm7tdmi", "-mthumb-interwork", "-ffreestanding",
+             "-nostdlib", "-O2", "-Wall",
+             "-Werror=implicit-function-declaration", "-I", RT, "-c", _src,
+             "-o", os.path.join(_course_tmp, "%s_%d.o" %
+                                 (_topic.tid, _body_index))],
+            capture_output=True, text=True)
+        _course_compiled += 1
+        ok(_result.returncode == 0,
+           "course code compiles: %s / block %d" %
+           (_topic.title, _body_index),
+           (_result.stderr or "").strip().split("\n")[0][:160])
+else:
+    print("  SKIP course compilation (no arm-none-eabi-gcc in vendor-dl)")
+for _ident, _reason in _course_skipped:
+    print("  SKIP course code %s -- %s" % (_ident, _reason))
+print("     course C() blocks: %d total, %d compiled, %d skipped" %
+      (len(_course_code), _course_compiled, len(_course_skipped)))
+ok(GCC is None or _course_compiled + len(_course_skipped) == len(_course_code),
+   "every course C() block is compiled or visibly skipped")
 
 print("\n== text mandate ==")
 # Same rule the OS applies everywhere: UI text describes function. Second person

@@ -31,6 +31,12 @@ typedef signed int     s32;
 #define REG_DISPSTAT (*(volatile u16*)0x04000004)
 #define REG_VCOUNT   (*(volatile u16*)0x04000006)
 #define REG_KEYINPUT (*(volatile u16*)0x04000130)
+/* The keypad interrupt: the only wake source a sleeping console can be
+ * given, because it is the only one a player can produce. Bit 14 enables
+ * it; bit 15 chooses AND (every named key held) over OR (any of them). */
+#define REG_KEYCNT   (*(volatile u16*)0x04000132)
+#define KEYCNT_IRQ      0x4000
+#define KEYCNT_AND      0x8000
 /* Waitstate control: ROM prefetch + faster cartridge reads, and the SRAM
    access timing a save needs. */
 #define REG_WAITCNT  (*(volatile u16*)0x04000204)
@@ -100,6 +106,40 @@ typedef signed int     s32;
 /* mode-3 framebuffer (legacy; the engine now renders in mode 0) */
 #define VRAM ((volatile u16*)0x06000000)
 
+/* ---- bitmap modes 3, 4 and 5 --------------------------------------------
+ * Three framebuffers drawn on BG2, and the only way to put an arbitrary shape
+ * on screen without a tile or a sprite to hold it. They differ in what one
+ * pixel costs and therefore in what fits:
+ *
+ *   MODE3  240x160, one u16 of BGR555 per pixel. 75 KiB -- more than half of
+ *          VRAM, so there is NO second page. Every edit is seen being made.
+ *   MODE4  240x160, one BYTE of palette index per pixel. 37.5 KiB, so two
+ *          pages fit and drawing can happen off-screen.
+ *   MODE5  160x128, u16 colour again, small enough for two pages. The size is
+ *          the trap: code written against 240x160 walks off the right edge of
+ *          every row and paints a diagonal.
+ *
+ * The second page starts at 0x0600A000. Mode 3's single buffer runs to
+ * 0x06012C00, straight through it, which is why page flipping is a modes 4/5
+ * feature rather than a bitmap feature.
+ *
+ * TWO THINGS DISAPPEAR IN A BITMAP MODE and neither reports itself: BG0, BG1
+ * and BG3 do not exist (so the runtime's own text and dialogue layers are
+ * gone), and OBJ tile data starts at 0x06014000 instead of 0x06010000 --
+ * sprites keep their numbering but the first 512 tiles are now framebuffer, so
+ * a sprite drawn there shows pixels of the picture. */
+#define MODE4 0x0004
+#define MODE5 0x0005
+#define DCNT_PAGE 0x0010      /* DISPCNT bit 4: display page 1 instead of page 0 */
+#define VRAM_PAGE0 ((volatile u16*)0x06000000)
+#define VRAM_PAGE1 ((volatile u16*)0x0600A000)
+#define M3_W 240
+#define M3_H 160
+#define M4_W 240
+#define M4_H 160
+#define M5_W 160
+#define M5_H 128
+
 /* ---- mode 0: tiled backgrounds + hardware OBJ sprites ---- */
 #define MODE0        0x0000
 #define FORCE_BLANK  0x0080   /* blank the display while VRAM is being rebuilt */
@@ -127,6 +167,8 @@ typedef signed int     s32;
 #define BGCNT_CB(n)  ((n) << 2)
 #define BGCNT_SB(n)  ((n) << 8)
 #define BGCNT_4BPP   0x0000
+#define BGCNT_8BPP   0x0080   /* affine backgrounds are always 8bpp */
+#define BGCNT_WRAP   0x2000   /* an affine layer repeats instead of ending */
 #define BGCNT_SIZE(s) ((s) << 14)
 
 /* colour special effects: a whole-screen fade to black or white */

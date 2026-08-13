@@ -42,6 +42,7 @@ import re
 import sys
 import json
 import shutil
+import struct
 import subprocess
 import tempfile
 
@@ -277,6 +278,216 @@ KINDS = (
     ("table", "TABLES", "New Table", "Table"),
 )
 
+
+class _SoundUnsupported(ValueError):
+    """A WAV this importer refuses on purpose, carrying a message meant for
+    the author. Distinct from a decoder failure so the two can be told apart
+    at the catch site: one is worth showing, the other is an errno and a
+    filesystem path."""
+
+
+class _MidiUnsupported(ValueError):
+    """A MIDI refusal whose translated text is safe to show to the author."""
+
+
+def _midi_vlq(data, pos):
+    value = 0
+    for _unused in range(4):
+        if pos >= len(data):
+            raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+        byte = data[pos]
+        pos += 1
+        value = (value << 7) | (byte & 0x7f)
+        if not byte & 0x80:
+            return value, pos
+    raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+
+
+def _midi_track(data):
+    """Return standard note events without depending on Composer internals."""
+    pos = tick = 0
+    running = None
+    active = {}
+    notes = []
+    name = None
+    tempo = None
+    channels = set()
+    while pos < len(data):
+        delta, pos = _midi_vlq(data, pos)
+        tick += delta
+        if pos >= len(data):
+            raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+        status = data[pos]
+        if status < 0x80:
+            if running is None:
+                raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+            status = running
+        else:
+            pos += 1
+            running = status if status < 0xf0 else None
+        if status == 0xff:
+            if pos >= len(data):
+                raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+            kind = data[pos]
+            pos += 1
+            size, pos = _midi_vlq(data, pos)
+            payload = data[pos:pos + size]
+            pos += size
+            if len(payload) != size:
+                raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+            if kind == 0x03:
+                name = payload.decode("utf-8", "replace")
+            elif kind == 0x51 and size == 3 and int.from_bytes(payload, "big"):
+                tempo = int(round(60000000.0 / int.from_bytes(payload, "big")))
+            elif kind == 0x2f:
+                break
+            continue
+        if status in (0xf0, 0xf7):
+            size, pos = _midi_vlq(data, pos)
+            if pos + size > len(data):
+                raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+            pos += size
+            continue
+        hi, channel = status & 0xf0, status & 0x0f
+        need = 1 if hi in (0xc0, 0xd0) else 2
+        values = data[pos:pos + need]
+        pos += need
+        if len(values) != need:
+            raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+        channels.add(channel)
+        if hi == 0x90 and values[1]:
+            active.setdefault((channel, values[0]), []).append((tick, values[1]))
+        elif hi in (0x80, 0x90):
+            waiting = active.get((channel, values[0]), [])
+            if waiting:
+                start, velocity = waiting.pop(0)
+                notes.append({"start": start, "duration": max(1, tick - start),
+                              "pitch": values[0], "velocity": velocity,
+                              "channel": channel})
+    return {"name": name, "tempo": tempo, "notes": notes,
+            "channels": channels}
+
+
+def _midi_pitch(pitch):
+    original = pitch
+    while pitch < PITCH_LO:
+        pitch += 12
+    while pitch > PITCH_HI:
+        pitch -= 12
+    return pitch, pitch != original
+
+
+def _midi_drum(pitch):
+    if pitch in (35, 36):
+        return 1                    # kick
+    if pitch in (37, 38, 39, 40):
+        return 2                    # snare / clap
+    if 42 <= pitch <= 59:
+        return 3                    # hats and cymbals
+    return 4                        # toms and other percussion
+
+
+def _midi_to_sound(raw, name="Song"):
+    """Reduce an SMF 0/1 to the SDK's lead/bass/drum tracker resource.
+
+    One row is a sixteenth note. The existing engine has two sequenced melodic
+    lanes and one noise lane; allocation and collision order are deliberately
+    stable so dropped notes can be reported and reproduced.
+    """
+    if raw[:4] != b"MThd" or len(raw) < 14:
+        raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+    header_size = struct.unpack(">I", raw[4:8])[0]
+    if header_size < 6 or len(raw) < 8 + header_size:
+        raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+    fmt, count, division = struct.unpack(">HHH", raw[8:14])
+    if fmt not in (0, 1) or not count or not division or division & 0x8000:
+        raise _MidiUnsupported(
+            _t("Use a Standard MIDI file in format 0 or 1 with musical timing."))
+    pos = 8 + header_size
+    parsed = []
+    for _unused in range(count):
+        if pos + 8 > len(raw) or raw[pos:pos + 4] != b"MTrk":
+            raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+        size = struct.unpack(">I", raw[pos + 4:pos + 8])[0]
+        body = raw[pos + 8:pos + 8 + size]
+        if len(body) != size:
+            raise _MidiUnsupported(_t("This is not a readable MIDI file."))
+        parsed.append(_midi_track(body))
+        pos += 8 + size
+    tempo = next((track["tempo"] for track in parsed if track["tempo"]), 120)
+    row_ticks = division / 4.0
+    sources = []
+    for ti, track in enumerate(parsed):
+        by_channel = sorted({n["channel"] for n in track["notes"]})
+        for channel in by_channel:
+            notes = [n for n in track["notes"] if n["channel"] == channel]
+            if notes:
+                label = track["name"] or _t("Track %d") % (ti + 1)
+                if len(by_channel) > 1:
+                    label += " ch %d" % (channel + 1)
+                sources.append({"name": label, "channel": channel,
+                                "notes": sorted(notes, key=lambda n:
+                                                (n["start"], n["pitch"],
+                                                 n["duration"]))})
+    if not sources:
+        raise _MidiUnsupported(_t("This MIDI file has no notes to import."))
+    last_row = max(int(round((n["start"] + n["duration"]) / row_ticks))
+                   for source in sources for n in source["notes"])
+    steps = 8 if last_row <= 8 else 16 if last_row <= 16 else 32
+    lanes = {"lead": [0] * steps, "bass": [0] * steps, "drum": [0] * steps}
+    lane_starts = {"lead": set(), "bass": set(), "drum": set()}
+    melodic = iter(("lead", "bass"))
+    reports = []
+    transposed = 0
+    for source in sources:
+        lane = "drum" if source["channel"] == 9 else next(melodic, None)
+        kept = dropped = 0
+        for note in source["notes"]:
+            start = int(round(note["start"] / row_ticks))
+            duration = max(1, int(round(note["duration"] / row_ticks)))
+            if lane is None or start >= steps or start in lane_starts[lane]:
+                dropped += 1
+                continue
+            if lane == "drum":
+                value = _midi_drum(note["pitch"])
+            else:
+                value, moved = _midi_pitch(note["pitch"])
+                transposed += int(moved)
+            for row in range(start, min(steps, start + duration)):
+                lanes[lane][row] = value
+            lane_starts[lane].add(start)
+            kept += 1
+        reports.append({"name": source["name"], "kept": kept,
+                        "dropped": dropped, "lane": lane})
+    total_kept = sum(r["kept"] for r in reports)
+    total_dropped = sum(r["dropped"] for r in reports)
+    voices = sum(bool(any(lanes[lane])) for lane in ("lead", "bass", "drum"))
+    sound = {"id": "", "name": name, "tempo": max(1, min(30,
+             int(round(900.0 / tempo)))), "loop": True, "steps": steps,
+             "lead": lanes["lead"], "bass": lanes["bass"],
+             "drum": lanes["drum"], "kind": 0, "duty": 0, "vol": 0,
+             "decay": 0, "prio": 0}
+    detail = "; ".join(_t("%s: %d kept/%d dropped") %
+                       (r["name"], r["kept"], r["dropped"]) for r in reports)
+    summary = (_t("%d voices used; %d notes kept, %d dropped; %d transposed; %s.")
+               % (voices, total_kept, total_dropped, transposed, detail))
+    return sound, {"voices": voices, "kept": total_kept,
+                   "dropped": total_dropped, "transposed": transposed,
+                   "tracks": reports, "summary": summary}
+
+
+def _find_empty_label(has_resources, query):
+    """Truthful empty copy for Find in Project.
+
+    An empty project has not failed to match a query; it has nothing available
+    to search yet.  ``query`` is accepted to make that policy explicit at the
+    call site and to keep the helper useful if the no-match copy later includes
+    the search text.
+    """
+    if not has_resources:
+        return "Project has no resources yet."
+    return "No results"
+
 # What a column can hold. Deliberately few: every one of these has an obvious C
 # type and an obvious cell editor, and a type that has neither becomes a column
 # nobody can fill in.
@@ -314,12 +525,14 @@ ACTION_GROUPS = (
                "if_lives", "set_health", "add_health", "if_health")),
     ("SOUND", ("play_sound", "stop_sound")),
     ("TEXT", ("say", "menu", "draw_text", "draw_number", "clear_text")),
-    ("ADVANCED", ("save_game", "load_game", "execute_code")),
+    ("ADVANCED", ("save_game", "load_game", "pal_cycle_start",
+                  "pal_cycle_stop", "obj_window", "execute_code")),
 )
 
 # Event kinds offered on an object (Game-Maker-style).
 EVENT_KINDS = [
-    ("create", "Create"), ("step", "Step"), ("destroy", "Destroy"),
+    ("create", "Create"), ("step", "Step"), ("no_health", "No Health"),
+    ("destroy", "Destroy"),
     ("key:left", "Key ◄"), ("key:right", "Key ►"), ("key:up", "Key ▲"),
     ("key:down", "Key ▼"), ("key:a", "Key A"), ("key:b", "Key B"),
     ("key:l", "Key L"), ("key:r", "Key R"),
@@ -422,6 +635,15 @@ PITCH_LO, PITCH_HI = 48, 83
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 ACTION_LABEL = {a[0]: a[1] for a in ACTION_DEFS}
 ACTION_PARAMS = {a[0]: a[2] for a in ACTION_DEFS}
+# These palette conveniences deliberately lower to the compiler's existing raw-C
+# action.  Keeping them out of ACTION_DEFS means saved projects contain only an
+# action kind gbabuild already understands.
+ACTION_PRESETS = {
+    "pal_cycle_start": ("Start Palette Cycle", "rt_pal_cycle({obj}, 0, 16, 8);"),
+    "pal_cycle_stop": ("Stop Palette Cycle", "rt_pal_cycle_stop(-1);"),
+    "obj_window": ("Set OBJ Window",
+                   "rt_set_objwin(self, 1);\nrt_window_obj(1);")}
+ACTION_LABEL.update({k: v[0] for k, v in ACTION_PRESETS.items()})
 # One-line help shown as a tooltip on each action in the palette.
 ACTION_TIPS = {
     "move_fixed": "Set speed in a fixed direction",
@@ -460,6 +682,9 @@ ACTION_TIPS = {
     "menu": "Offer a list to choose from; the answer lands in a variable",
     "save_game": "Save score / lives / health + globals to the cartridge",
     "load_game": "Load the saved game from the cartridge",
+    "pal_cycle_start": "Cycle a range of this object's palette colours",
+    "pal_cycle_stop": "Stop one palette cycle, or use -1 to stop all",
+    "obj_window": "Use this object as a window stencil and choose inside layers",
     "execute_code": "Run code written by hand, for anything the actions above cannot express",
 }
 # What a new script opens as. It compiles, so the first build after making one
@@ -536,9 +761,11 @@ class GbaSdk(nbapp.AppWindow):
         self._snd_cur = [0, 60]     # keyboard cursor in the piano roll: step, pitch
         self._spr_cur = [0, 0]      # keyboard cursor on the pixel canvas
         self._tile_cur = [0, 0]     # keyboard cursor on the tile canvas
+        self._paint_stroke = None   # (canvas, x, y, erase) during pointer drag
         self._room_cur = [0, 0]     # keyboard cursor in the room, in 8px cells
         self._room_zoom = 2         # room pixels per screen pixel: 1, 2, 4 or "fit"
         self._tree_busy = False     # guards the browser's selection round-trip
+        self._layout_save_timer = None  # coalesces workspace-only autosaves
         self._heads = {}            # kind -> (title label, subtitle label)
         self._pane_focus = {}       # kind -> the widget Return from the browser lands on
         self._tool_btns = {}
@@ -606,12 +833,25 @@ class GbaSdk(nbapp.AppWindow):
     # ---- workspace layout ---------------------------------------------------
     def _save_layout_soon(self):
         """Keep the arrangement with the project. Guarded: the workspace fires
-        this while it is still being built, before the store exists."""
+        this while it is still being built, before the store exists.
+
+        Switching editors can emit several workspace changes together.  The
+        project model is updated immediately, but its (potentially large) JSON
+        is written once after that burst instead of once per selected editor.
+        """
         try:
             self.proj["layout"] = self._editor_stack.layout()
         except Exception:                                   # noqa: BLE001
             pass
+        if self._layout_save_timer is not None:
+            GLib.source_remove(self._layout_save_timer)
+        self._layout_save_timer = GLib.timeout_add(250,
+                                                   self._flush_layout_save)
+
+    def _flush_layout_save(self):
+        self._layout_save_timer = None
         self._save_autosave()
+        return False
 
     def _restore_layout(self):
         desc = (self.proj or {}).get("layout")
@@ -632,7 +872,8 @@ class GbaSdk(nbapp.AppWindow):
         self._editor_stack.reset(keep="welcome")
 
     def _new_project(self):
-        self.proj = {"name": "Game", "sprites": [], "sounds": [],
+        self.proj = {"name": "Game", "save_type": "sram",
+                     "sprites": [], "sounds": [],
                      "tilesets": [], "objects": [], "rooms": [],
                      "scripts": [], "tables": [], "start_room": None}
 
@@ -1138,7 +1379,7 @@ class GbaSdk(nbapp.AppWindow):
             rid = self._uid("obj", lst)
             lst.append({"id": rid, "sprite": None, "visible": True,
                         "solid": False, "tilecol": 1, "depth": 0,
-                        "bb_inset": 0, "events": []})
+                        "bb_inset": 0, "hurt_frames": 0, "events": []})
         elif kind == "script":
             rid = self._uid("scr", lst)
             lst.append({"id": rid, "code": SCRIPT_STARTER})
@@ -1810,11 +2051,13 @@ class GbaSdk(nbapp.AppWindow):
         self._spr_canvas.set_tooltip_text(
             "%s %s" % (_t("Click to paint."), _t(KEYS_HINT)))
         self._spr_canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                                    | Gdk.EventMask.BUTTON_RELEASE_MASK
                                     | Gdk.EventMask.BUTTON1_MOTION_MASK
                                     | Gdk.EventMask.BUTTON3_MOTION_MASK)
         self._spr_canvas.connect("draw", self._draw_sprite_canvas)
         self._spr_canvas.connect("button-press-event", self._on_sprite_paint)
         self._spr_canvas.connect("motion-notify-event", self._on_sprite_paint)
+        self._spr_canvas.connect("button-release-event", self._on_paint_release)
         self._spr_canvas.connect("key-press-event", self._on_canvas_key)
         self._spr_canvas.connect("focus-in-event", self._redraw_cb)
         self._spr_canvas.connect("focus-out-event", self._redraw_cb)
@@ -2407,6 +2650,50 @@ class GbaSdk(nbapp.AppWindow):
         frame[idx] = want
         return True
 
+    def _paint_pointer(self, canvas, ev, frame, sw, sh):
+        """Map a pointer event and paint it, interpolating sparse drag events.
+
+        GTK normally delivers motion here only for a held button because the
+        canvases request BUTTON[13]_MOTION_MASK.  Checking the state as well is
+        important for synthetic/tablet events and prevents a late queued motion
+        from leaving an accidental pixel after release.
+        """
+        motion = ev.type == Gdk.EventType.MOTION_NOTIFY
+        held = ev.state & (Gdk.ModifierType.BUTTON1_MASK |
+                           Gdk.ModifierType.BUTTON3_MASK)
+        if motion and not held:
+            self._paint_stroke = None
+            return None, False
+        cell, ox, oy = self._canvas_geom(canvas, sw, sh)
+        i = int((ev.x - ox) // cell)
+        j = int((ev.y - oy) // cell)
+        if not (0 <= i < sw and 0 <= j < sh):
+            return None, False
+        erase = bool(getattr(ev, "button", 1) == 3 or
+                     (ev.state & Gdk.ModifierType.BUTTON3_MASK))
+        points = [(i, j)]
+        previous = self._paint_stroke
+        if (motion and previous and previous[0] is canvas and
+                previous[3] == erase and self._spr_tool in ("pen", "erase")):
+            x0, y0 = previous[1], previous[2]
+            dx, dy = i - x0, j - y0
+            steps = max(abs(dx), abs(dy))
+            if steps:
+                points = [(round(x0 + dx * n / steps),
+                           round(y0 + dy * n / steps))
+                          for n in range(1, steps + 1)]
+        self._paint_stroke = (canvas, i, j, erase)
+        changed = False
+        for x, y in points:
+            changed = self._paint_at(frame, sw, sh, x, y, erase) or changed
+        return (i, j), changed
+
+    def _on_paint_release(self, _canvas, _ev):
+        """End one pointer stroke and land its debounced undo snapshot."""
+        self._paint_stroke = None
+        self.undo.flush()
+        return True
+
     def _on_sprite_paint(self, w, ev):
         if self._spr_play is not None:      # don't edit while previewing
             return False
@@ -2416,15 +2703,12 @@ class GbaSdk(nbapp.AppWindow):
         if s is None or frame is None:
             return False
         sw, sh = s.get("w", 16), s.get("h", 16)
-        cell, ox, oy = self._canvas_geom(w, sw, sh)
-        i = int((ev.x - ox) // cell)
-        j = int((ev.y - oy) // cell)
-        if not (0 <= i < sw and 0 <= j < sh):
+        point, changed = self._paint_pointer(w, ev, frame, sw, sh)
+        if point is None:
             return True
+        i, j = point
         self._spr_cur = [i, j]
-        erase = bool(getattr(ev, "button", 1) == 3
-                     or (ev.state & Gdk.ModifierType.BUTTON3_MASK))
-        if self._paint_at(frame, sw, sh, i, j, erase):
+        if changed:
             self.undo.touch()
             self._save_autosave()
             self._render_tree()
@@ -2453,7 +2737,7 @@ class GbaSdk(nbapp.AppWindow):
             frame = self._cur_tile()
             if frame is None:
                 return False
-            sw = sh = 8
+            sw = sh = ts_size(self._cur_tileset())
             cur = self._tile_cur
         step = {Gdk.KEY_Left: (-1, 0), Gdk.KEY_Right: (1, 0),
                 Gdk.KEY_Up: (0, -1), Gdk.KEY_Down: (0, 1)}.get(ev.keyval)
@@ -2607,11 +2891,13 @@ class GbaSdk(nbapp.AppWindow):
         self._tile_canvas.set_tooltip_text(
             "%s %s" % (_t("Click to paint."), _t(KEYS_HINT)))
         self._tile_canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                                     | Gdk.EventMask.BUTTON_RELEASE_MASK
                                      | Gdk.EventMask.BUTTON1_MOTION_MASK
                                      | Gdk.EventMask.BUTTON3_MOTION_MASK)
         self._tile_canvas.connect("draw", self._draw_tile_canvas)
         self._tile_canvas.connect("button-press-event", self._on_tile_paint)
         self._tile_canvas.connect("motion-notify-event", self._on_tile_paint)
+        self._tile_canvas.connect("button-release-event", self._on_paint_release)
         self._tile_canvas.connect("key-press-event", self._on_canvas_key)
         self._tile_canvas.connect("focus-in-event", self._redraw_cb)
         self._tile_canvas.connect("focus-out-event", self._redraw_cb)
@@ -2925,15 +3211,12 @@ class GbaSdk(nbapp.AppWindow):
         if tile is None:
             return False
         n = ts_size(self._cur_tileset())
-        cell, ox, oy = self._canvas_geom(w, n, n)
-        i = int((ev.x - ox) // cell)
-        j = int((ev.y - oy) // cell)
-        if not (0 <= i < n and 0 <= j < n):
+        point, changed = self._paint_pointer(w, ev, tile, n, n)
+        if point is None:
             return True
+        i, j = point
         self._tile_cur = [i, j]
-        erase = bool(getattr(ev, "button", 1) == 3
-                     or (ev.state & Gdk.ModifierType.BUTTON3_MASK))
-        if self._paint_at(tile, 8, 8, i, j, erase):
+        if changed:
             self.undo.touch()
             self._save_autosave()
             self._render_tile_list()
@@ -3640,6 +3923,8 @@ class GbaSdk(nbapp.AppWindow):
             self._obj_tilecol.set_active_id(
                 str(gbabuild._int(o.get("tilecol"), 0)))
             self._obj_depth.set_active_id(str(gbabuild._int(o.get("depth"), 0)))
+            self._obj_hurt_frames.set_value(
+                min(255, max(0, gbabuild._int(o.get("hurt_frames"), 0))))
         finally:
             self._suspend = False
 
@@ -4514,6 +4799,14 @@ class GbaSdk(nbapp.AppWindow):
         self._obj_depth.connect("changed", self._on_obj_setting, "depth")
         tools.pack_start(self._obj_depth, False, False, 0)
 
+        tools.pack_start(_group_label(_t("Mercy frames")), False, False, 0)
+        self._obj_hurt_frames = Gtk.SpinButton.new_with_range(0, 255, 1)
+        self._obj_hurt_frames.set_width_chars(3)
+        self._obj_hurt_frames.set_tooltip_text(
+            _t("Invincible frames after this object loses health; 0 disables"))
+        self._obj_hurt_frames.connect("value-changed", self._on_obj_hurt_frames)
+        tools.pack_start(self._obj_hurt_frames, False, False, 0)
+
         self._obj_visible = Gtk.CheckButton(label=_t("Visible"))
         self._obj_visible.set_margin_start(12)
         self._obj_visible.set_tooltip_text(
@@ -4629,6 +4922,16 @@ class GbaSdk(nbapp.AppWindow):
             self._save_autosave()
             self.undo.commit()
 
+    def _on_obj_hurt_frames(self, spin):
+        if self._suspend:
+            return
+        o = self._cur_object()
+        if o is not None:
+            self.undo.checkpoint(_t("Mercy frames"))
+            o["hurt_frames"] = min(255, max(0, spin.get_value_as_int()))
+            self._save_autosave()
+            self.undo.commit()
+
     def _add_event(self):
         o = self._cur_object()
         if not o:
@@ -4685,6 +4988,7 @@ class GbaSdk(nbapp.AppWindow):
         if t == "collision":
             return "%s: %s" % (_t("Collision"), (ev.get("object") or "?"))
         names = {"create": "Create", "step": "Step", "draw": "Draw",
+                 "no_health": "No Health",
                  "destroy": "Destroy"}
         return _t(names.get(t, t.capitalize() if t else "?"))
 
@@ -4808,7 +5112,18 @@ class GbaSdk(nbapp.AppWindow):
             # different wordings.
             self._flash(_t("Select an event first"))
             return
-        act = {"kind": kind}
+        if kind in ACTION_PRESETS:
+            code = ACTION_PRESETS[kind][1]
+            if "{obj}" in code:
+                try:
+                    obj = self.proj["objects"].index(self._cur_object())
+                except (ValueError, TypeError):
+                    obj = 0
+                code = code.format(obj=obj)
+            act = {"kind": "execute_code", "lang": "C",
+                   "code": code}
+        else:
+            act = {"kind": kind}
         for key, _lbl, spec in ACTION_PARAMS.get(kind, []):
             act[key] = self._default_param(spec)
         if kind in CONTAINER_ACTIONS:
@@ -4957,7 +5272,11 @@ class GbaSdk(nbapp.AppWindow):
                      lambda i: self._do_add_action_into(lst, items[i][0]))
 
     def _do_add_action_into(self, lst, kind):
-        act = {"kind": kind}
+        if kind in ACTION_PRESETS:
+            act = {"kind": "execute_code", "lang": "C",
+                   "code": ACTION_PRESETS[kind][1]}
+        else:
+            act = {"kind": kind}
         for key, _lbl, spec in ACTION_PARAMS.get(kind, []):
             act[key] = self._default_param(spec)
         if kind in CONTAINER_ACTIONS:
@@ -6143,6 +6462,9 @@ class GbaSdk(nbapp.AppWindow):
             return None, 0
         out = {"name": data.get("name") if isinstance(data.get("name"), str)
                else _t("Game")}
+        save_type = str(data.get("save_type") or "sram").strip().lower()
+        out["save_type"] = save_type if save_type in (
+            "sram", "flash64", "flash128") else "sram"
 
         sprites = []
         for rec in self._records(data.get("sprites")):
@@ -6277,6 +6599,8 @@ class GbaSdk(nbapp.AppWindow):
                 "depth": min(7, max(0, gbabuild._int(rec.get("depth"), 0))),
                 "bb_inset": min(64, max(0,
                                         gbabuild._int(rec.get("bb_inset"), 0))),
+                "hurt_frames": min(255, max(0,
+                    gbabuild._int(rec.get("hurt_frames"), 0))),
                 "events": events}
             if isinstance(rec.get("_was"), str) and rec.get("_was"):
                 obj["_was"] = rec["_was"]     # what its sprite USED to be
@@ -6433,6 +6757,9 @@ class GbaSdk(nbapp.AppWindow):
         self._load_note = lost
 
     def _on_destroy(self, *_):
+        if self._layout_save_timer is not None:
+            GLib.source_remove(self._layout_save_timer)
+            self._layout_save_timer = None
         self._save_autosave()
         return False
 
@@ -6531,7 +6858,8 @@ class GbaSdk(nbapp.AppWindow):
             cell = Gtk.CellRendererText()
             cell.set_property("ellipsize", Pango.EllipsizeMode.END)
             view.append_column(Gtk.TreeViewColumn(head, cell, text=n))
-        empty = Gtk.Label(label=_t("No results"))
+        has_resources = any(self.proj.get(kind) for kind, *_rest in KINDS)
+        empty = Gtk.Label(label=_t(_find_empty_label(has_resources, "")))
         empty.get_style_context().add_class("emptyrow")
         stack = Gtk.Stack(); stack.add_named(view, "results"); stack.add_named(empty, "empty")
         sc = Gtk.ScrolledWindow(); sc.add(stack); sc.set_vexpand(True)
@@ -6542,6 +6870,8 @@ class GbaSdk(nbapp.AppWindow):
             for rec in rows:
                 store.append([_t(str(rec["kind"])), str(rec["owner"]),
                               rec["snippet"], rec])
+            query_text = entry.get_text() if entry is not None else ""
+            empty.set_text(_t(_find_empty_label(has_resources, query_text)))
             stack.set_visible_child_name("results" if rows else "empty")
         fill(current[0])
         def activate(_view, path, _column):
@@ -6601,7 +6931,9 @@ class GbaSdk(nbapp.AppWindow):
         if name == "File":
             return [
                 ("New Project", self._file_new),
+                ("Project Settings…", self._project_settings),
                 ("Open Example Game", self._file_example),
+                (_t("Import MIDI…"), self._import_midi),
                 ("Import Sound\u2026", self._import_wav),
                 ("Open Project…", self._file_open),
                 nbapp.SEP,
@@ -6666,6 +6998,40 @@ class GbaSdk(nbapp.AppWindow):
                                         or _t("The build log is empty."))),
             ]
         return super().menu_items(name)
+
+    def _project_settings(self):
+        """Project-wide cartridge settings."""
+        dlg = Gtk.Dialog(title=_t("Project Settings"), transient_for=self,
+                         modal=True)
+        area = dlg.get_content_area()
+        area.set_margin_top(16); area.set_margin_bottom(10)
+        area.set_margin_start(20); area.set_margin_end(20)
+        head = Gtk.Label(label=_t("Project Settings"), xalign=0)
+        head.get_style_context().add_class("dlghead")
+        area.pack_start(head, False, False, 0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.pack_start(Gtk.Label(label=_t("Save memory"), xalign=0),
+                       True, True, 0)
+        combo = Gtk.ComboBoxText()
+        for key, label in (("sram", "SRAM"), ("flash64", "Flash 64 KB"),
+                           ("flash128", "Flash 128 KB")):
+            combo.append(key, _t(label))
+        combo.set_active_id(self.proj.get("save_type") or "sram")
+        self._project_save_type = combo
+        combo.set_tooltip_text(_t("Cartridge memory used for saved games"))
+        row.pack_start(combo, False, False, 0)
+        area.pack_start(row, False, False, 12)
+        dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        ok = dlg.add_button(_t("Apply"), Gtk.ResponseType.OK)
+        ok.get_style_context().add_class("suggested-action")
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        dlg.show_all()
+        if dlg.run() == Gtk.ResponseType.OK:
+            self.undo.checkpoint(_t("Project Settings"))
+            self.proj["save_type"] = combo.get_active_id() or "sram"
+            self._save_autosave()
+            self.undo.commit()
+        dlg.destroy()
 
     def _project_has_work(self):
         """True when the open project holds something the user made.
@@ -6754,6 +7120,10 @@ class GbaSdk(nbapp.AppWindow):
                       for k, act, v in move]
         return {
             "name": "Example",
+            # The same normal form a NEW project has and the loader normalises
+            # to. Without it the example round-trips unequal to itself: saved
+            # without the key, read back with its default.
+            "save_type": "sram",
             "sprites": [
                 {"id": "spr_player", "w": 16, "h": 16, "ox": 8, "oy": 8,
                  "anim_speed": 0, "frames": [player]},
@@ -6769,10 +7139,12 @@ class GbaSdk(nbapp.AppWindow):
             "objects": [
                 {"id": "obj_player", "sprite": "spr_player", "visible": True,
                  "solid": False, "tilecol": 1, "depth": 0, "bb_inset": 0,
+                 "hurt_frames": 0,
                  "events":
                      [{"type": "step", "actions": step_actions}] + key_events},
                 {"id": "obj_coin", "sprite": "spr_coin", "visible": True,
                  "solid": False, "tilecol": 0, "depth": 0, "bb_inset": 0,
+                 "hurt_frames": 0,
                  "events": [
                      {"type": "collision", "object": "obj_player", "actions": [
                          {"kind": "add_score", "value": "10"},
@@ -6811,6 +7183,34 @@ class GbaSdk(nbapp.AppWindow):
     PCM_RATE = 16384          # the runtime's only rate; see rt_pcm_play
     PCM_MAX_SECONDS = 8       # 16 KB per second of ROM
 
+    def _import_midi(self):
+        path = nbpicker.open_file(self, title=_t("Import MIDI"),
+                                  start_dir=os.path.join(HOME, "Documents"),
+                                  patterns=("*.mid", "*.midi"))
+        if not path:
+            return
+        try:
+            with open(path, "rb") as source:
+                sound, report = _midi_to_sound(
+                    source.read(), os.path.splitext(os.path.basename(path))[0])
+        except _MidiUnsupported as exc:
+            self._flash(str(exc))
+            return
+        except Exception:                                  # noqa: BLE001
+            # Decoder details and paths are not repair instructions. Corrupt
+            # and unfamiliar inputs get one stable, translated refusal.
+            self._flash(_t("This is not a readable MIDI file."))
+            return
+        sounds = self._res("sound")
+        self.undo.checkpoint(_t("Import MIDI"))
+        sound["id"] = self._uid("snd", sounds)
+        sounds.append(sound)
+        self._save_autosave()
+        self._render_tree()
+        self._select_resource("sound", len(sounds) - 1)
+        self.undo.commit()
+        self._flash(report["summary"])
+
     def _import_wav(self):
         """Bring a .wav in as a sampled sound.
 
@@ -6824,9 +7224,21 @@ class GbaSdk(nbapp.AppWindow):
             return
         try:
             data, secs = self._read_wav(path)
-        except Exception as exc:                            # noqa: BLE001
-            self._flash(_t("This file could not be read as a sound: %s")
-                        % str(exc)[:60])
+        except _SoundUnsupported as exc:
+            # OUR OWN refusal, already phrased for the author and already
+            # translated. A blanket handler swallowed this and said "could not
+            # be read" instead -- which is true and useless, because the most
+            # common reason a WAV is rejected here is that it is 24- or 32-bit,
+            # which is what most audio tools export by DEFAULT, and the author
+            # can fix it in one export. Hiding an internal error must not cost
+            # the one message that tells somebody what to do.
+            self._flash(str(exc))
+            return
+        except Exception:                                  # noqa: BLE001
+            # A decoder exception, on the other hand, carries a raw errno and
+            # the source's absolute path. Neither helps repair the WAV, and
+            # neither belongs on screen.
+            self._flash(_t("This file could not be read as a sound."))
             return
         if not data:
             self._flash(_t("That sound is empty"))
@@ -6859,7 +7271,7 @@ class GbaSdk(nbapp.AppWindow):
             cap = int(rate * self.PCM_MAX_SECONDS)
             raw = w.readframes(min(nframes, cap))
         if width not in (1, 2):
-            raise ValueError(_t("only 8- and 16-bit WAV files"))
+            raise _SoundUnsupported(_t("only 8- and 16-bit WAV files"))
         vals = []
         step = width * nch
         for i in range(0, len(raw) - step + 1, step):

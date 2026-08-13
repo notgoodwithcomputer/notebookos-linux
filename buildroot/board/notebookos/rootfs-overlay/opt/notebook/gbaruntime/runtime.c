@@ -71,6 +71,128 @@ static void dma_copy16(volatile void* dst, const void* src, int halfwords) {
 #define SAVE_MAGIC  0x42474D31   /* '1MGB' */
 #define SAVE_HISCORE (16 + NB_MAX_GLOBALS * 4)   /* high score lives after the globals */
 
+/* ---- EEPROM ---------------------------------------------------------------
+ * The third save part, and the one that shares nothing with the other two.
+ * SRAM and flash are memory you address a byte at a time; EEPROM is a SERIAL
+ * device behind a one-bit port at 0x0D000000, and the only legal way to talk
+ * to it is DMA3 -- the CPU cannot clock it, because the transfer has to be
+ * uninterrupted. Every halfword sent carries ONE bit in its low bit.
+ *
+ * It also has no byte writes at all: the unit is an 8-byte BLOCK. So this
+ * keeps the whole save block in a RAM shadow, serves reads and writes from
+ * there, and commits complete blocks -- which is why save_commit() exists and
+ * does nothing for the other two parts.
+ *
+ * The address is 6 bits on the 512-byte part and 14 on the 8 KB one. Sending
+ * the wrong width is not an error the device reports: it stores the data
+ * somewhere else and reads back rubbish, so the width comes from the same
+ * generator-chosen nb_save_type that picks the signature. */
+#define EEPROM_PORT ((volatile u16*)0x0D000000)
+#define SAVE_BYTES  (SAVE_HISCORE + 4)
+#define EE_BLOCKS   ((SAVE_BYTES + 7) / 8)
+
+static u8 g_ee_shadow[EE_BLOCKS * 8] __attribute__((aligned(4)));
+static u8 g_ee_loaded;          /* the shadow holds what the device holds */
+static u8 g_ee_dirty[EE_BLOCKS]; /* blocks whose bytes actually changed */
+static u16 g_ee_bits[81];       /* the longest request: 2 + 14 + 64 + 1 */
+
+static int ee_addr_bits(void) { return nb_save_type == 4 ? 14 : 6; }
+
+static void ee_dma_send(const volatile void* src, int halfwords) {
+    REG_DMA3CNT = 0;
+    REG_DMA3SAD = (u32)src;
+    REG_DMA3DAD = (u32)EEPROM_PORT;
+    REG_DMA3CNT = DMA_ENABLE | DMA_16 | DMA_DST_FIX | (u32)halfwords;
+    /* BOUNDED, like every other wait on a save part. DMA3 clears its own
+       enable bit the moment the transfer ends, so this normally spins a few
+       hundred cycles -- but on a cartridge with no EEPROM behind the port
+       there is nothing to end it, and an unbounded wait here hangs the GAME
+       rather than the save. The first version of this had no bound and the
+       power-cycle gate caught it: a fresh EEPROM cartridge never reached its
+       Create event. */
+    for (u32 t = 0; t < 4096u; t++)
+        if (!(REG_DMA3CNT & DMA_ENABLE)) return;
+    REG_DMA3CNT = 0;                /* give up and leave the channel free */
+}
+
+static void ee_dma_receive(volatile void* dst, int halfwords) {
+    REG_DMA3CNT = 0;
+    REG_DMA3SAD = (u32)EEPROM_PORT;
+    REG_DMA3DAD = (u32)dst;
+    REG_DMA3CNT = DMA_ENABLE | DMA_16 | DMA_SRC_FIX | (u32)halfwords;
+    for (int spin = 0; (REG_DMA3CNT & DMA_ENABLE) && spin < 100000; spin++) { }
+    if (REG_DMA3CNT & DMA_ENABLE) REG_DMA3CNT = 0;
+}
+
+/* Read one 8-byte block into `out`. */
+static void eeprom_block_read(int block, u8* out) {
+    int ab = ee_addr_bits(), n = 0, i;
+    u16 in[68];
+    g_ee_bits[n++] = 1;
+    g_ee_bits[n++] = 1;                     /* 11 = read */
+    for (i = ab - 1; i >= 0; i--)
+        g_ee_bits[n++] = (u16)((block >> i) & 1);
+    g_ee_bits[n++] = 0;
+    ee_dma_send(g_ee_bits, n);
+    ee_dma_receive(in, 68);
+    /* Four ignored bits, then 64 data bits, most significant first. */
+    for (i = 0; i < 8; i++) {
+        u8 b = 0;
+        for (int k = 0; k < 8; k++)
+            b = (u8)((b << 1) | (in[4 + i * 8 + k] & 1));
+        out[i] = b;
+    }
+}
+
+/* Write one 8-byte block, then wait for the device to finish burning it.
+   The poll is bounded: a worn or absent part must hang the SAVE, never the
+   GAME -- the same rule the flash path follows. */
+/* Set once a block write finishes without the port ever reporting ready:
+   one probe is enough to learn that this cartridge does not answer the
+   status read, and continuing to poll every later block would spend
+   seconds learning it again. The writes still go out. */
+static u8 g_ee_no_status;
+
+static void eeprom_block_write(int block, const u8* src) {
+    int ab = ee_addr_bits(), n = 0, i;
+    g_ee_bits[n++] = 1;
+    g_ee_bits[n++] = 0;                     /* 10 = write */
+    for (i = ab - 1; i >= 0; i--)
+        g_ee_bits[n++] = (u16)((block >> i) & 1);
+    for (i = 0; i < 8; i++)
+        for (int k = 7; k >= 0; k--)
+            g_ee_bits[n++] = (u16)((src[i] >> k) & 1);
+    g_ee_bits[n++] = 0;
+    ee_dma_send(g_ee_bits, n);
+    /* A real part finishes a block in about 10 ms and reports it by
+       reading back 1. Two things went wrong before this shape: an
+       unbounded wait hung the GAME on a cartridge with no EEPROM, and a
+       generous per-block bound across every block left the Create event
+       still inside rt_game_save five seconds after boot -- which the
+       power-cycle gate reported, correctly, as a cartridge that never
+       started. So: bounded, and if the first block never reports ready
+       this cartridge is taken not to answer status at all. */
+    if (g_ee_no_status) return;
+    for (u32 t = 0; t < 8192u; t++)
+        if (*EEPROM_PORT & 1) return;       /* 1 = finished */
+    g_ee_no_status = 1;
+}
+
+static void ee_load_shadow(void) {
+    if (g_ee_loaded) return;
+    for (int b = 0; b < EE_BLOCKS; b++)
+        eeprom_block_read(b, &g_ee_shadow[b * 8]);
+    g_ee_loaded = 1;
+}
+
+static int save_is_eeprom(void) {
+    return nb_save_type == 3 || nb_save_type == 4;
+}
+
+static int save_is_flash(void) {
+    return nb_save_type == 1 || nb_save_type == 2;
+}
+
 static void flash_cmd(u8 c) {
     FLASH_A = 0xAA;
     FLASH_B = 0x55;
@@ -101,6 +223,15 @@ static void save_erase_sector0(void) {
 }
 
 static void save_w8(int off, u8 v) {
+    if (save_is_eeprom()) {
+        ee_load_shadow();
+        if (off >= 0 && off < (int)sizeof g_ee_shadow
+            && g_ee_shadow[off] != v) {
+            g_ee_shadow[off] = v;
+            g_ee_dirty[off / 8] = 1;
+        }
+        return;
+    }
     if (nb_save_type == 0) {
         SAVE_PORT[off] = v;
         return;
@@ -117,17 +248,40 @@ static void save_w32(int off, s32 v) {
     save_w8(off + 3, (u8)(v >> 24));
 }
 
-/* Reads are plain bytes on every part. */
+/* Reads are plain bytes on the memory-mapped parts; EEPROM answers from
+   the shadow, which is filled from the device on first touch. */
 static s32 save_r32(int off) {
+    if (save_is_eeprom()) {
+        ee_load_shadow();
+        if (off < 0 || off + 3 >= (int)sizeof g_ee_shadow) return 0;
+        return (s32)((u32)g_ee_shadow[off]
+                     | ((u32)g_ee_shadow[off + 1] << 8)
+                     | ((u32)g_ee_shadow[off + 2] << 16)
+                     | ((u32)g_ee_shadow[off + 3] << 24));
+    }
     return (s32)((u32)SAVE_PORT[off] | ((u32)SAVE_PORT[off + 1] << 8)
                  | ((u32)SAVE_PORT[off + 2] << 16)
                  | ((u32)SAVE_PORT[off + 3] << 24));
 }
 
+/* EEPROM writes reach the device here, a whole block at a time; the other
+   parts have already written and this does nothing. */
+static void save_commit(void) {
+    if (!save_is_eeprom()) return;
+    /* Only blocks whose bytes CHANGED. A save that moves a score and a
+       couple of globals touches two or three of nineteen, and each
+       untouched block skipped is a block-burn of device time not spent. */
+    for (int b = 0; b < EE_BLOCKS; b++) {
+        if (!g_ee_dirty[b]) continue;
+        eeprom_block_write(b, &g_ee_shadow[b * 8]);
+        g_ee_dirty[b] = 0;
+    }
+}
+
 void rt_game_save(void) {
     /* The high score shares sector 0; carry it over the erase. */
     s32 hs = (save_r32(0) == (s32)SAVE_MAGIC) ? save_r32(SAVE_HISCORE) : 0;
-    if (nb_save_type != 0)
+    if (save_is_flash())
         save_erase_sector0();
     save_w32(0, (s32)SAVE_MAGIC);
     save_w32(4, nb_score);
@@ -135,8 +289,9 @@ void rt_game_save(void) {
     save_w32(12, nb_health);
     for (int i = 0; i < NB_MAX_GLOBALS; i++)
         save_w32(16 + i * 4, nb_global[i]);
-    if (nb_save_type != 0)
+    if (save_is_flash())
         save_w32(SAVE_HISCORE, hs);
+    save_commit();
 }
 
 int rt_game_load(void) {
@@ -161,13 +316,17 @@ s32 rt_highscore(void) {
 
 int rt_highscore_submit(void) {
     s32 best = rt_highscore();
-    if (nb_save_type == 0) {
+    if (nb_save_type == 0 || save_is_eeprom()) {
+        /* Both address the block directly: SRAM because it is memory,
+           EEPROM because the shadow is. No erase, so no carrying. */
         if (save_r32(0) != (s32)SAVE_MAGIC)
             save_w32(0, (s32)SAVE_MAGIC);
         if (nb_score > best) {
             save_w32(SAVE_HISCORE, nb_score);
+            save_commit();
             return 1;
         }
+        save_commit();
         return 0;
     }
     /* Flash: the sector is rewritten whole, preserving the save block. A
@@ -281,6 +440,9 @@ static s32 dir_of(s32 dx, s32 dy) {
 #define BG_TEXT_SB   26
 #define BG_PANEL_SB  25
 #define BG_FAR_SB    24
+#define BG_AFF_SB    27   /* the affine map: 8-bit indices, 2 KB, free between
+                            the parallax/panel/text blocks and the room map */
+#define BG_AFF_CB    2    /* 8bpp affine tiles; charblock 2 is otherwise unused */
 #define SOLID_TILE   NB_FONT_COUNT   /* the filled cell rt_draw_box paints with */
 
 static s32 g_cam_x = 0, g_cam_y = 0;     /* camera top-left, in room pixels */
@@ -543,6 +705,21 @@ static void rt_video_init(void) {
     dma_copy16(CHARBLOCK(0), nb_bg_tiles, m);
     REG_BG0CNT = BGCNT_CB(0) | BGCNT_SB(BG_MAP_SB) | BGCNT_4BPP | BGCNT_SIZE(3) | 2;
 
+    /* The affine tileset, if the project has one: 8bpp, 64 bytes a tile, into
+       the charblock nothing else claims. Uploaded once like every other
+       tileset -- a room that uses none simply never points a layer at it. */
+    if (nb_aff_tile_count > 0) {
+        int a = nb_aff_tile_count * 32;    /* 32 u16 per 8bpp tile */
+        if (a > 8192) a = 8192;            /* 256 tiles fills the charblock */
+        dma_copy16(CHARBLOCK(BG_AFF_CB), nb_aff_tiles, a);
+        /* And its palette. An 8bpp layer indexes the WHOLE 256-entry BG
+           palette, not the 16 the 4bpp tiles share -- forgetting this uploads
+           perfect tiles that index black, which is a layer configured
+           correctly in every register and invisible on screen. Entry 0 stays
+           the room backdrop, as it is for every other layer. */
+        for (int c = 1; c < 256; c++) BG_PALETTE[c] = nb_aff_palette[c];
+    }
+
     /* BG3: the parallax layer shares the room's tileset, behind everything */
     REG_BG3CNT = BGCNT_CB(0) | BGCNT_SB(BG_FAR_SB) | BGCNT_4BPP | 3;
 
@@ -621,6 +798,182 @@ void rt_shake(s32 frames, s32 magnitude) {
     if (magnitude < 1) magnitude = 1;
     if (magnitude > 16) magnitude = 16;
     g_shake_n = (u8)frames; g_shake_mag = (u8)magnitude;
+}
+
+/* ---- power, and the cartridge's own hardware ------------------------------
+ * SLEEP is BIOS Stop (SWI 3): the CPU, the display and the sound clock all
+ * halt until an enabled interrupt arrives, and the console draws almost
+ * nothing. The wake source must be enabled in REG_IE BEFORE stopping or the
+ * machine never comes back -- a keypad interrupt is the only one a player can
+ * reach, so rt_sleep arms it, stops, and restores the interrupt mask it found.
+ *
+ * rt_wait_vblank is BIOS Halt (SWI 2) for the frames a game spends waiting:
+ * the CPU idles until any interrupt instead of spinning, which on a handheld
+ * is battery.
+ *
+ * RUMBLE, SOLAR and GYRO are all CARTRIDGE hardware reached through the same
+ * four GPIO pins the RTC uses -- no console pin does any of it. A cartridge
+ * has one of them at most, so the three are separate calls over shared pins
+ * and rt_gpio_release hands the pins back. */
+static u16 g_gpio_saved_dir;
+
+void rt_wait_vblank(void) {
+    __asm__ volatile("swi 0x020000" ::: "r0", "r1", "r2", "r3", "memory");
+}
+
+void rt_sleep(void) {
+    u16 ie = REG_IE, ime = REG_IME;
+    REG_IE = IRQ_KEYPAD;              /* the only wake a player can produce */
+    REG_KEYCNT = (u16)(KEYCNT_IRQ | KEY_A | KEY_B | KEY_START | KEY_SELECT);
+    REG_IME = 1;
+    __asm__ volatile("swi 0x030000" ::: "r0", "r1", "r2", "r3", "memory");
+    REG_KEYCNT = 0;
+    REG_IE = ie;
+    REG_IME = ime;
+}
+
+/* Rumble: a GPIO pin held high shakes the motor. Cartridges that have one
+   wire it to bit 3 -- the pin the RTC uses for chip select, which is why a
+   cartridge never has both. */
+void rt_rumble(int on) {
+    g_gpio_saved_dir = REG_GPIO_DIR;
+    REG_GPIO_CTRL = 1;                /* GPIO readable/writable */
+    REG_GPIO_DIR = 0x0008;            /* bit 3 out */
+    REG_GPIO_DATA = (u16)(on ? 0x0008 : 0x0000);
+}
+
+/* The solar sensor (Boktai): pulse the clock pin and count how long the
+   ADC takes to flag. Bright light returns a small count. 0..255, and 0 on a
+   cartridge with no sensor -- which is indistinguishable from darkness, so a
+   game that needs the difference must ask the player. */
+int rt_solar(void) {
+    int n;
+    REG_GPIO_CTRL = 1;
+    REG_GPIO_DIR = 0x0007;            /* clk + reset out, flag in */
+    REG_GPIO_DATA = 0x0002;           /* reset high */
+    REG_GPIO_DATA = 0x0000;
+    for (n = 0; n < 255; n++) {
+        REG_GPIO_DATA = 0x0001;       /* clock high */
+        REG_GPIO_DATA = 0x0000;
+        if (REG_GPIO_DATA & 0x0008) break;
+    }
+    return n;
+}
+
+/* The gyro (WarioWare Twisted): the same ADC, read as 12 bits of angular
+   rate. Centre is about 0x6C0; smaller is one way, larger the other. */
+int rt_gyro(void) {
+    int i, v = 0;
+    REG_GPIO_CTRL = 1;
+    REG_GPIO_DIR = 0x000B;            /* clk + start out, data in */
+    REG_GPIO_DATA = 0x0002;           /* start conversion */
+    REG_GPIO_DATA = 0x0000;
+    for (i = 0; i < 12; i++) {
+        REG_GPIO_DATA = 0x0001;
+        REG_GPIO_DATA = 0x0000;
+        v = (v << 1) | ((REG_GPIO_DATA & 0x0004) ? 1 : 0);
+    }
+    return v;
+}
+
+/* Hand the pins back to whatever else uses them -- the clock, most often. */
+void rt_gpio_release(void) {
+    REG_GPIO_DATA = 0;
+    REG_GPIO_DIR = g_gpio_saved_dir;
+    REG_GPIO_CTRL = 0;
+}
+
+/* ---- the affine ground layer ----------------------------------------------
+ * A room may replace its flat tile layer with an AFFINE one that rotates and
+ * scales -- Mode 7 ground, a spinning battle floor, a map that tilts.
+ *
+ * The cost is fixed by the hardware and worth stating plainly. Affine
+ * backgrounds exist only in display modes 1 and 2, and mode 1 offers two text
+ * layers where mode 0 offers four. This runtime needs three of them: the
+ * room's tiles, the dialogue panel, and the text on top of it. An affine room
+ * spends BG2 on the affine layer and therefore gives up the PARALLAX layer
+ * entirely -- and its flat tile layer too, since the affine layer IS the
+ * ground. What remains is exactly enough: BG0 carries the text and BG1 the
+ * panel, which is the reverse of their mode-0 assignment because a lower
+ * numbered layer wins a priority tie and the text has to sit on its box.
+ *
+ * Only the 16x16 and 32x32 map sizes are offered. 64x64 needs 4 KB of map and
+ * the free space between the other screenblocks is 2 KB; taking more would
+ * come out of the room's own tile map, which an affine room has already given
+ * up but a NON-affine room has not, and a layout that changes shape per room
+ * is a worse trade than two sizes. */
+static void affine_layer_on(const nb_Room* r) {
+    int size = r->aff_size > 1 ? 1 : r->aff_size;   /* 0 = 16x16, 1 = 32x32 */
+    int cells = size ? 32 * 32 : 16 * 16;
+    dma_copy16(SCREENBLOCK(BG_AFF_SB), (const u16*)r->aff_map, cells / 2);
+    REG_BG2CNT = (u16)(BGCNT_CB(BG_AFF_CB) | BGCNT_SB(BG_AFF_SB)
+                       | BGCNT_8BPP | BGCNT_WRAP | BGCNT_SIZE(size) | 2);
+    /* Text above panel above the ground: BG0 and BG1 swap duties. */
+    REG_BG0CNT = (u16)(BGCNT_CB(1) | BGCNT_SB(BG_TEXT_SB) | BGCNT_4BPP | 0);
+    REG_BG1CNT = (u16)(BGCNT_CB(1) | BGCNT_SB(BG_PANEL_SB) | BGCNT_4BPP | 0);
+    g_dispcnt = (u16)((g_dispcnt & (u16)~(7 | BG3_ON))
+                      | MODE_1 | BG0_ON | BG1_ON | BG2_ON);
+    REG_DISPCNT = g_dispcnt;
+    /* Identity: the ground sits still until the game turns it. */
+    rt_bg_affine(2, 0, 0, 0, 0, 0, 256);
+}
+
+/* Back to the flat arrangement. Called on every room load that has no affine
+   layer, so a game can walk from an affine room into an ordinary one. */
+static void affine_layer_off(void) {
+    REG_BG0CNT = (u16)(BGCNT_CB(0) | BGCNT_SB(BG_MAP_SB) | BGCNT_4BPP
+                       | BGCNT_SIZE(3) | 2);
+    REG_BG1CNT = (u16)(BGCNT_CB(1) | BGCNT_SB(BG_TEXT_SB) | BGCNT_4BPP | 0);
+    REG_BG2CNT = (u16)(BGCNT_CB(1) | BGCNT_SB(BG_PANEL_SB) | BGCNT_4BPP | 0);
+    g_dispcnt = (u16)((g_dispcnt & (u16)~7) | BG0_ON | BG1_ON | BG2_ON);
+    REG_DISPCNT = g_dispcnt;
+}
+
+/* ---- palettes at run time -------------------------------------------------
+ * Two things a game needs that a static palette cannot give: a sprite that
+ * changes its COLOURS without changing its picture -- the same enemy in four
+ * team colours, a character who turns grey when poisoned -- and a colour that
+ * a game computes rather than an artist picks.
+ *
+ * A sprite is drawn from one of 16 OBJ palette banks, chosen by the artist.
+ * rt_set_palbank overrides that per INSTANCE, so two instances of one object
+ * can wear different colours from the same tiles: a bank costs 16 colours,
+ * where a recoloured copy of the sprite would cost its whole tile footprint.
+ *
+ * Writes land immediately. Palette RAM is not double-buffered and the frame
+ * loop does not own it, so a mid-frame write tears -- call these from a Step
+ * event, which runs inside the game step and well before the flush. */
+void rt_set_palbank(Instance* self, int bank) {
+    if (!self || bank < 0 || bank > 15) return;
+    /* 0 is a real bank, so "use the sprite's own" needs a value outside the
+       range: the field holds bank+1 and zero keeps the original behaviour,
+       which is the same appended-field rule every struct here follows. */
+    self->palbank = (u8)(bank + 1);
+}
+
+void rt_clear_palbank(Instance* self) {
+    if (self) self->palbank = 0;
+}
+
+/* One colour, in the background palette (obj = 0) or the sprite one. */
+void rt_pal_set(int obj, int index, u16 colour) {
+    if (index < 0 || index > 255) return;
+    (obj ? OBJ_PALETTE : BG_PALETTE)[index] = colour;
+}
+
+u16 rt_pal_get(int obj, int index) {
+    if (index < 0 || index > 255) return 0;
+    return (obj ? OBJ_PALETTE : BG_PALETTE)[index];
+}
+
+/* A run of colours at once -- a whole bank swapped in one call, which is what
+   a palette-swapped enemy or a room's day-and-night tint actually needs. */
+void rt_pal_load(int obj, int first, const u16* colours, int count) {
+    if (!colours || first < 0 || count <= 0) return;
+    if (first + count > 256) count = 256 - first;
+    if (count <= 0) return;
+    volatile u16* p = (obj ? OBJ_PALETTE : BG_PALETTE) + first;
+    for (int i = 0; i < count; i++) p[i] = colours[i];
 }
 
 /* ---- palette cycling -----------------------------------------------------
@@ -1459,7 +1812,13 @@ int rt_link_open(u16 baud) {
     REG_RCNT = RCNT_SIO;
     REG_SIOCNT = (u16)(SIO_MULTI | (baud & 3));
     g_link_ok = 0;
-    for (int i = 0; i < 4; i++) g_link_in[i] = 0;
+    /* 0xFFFF from the very start, because that is what the header
+       promises for a unit that has not answered -- and it is what the
+       hardware itself reports in SIOMULTIn for absent units after a
+       transfer. Initialised to 0 this read as "unit present, sent 0"
+       until the first transfer completed, so the documented absence
+       check recv(n) == 0xFFFF saw a phantom player. */
+    for (int i = 0; i < 4; i++) g_link_in[i] = 0xFFFF;
     /* SD reads 1 only when every unit is connected and in multiplayer mode. */
     return (REG_SIOCNT & SIO_SD_READY) ? 1 : 0;
 }
@@ -1468,6 +1827,8 @@ void rt_link_close(void) {
     REG_SIOCNT = 0;
     REG_RCNT = RCNT_SIO;
     g_link_ok = 0;
+    /* The port is closed: nobody is answering, and the buffer says so. */
+    for (int i = 0; i < 4; i++) g_link_in[i] = 0xFFFF;
 }
 
 int rt_link_ready(void) { return (REG_SIOCNT & SIO_SD_READY) ? 1 : 0; }
@@ -1862,6 +2223,194 @@ void rt_video_mode(int mode) {
 }
 
 int rt_video_mode_get(void) { return g_dispcnt & 7; }
+
+/* ---- bitmap modes 3, 4 and 5 ---------------------------------------------
+ * A framebuffer on BG2: the one way to draw a shape the tileset and the sprite
+ * sheet have no entry for. The SPEC wants it for particle fields, where the
+ * count is past what 128 OAM entries can carry (Part IV.1, technique 3).
+ *
+ * Everything here reads the mode and the page out of g_dispcnt rather than
+ * taking them as arguments, for the same reason rt_video_mode exists: the
+ * frame loop ends every VBlank with `REG_DISPCNT = g_dispcnt`, so state kept
+ * anywhere else is reverted a frame later with nothing to say so. One place,
+ * and the loop already knows about it.
+ *
+ * The page arithmetic is the part worth stating plainly. Page 0 is at
+ * 0x06000000 and page 1 at 0x0600A000, and DISPCNT bit 4 chooses which one the
+ * hardware DISPLAYS. Drawing therefore goes to the OTHER one -- the hidden
+ * page -- and rt_bitmap_flip presents it. A renderer that draws into the page
+ * being scanned out shows every half-finished shape it makes. */
+static int bitmap_w(void) { return (g_dispcnt & 7) == 5 ? M5_W : M3_W; }
+static int bitmap_h(void) { return (g_dispcnt & 7) == 5 ? M5_H : M3_H; }
+
+/* Where drawing lands: 0 or 1. Mode 3's buffer is 75 KiB and runs straight
+   through 0x0600A000, so it has one page and that page is the visible one --
+   in mode 3 there is nothing to hide behind. */
+int rt_bitmap_page(void) {
+    int mode = g_dispcnt & 7;
+    if (mode != 4 && mode != 5) return 0;
+    return (g_dispcnt & DCNT_PAGE) ? 0 : 1;
+}
+
+static volatile u16* bitmap_base(void) {
+    return rt_bitmap_page() ? VRAM_PAGE1 : VRAM_PAGE0;
+}
+
+/* Enter a bitmap mode: 3, 4 or 5. BG2 carries the framebuffer in all three and
+   is switched on here, because a mode change alone leaves the screen blank and
+   looks like the bitmap call having done nothing. The displayed page is reset
+   to 0 so a game entering mode 4 or 5 starts by drawing into page 1, hidden,
+   which is the order double buffering has to be used in. */
+void rt_bitmap_mode(int mode) {
+    if (mode < 3 || mode > 5) return;
+    rt_video_mode(mode);                  /* the mode bits, where the loop reads them */
+    g_dispcnt = (u16)((g_dispcnt | BG2_ON) & (u16)~DCNT_PAGE);
+    REG_DISPCNT = g_dispcnt;
+}
+
+/* Show the page just drawn and start drawing into the other one. Modes 4 and 5
+   only; mode 3 has a single page and this is deliberately a no-op there rather
+   than a flip that swaps the framebuffer for tile memory.
+   The swap takes effect on the next scanline, so a tear-free present is
+   rt_vsync() and then this. */
+void rt_bitmap_flip(void) {
+    int mode = g_dispcnt & 7;
+    if (mode != 4 && mode != 5) return;
+    g_dispcnt ^= DCNT_PAGE;
+    REG_DISPCNT = g_dispcnt;
+}
+
+/* Mode 4's one hardware trap, and it is a silent one.
+ *
+ * VRAM HAS NO 8-BIT WRITE PORT. A byte store to VRAM is silently dropped, so
+ * a tempting `pixels[y * 240 + x] = index` draws nothing at all. The only
+ * correct 8bpp plot is a read-modify-write of the halfword the pixel shares:
+ * keep the neighbour's byte, replace this pixel's, then issue one 16-bit store.
+ *
+ * These two span helpers are where that lives for runs of pixels. The middle
+ * of a span is written a pair at a time, which needs no read at all; only the
+ * odd first and last pixels share a halfword with something that must survive.
+ * x is even/odd in SOURCE pixels, and the halfword index is x >> 1. */
+static void bitmap_span4(int x, int y, int w, u8 idx) {
+    volatile u16 *row = bitmap_base() + y * (M4_W / 2);
+    u16 pair = (u16)(idx | (idx << 8));
+    if (w <= 0) return;
+    if (x & 1) {                          /* shares its halfword with x-1 */
+        volatile u16 *p = &row[x >> 1];
+        *p = (u16)((*p & 0x00FF) | ((u16)idx << 8));
+        x++; w--;
+    }
+    while (w >= 2) { row[x >> 1] = pair; x += 2; w -= 2; }
+    if (w > 0) {                          /* shares its halfword with x+1 */
+        volatile u16 *p = &row[x >> 1];
+        *p = (u16)((*p & 0xFF00) | idx);
+    }
+}
+
+static void bitmap_row4(int x, int y, int w, const u8 *s) {
+    volatile u16 *row = bitmap_base() + y * (M4_W / 2);
+    if (w <= 0) return;
+    if (x & 1) {
+        volatile u16 *p = &row[x >> 1];
+        *p = (u16)((*p & 0x00FF) | ((u16)*s++ << 8));
+        x++; w--;
+    }
+    while (w >= 2) {
+        row[x >> 1] = (u16)(s[0] | ((u16)s[1] << 8));
+        s += 2; x += 2; w -= 2;
+    }
+    if (w > 0) {
+        volatile u16 *p = &row[x >> 1];
+        *p = (u16)((*p & 0xFF00) | *s);
+    }
+}
+
+/* One pixel. `colour` is BGR555 in modes 3 and 5 and a palette index 0..255 in
+   mode 4. Out of bounds is dropped rather than wrapped: a wrapped pixel comes
+   out on the far side of the row above, which reads as a rendering bug rather
+   than as coordinates that left the screen. */
+void rt_bitmap_pixel(int x, int y, u16 colour) {
+    int mode = g_dispcnt & 7;
+    if (mode < 3 || mode > 5) return;
+    if (x < 0 || y < 0 || x >= bitmap_w() || y >= bitmap_h()) return;
+    if (mode == 4) { bitmap_span4(x, y, 1, (u8)colour); return; }
+    bitmap_base()[y * bitmap_w() + x] = colour;
+}
+
+/* A filled rectangle, clipped to the screen. A rectangle that starts off the
+   left edge keeps the part that is on screen, so a particle drifting out of
+   view thins rather than jumping. */
+void rt_bitmap_rect(int x, int y, int w, int h, u16 colour) {
+    int mode = g_dispcnt & 7, bw = bitmap_w(), bh = bitmap_h(), r;
+    if (mode < 3 || mode > 5) return;
+    if (w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x >= bw || y >= bh) return;
+    if (x + w > bw) w = bw - x;
+    if (y + h > bh) h = bh - y;
+    if (w <= 0 || h <= 0) return;
+    if (mode == 4) {
+        for (r = 0; r < h; r++) bitmap_span4(x, y + r, w, (u8)colour);
+        return;
+    }
+    {
+        volatile u16 *base = bitmap_base();
+        for (r = 0; r < h; r++) {
+            volatile u16 *p = base + (y + r) * bw + x;
+            for (int c = 0; c < w; c++) p[c] = colour;
+        }
+    }
+}
+
+/* The whole drawing page. In mode 4 the index is doubled into both bytes of
+   each halfword, so the fill needs no read at all. */
+void rt_bitmap_clear(u16 colour) {
+    int mode = g_dispcnt & 7, i, n;
+    volatile u16 *base;
+    if (mode < 3 || mode > 5) return;
+    base = bitmap_base();
+    if (mode == 4) {
+        colour = (u16)((colour & 0xFF) | ((colour & 0xFF) << 8));
+        n = (M4_W * M4_H) / 2;
+    } else {
+        n = bitmap_w() * bitmap_h();
+    }
+    for (i = 0; i < n; i++) base[i] = colour;
+}
+
+/* A w-by-h image at (x,y), clipped. `src` is read in the mode's own pixel
+   size -- u16 of colour in modes 3 and 5, one byte of palette index in mode 4
+   -- with a stride of w, and clipping walks INTO the source rather than
+   dropping rows, so a sprite half off the left edge shows its right half
+   rather than its left half moved. */
+void rt_bitmap_blit(int x, int y, int w, int h, const void *src) {
+    int mode = g_dispcnt & 7, bw = bitmap_w(), bh = bitmap_h();
+    int sx = 0, sy = 0, stride = w, r;
+    if (mode < 3 || mode > 5 || !src) return;
+    if (w <= 0 || h <= 0) return;
+    if (x < 0) { sx = -x; w += x; x = 0; }
+    if (y < 0) { sy = -y; h += y; y = 0; }
+    if (x >= bw || y >= bh) return;
+    if (x + w > bw) w = bw - x;
+    if (y + h > bh) h = bh - y;
+    if (w <= 0 || h <= 0) return;
+    if (mode == 4) {
+        const u8 *s = (const u8*)src;
+        for (r = 0; r < h; r++)
+            bitmap_row4(x, y + r, w, s + (sy + r) * stride + sx);
+        return;
+    }
+    {
+        const u16 *s = (const u16*)src;
+        volatile u16 *base = bitmap_base();
+        for (r = 0; r < h; r++) {
+            volatile u16 *d = base + (y + r) * bw + x;
+            const u16 *sr = s + (sy + r) * stride + sx;
+            for (int c = 0; c < w; c++) d[c] = sr[c];
+        }
+    }
+}
 
 void rt_bg_affine(int bg, s32 tx, s32 ty, s32 sx, s32 sy,
                   s32 angle, s32 scale) {
@@ -2821,6 +3370,11 @@ static void rt_room_load(s16 room) {
         g_view->y = (s16)g_arrive_y;
         g_view->xsub = 0; g_view->ysub = 0;
     }
+    /* The ground: affine if the room brought one, flat otherwise. Done
+       on every load so walking out of an affine room restores the flat
+       arrangement without the author asking. */
+    if (r->aff_map) affine_layer_on(r);
+    else affine_layer_off();
     g_arrive_x = -1; g_arrive_y = -1;
     rt_camera_update();
     map_update();
@@ -2829,7 +3383,11 @@ static void rt_room_load(s16 room) {
 }
 
 /* ---------------- the game step ---------------- */
-static void rt_step_all(void) {
+/* IWRAM: 128 instances a frame, and ROM is a 16-bit bus with waitstates
+   where IWRAM is 32-bit with none. Measured at full sprite saturation the
+   step/move/draw trio cost 104%% of a frame -- the game ran at 0.68 steps
+   per VBlank, which is 41 fps, not 60. */
+IWRAM_CODE static void rt_step_all(void) {
     /* count alarms down first, so a step fn's alarm==0 check fires this step */
     for (int i = 0; i < NB_MAX_INSTANCES; i++) {
         Instance* in = &g_inst[i];
@@ -2873,7 +3431,7 @@ static void rt_step_all(void) {
     }
 }
 
-static void anim_step(Instance* in) {
+IWRAM_CODE static void anim_step(Instance* in) {
     if (!in->image_speed || in->sprite < 0 || in->sprite >= nb_sprite_count)
         return;
     s16 nf = (s16)nb_sprites[in->sprite].nframes;
@@ -2970,7 +3528,7 @@ static void inst_move(Instance* in) {
         in->flags |= NB_F_GROUND;
 }
 
-static void rt_move_all(void) {
+IWRAM_CODE static void rt_move_all(void) {
     /* the instances other things cannot pass through, gathered once so the
        per-pixel collision walk above stays cheap */
     g_solid_n = 0;
@@ -3008,7 +3566,7 @@ static void aff_write(int slot, s32 pa, s32 pb, s32 pc, s32 pd) {
     g_oam[slot * 4 + 3].fill = (u16)(s16)pd;
 }
 
-static void emit_sprite(Instance* in, int oi) {
+IWRAM_CODE static void emit_sprite(Instance* in, int oi) {
     const nb_Sprite* s = &nb_sprites[in->sprite];
     int frame = in->image_index;
     if (frame < 0 || (u16)frame >= s->nframes) frame = 0;
@@ -3017,6 +3575,8 @@ static void emit_sprite(Instance* in, int oi) {
     u16 tile = (u16)(s->tile + (u16)frame * s->tiles_per_frame);
     u16 a0 = (u16)(s->shape << 14);
     u16 a1 = OBJ_SIZE(s->size);
+    /* The instance's bank wins over the sprite's when it has one. */
+    u16 palbank = in->palbank ? (u16)(in->palbank - 1) : s->palbank;
     /* OBJ mode 2: this sprite's opaque pixels define the OBJ window
        instead of being drawn. The blink and every other attribute still
        apply -- a blinking stencil flickers the window, which is exactly
@@ -3052,10 +3612,10 @@ static void emit_sprite(Instance* in, int oi) {
     }
     g_oam[oi].attr0 = (u16)((sy & 0x00FF) | a0);
     g_oam[oi].attr1 = (u16)((sx & 0x01FF) | a1);
-    g_oam[oi].attr2 = (u16)(OBJ_TILE(tile) | OBJ_PALBANK(s->palbank) | OBJ_PRIO(1));
+    g_oam[oi].attr2 = (u16)(OBJ_TILE(tile) | OBJ_PALBANK(palbank) | OBJ_PRIO(1));
 }
 
-static void rt_render(void) {
+IWRAM_CODE static void rt_render(void) {
     int oi = 0;
     u32 layers = 0;
     aff_slot = 0;

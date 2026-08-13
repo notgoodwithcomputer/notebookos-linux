@@ -132,7 +132,81 @@ HOST_TYPES = """
 #include <math.h>
 typedef unsigned char u8; typedef unsigned short u16;
 typedef signed short s16; typedef signed int s32; typedef unsigned int u32;
+typedef signed char s8;
 """
+
+print("\n== bitmap modes: packed pixels, addresses, and hidden pages ==")
+_bitmap_src = "\n".join(extract(name) for name in (
+    "bitmap_w", "bitmap_h", "rt_bitmap_page", "bitmap_base",
+    "bitmap_span4", "rt_bitmap_pixel", "rt_bitmap_flip"))
+_bitmap_prog = HOST_TYPES + r"""
+#define MODE3 3
+#define MODE4 4
+#define MODE5 5
+#define DCNT_PAGE 0x0010
+#define M3_W 240
+#define M3_H 160
+#define M4_W 240
+#define M4_H 160
+#define M5_W 160
+#define M5_H 128
+static volatile u16 page0[50000], page1[50000];
+#define VRAM_PAGE0 page0
+#define VRAM_PAGE1 page1
+static u16 g_dispcnt;
+static u16 host_dispcnt;
+#define REG_DISPCNT host_dispcnt
+""" + _bitmap_src + r"""
+int main(void) {
+    g_dispcnt = MODE4;                 /* page 0 displayed, page 1 hidden */
+    page1[7 * (M4_W / 2) + 4] = 0x1234;
+    rt_bitmap_pixel(9, 7, 0xAB);       /* odd x is the high byte */
+    printf("rmw=%04x even=%02x odd=%02x\n",
+           page1[7 * (M4_W / 2) + 4],
+           page1[7 * (M4_W / 2) + 4] & 255,
+           page1[7 * (M4_W / 2) + 4] >> 8);
+
+    g_dispcnt = MODE3;
+    rt_bitmap_pixel(11, 3, 0x3456);
+    printf("m3=%ld\n", (long)(bitmap_base() + 3 * M3_W + 11 - page0));
+    g_dispcnt = MODE4;
+    printf("m4page=%d m4base=%d m4word=%d\n", rt_bitmap_page(),
+           bitmap_base() == page1, 7 * (M4_W / 2) + (9 >> 1));
+    g_dispcnt = MODE5;
+    rt_bitmap_pixel(13, 4, 0x5678);
+    printf("m5page=%d m5base=%d m5word=%ld\n", rt_bitmap_page(),
+           bitmap_base() == page1,
+           (long)(bitmap_base() + 4 * M5_W + 13 - page1));
+
+    g_dispcnt = MODE4;
+    rt_bitmap_flip();                  /* page 1 displayed, page 0 hidden */
+    printf("flipbit=%d draw=%d base0=%d reg=%04x\n",
+           !!(g_dispcnt & DCNT_PAGE), rt_bitmap_page(),
+           bitmap_base() == page0, host_dispcnt);
+    return 0;
+}
+"""
+_bitmap_out = run_c(_bitmap_prog, "bitmap modes")
+_bitmap_vals = dict(field.split("=", 1) for field in _bitmap_out.split()
+                    if "=" in field)
+ok(_bitmap_vals.get("rmw") == "ab34" and
+   _bitmap_vals.get("even") == "34" and _bitmap_vals.get("odd") == "ab",
+   "mode 4 odd-x plotting preserves its even-x neighbour",
+   _bitmap_out.strip())
+ok(_bitmap_vals.get("m3") == str(3 * 240 + 11) and
+   _bitmap_vals.get("m4word") == str(7 * 120 + 4) and
+   _bitmap_vals.get("m5word") == str(4 * 160 + 13),
+   "modes 3, 4, and 5 use their correct row strides", _bitmap_out.strip())
+ok(_bitmap_vals.get("m4page") == "1" and
+   _bitmap_vals.get("m4base") == "1" and
+   _bitmap_vals.get("m5page") == "1" and
+   _bitmap_vals.get("m5base") == "1" and
+   _bitmap_vals.get("flipbit") == "1" and
+   _bitmap_vals.get("draw") == "0" and
+   _bitmap_vals.get("base0") == "1" and
+   _bitmap_vals.get("reg") == "0014",
+   "page bases follow the inverse of the displayed DCNT_PAGE bit",
+   _bitmap_out.strip())
 
 print("\n== affine: does a rotation turn on the spot? ==")
 # affine_matrix is static and takes rt_cos8/rt_sin8, which are table lookups on
@@ -844,12 +918,64 @@ else:
         # FROM changes, and crt0 copies it either way.
         ok(_ms[".data"][0] >> 24 == 0x03,
            "...with data still in IWRAM at run time", hex(_ms[".data"][0]))
-        # Where .data is loaded FROM differs between the two builds; the ELF
-        # section header carries only the run address, so the distinction that
-        # matters here is that .text moved and .data did not.
-        ok(_cs[".data"][0] == _ms[".data"][0],
-           "...and data runs at the same address in both builds",
-           "%s vs %s" % (hex(_cs[".data"][0]), hex(_ms[".data"][0])))
+        # This used to demand that .data run at the SAME ADDRESS in both
+        # builds, and that was a coincidence rather than a requirement: it
+        # held only while .iwram was 252 bytes. Moving the hot functions into
+        # IWRAM made the two sections differ by 20 bytes -- the same source
+        # links differently from ROM than from EWRAM -- and the check went red
+        # over nothing. Each build's crt0 uses its OWN __data_start /
+        # __data_end / __data_lma, so the addresses need not agree between
+        # them.
+        #
+        # What must hold is that each build is SELF-consistent: the copy range
+        # spans exactly the sections that need copying, and the load address
+        # points into the region that build is actually loaded from -- ROM for
+        # a cartridge, EWRAM for a multiboot image. A cartridge whose
+        # __data_lma pointed at EWRAM would copy garbage over its own
+        # variables, which is the failure this is really guarding.
+        def _sym(elf, want):
+            import struct as _st
+            d = open(elf, "rb").read()
+            shoff, = _st.unpack_from("<I", d, 0x20)
+            shent, shnum, shstrndx = _st.unpack_from("<HHH", d, 0x2E)
+            secs = []
+            for i in range(shnum):
+                b = shoff + i * shent
+                secs.append(_st.unpack_from("<IIIIIIIIII", d, b))
+            shstr = secs[shstrndx]
+            def nm(off, base):
+                e = d.index(b"\0", base + off)
+                return d[base + off:e].decode()
+            out = {}
+            for sh in secs:
+                if sh[1] != 2:                      # SHT_SYMTAB
+                    continue
+                stroff = secs[sh[6]][4]
+                for o in range(sh[4], sh[4] + sh[5], sh[9] or 16):
+                    n, v = _st.unpack_from("<II", d, o)
+                    if n:
+                        out[nm(n, stroff)] = v
+            return {k: out[k] for k in want if k in out}
+
+        for _label, _elf, _region in (
+                ("cartridge", os.path.join(_mbdir, "game.elf"), 0x08),
+                ("multiboot", os.path.join(_mbdir, "game_mb.elf"), 0x02)):
+            _sy = _sym(_elf, ("__data_start", "__data_end", "__data_lma"))
+            if len(_sy) != 3:
+                ok(False, "%s exposes its copy symbols" % _label, str(_sy))
+                continue
+            _sec = _sections(_elf)
+            _span = _sy["__data_end"] - _sy["__data_start"]
+            _want = _sec[".iwram"][2] + _sec[".data"][2] \
+                if len(_sec[".iwram"]) > 2 else None
+            ok(_sy["__data_lma"] >> 24 == _region,
+               "the %s image copies its data from the region it is loaded "
+               "into" % _label,
+               "__data_lma=%s, expected %02x......"
+               % (hex(_sy["__data_lma"]), _region))
+            ok(_sy["__data_start"] >> 24 == 0x03 and _span > 0,
+               "...into IWRAM, spanning %d bytes" % _span,
+               hex(_sy["__data_start"]))
 
     # Hot code in IWRAM. A section that is PLACED but never COPIED is a jump
     # into whatever IWRAM happened to hold, so the addresses and the copy
@@ -1016,8 +1142,8 @@ ok(out.get("error_poll") == "0", "a failed transfer yields no data")
 ok(out.get("error_cleared") == "1",
    "...and the flag is left for the hardware, not guessed at",
    str(out.get("error_cleared")))
-ok(out.get("stale") == "0",
-   "...leaving no stale word to be mistaken for this frame's input",
+ok(out.get("stale") == "65535",
+   "...leaving the hardware's no-data word (0xFFFF), never the failed bytes",
    str(out.get("stale")))
 ok(out.get("good_poll") == "1", "a clean transfer yields data")
 ok(out.get("word0") == "4660", "...the word each unit sent", str(out.get("word0")))
@@ -1421,6 +1547,35 @@ ok(not _missing,
    "every nb_ name the runtime owns is reserved against generated code",
    "not in RESERVED_C: " + ", ".join(_missing))
 
+_bitmap_api = {
+    "rt_bitmap_mode", "rt_bitmap_pixel", "rt_bitmap_rect",
+    "rt_bitmap_clear", "rt_bitmap_blit", "rt_bitmap_flip", "rt_bitmap_page",
+}
+# This asked for the bitmap calls to be in RESERVED_C, and that was the wrong
+# question. RESERVED_C seeds the generator's used-name set and _unique_c tests
+# the SYMBOLS a name becomes -- all of them nb_-prefixed, because every name
+# the generator mints from author text wears that prefix. No generated symbol
+# can ever equal `rt_bitmap_pixel`, so reserving it prevents a collision that
+# cannot happen: green, and guarding nothing.
+#
+# The real drift for a new API is that the runtime grows a function the
+# CONTRACT never publishes, so no author can reach it and nothing notices.
+# That is what this asks instead.
+_hdr = open(os.path.join(RT, "runtime.h"), encoding="utf-8").read()
+_undeclared = sorted(n for n in _bitmap_api
+                     if not re.search(r"\b%s\s*\(" % re.escape(n), _hdr))
+ok(not _undeclared,
+   "every bitmap call the runtime defines is published in runtime.h",
+   "defined but unreachable: " + ", ".join(_undeclared))
+
+_src = open(os.path.join(RT, "runtime.c"), encoding="utf-8").read()
+_undefined = sorted(n for n in _bitmap_api
+                    if not re.search(r"^[A-Za-z_].*\b%s\s*\(" % re.escape(n),
+                                     _src, re.M))
+ok(not _undefined,
+   "...and every one published is actually defined",
+   "declared but absent: " + ", ".join(_undefined))
+
 # and the reservation has to actually change the emitted symbol
 _collide = {"name": "T", "sprites": [], "sounds": [], "objects": [],
             "start_room": "rm_a", "tilesets": [],
@@ -1456,13 +1611,15 @@ typedef struct Instance Instance;
 typedef void (*nb_event_fn)(Instance*);
 typedef struct { s16 sprite; u8 visible, solid;
                  nb_event_fn create, step, draw, destroy;
-                 u8 depth, tilecol, bb_l, bb_t, bb_r, bb_b; } nb_Object;
+                 u8 depth, tilecol, bb_l, bb_t, bb_r, bb_b;
+                 u8 hurt_frames; nb_event_fn on_no_health; } nb_Object;
 struct Instance { u8 active; s16 object, sprite, image_index, image_speed,
                   image_accum; s32 x,y,hspeed,vspeed,grav;
                   s32 alarm[NB_MAX_ALARMS]; s32 var[NB_MAX_VARS];
                   s16 hspd8,vspd8,grav8,xsub,ysub;
                   u8 hidden,flip,depth,flags,angle; s16 scale;
-                  u8 anim_lo,anim_hi; s16 gx,gy; u16 glide; };
+                  u8 anim_lo,anim_hi; s16 gx,gy; u16 glide; u8 inv; u8 objwin;
+                  u8 palbank; };
 static Instance g_inst[NB_MAX_INSTANCES];
 static Instance* g_other = 0;
 static nb_Sprite nb_sprites[8];
@@ -1723,6 +1880,382 @@ ok(_v.get("reuse") == "1" and _v.get("then") == "0"
 ok(_v.get("bad") == "0" and _v.get("badrefusals") == "0",
    "a bad object id is rejected without being blamed on the pool",
    "bad=%s counted=%s" % (_v.get("bad"), _v.get("badrefusals")))
+
+
+# ---------------------------------------------------------------------------
+# The one-shot mixer: the arithmetic four simultaneous samples stand on.
+# ---------------------------------------------------------------------------
+print("\n== the mixer: saturation, retirement, and the honest cadence ==")
+_mix_src = extract("mix_block")
+ok("if (acc > 127) acc = 127;" in _mix_src,
+   "the extracted mixer still clamps its sum",
+   "runtime.c changed shape; this test may be measuring something else")
+_prog = HOST_TYPES + r"""
+#define MIX_VOICES 4
+typedef struct { const signed char* data; u32 pos, len; u8 on; } MixVoice;
+static MixVoice g_mixv[MIX_VOICES];
+""" + _mix_src + r"""
+static signed char loud[64], quiet[64], neg[64];
+int main(void) {
+    s8 out[64];
+    for (int i = 0; i < 64; i++) { loud[i] = 100; quiet[i] = 3; neg[i] = -100; }
+    /* Two loud voices: 200 must clamp to 127, never wrap to -56. */
+    g_mixv[0].data = loud; g_mixv[0].len = 64; g_mixv[0].pos = 0; g_mixv[0].on = 1;
+    g_mixv[1].data = loud; g_mixv[1].len = 64; g_mixv[1].pos = 0; g_mixv[1].on = 1;
+    mix_block(out, 8);
+    printf("sat=%d\n", out[0]);
+    /* Two loud negatives clamp at the floor. */
+    g_mixv[0].data = neg; g_mixv[0].pos = 0;
+    g_mixv[1].data = neg; g_mixv[1].pos = 0;
+    mix_block(out, 8);
+    printf("floor=%d\n", out[0]);
+    /* A short voice retires exactly at its end and stops contributing. */
+    g_mixv[0].data = quiet; g_mixv[0].len = 4; g_mixv[0].pos = 0; g_mixv[0].on = 1;
+    g_mixv[1].on = 0;
+    mix_block(out, 8);
+    printf("tail=%d after=%d on=%d\n", out[3], out[4], g_mixv[0].on);
+    /* The cadence: 14 frames of 273 plus one of 274, four times over, is one
+       second of samples exactly. */
+    int total = 0;
+    for (int f = 0; f < 60; f++) total += 273 + (f % 15 == 0);
+    printf("persec=%d\n", total);
+    return 0;
+}
+"""
+_out = run_c(_prog, "mixer")
+_v = dict(kv.split("=", 1) for kv in _out.split() if "=" in kv)
+ok(_v.get("sat") == "127",
+   "two loud voices clamp at full scale instead of wrapping", _v.get("sat"))
+ok(_v.get("floor") == "-128",
+   "and at the negative floor the same way", _v.get("floor"))
+ok(_v.get("tail") == "3" and _v.get("after") == "0" and _v.get("on") == "0",
+   "a finished voice retires exactly at its end",
+   "tail=%s after=%s on=%s" % (_v.get("tail"), _v.get("after"), _v.get("on")))
+ok(_v.get("persec") == "16384",
+   "the 273/274 cadence pays exactly one second of samples per second",
+   _v.get("persec"))
+
+print("\n== bitmap modes: the 8bpp trap, the address arithmetic, the hidden page ==")
+# Three things here are wrong-looking-like-right in exactly the way this file
+# exists for:
+#   * VRAM has no 8-bit write port. A byte store paints BOTH bytes of the
+#     halfword, so every mode-4 pixel comes out two wide and nothing says so.
+#   * mode 5 is 160x128, not 240x160. Row arithmetic taken from mode 3 walks
+#     off each row's right edge and draws a diagonal.
+#   * drawing must land on the page that is NOT being displayed, or every
+#     half-drawn shape is seen. Which page that is lives in DISPCNT bit 4.
+_BM_ORDER = ("rt_video_mode", "bitmap_w", "bitmap_h", "rt_bitmap_page",
+             "bitmap_base", "rt_bitmap_mode", "rt_bitmap_flip",
+             "bitmap_span4", "bitmap_row4", "rt_bitmap_pixel",
+             "rt_bitmap_rect", "rt_bitmap_clear", "rt_bitmap_blit")
+_bm = dict((_n, extract(_n)) for _n in _BM_ORDER)
+_bm_all = "\n".join(_bm[_n] for _n in _BM_ORDER)
+
+# The house rule the frame loop enforces: DISPCNT state lives in g_dispcnt, and
+# the register is only ever handed that. A bitmap call that wrote the register
+# some other way would work for one frame and then revert, silently.
+_writes = re.findall(r"REG_DISPCNT\s*=\s*([^;]+);", _bm_all)
+ok(_writes and all(w.strip() == "g_dispcnt" for w in _writes),
+   "every bitmap DISPCNT write is `= g_dispcnt`, not a value of its own",
+   "writes: %s" % _writes)
+ok("g_dispcnt ^= DCNT_PAGE;" in _bm["rt_bitmap_flip"],
+   "the page flip turns over the state the frame loop reads")
+# The read-modify-write is the fix for the byte-port trap. If it goes, mode 4
+# still compiles, still draws, and is two pixels wide everywhere.
+ok("& 0x00FF" in _bm["bitmap_span4"] and "& 0xFF00" in _bm["bitmap_span4"],
+   "the mode-4 span still read-modify-writes its odd edges",
+   "runtime.c changed shape; this test may be measuring something else")
+_gba_h = open(os.path.join(RT, "gba.h"), encoding="utf-8").read()
+ok("#define VRAM_PAGE0 ((volatile u16*)0x06000000)" in _gba_h,
+   "page 0 is 0x06000000")
+ok("#define VRAM_PAGE1 ((volatile u16*)0x0600A000)" in _gba_h,
+   "page 1 is 0x0600A000")
+_rt_h = open(os.path.join(RT, "runtime.h"), encoding="utf-8").read()
+for _decl in ("void rt_bitmap_mode(int mode);",
+              "void rt_bitmap_pixel(int x, int y, u16 colour);",
+              "void rt_bitmap_rect(int x, int y, int w, int h, u16 colour);",
+              "void rt_bitmap_clear(u16 colour);",
+              "void rt_bitmap_blit(int x, int y, int w, int h, const void *src);",
+              "void rt_bitmap_flip(void);",
+              "int  rt_bitmap_page(void);"):
+    ok(_decl in _rt_h, "runtime.h declares %s" % _decl.split("(")[0].split()[-1])
+
+# VRAM is modelled as ONE array with page 1 an offset into it, exactly as the
+# hardware has it -- so mode 3's 75 KiB buffer really does run through page 1's
+# address here, which is the reason mode 3 cannot flip.
+_prog = HOST_TYPES + r"""
+#define BG2_ON     0x0400
+#define DCNT_PAGE  0x0010
+#define M3_W 240
+#define M3_H 160
+#define M4_W 240
+#define M4_H 160
+#define M5_W 160
+#define M5_H 128
+#define VRAM_HW (0x18000 / 2)
+static u16 VRAM_MEM[VRAM_HW];
+#define VRAM_PAGE0 (VRAM_MEM)
+#define VRAM_PAGE1 (VRAM_MEM + 0xA000 / 2)   /* 0x5000 halfwords in */
+static u16 g_dispcnt = 0x0400;                /* mode 0, as the runtime boots */
+static u16 REG_DISPCNT;
+""" + _bm_all + r"""
+static void wipe(void) { memset(VRAM_MEM, 0, sizeof VRAM_MEM); }
+static int nz(void) {
+    int n = 0;
+    for (int i = 0; i < VRAM_HW; i++) if (VRAM_MEM[i]) n++;
+    return n;
+}
+static int at(u16 v) {
+    for (int i = 0; i < VRAM_HW; i++) if (VRAM_MEM[i] == v) return i;
+    return -1;
+}
+/* read one mode-4 pixel back out of the page being DRAWN to */
+static int px4(int x, int y) {
+    int i = y * M4_W + x;
+    u16 h = VRAM_MEM[(rt_bitmap_page() ? 0x5000 : 0) + (i >> 1)];
+    return (x & 1) ? (h >> 8) & 0xFF : h & 0xFF;
+}
+int main(void) {
+    /* ---- mode 3: one page, u16 per pixel, and it covers page 1's address -- */
+    wipe();
+    rt_bitmap_mode(3);
+    printf("m3_mode=%d m3_bg2=%d m3_reg=%d m3_page=%d m3_dim=%d\n",
+           g_dispcnt & 7, (g_dispcnt & BG2_ON) ? 1 : 0,
+           REG_DISPCNT == g_dispcnt, rt_bitmap_page(),
+           bitmap_w() * 1000 + bitmap_h());
+    rt_bitmap_pixel(0, 0, 0x1111);
+    rt_bitmap_pixel(1, 0, 0x2222);
+    rt_bitmap_pixel(0, 1, 0x3333);
+    rt_bitmap_pixel(239, 159, 0x4444);
+    printf("m3_00=%d m3_10=%d m3_01=%d m3_last=%d\n",
+           at(0x1111), at(0x2222), at(0x3333), at(0x4444));
+    /* off every edge: dropped, not wrapped onto the row above */
+    wipe();
+    rt_bitmap_pixel(240, 0, 0x5555);
+    rt_bitmap_pixel(0, 160, 0x5555);
+    rt_bitmap_pixel(-1, 0, 0x5555);
+    rt_bitmap_pixel(0, -1, 0x5555);
+    printf("m3_oob=%d\n", nz());
+    /* the flip that must not happen: one page, and half of page 1 is picture */
+    wipe();
+    rt_bitmap_clear(0x1234);
+    printf("m3_fill=%d m3_endfill=%d m3_over=%d m3_into_p1=%d\n",
+           nz(), VRAM_MEM[M3_W * M3_H - 1] == 0x1234,
+           VRAM_MEM[M3_W * M3_H] == 0x1234, VRAM_MEM[0x5000] == 0x1234);
+    rt_bitmap_flip();
+    printf("m3_flip_bit=%d m3_flip_page=%d\n",
+           (g_dispcnt & DCNT_PAGE) ? 1 : 0, rt_bitmap_page());
+
+    /* ---- mode 5: 160x128, and the second page is where drawing goes ------- */
+    wipe();
+    rt_bitmap_mode(5);
+    printf("m5_dim=%d m5_page=%d m5_bit=%d\n",
+           bitmap_w() * 1000 + bitmap_h(), rt_bitmap_page(),
+           (g_dispcnt & DCNT_PAGE) ? 1 : 0);
+    rt_bitmap_pixel(0, 0, 0x1111);
+    rt_bitmap_pixel(0, 1, 0x2222);
+    rt_bitmap_pixel(159, 127, 0x3333);
+    printf("m5_00=%d m5_01=%d m5_last=%d\n", at(0x1111), at(0x2222), at(0x3333));
+    /* x=160 is ON SCREEN in mode 3 and OFF it here. Dropped, not wrapped. */
+    wipe();
+    rt_bitmap_pixel(160, 0, 0x5555);
+    rt_bitmap_pixel(0, 128, 0x5555);
+    printf("m5_oob=%d\n", nz());
+    /* a rectangle clipped at the right edge must not spill into the next row */
+    wipe();
+    rt_bitmap_rect(158, 0, 4, 1, 0x6666);
+    printf("m5_rect=%d m5_spill=%d\n", nz(), VRAM_MEM[0x5000 + M5_W] != 0);
+    /* clipping walks INTO the source: at x=-2 the right half of the row shows */
+    wipe();
+    { u16 src[4] = { 0xA1, 0xA2, 0xA3, 0xA4 };
+      rt_bitmap_blit(-2, 0, 4, 1, src);
+      printf("m5_blit0=%d m5_blit1=%d m5_blitn=%d\n",
+             VRAM_MEM[0x5000], VRAM_MEM[0x5000 + 1], nz()); }
+    /* the page pair: flip, and drawing crosses to the other buffer */
+    wipe();
+    rt_bitmap_flip();
+    printf("m5_flip_bit=%d m5_flip_page=%d m5_flip_reg=%d\n",
+           (g_dispcnt & DCNT_PAGE) ? 1 : 0, rt_bitmap_page(),
+           REG_DISPCNT == g_dispcnt);
+    rt_bitmap_pixel(0, 0, 0x7777);
+    printf("m5_after_flip=%d\n", at(0x7777));
+    rt_bitmap_flip();
+    printf("m5_flip2_page=%d m5_mode_kept=%d\n",
+           rt_bitmap_page(), g_dispcnt & 7);
+
+    /* ---- mode 4: the byte-port trap ------------------------------------- */
+    wipe();
+    rt_bitmap_mode(4);
+    printf("m4_page=%d m4_dim=%d\n", rt_bitmap_page(),
+           bitmap_w() * 1000 + bitmap_h());
+    /* one pixel at an odd x sits in the HIGH byte of halfword x>>1 */
+    rt_bitmap_pixel(3, 0, 0x11);
+    printf("m4_odd_hw=%d m4_odd_val=%d\n", at(0x1100), VRAM_MEM[0x5000 + 1]);
+    /* THE ONE THAT MATTERS: a neighbour already drawn must survive. A byte
+       store would leave both halves at the new index and the test would read
+       0x77 -> 0x11 on the pixel nobody touched. */
+    wipe();
+    rt_bitmap_rect(0, 0, M4_W, 1, 0x99);        /* a row of known index */
+    rt_bitmap_pixel(5, 0, 0x77);
+    printf("m4_keep_l=%d m4_wrote=%d m4_keep_r=%d\n",
+           px4(4, 0), px4(5, 0), px4(6, 0));
+    rt_bitmap_pixel(4, 0, 0x66);                /* and the even side of the pair */
+    printf("m4_even=%d m4_odd_kept=%d\n", px4(4, 0), px4(5, 0));
+    /* a span with an odd start AND an odd end: both edges share a halfword */
+    wipe();
+    rt_bitmap_rect(0, 0, M4_W, 1, 0x99);
+    rt_bitmap_rect(3, 0, 3, 1, 0x44);
+    printf("m4_rect=%d %d %d %d %d\n",
+           px4(2, 0), px4(3, 0), px4(4, 0), px4(5, 0), px4(6, 0));
+    /* the same for a blit, which reads its source a byte at a time */
+    wipe();
+    rt_bitmap_rect(0, 0, M4_W, 1, 0x99);
+    { u8 src[3] = { 0x11, 0x22, 0x33 };
+      rt_bitmap_blit(3, 0, 3, 1, src);
+      printf("m4_blit=%d %d %d %d %d\n",
+             px4(2, 0), px4(3, 0), px4(4, 0), px4(5, 0), px4(6, 0)); }
+    /* row arithmetic: 240 BYTES per row, so row 1 starts 120 halfwords in */
+    wipe();
+    rt_bitmap_pixel(0, 1, 0x55);
+    printf("m4_row1=%d\n", at(0x0055));
+    /* clear doubles the index into both bytes and stops at the page's end */
+    wipe();
+    rt_bitmap_clear(0x22);
+    printf("m4_clear=%d m4_clear_n=%d m4_clear_over=%d\n",
+           VRAM_MEM[0x5000] == 0x2222, nz(),
+           VRAM_MEM[0x5000 + (M4_W * M4_H) / 2] != 0);
+    /* and it clears the DRAWING page, not the one on screen */
+    printf("m4_clear_p0=%d\n", VRAM_MEM[0] != 0);
+
+    /* ---- a mode that is not a bitmap mode draws nothing ------------------ */
+    wipe();
+    rt_video_mode(0);
+    rt_bitmap_pixel(0, 0, 0x1111);
+    rt_bitmap_rect(0, 0, 8, 8, 0x1111);
+    rt_bitmap_clear(0x1111);
+    { u16 src[4] = { 1, 2, 3, 4 }; rt_bitmap_blit(0, 0, 2, 2, src); }
+    printf("mode0_quiet=%d\n", nz());
+    /* rt_bitmap_mode refuses a tiled mode rather than half-entering one */
+    rt_bitmap_mode(2);
+    printf("refuse=%d\n", g_dispcnt & 7);
+    return 0;
+}
+"""
+_v = dict(kv.split("=", 1) for kv in run_c(_prog, "bitmap").split() if "=" in kv)
+_out = run_c(_prog, "bitmap")
+_v = dict(kv.split("=", 1) for kv in _out.split() if "=" in kv)
+_rows = dict(l.split("=", 1)[0] + "_row" for l in [])   # (no row keys; see below)
+
+
+def _line(key):
+    """A whole printed line, for the checks whose value is several numbers."""
+    for l in _out.split("\n"):
+        if l.startswith(key + "="):
+            return l[len(key) + 1:].strip()
+    return None
+
+
+ok(_v.get("m3_mode") == "3" and _v.get("m3_bg2") == "1",
+   "entering mode 3 sets the mode AND turns BG2 on",
+   "mode=%s bg2=%s" % (_v.get("m3_mode"), _v.get("m3_bg2")))
+ok(_v.get("m3_reg") == "1", "...through g_dispcnt, which the frame loop reads")
+ok(_v.get("m3_dim") == "240160", "mode 3 is 240x160", _v.get("m3_dim"))
+ok(_v.get("m3_00") == "0" and _v.get("m3_10") == "1" and _v.get("m3_01") == "240",
+   "mode 3 addresses a pixel at y*240 + x halfwords",
+   "(0,0)=%s (1,0)=%s (0,1)=%s" % (_v.get("m3_00"), _v.get("m3_10"),
+                                   _v.get("m3_01")))
+ok(_v.get("m3_last") == str(159 * 240 + 239),
+   "...and the last pixel is the last halfword of the buffer",
+   _v.get("m3_last"))
+ok(_v.get("m3_oob") == "0",
+   "a pixel off any edge is dropped, not wrapped onto another row",
+   _v.get("m3_oob"))
+ok(_v.get("m3_fill") == str(240 * 160) and _v.get("m3_endfill") == "1"
+   and _v.get("m3_over") == "0",
+   "clear fills exactly the 240x160 buffer",
+   "n=%s end=%s over=%s" % (_v.get("m3_fill"), _v.get("m3_endfill"),
+                            _v.get("m3_over")))
+# This is WHY mode 3 cannot page-flip, demonstrated rather than asserted: its
+# own picture already occupies the address the second page would start at.
+ok(_v.get("m3_into_p1") == "1",
+   "mode 3's buffer runs straight through 0x0600A000 -- there IS no page 1",
+   _v.get("m3_into_p1"))
+ok(_v.get("m3_page") == "0", "mode 3 draws to page 0, the visible one")
+ok(_v.get("m3_flip_bit") == "0" and _v.get("m3_flip_page") == "0",
+   "flipping in mode 3 does nothing rather than swapping in tile memory",
+   "bit=%s page=%s" % (_v.get("m3_flip_bit"), _v.get("m3_flip_page")))
+
+ok(_v.get("m5_dim") == "160128", "mode 5 is 160x128, not 240x160", _v.get("m5_dim"))
+ok(_v.get("m5_page") == "1" and _v.get("m5_bit") == "0",
+   "entering mode 5 displays page 0 and draws into page 1",
+   "page=%s bit=%s" % (_v.get("m5_page"), _v.get("m5_bit")))
+ok(_v.get("m5_00") == "20480",
+   "...so the first pixel lands at 0x0600A000, the hidden page", _v.get("m5_00"))
+ok(_v.get("m5_01") == str(20480 + 160),
+   "mode 5 addresses a pixel at y*160 + x halfwords", _v.get("m5_01"))
+ok(_v.get("m5_last") == str(20480 + 127 * 160 + 159),
+   "...and the last pixel is the last halfword of the page", _v.get("m5_last"))
+ok(_v.get("m5_oob") == "0",
+   "x=160 is off screen in mode 5 even though it is on screen in mode 3",
+   _v.get("m5_oob"))
+ok(_v.get("m5_rect") == "2" and _v.get("m5_spill") == "0",
+   "a rectangle clipped at the right edge does not spill onto the next row",
+   "n=%s spill=%s" % (_v.get("m5_rect"), _v.get("m5_spill")))
+ok(_v.get("m5_blit0") == "163" and _v.get("m5_blit1") == "164"
+   and _v.get("m5_blitn") == "2",
+   "clipping a blit walks into the source, keeping the on-screen half",
+   "px0=%s px1=%s n=%s" % (_v.get("m5_blit0"), _v.get("m5_blit1"),
+                           _v.get("m5_blitn")))
+ok(_v.get("m5_flip_bit") == "1" and _v.get("m5_flip_page") == "0"
+   and _v.get("m5_flip_reg") == "1",
+   "a flip sets DCNT_PAGE and moves drawing to page 0",
+   "bit=%s page=%s reg=%s" % (_v.get("m5_flip_bit"), _v.get("m5_flip_page"),
+                              _v.get("m5_flip_reg")))
+ok(_v.get("m5_after_flip") == "0",
+   "...so the next pixel lands at 0x06000000, which is now the hidden page",
+   _v.get("m5_after_flip"))
+ok(_v.get("m5_flip2_page") == "1" and _v.get("m5_mode_kept") == "5",
+   "flipping back returns to page 1 and leaves the mode alone",
+   "page=%s mode=%s" % (_v.get("m5_flip2_page"), _v.get("m5_mode_kept")))
+
+ok(_v.get("m4_page") == "1" and _v.get("m4_dim") == "240160",
+   "mode 4 is 240x160 and starts drawing into the hidden page",
+   "page=%s dim=%s" % (_v.get("m4_page"), _v.get("m4_dim")))
+ok(_v.get("m4_odd_hw") == "20481" and _v.get("m4_odd_val") == str(0x1100),
+   "an odd-x pixel is the HIGH byte of halfword (y*240 + x) >> 1",
+   "hw=%s val=%s" % (_v.get("m4_odd_hw"), _v.get("m4_odd_val")))
+# The whole reason mode 4 plots read before they write.
+ok(_v.get("m4_keep_l") == str(0x99) and _v.get("m4_wrote") == str(0x77)
+   and _v.get("m4_keep_r") == str(0x99),
+   "plotting one 8bpp pixel leaves BOTH neighbours as they were",
+   "x4=%s x5=%s x6=%s" % (_v.get("m4_keep_l"), _v.get("m4_wrote"),
+                          _v.get("m4_keep_r")))
+ok(_v.get("m4_even") == str(0x66) and _v.get("m4_odd_kept") == str(0x77),
+   "...and writing the even half of a pair keeps the odd half",
+   "x4=%s x5=%s" % (_v.get("m4_even"), _v.get("m4_odd_kept")))
+ok(_line("m4_rect") == "153 68 68 68 153",
+   "a rect with an odd start and an odd end keeps the pixel outside each edge",
+   str(_line("m4_rect")))
+ok(_line("m4_blit") == "153 17 34 51 153",
+   "a blit at an odd x lands the right bytes and keeps its edges",
+   str(_line("m4_blit")))
+ok(_v.get("m4_row1") == str(20480 + 120),
+   "mode 4 rows are 240 BYTES apart, so row 1 starts 120 halfwords in",
+   _v.get("m4_row1"))
+ok(_v.get("m4_clear") == "1" and _v.get("m4_clear_n") == str(240 * 160 // 2)
+   and _v.get("m4_clear_over") == "0",
+   "clear doubles the index into both bytes and stops at the page's end",
+   "val=%s n=%s over=%s" % (_v.get("m4_clear"), _v.get("m4_clear_n"),
+                            _v.get("m4_clear_over")))
+ok(_v.get("m4_clear_p0") == "0",
+   "...and clears the page being DRAWN, leaving the displayed one alone",
+   _v.get("m4_clear_p0"))
+ok(_v.get("mode0_quiet") == "0",
+   "a bitmap call in a tiled mode writes nothing, rather than over the tiles",
+   _v.get("mode0_quiet"))
+ok(_v.get("refuse") == "0",
+   "rt_bitmap_mode refuses a tiled mode instead of half-entering one",
+   _v.get("refuse"))
 
 print("\n%s  (%d failed)" % ("FAILURES: " + ", ".join(FAIL) if FAIL
                              else "all checks pass", len(FAIL)))

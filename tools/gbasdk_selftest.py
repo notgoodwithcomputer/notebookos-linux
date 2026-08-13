@@ -42,7 +42,7 @@ import tempfile
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk  # noqa: E402
+from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 
 HOME = tempfile.mkdtemp(prefix="gbasdk-selftest-")
 os.makedirs(os.path.join(HOME, ".config", "notebook"))
@@ -1983,6 +1983,25 @@ check("...but stays registered, so its editor keeps its state",
       "room" in _ws.panes)
 _ws.reset(keep="welcome")
 
+# A workspace change used to synchronously serialise the whole project.  At
+# Pokemon scale that was half the cost of every resource selection.  Layout is
+# reflected in the model at once, while disk writes are coalesced and destroy
+# still flushes the last pending arrangement.
+_layout_writes = []
+_real_layout_save = _ws_app._save_autosave
+_ws_app._save_autosave = lambda: _layout_writes.append(_ws_app.proj.get("layout"))
+_ws.show("sprite"); _ws.show("room"); _ws.show("table")
+check("workspace changes defer the project write",
+      _layout_writes == [], repr(_layout_writes))
+check("workspace changes update the in-memory layout immediately",
+      isinstance(_ws_app.proj.get("layout"), dict))
+GLib.source_remove(_ws_app._layout_save_timer)
+_ws_app._layout_save_timer = None
+_ws_app._flush_layout_save()
+check("a burst of workspace changes coalesces to one project write",
+      len(_layout_writes) == 1, repr(_layout_writes))
+_ws_app._save_autosave = _real_layout_save
+
 # The browser must address the PROJECT's index, never the filtered one. The bug
 # this exists for: filtering renumbered rows 0..n while _sel and _asset_row
 # address a resource by its index into the project list, so with a filter
@@ -2823,8 +2842,12 @@ for _combo, _key, _val in ((_au._snd_kind, "kind", "1"),
 _ac = gbabuild.generate_c(_au.proj)
 _srow = re.search(r"const nb_Sound nb_sounds\[\].*?};", _ac, re.S).group(0)
 _sf = [f.strip() for f in re.search(r"\{([^{}]*)\},", _srow).group(1).split(",")]
-check("every sound field reaches the C", len(_sf) == 13,
+# 14 fields since pcm_loop (2026-08-07): a sampled sound marked loop is a
+# soundtrack and plays looping on the second PCM voice.
+check("every sound field reaches the C", len(_sf) == 14,
       "%d: %s" % (len(_sf), _sf))
+check("...and a tracker loop without pcm does not mark a soundtrack",
+      _sf[13] == "0", str(_sf[13]))
 check("...including the drum track", _sf[5].startswith("snd_drum"), str(_sf[5]))
 check("...and kind, duty, volume and decay",
       _sf[6:10] == ["1", "2", "10", "3"], str(_sf[6:10]))
@@ -3175,7 +3198,176 @@ check("the course tracks the open project", _after_done > _before_done)
 _h_app.destroy()
 pump()
 
+# ------------------------------------------------------- project search / refs
+_find_project = {
+    "name": "Find test", "sprites": [], "tilesets": [], "sounds": [],
+    "scripts": [{"id": "scr_intro", "code": "return 7;"}],
+    "tables": [{"id": "dialogue", "columns": [{"name": "line", "type": "text"}],
+                "rows": [["A hidden moon-cell phrase"]]}],
+    "objects": [
+        {"id": "obj_target", "sprite": None, "events": []},
+        {"id": "obj_actor", "sprite": None, "events": [
+            {"type": "create", "actions": [
+                {"kind": "say", "text": "Known action-string beacon"},
+                {"kind": "create_instance", "object": "obj_target", "x": 4, "y": 8}]}]}],
+    "rooms": [{"id": "rm_test", "w": 240, "h": 160, "speed": 60,
+               "instances": [{"object": "obj_target", "x": 10, "y": 12}],
+               "tiles": []}], "start_room": "rm_test"}
+_find_app = app(_find_project)
+_action_hits = _find_app._project_search("action-string beacon")
+check("project search finds a known action string",
+      len(_action_hits) == 1 and _action_hits[0]["kind"] == "Action")
+_cell_hits = _find_app._project_search("moon-cell")
+check("project search finds table cell text",
+      len(_cell_hits) == 1 and _cell_hits[0]["row"] == 0)
+check("search result activation opens and selects the action",
+      _find_app._activate_project_result(_action_hits[0])
+      and _find_app._editor_stack._active.current == "object"
+      and _find_app._sel == ("object", 1)
+      and _find_app._sel_event == 0 and _find_app._sel_action == 0)
+_uses = _find_app._where_used("object", "obj_target")
+check("where-used lists a room placement and action reference",
+      {u["kind"] for u in _uses} >= {"Room placement", "Action reference"},
+      repr(_uses))
+check("project search has a no-results case",
+      _find_app._project_search("phrase-that-does-not-exist") == [])
+_find_app.destroy()
+pump()
+
+# ======================================== runtime capabilities in the IDE =====
+section("object mercy frames")
+_cap = app({"name": "Capabilities", "sprites": [], "tilesets": [],
+            "sounds": [], "scripts": [], "tables": [],
+            "objects": [{"id": "obj_cap", "sprite": None, "events": []}],
+            "rooms": [], "start_room": None})
+_cap._sel = ("object", 0)
+_cap._load_object_editor()
+_cap._obj_hurt_frames.set_value(37)
+pump()
+check("mercy-frames control stores hurt_frames",
+      _cap.proj["objects"][0].get("hurt_frames") == 37)
+with open(CFG, "r", encoding="utf-8") as _fh:
+    _cap_saved = json.load(_fh)
+check("hurt_frames round-trips through the saved project",
+      _cap_saved["objects"][0].get("hurt_frames") == 37)
+_cap_c = gbabuild.generate_c(_cap.proj)
+check("hurt_frames reaches the object initializer",
+      re.search(r"\b37,\s*0\s*},", _cap_c) is not None)
+_cap_loaded, _ = _cap._sane_project(_cap_saved)
+check("hurt_frames survives project loading",
+      _cap_loaded["objects"][0]["hurt_frames"] == 37)
+
+section("no_health event")
+check("no_health is offered by the event picker",
+      ("no_health", "No Health") in gbasdk.EVENT_KINDS)
+_cap._do_add_event("no_health")
+check("no_health picker stores the generator event type",
+      _cap.proj["objects"][0]["events"][-1]["type"] == "no_health")
+_cap._add_action("add_score")
+_nh_c = gbabuild.generate_c(_cap.proj)
+check("no_health reaches its generated callback",
+      "obj_cap_no_health" in _nh_c and "obj_cap_no_health" in
+      re.search(r"const nb_Object nb_objects\[\].*?};", _nh_c, re.S).group(0))
+
+section("project save type")
+def _choose_flash128():
+    if hasattr(_cap, "_project_save_type"):
+        _cap._project_save_type.set_active_id("flash128")
+        _cap._project_save_type.get_toplevel().response(Gtk.ResponseType.OK)
+        return False
+    return True
+GLib.idle_add(_choose_flash128)
+_cap._project_settings()
+check("save-memory chooser stores save_type",
+      _cap.proj.get("save_type") == "flash128")
+with open(CFG, "r", encoding="utf-8") as _fh:
+    _save_model = json.load(_fh)
+check("save_type round-trips through the saved project",
+      _save_model.get("save_type") == "flash128")
+check("save_type reaches the generated signature",
+      "FLASH1M_V102" in gbabuild.generate_c(_cap.proj))
+_save_loaded, _ = _cap._sane_project(_save_model)
+check("save_type survives project loading",
+      _save_loaded.get("save_type") == "flash128")
+
+section("palette-cycle actions")
+_cap._sel_event = 0
+_cap._add_action("pal_cycle_start")
+_cap._add_action("pal_cycle_stop")
+_pc_actions = _cap.proj["objects"][0]["events"][0]["actions"][-2:]
+check("palette-cycle palette buttons lower to editable C actions",
+      all(a.get("kind") == "execute_code" and a.get("lang") == "C"
+          for a in _pc_actions), repr(_pc_actions))
+_pc_c = gbabuild.generate_c(_cap.proj)
+check("palette-cycle start reaches generated C",
+      "rt_pal_cycle(0, 0, 16, 8);" in _pc_c)
+check("palette-cycle stop reaches generated C",
+      "rt_pal_cycle_stop(-1);" in _pc_c)
+
+section("OBJ-window action")
+_cap._add_action("obj_window")
+_ow_action = _cap.proj["objects"][0]["events"][0]["actions"][-1]
+check("OBJ-window palette button lowers to an editable C action",
+      _ow_action.get("kind") == "execute_code" and _ow_action.get("lang") == "C")
+_ow_c = gbabuild.generate_c(_cap.proj)
+check("OBJ-window action reaches both runtime calls",
+      "rt_set_objwin(self, 1);" in _ow_c and "rt_window_obj(1);" in _ow_c)
+_cap.destroy()
+pump()
+
 # ===================================================================== end
+# ---- importing a sound: what the author is told when it will not load ----
+# Two failures, two different answers, and the distinction is the point. An
+# error-path audit replaced BOTH with one generic line, which stopped a raw
+# errno and an absolute path reaching the screen -- correct -- but also
+# swallowed the importer's own refusal. That refusal is the common case: most
+# audio tools export 24-bit by default, and "only 8- and 16-bit WAV files" is
+# a sentence somebody can act on in one re-export.
+import wave as _wave
+import struct as _struct
+_wd = tempfile.mkdtemp(prefix="gbasdk-wav-")
+_wapp = app()
+pump()
+_said = []
+_wapp._flash = lambda m: _said.append(m)
+
+
+def _wav(name, width, nch=1, rate=16384, frames=200):
+    q = os.path.join(_wd, name)
+    f = _wave.open(q, "wb")
+    f.setnchannels(nch)
+    f.setsampwidth(width)
+    f.setframerate(rate)
+    f.writeframes(b"\x00" * (width * nch * frames))
+    f.close()
+    return q
+
+
+_p24 = _wav("24bit.wav", 3)
+gbasdk.nbpicker.open_file = lambda *a, **k: _p24
+_wapp._import_wav()
+check("a 24-bit WAV is refused with the reason, not a generic failure",
+      _said and "8-" in _said[-1] and "16-bit" in _said[-1], str(_said[-1:]))
+
+_pbad = os.path.join(_wd, "notawav.wav")
+open(_pbad, "wb").write(b"not a RIFF file")
+gbasdk.nbpicker.open_file = lambda *a, **k: _pbad
+_wapp._import_wav()
+_msg = _said[-1]
+check("a decoder failure says so without leaking the path",
+      "could not be read" in _msg and _pbad not in _msg, _msg)
+check("...and without leaking an errno",
+      not any(c.isdigit() for c in _msg), _msg)
+
+_pok = _wav("ok.wav", 2)
+gbasdk.nbpicker.open_file = lambda *a, **k: _pok
+_before = len(_wapp._res("sound"))
+_wapp._import_wav()
+check("and a valid 16-bit WAV still imports",
+      len(_wapp._res("sound")) == _before + 1, str(_said[-1:]))
+_wapp.destroy()
+pump()
+
 print("\n%d/%d checks passed" % (sum(RESULTS), len(RESULTS)))
 if FAILED:
     print("\nFAILED:")

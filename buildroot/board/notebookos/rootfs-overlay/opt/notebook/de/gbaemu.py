@@ -20,6 +20,7 @@ import json
 import time
 import shutil
 import subprocess
+import tempfile
 
 import nbapp
 import nbpicker
@@ -32,6 +33,8 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 # gbaemu.json any more: it held only `fullscreen` and `scale`, neither of which
 # could act on anything.
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
+CFG_PATH = os.path.join(CFG_DIR, "gbaemu.json")
+STATE_SLOTS = (1, 2, 3)
 
 INK = "#1A1916"
 MUTED = "#6E695E"
@@ -51,6 +54,19 @@ MAX_ROMS = 600
 
 def _is_rom(path):
     return os.path.splitext(path)[1].lower() in ROM_EXT
+
+
+def game_key(path):
+    """Stable per-game metadata key (the same file reached by one path)."""
+    return os.path.realpath(os.path.abspath(path))
+
+
+def state_path(path, slot):
+    """State name used by SDL.cpp:sdlStateName for a writable ROM folder."""
+    if slot not in STATE_SLOTS:
+        raise ValueError("save-state slot must be 1, 2, or 3")
+    return os.path.join(os.path.dirname(path),
+                        os.path.basename(path) + str(slot) + ".sgm")
 
 
 # The smallest a file can be and still hold the cartridge header its system
@@ -127,17 +143,13 @@ class GbaEmu(nbapp.AppWindow):
         self._closed = False
         self._launch_source = 0         # the pending command-line launch idle
 
-        # No settings file. There were two keys and neither could act: a game
-        # ALWAYS runs fullscreen, because nbgame has to reparent vbam into a
-        # fullscreen app window or the single-app WM unmaps it (see
-        # nbgame._build_stage), and `scale` had no control at all — it was
-        # loaded, range-checked to 1..6, and read by nothing. A Fullscreen
-        # toggle that remembers your choice across reboots and changes nothing
-        # is the quietest way for a control to lie, so it is gone rather than
-        # unified or explained.
+        # This file is metadata, not emulator configuration: vbam owns the
+        # binary .sgm files and its SDL frontend owns the F-key bindings.
+        self._state_meta = self._load_state_meta()
         self._roms = []                 # [{path, name, system, ext}]
         self._launch_time = 0.0
         self._session = None            # the running nbgame.GameSession, if any
+        self._active_rom = None
         # NB: the vbam process, its stdout log and the Ctrl+Esc watch all live in
         # nbgame.GameSession now — gbaemu only owns the library + the session.
 
@@ -242,6 +254,76 @@ class GbaEmu(nbapp.AppWindow):
             pass
         found.sort(key=lambda m: m["name"].lower())
         self._roms = found
+        changed = False
+        for item in found:
+            changed = self._reconcile_states(item["path"], save=False) or changed
+        if changed:
+            self._save_state_meta()
+
+    # ================= save-state metadata =================
+    def _load_state_meta(self):
+        try:
+            with open(CFG_PATH, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                nbapp.quarantine_unrecognized(CFG_PATH)
+                data = {}
+        except (ValueError, UnicodeDecodeError):
+            nbapp.preserve_damaged(CFG_PATH)
+            data = {}
+        except (OSError, TypeError):
+            data = {}
+        games = data.get("games")
+        if not isinstance(games, dict):
+            games = {}
+        return {"version": 1, "games": games}
+
+    def _save_state_meta(self):
+        try:
+            os.makedirs(CFG_DIR, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=".gbaemu-", suffix=".json",
+                                       dir=CFG_DIR)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(self._state_meta, fh, indent=2, sort_keys=True)
+                fh.write("\n")
+            os.replace(tmp, CFG_PATH)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except (OSError, UnboundLocalError):
+                pass
+
+    def _game_state(self, path):
+        games = self._state_meta["games"]
+        rec = games.setdefault(game_key(path), {})
+        slot = rec.get("last_slot", 1)
+        rec["last_slot"] = slot if slot in STATE_SLOTS else 1
+        if not isinstance(rec.get("last_saved"), dict):
+            rec["last_saved"] = {}
+        return rec
+
+    def _select_slot(self, path, slot):
+        if slot not in STATE_SLOTS:
+            return
+        self._game_state(path)["last_slot"] = slot
+        self._save_state_meta()
+        self._render_library()
+
+    def _reconcile_states(self, path, save=True):
+        rec = self._game_state(path)
+        changed = False
+        for slot in STATE_SLOTS:
+            try:
+                stamp = os.path.getmtime(state_path(path, slot))
+            except OSError:
+                continue
+            key = str(slot)
+            if rec["last_saved"].get(key) != stamp:
+                rec["last_saved"][key] = stamp
+                changed = True
+        if changed and save:
+            self._save_state_meta()
+        return changed
 
     def _render_library(self):
         for c in self._lib_body.get_children():
@@ -272,8 +354,18 @@ class GbaEmu(nbapp.AppWindow):
         self._lib_body.show_all()
 
     def _rom_card(self, m):
+        # TWO activatable regions, never nested. The launch button wraps the
+        # artwork and titles ONLY; the slot buttons are its SIBLINGS below.
+        #
+        # They were inside it, and a GtkButton containing GtkToggleButtons is
+        # a broken control: picking a save slot could activate the outer
+        # button and launch the game instead, and keyboard focus inside an
+        # activatable parent behaves differently again. That is the shape of
+        # "the emulator breaks sometimes" -- it only misfires when the pointer
+        # or focus lands on the inner control, so it looks intermittent.
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        outer.get_style_context().add_class("romcard")
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        card.get_style_context().add_class("romcard")
         art = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         art.get_style_context().add_class("romart")
         art.set_size_request(120, 120)
@@ -292,6 +384,29 @@ class GbaEmu(nbapp.AppWindow):
         sysl = Gtk.Label(label=m["system"])
         sysl.get_style_context().add_class("romsys")
         card.pack_start(sysl, False, False, 0)
+        rec = self._game_state(m["path"])
+        selected = rec["last_slot"]
+        slots = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+        slots.set_halign(Gtk.Align.CENTER)
+        for slot in STATE_SLOTS:
+            sb = Gtk.ToggleButton(label=_t("Slot %d") % slot)
+            sb.set_active(slot == selected)
+            sb.set_relief(Gtk.ReliefStyle.NONE)
+            sb.get_style_context().add_class("stateslot")
+            sb.connect("clicked", lambda _w, p=m["path"], s=slot:
+                       self._select_slot(p, s))
+            slots.pack_start(sb, False, False, 0)
+        outer.pack_start(slots, False, False, 0)
+        keys = Gtk.Label(label=(_t("Load F%d") % selected) + "  ·  " +
+                         (_t("Save Shift+F%d") % selected))
+        keys.get_style_context().add_class("statekeys")
+        outer.pack_start(keys, False, False, 0)
+        stamp = rec["last_saved"].get(str(selected))
+        saved = (time.strftime("%Y-%m-%d %H:%M", time.localtime(stamp))
+                 if stamp is not None else _t("Not saved"))
+        last = Gtk.Label(label=_t("Last saved: %s") % saved)
+        last.get_style_context().add_class("statetime")
+        outer.pack_start(last, False, False, 0)
         # The card is wrapped in a real button, not an EventBox. An EventBox
         # takes no focus and answers no key, so the library was reachable by
         # pointer only: Tab skipped every game and there was no way to start
@@ -305,7 +420,9 @@ class GbaEmu(nbapp.AppWindow):
         button.add(card)
         button.set_tooltip_text(_t("Play %s") % m["name"])
         button.connect("clicked", lambda _w, p=m["path"]: self._play(p))
-        return button
+        outer.pack_start(button, False, False, 0)
+        outer.reorder_child(button, 0)     # artwork above the slot controls
+        return outer
 
     def _empty_state(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -492,6 +609,7 @@ class GbaEmu(nbapp.AppWindow):
         if self._session is not None:       # a game is already running
             return
         self._launch_time = time.monotonic()
+        self._active_rom = rompath
         self._flash("Playing %s — press Ctrl+Esc to exit."
                     % os.path.basename(rompath))
         # Run the game inside a fullscreen "stage": a raw vbam window is unmapped
@@ -515,6 +633,13 @@ class GbaEmu(nbapp.AppWindow):
 
     def _on_game_end(self):
         self._session = None
+        # Lifecycle tests and emergency teardown may exercise this callback on
+        # a deliberately skeletal instance that never reached __init__.
+        active_rom = getattr(self, "_active_rom", None)
+        self._active_rom = None
+        if active_rom:
+            self._reconcile_states(active_rom)
+            self._render_library()
         if self._closed:
             # The launcher went away while the game was running (teardown ends
             # the session itself): there is no status line to write and no
@@ -717,6 +842,13 @@ class GbaEmu(nbapp.AppWindow):
                                    border-color: #C8341E; }
         .romname { font-size: 13px; color: #1A1916; font-weight: 600; }
         .romsys { font-size: 11px; color: #9A9484; }
+        .stateslot { padding: 2px 5px; min-height: 20px; min-width: 0;
+                     border: 1px solid #C9C4B6; background: #FCFBF8;
+                     box-shadow: none; font-size: 10px; color: #6E695E; }
+        .stateslot:checked { background: #EAE3D2; border-color: #6E695E;
+                            color: #1A1916; }
+        .statekeys { font-size: 10px; color: #6E695E; }
+        .statetime { font-size: 10px; color: #9A9484; }
         .emptytitle { font-size: 15px; font-weight: 600; color: #6E695E; }
         .emptysub { font-size: 13px; color: #9A9484; }
         .emunotice { margin: 20px 24px 0; padding: 12px 16px;

@@ -445,7 +445,7 @@ COURSE = [
            ["rt_key_held(KEY_A)", "held this frame"],
            ["rt_key_pressed(KEY_A)", "pressed on this frame only"],
            ["rt_play_sound(n)", "start a sound"],
-           ["rt_goto_room(n)", "change room at the end of the frame"],
+           ["rt_room_goto(n)", "change room at the end of the frame"],
            ["rt_draw_text(s, x, y)", "text at a screen position"]]),
         P("Engine calls and the action sheet are the same surface. Play Sound is "
           "rt_play_sound; there is no capability behind one that the other "
@@ -566,7 +566,7 @@ COURSE = [
           "}"),
         P("Passing 0 as the handler removes it and disables that source. The "
           "sources are named in gba.h: IRQ_VBLANK, IRQ_HBLANK, IRQ_VCOUNT, "
-          "IRQ_TIMER0 … 3, IRQ_DMA0 … 3, IRQ_SERIAL, IRQ_KEYPAD, IRQ_CART."),
+          "IRQ_TIMER0 … 3, IRQ_DMA0 … 3, IRQ_SERIAL, IRQ_KEYPAD, IRQ_GAMEPAK."),
         N("A handler is a function, so it goes in a script, not in an Execute "
           "Code action -- see lesson 7. Arming it is one call, which can go "
           "anywhere."),
@@ -683,11 +683,10 @@ COURSE = [
           "effect."),
         C("rt_video_mode(1);               /* BG0/BG1 tiled, BG2 affine */\n"
           "rt_bg_affine(2, 120, 80, 120, 80, angle, 256);"),
-        N("An affine background reads 8-bit tile indices in a layout the room "
-          "editor does not emit, so mode 1 turns BG2 over whatever already "
-          "occupies its screenblock. Supplying affine map data is Phase 7 "
-          "work; until then rt_bg_affine is for hand-built maps in Execute "
-          "Code, and rt_set_angle is the way to turn a picture on screen."),
+        N("An affine room supplies BG2 with its own 8-bit map and project-level "
+          "affine_tileset. Entering that room selects mode 1 automatically; "
+          "rt_bg_affine turns and scales the ground without a direct write to "
+          "the display-mode register."),
         T(["scale", "Result"],
           [["256", "life size"], ["512", "double"], ["128", "half"],
            ["0", "treated as 1, because the register maths divides by it"]]),
@@ -955,26 +954,39 @@ s16 bob(s32 frame, s16 amplitude)
 }
 """),
 
-    ("r_spotlight", "Spotlight", "Script",
-     "A circle of full brightness following something, with everything outside "
-     "it dimmed. A window decides where the effect applies; the blend decides "
-     "how strong it is. Nothing is redrawn to achieve either.",
+    ("r_waterfall", "Cycling waterfall", "Step event",
+     "Four background palette entries rotate every six frames, animating a "
+     "waterfall or torch without changing its tiles. The returned slot stops "
+     "that one cycle when B is pressed.",
      """
-void spotlight(s32 x, s32 y, s32 radius, int dim)
-{
-    /* Inside: every layer, no colour effect. Outside: every layer AND the
-       blend, which is what dims it. */
-    rt_window(0, x - radius, y - radius, radius * 2, radius * 2,
-              WIN_ALL, WIN_ALL | WIN_BLEND);
-    rt_blend_brightness(BLD_A_BG0 | BLD_A_BG1 | BLD_A_OBJ, -dim);
-    REG_DISPCNT |= WIN0_ON;
+if (self->var[0] == 0) {
+    self->var[1] = rt_pal_cycle(0, 1, 4, 6);
+    self->var[0] = 1;
 }
 
-void spotlight_off(void)
-{
-    rt_window_off(0);
-    rt_blend_off();
+if (rt_key_pressed(KEY_B)) {
+    rt_pal_cycle_stop(self->var[1]);
+    self->var[0] = 2;
 }
+"""),
+
+    ("r_spotlight", "Sprite-shaped spotlight", "Create event",
+     "The object's sprite becomes an OBJ-window stencil: a sprite-shaped hole "
+     "shows BG0 through darkness. The stencil sprite itself is not drawn. The "
+     "empty regular window makes everything outside all windows dark. "
+     "rt_window_obj_off() removes the OBJ-window when the effect ends.",
+     """
+rt_set_objwin(self, 1);
+rt_window_obj(WIN_BG0);
+rt_window(0, 0, 0, 0, 0, 0, 0);
+"""),
+
+    ("r_mercy", "Contact damage and mercy frames", "Collision event",
+     "Place this event on the player against the damaging object. Set the "
+     "player object's hurt_frames field to the wanted invincibility length, "
+     "then place respawn or game-over logic in its no_health event.",
+     """
+nb_health -= 10;
 """),
 
     ("r_rotate", "Rotating sprite", "Step event",
@@ -990,6 +1002,40 @@ self->var[1] = (self->var[1] + 3) & 255;      /* a separate phase for size */
 
 rt_set_angle(self, self->var[0]);
 rt_set_scale(self, 192 + (rt_sin8(self->var[1]) >> 2));
+"""),
+
+    ("r_bitmap", "Double-buffered bitmap", "Step event",
+     "A mode-4 frame is built on the hidden page, held for VBlank, then "
+     "presented. The next step draws into the page that has become hidden. "
+     "Palette indices, not BGR555 colours, are stored in this mode.",
+     """
+static const u8 mark[16] = {
+    1, 1, 0, 0,
+    1, 2, 2, 0,
+    0, 2, 2, 1,
+    0, 0, 1, 1
+};
+
+if (self->var[0] == 0) {
+    rt_bitmap_mode(4);
+    self->var[0] = 1;
+}
+
+rt_bitmap_clear(0);
+rt_bitmap_rect(16, 16, 80, 32, 3);
+rt_bitmap_pixel(20 + rt_bitmap_page(), 20, 4);
+rt_bitmap_blit(112, 72, 4, 4, mark);
+rt_wait_vblank();
+rt_bitmap_flip();
+"""),
+
+    ("r_affine_ground", "Turning affine ground", "Step event",
+     "A room carrying an affine map enters mode 1 when it loads. This keeps "
+     "the centre texture pixel under the centre screen pixel while the ground "
+     "turns; scale 256 keeps it at life size.",
+     """
+self->var[0] = (self->var[0] + 1) & 255;
+rt_bg_affine(2, 128, 128, 120, 80, self->var[0], 256);
 """),
 
     ("r_dissolve", "Mosaic dissolve", "Step event",
@@ -1466,6 +1512,71 @@ GUIDES = [
           "which is how a sprite is drawn behind a foreground layer."),
     ]),
 
+    Topic("g_bitmap", "Bitmap modes", "Guides", [
+        H("Three framebuffers"),
+        P("rt_bitmap_mode selects mode 3, 4 or 5 and enables the BG2 "
+          "framebuffer. rt_bitmap_pixel plots one clipped pixel; "
+          "rt_bitmap_rect fills a clipped rectangle; rt_bitmap_clear fills "
+          "the drawing page; rt_bitmap_blit copies a clipped image in the "
+          "current mode's pixel format."),
+        T(["Mode", "Pixels", "Pages", "Colour"],
+          [["3", "240x160", "one", "u16 BGR555"],
+           ["4", "240x160", "two", "8-bit BG palette index"],
+           ["5", "160x128", "two", "u16 BGR555"]]),
+        N("Mode 5 is smaller. A 240-pixel stride in mode 5 crosses the "
+          "160-pixel row boundary and draws a diagonal instead of a row."),
+        H("Hidden-page drawing"),
+        C("rt_bitmap_clear(0);\n"
+          "rt_bitmap_rect(24, 24, 48, 16, RGB15(31, 0, 0));\n"
+          "rt_bitmap_pixel(120, 80, RGB15(31, 31, 31));\n"
+          "rt_wait_vblank();\n"
+          "rt_bitmap_flip();"),
+        P("Modes 4 and 5 always draw to the hidden page. rt_bitmap_page "
+          "reports that drawing page as 0 or 1. The runtime's rt_vsync frame "
+          "boundary paired with rt_bitmap_flip presents the completed page "
+          "during VBlank, then makes the other page the next drawing target. "
+          "Author code uses rt_wait_vblank before the flip because rt_vsync "
+          "belongs to the runtime loop. Mode 3 has no hidden page, so every "
+          "edit is visible and rt_bitmap_flip does nothing."),
+        N("A mode-4 pixel occupies one byte, but VRAM ignores byte writes. "
+          "rt_bitmap_pixel performs a read-modify-write of the containing "
+          "halfword; a direct byte plot silently loses every second pixel."),
+        H("Layers and sprite memory"),
+        N("BG0, BG1 and BG3 do not exist in a bitmap mode. The runtime's text "
+          "and dialogue layers therefore are not drawn there."),
+        N("OBJ tiles begin at 0x06014000 in bitmap modes. Sprite tile numbers "
+          "below 512 land in the framebuffer instead of safe OBJ tile memory."),
+        DO("Insert the Double-buffered bitmap recipe in a Step event."),
+        CHK("code_calls_engine", "An Execute Code action calls an rt_ function."),
+    ]),
+
+    Topic("g_affine_ground", "Affine ground", "Guides", [
+        H("Room data"),
+        P("A project-level affine_tileset supplies 8-bit tiles. A room may "
+          "carry a 16x16 or 32x32 affine map whose cells are 8-bit tile "
+          "indices. Loading that room selects display mode 1 automatically "
+          "and places the affine ground on BG2."),
+        T(["Map size", "Ground area"],
+          [["16x16 cells", "128x128 pixels"],
+           ["32x32 cells", "256x256 pixels"]]),
+        H("The layer trade"),
+        P("Mode 0 has four text backgrounds; mode 1 has two text backgrounds "
+          "and one affine background. An affine room gives up its flat tile "
+          "layer because the affine layer IS the ground, and gives up its "
+          "parallax layer as well."),
+        N("BG0 and BG1 swap duties in an affine room: BG0 carries text and "
+          "BG1 carries the dialogue panel. A lower-numbered background wins a "
+          "priority tie, so the text remains above its box."),
+        H("Turning and scaling"),
+        C("rt_bg_affine(2, 128, 128, 120, 80, angle, 256);"),
+        P("rt_bg_affine puts texture pixel (128,128) at screen pixel "
+          "(120,80), then turns it by angle. A full turn is 256 angle units; "
+          "scale is 8.8 fixed point, with 256 at life size."),
+        DO("Set an affine_tileset, add an affine map to a room, then insert "
+           "the Turning affine ground recipe in a Step event."),
+        CHK("code_uses_effect", "An Execute Code action uses a Phase 7 effect."),
+    ]),
+
     Topic("g_audio", "Audio", "Guides", [
         P("Two independent sound systems."),
         T(["System", "Channels", "Source"],
@@ -1498,7 +1609,17 @@ GUIDES = [
            ["Longest import", "8 seconds"],
            ["Held while playing", "timer 1 and DMA 1"]]),
         P("Play Sound plays a sampled sound as a sample; its pattern tracks are "
-          "ignored. Playback stops itself when the sample runs out."),
+          "ignored. rt_pcm_play mixes up to four one-shot samples at once, so "
+          "a new effect does not cut the previous effect off. A fifth takes "
+          "the voice closest to finishing. Playback stops each voice when its "
+          "sample runs out."),
+        H("Looping soundtrack"),
+        P("A sampled sound marked Loop plays forever on the second PCM voice. "
+          "Four mixed one-shot voices keep the first PCM voice and play over the "
+          "soundtrack. rt_stop_music() silences the looping sample together "
+          "with the music channels."),
+        C("rt_play_music(NB_SND_THEME);\n"
+          "rt_stop_music();"),
         N("Timer 1, not timer 0. Timer 0 is left for the project, so a sample "
           "and the interrupt example in lesson 13 do not collide."),
         N("A minute of music sampled is a megabyte. The same minute as a "
@@ -1613,6 +1734,29 @@ GUIDES = [
           "then does nothing and reports nothing."),
     ]),
 
+    Topic("g_power_gpio", "Sleep and cartridge hardware", "Guides", [
+        H("Stopping work"),
+        P("rt_sleep stops the console until a button wakes it. "
+          "rt_wait_vblank idles the CPU until the next interrupt, which is a "
+          "one-frame wait rather than a full sleep."),
+        C("if (rt_key_pressed(KEY_SELECT)) rt_sleep();\n"
+          "rt_wait_vblank();"),
+        T(["Call", "Function"],
+          [["rt_rumble(on)", "turn the cartridge motor on or off"],
+           ["rt_solar()", "read 0..255; smaller is brighter"],
+           ["rt_gyro()", "read a 12-bit rate centred near 0x6C0"],
+           ["rt_gpio_release()", "return the GPIO pins to the clock"]]),
+        H("One cartridge device"),
+        N("Rumble, solar and gyro are CARTRIDGE hardware, not parts of the "
+          "console. All three share the same four GPIO pins used by the "
+          "cartridge clock, so a cartridge carries at most one of them."),
+        P("rt_gpio_release returns the shared pins after a hardware reading or "
+          "rumble session, allowing the clock driver to claim them later."),
+        DO("Add an Execute Code action that sleeps on Select or reads the one "
+           "device present on the target cartridge."),
+        CHK("code_calls_engine", "An Execute Code action calls an rt_ function."),
+    ]),
+
     Topic("g_clock", "The cartridge clock", "Guides", [
         P("The real-time clock is on the CARTRIDGE, not in the console. "
           "Whether a game can tell the time depends on the cartridge it is in, "
@@ -1640,8 +1784,48 @@ GUIDES = [
           "the transfer itself is written to the chip's published sequence."),
     ]),
 
+    Topic("g_palette_cycles", "Palette cycling", "Guides", [
+        P("rt_pal_cycle(obj, first, count, frames) rotates one contiguous "
+          "background or sprite palette range and returns its cycle slot. "
+          "rt_pal_cycle_stop(slot) stops that slot; -1 stops every cycle."),
+        N("The room backdrop lives in background palette entry 0, and room "
+          "changes rewrite it. A cycle including entry 0 therefore fights the "
+          "room loader. Nothing forbids that range -- cycling the backdrop is "
+          "a legitimate sky effect -- but it is the author's fight to pick "
+          "and manage."),
+    ]),
+
+    Topic("g_mercy", "Mercy frames and death", "Guides", [
+        P("The object field hurt_frames opts that object into invincibility "
+          "after any step that costs health. Its sprite blinks while the count "
+          "runs, and collision tests report nothing until it reaches zero."),
+        H("Damage in the collision event"),
+        C("nb_health -= 10;"),
+        H("Death in the no_health event"),
+        C("nb_lives -= 1;\nrt_room_goto(NB_ROOM_START);"),
+        P("The no_health event fires once when health reaches zero. It re-arms "
+          "after health rises above zero, so the event needs no latch variable."),
+        DO("Set hurt_frames on the player object, subtract health in its "
+           "collision event, and place death logic in its no_health event."),
+    ]),
+
     Topic("g_saves", "Saving", "Guides", [
-        P("Cartridge save memory is 32 KB of SRAM at 0xE000000."),
+        H("Save type"),
+        P("The project-level save_type setting accepts sram, flash64, "
+          "flash128, eeprom512 or eeprom8k. The generator emits the matching "
+          "emulator save signature. Author code still uses rt_game_save and "
+          "rt_game_load unchanged."),
+        T(["Type", "Capacity"],
+          [["sram", "32 KB"], ["flash64", "64 KB"],
+           ["flash128", "128 KB"], ["eeprom512", "512 bytes"],
+           ["eeprom8k", "8 KB"]]),
+        C("rt_game_save();\n"
+          "if (rt_game_load()) loaded = 1;"),
+        H("EEPROM"),
+        P("EEPROM changes the cartridge save hardware, not the author API. "
+          "Its serial device transfers 8-byte blocks through DMA3; the runtime "
+          "keeps that protocol behind rt_game_save and rt_game_load."),
+        P("SRAM provides 32 KB of cartridge save memory at 0xE000000."),
         N("SRAM is 8-bit only. Reading or writing a u16 or u32 there returns or "
           "stores the wrong bytes. Every access is one byte at a time, which "
           "also means a struct cannot be copied into it wholesale."),
@@ -1650,6 +1834,9 @@ GUIDES = [
         N("An emulator infers save type from strings present in the ROM. A ROM "
           "with no recognisable save signature saves nothing and reports "
           "nothing. The build writes the signature."),
+        DO("Choose a save_type in project settings and call rt_game_save from "
+           "the event that commits progress."),
+        CHK("code_calls_engine", "An Execute Code action calls an rt_ function."),
     ]),
 ]
 
@@ -1678,7 +1865,8 @@ def _param_kind(kind):
     return str(kind)
 
 
-def reference_actions(action_groups, action_defs, action_tips, container=()):
+def reference_actions(action_groups, action_defs, action_tips,
+                      container=(), presets=None):
     """One topic per action group, derived from the tables the app itself uses.
 
     Written by hand this would be 45 entries that drift from the tool within a
@@ -1690,6 +1878,19 @@ def reference_actions(action_groups, action_defs, action_tips, container=()):
         body = [P("Actions in the %s group of the palette. Every one of them "
                   "compiles to C that Show C displays." % group.title())]
         for k in keys:
+            if k not in labels and k in (presets or {}):
+                # A PRESET: a palette entry that inserts a block of C
+                # rather than its own action kind, so saved projects
+                # carry only kinds the generator already knows. It is
+                # still something an author can click, so the reference
+                # owes it an entry -- the palette-coverage gate exists
+                # to notice exactly this gap.
+                body.append(H(presets[k][0]))
+                tip = action_tips.get(k)
+                if tip:
+                    body.append(P(tip + "."))
+                body.append(C(presets[k][1]))
+                continue
             if k not in labels:
                 continue
             body.append(H(labels[k]))
@@ -1820,6 +2021,12 @@ def reference_engine(header_path=None):
             tail = (m.group("note") or m.group("note2") or "").strip()
             above = " ".join(t.strip(" *") for t in pending).strip()
             note = " - ".join(x for x in (above, tail) if x)
+            if not note and name == "rt_window_obj_off":
+                note = "disable the sprite-shaped object window"
+            if not note and name == "rt_pal_get":
+                note = "read one background or sprite palette colour"
+            if not note and name == "rt_pal_load":
+                note = "load a run of background or sprite palette colours"
             cur[1].append((sig, note))
             pending = []
         elif line.strip().startswith(("/*", "*", "//")):
@@ -2454,6 +2661,7 @@ def all_topics(tables=None):
                 "action_defs": gbasdk.ACTION_DEFS,
                 "action_tips": gbasdk.ACTION_TIPS,
                 "container": gbasdk.CONTAINER_ACTIONS,
+                "presets": gbasdk.ACTION_PRESETS,
             }
         except Exception:
             tables = {}
@@ -2462,7 +2670,8 @@ def all_topics(tables=None):
         out += reference_actions(tables.get("action_groups", ()),
                                  tables.get("action_defs", ()),
                                  tables.get("action_tips", {}),
-                                 tables.get("container", ()))
+                                 tables.get("container", ()),
+                                 tables.get("presets", {}))
     out += reference_engine()
     out += list(GUIDES)
     out += reference_registers()

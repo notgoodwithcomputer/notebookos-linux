@@ -251,42 +251,50 @@ else:
         check("a game pulled off a USB stick half-way through is refused",
               gbaemu.rom_problem(part) is not None)
 
-# gbaemu keeps NO settings file. It had two keys and neither could act: a game
-# always runs fullscreen (nbgame must reparent vbam into a fullscreen app window
-# or the single-app WM unmaps it), and `scale` had no control at all. Both were
-# removed, so what is asserted now is the removal itself — and the upgrade path,
-# because a machine coming from an older build still has the file on disk.
-section("settings")
+# Save states are VBA-M-owned .sgm binaries; gbaemu owns only per-game UI
+# metadata. SDL.cpp's sdlStateName keeps the ROM extension in the basename.
+section("save-state slots and metadata")
 cfg = os.path.join(HOME, ".config", "notebook", "gbaemu.json")
-check("the app keeps no settings of its own",
-      not hasattr(gbaemu.GbaEmu, "_load_settings")
-      and not hasattr(gbaemu.GbaEmu, "_save_settings"))
-# Comments stripped before matching. The word survives in the comment that
-# RECORDS the removal, and a check for the feature that trips on the note
-# saying the feature is gone reports the documentation, not the code. (Exactly
-# what had music_transport_accessibility_selftest sitting red on a fixed
-# defect — and I wrote this line an hour after fixing that one.)
-_src = "\n".join(l for l in open(gbaemu.__file__, encoding="utf-8").read()
-                 .splitlines() if not l.strip().startswith("#"))
-check("and offers no Fullscreen toggle to write them with",
-      "Fullscreen" not in _src)
+paths = [gbaemu.state_path(good, slot) for slot in gbaemu.STATE_SLOTS]
+check("exactly three save-state slots are exposed",
+      gbaemu.STATE_SLOTS == (1, 2, 3), gbaemu.STATE_SLOTS)
+check("each slot addresses VBA-M's correct state binary",
+      [os.path.basename(p) for p in paths] ==
+      ["Good.gba1.sgm", "Good.gba2.sgm", "Good.gba3.sgm"], paths)
+try:
+    gbaemu.state_path(good, 4)
+    rejected = False
+except ValueError:
+    rejected = True
+check("a fourth slot cannot be addressed", rejected)
 
-# left over from a previous build: must be ignored, not read, not rewritten
-os.makedirs(os.path.dirname(cfg), exist_ok=True)
-with open(cfg, "w") as fh:
-    json.dump({"fullscreen": False, "scale": 4}, fh)
-before = open(cfg).read()
 w = app()
+w._select_slot(good, 3)
+w._select_slot(real, 2)
 w.destroy()
-check("a settings file left by an older build does not stop the app opening",
-      True)
-check("...and is not rewritten on the way out", open(cfg).read() == before)
+w = app()
+check("the last-used slot is remembered independently per game",
+      w._game_state(good)["last_slot"] == 3
+      and w._game_state(real)["last_slot"] == 2,
+      w._state_meta)
+stamp = 1700000123.0
+with open(gbaemu.state_path(good, 3), "wb") as fh:
+    fh.write(b"state three")
+os.utime(gbaemu.state_path(good, 3), (stamp, stamp))
+w._reconcile_states(good)
+w.destroy()
+saved = json.load(open(cfg))
+good_rec = saved["games"][gbaemu.game_key(good)]
+check("the addressed slot records its state binary timestamp",
+      good_rec["last_saved"].get("3") == stamp, good_rec)
+check("an untouched slot does not acquire a timestamp",
+      "2" not in good_rec["last_saved"], good_rec)
 
-# and a corrupt one is equally uninteresting, because nothing reads it
 open(cfg, "w").write("{ not json at all")
 w = app()
+check("a damaged metadata file opens with slot 1 selected",
+      w._game_state(good)["last_slot"] == 1, w._state_meta)
 w.destroy()
-check("a damaged leftover settings file is simply ignored", True)
 
 print("\n%d/%d checks passed" % (sum(RESULTS), len(RESULTS)))
 if FAILED:

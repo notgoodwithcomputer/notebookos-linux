@@ -111,6 +111,13 @@ typedef struct {
     u8  edge_open;          /* 0 = the room's outside edge is solid, 1 = open */
     const nb_Warp* warps;   /* room-to-room links, or 0 for none */
     u16 nwarps;
+    /* ---- appended; 0 = the original behaviour ---- */
+    const u8* aff_map;      /* an AFFINE ground layer: one 8-bit tile index
+                               per cell, or 0 for the flat tile layer. A room
+                               with one gives up its parallax layer and its
+                               own flat tiles -- mode 1 has two text layers
+                               where mode 0 has four. */
+    u8 aff_size;            /* 0 = 16x16 cells, 1 = 32x32 */
 } nb_Room;
 
 /* A chiptune. Three tracks over `nsteps` steps, each `tempo` frames long:
@@ -196,6 +203,10 @@ typedef struct Instance {
                                with hurt_frames report nothing while set */
     u8  objwin;             /* 1 = this sprite is the OBJ window stencil
                                rather than a drawn image */
+    u8  palbank;            /* OBJ palette bank OVERRIDE, held as bank+1 so
+                               that 0 means "use the sprite's own" -- bank 0
+                               is a real bank and could not signal it */
+    u32 serial;             /* identity of this occupancy of its pool slot */
 } Instance;
 
 /* ---- supplied by the generated game ---- */
@@ -208,6 +219,9 @@ extern const int       nb_obj_tile_count;
 extern const u16       nb_bg_palette[16];   /* shared 4bpp BG (tileset) palette */
 extern const u16       nb_bg_tiles[];       /* tileset tiles, 4bpp; tile 0 = blank */
 extern const int       nb_bg_tile_count;
+extern const u16       nb_aff_tiles[];      /* affine tileset, 8bpp (64 bytes a tile) */
+extern const int       nb_aff_tile_count;
+extern const u16       nb_aff_palette[256]; /* the affine layer's own 256 colours */
 extern const nb_Object nb_objects[];
 extern const int       nb_object_count;
 extern const nb_Room   nb_rooms[];
@@ -468,11 +482,48 @@ void      rt_pcm_play(const void *data, u32 nsamples); /* nsamples is a count of
 void      rt_pcm_stop(void);                  /* silence and release timer 1 and DMA 1 */
 int       rt_pcm_playing(void);           /* 1 while a sample is sounding */
 void      rt_pcm_play_b(const void* data, u32 nsamples, int loop); /* the soundtrack voice */
-int       rt_pal_cycle(int obj, int first, int count, int frames); /* rotate palette entries; slot or -1 */
+/* Rotate a contiguous run of palette entries: slot number back, or -1 if
+ * all four slots are busy or the range is bad. obj: 0 = background
+ * palette, 1 = sprites. Steps happen in the VBlank flush, so a rotation
+ * is never torn mid-frame.
+ *
+ * A CYCLE IS GLOBAL AND SURVIVES A ROOM CHANGE, like every other screen
+ * effect here -- a fade, a shake and a mosaic all persist too, because a
+ * fade-out has to survive the transition it is covering. A cycle started
+ * for one room's waterfall therefore keeps rotating in the next room,
+ * where it looks like colour corruption rather than an effect. Stop it
+ * with rt_pal_cycle_stop(-1) in the room's own Create event if it
+ * belongs to the scene rather than the game. */
+int       rt_pal_cycle(int obj, int first, int count, int frames);
 void      rt_window_obj(int inside);          /* layers visible inside the sprite-shaped window */
+
+/* ---- power, and the cartridge's own hardware ----------------------------
+ * rt_sleep stops the console until a button wakes it; rt_wait_vblank idles
+ * the CPU for a frame instead of spinning. Rumble, the solar sensor and the
+ * gyro are all CARTRIDGE hardware on the same four GPIO pins the clock uses,
+ * so a cartridge carries at most one of them; rt_gpio_release hands the pins
+ * back when done. */
+void      rt_sleep(void);                     /* stop until a button is pressed */
+void      rt_wait_vblank(void);               /* idle the CPU until the next interrupt */
+void      rt_rumble(int on);                  /* the motor, on cartridges that have one */
+int       rt_solar(void);                     /* 0..255; small means bright */
+int       rt_gyro(void);                      /* 12-bit angular rate, centre about 0x6C0 */
+void      rt_gpio_release(void);              /* return the pins to the clock */
 void      rt_window_obj_off(void);
 void      rt_set_objwin(Instance* self, int on); /* this sprite becomes the stencil */
 void      rt_pal_cycle_stop(int slot);        /* one slot, or -1 for all */
+
+/* ---- palettes at run time ------------------------------------------------
+ * A sprite's colours without a second copy of its tiles: rt_set_palbank puts
+ * ONE INSTANCE on a different OBJ palette bank, so the same enemy can wear
+ * four team colours for 16 colours each instead of four tile sets. The
+ * direct writes are for colours a game computes rather than an artist picks.
+ * Palette RAM is not double-buffered, so call these from a Step event. */
+void      rt_set_palbank(Instance* self, int bank);  /* 0..15 */
+void      rt_clear_palbank(Instance* self);   /* back to the sprite's own */
+void      rt_pal_set(int obj, int index, u16 colour); /* obj: 0 = BG, 1 = sprites */
+u16       rt_pal_get(int obj, int index);
+void      rt_pal_load(int obj, int first, const u16* colours, int count);
 void      rt_pcm_stop_b(void);               /* silence the soundtrack voice */
 int       rt_pcm_playing_b(void);            /* 1 while the soundtrack voice plays */
 void      rt_sfx(int preset);                 /* a built-in NB_SFX_* effect */
@@ -616,5 +667,47 @@ int  rt_video_mode_get(void);
 void rt_bg_affine(int bg, s32 tx, s32 ty, s32 sx, s32 sy,
                   s32 angle, s32 scale);
 void rt_obj_affine(int group, s32 angle, s32 scale);
+
+/* ---- bitmap modes 3, 4 and 5 ----------------------------------------------
+ * A framebuffer on BG2: a shape that no tile and no sprite holds -- a particle
+ * field past what 128 OAM entries can carry, a curve, a plotted graph.
+ *
+ * rt_bitmap_mode(3|4|5) enters one and turns BG2 on. What each costs:
+ *
+ *   3   240x160, u16 BGR555 per pixel, ONE page. Every edit is seen being made.
+ *   4   240x160, palette index per pixel, TWO pages.
+ *   5   160x128, u16 BGR555, TWO pages. THE SIZE IS SMALLER -- code written
+ *       for 240x160 runs off each row's right edge and paints a diagonal.
+ *
+ * `colour` is BGR555 in modes 3 and 5 (RGB15) and a BG palette index 0..255 in
+ * mode 4, where the palette is BG_PALETTE and is the game's to fill.
+ * Coordinates outside the screen are dropped, and rectangles and blits are
+ * clipped to it. `src` for rt_bitmap_blit is w*h pixels in the mode's own size
+ * -- u16 in modes 3 and 5, bytes in mode 4.
+ *
+ * In modes 4 and 5 DRAWING GOES TO THE HIDDEN PAGE, never the one on screen:
+ * rt_bitmap_page() says which (0 or 1), and rt_bitmap_flip() presents what was
+ * drawn and turns the pair over. Pair it with rt_vsync() for a clean present.
+ * Mode 3's buffer is 75 KiB and covers both pages' worth of VRAM, so there is
+ * no hidden page and rt_bitmap_flip does nothing there rather than swapping
+ * the framebuffer for tile memory.
+ *
+ * BG0, BG1 and BG3 do not exist in a bitmap mode, so the runtime's own text
+ * and dialogue layers are not drawn; and OBJ tiles start at 0x06014000 instead
+ * of 0x06010000, so sprite tiles numbered below 512 land in the framebuffer. */
+void rt_bitmap_mode(int mode);
+/* One pixel. In mode 4 this is a read-modify-write of the halfword holding
+   it, because VRAM ignores 8-bit writes -- plotting a byte there loses every
+   second pixel. */
+void rt_bitmap_pixel(int x, int y, u16 colour);
+
+/* A filled rectangle, clipped to the screen. */
+void rt_bitmap_rect(int x, int y, int w, int h, u16 colour);
+
+/* The whole drawing page in one colour. */
+void rt_bitmap_clear(u16 colour);
+void rt_bitmap_blit(int x, int y, int w, int h, const void *src);
+void rt_bitmap_flip(void);
+int  rt_bitmap_page(void);
 
 #endif
