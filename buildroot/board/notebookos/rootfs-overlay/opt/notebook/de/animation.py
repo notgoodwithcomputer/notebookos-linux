@@ -4892,9 +4892,16 @@ class Animation(nbapp.AppWindow):
             action()
 
         self._guard_action = action
+        # A confirm states the CONSEQUENCE and names the TARGET (Article
+        # IV §3). The old line said what to do and never said which film,
+        # which is no help to anyone keeping two of them.
+        if self.doc_path:
+            stake = _t('Changes to %s are not saved.') % os.path.basename(
+                self.doc_path)
+        else:
+            stake = _t('This film has changes that are not saved.')
         self._overlay_prompt('Unsaved changes', [], 'Save',
-                             lambda _state: save_then(),
-                             'Save the current Animation project before leaving it.')
+                             lambda _state: save_then(), stake)
         layer = self._prompt_layer
         # Add the explicit Discard choice beside the safe Save/Cancel pair.
         discard = Gtk.Button(label=_t('Discard'))
@@ -4932,7 +4939,10 @@ class Animation(nbapp.AppWindow):
                  ((1920, 1080), '1920 × 1080 (%d× with borders)' % largest))
         repeats = CONFORM_FPS[self.doc.fps] // self.doc.fps
         self._overlay_prompt('Export Movie…',
-                             [('name', 'Name', 'animation', 'text'),
+                             [('name', 'Name',
+                               (os.path.splitext(os.path.basename(
+                                   self.doc_path))[0]
+                                if self.doc_path else 'animation'), 'text'),
                               ('range', 'Range', 'everything',
                                ('choices', (('everything', _t('Everything')),
                                             ('scene', _t('This scene')),
