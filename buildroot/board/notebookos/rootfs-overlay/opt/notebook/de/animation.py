@@ -2300,7 +2300,9 @@ class Animation(nbapp.AppWindow):
                 ('Clear Exposure    Delete',
                  self._clear_exposure if self.selection else None),
                 nbapp.SEP,
-                ('Repeat Selection…    Ctrl+R', self._repeat_prompt),
+                ('Repeat Selection…    Ctrl+R',
+                 self._repeat_prompt
+                 if (self.selection or self.sheet.clipboard) else None),
                 ('Slide Between Exposures',
                  self._slide_selection if self.selection else None),
                 ('Insert Frames…', self._insert_prompt),
@@ -3492,9 +3494,16 @@ class Animation(nbapp.AppWindow):
         self._prompt_state = None
 
     def _repeat_prompt(self, *_):
+        if not self.selection and not self.sheet.clipboard:
+            # The card used to open on nothing and then blame the scene
+            # for being too short, sending someone to look for room that
+            # was never the problem.
+            self._flash(_t('Select the exposures to repeat first.'))
+            return
         self._overlay_prompt('Repeat Selection…',
                              [('count', 'Copies', 2, 'int')],
-                             'Repeat', self._repeat_apply)
+                             'Repeat', self._repeat_apply,
+                             'The copies start at the current frame.')
 
     def _repeat_apply(self, state):
         if not self.sheet.clipboard and self.selection:

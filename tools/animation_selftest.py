@@ -1431,11 +1431,67 @@ def recording_family():
         animation.Animation._stop_recording = real
 
 
+def message_truth_family():
+    """A refusal has to name the thing that actually stopped it.
+
+    Repeat Selection was offered with nothing selected, opened a card, took
+    a number, and then blamed the scene for being too short — sending
+    someone to look for room that was never the problem."""
+    if not gtk_available():
+        skip("F14 message truth", "no display")
+        return
+    import nbapp as _nbapp
+    app = animation.Animation()
+    app.selection = None
+    app.sheet.clipboard = None
+
+    def timeline_items():
+        return {item[0]: item[1] for item in app.menu_items("Timeline")
+                if item and item is not _nbapp.SEP}
+
+    offered = timeline_items()
+    needs_selection = [name for name in offered
+                       if "Repeat Selection" in name or "Slide Between" in name]
+    check("F14 commands that need a selection are not offered without one",
+          len(needs_selection) == 2 and
+          all(offered[name] is None for name in needs_selection),
+          {name: offered[name] is not None for name in needs_selection})
+
+    said = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: said.append(text)
+    try:
+        app._repeat_prompt()
+    finally:
+        app._flash = spoken
+    check("F14 repeating nothing blames the selection, not the scene length",
+          len(said) == 1 and "select" in said[0].lower() and
+          "scene" not in said[0].lower(), said)
+    check("F14 and it does not open a card over the refusal",
+          app._prompt_layer is None)
+
+    graded, scratch = module_mutant(
+        "F14-ungated",
+        [("""        if not self.selection and not self.sheet.clipboard:""",
+          """        if False:""")])
+    sabotaged = graded.Animation()
+    sabotaged.selection = None
+    sabotaged.sheet.clipboard = None
+    heard = []
+    sabotaged._flash = lambda text, *a, **k: heard.append(text)
+    sabotaged._repeat_prompt()
+    mutant("F14 a card that opens on nothing is caught",
+           sabotaged._prompt_layer is not None and not heard)
+    sabotaged._close_prompt()
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 workflow_family()
 thumbnail_family()
 control_range_family()
 recording_family()
+message_truth_family()
 
 total = len(PASSES) + len(FAILS) + len(SKIPS) + len(MUTANTS) + len(UNCAUGHT_MUTANTS)
 print("TALLY total=%d passed=%d failed=%d skipped=%d mutants-caught=%d mutants-uncaught=%d" %
