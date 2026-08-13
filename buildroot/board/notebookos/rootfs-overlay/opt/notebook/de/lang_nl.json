@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "Het rapport is niet geschreven. %s",
  "The room a door placed here opens into": "De ruimte waar een hier geplaatste deur op uitkomt",
  "The room the game opens in": "De ruimte waarin het spel opent",
+ "The scene cannot be shorter than %d frames.": "De scène kan niet korter zijn dan %d frames.",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "Het scherm blijft normaal gesproken aan, zodat de computer klaarstaat zodra je erbij komt. Er gaat niets verloren als het scherm donker wordt — druk op een toets en ga verder.",
  "The service retries by itself. Replugging the dongle also restarts it.": "De dienst probeert het vanzelf opnieuw. De dongel eruit halen en terugsteken herstart hem ook.",
  "The sliding-tile number puzzle.": "De schuifpuzzel met getallen.",

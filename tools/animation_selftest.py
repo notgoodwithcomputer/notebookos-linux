@@ -1348,6 +1348,30 @@ def control_range_family():
     check("F12 loudness thresholds stop where loudness itself stops",
           opened and thresholds == [(0., 1.), (0., 1.)], thresholds)
 
+    # the same law for the number spinners: a scene may not be offered a
+    # length that strands the drawings and sounds already inside it
+    app.sheet.ensure_drawing(0, 0)
+    for _hold in range(40):
+        app.sheet.extend(0, 0)
+    scene = app.doc.scenes[0]
+    app._scene_length_prompt()
+    spins = []
+    _find_widgets(app._prompt_layer,
+                  lambda w: isinstance(w, Gtk.SpinButton), spins)
+    floor = app._scene_floor(scene)
+    lowest = spins[0].get_adjustment().get_lower() if spins else -1
+    said = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: said.append(text)
+    try:
+        spins[0].set_value(lowest)
+        app._apply_prompt(app._prompt_callback, dict(app._prompt_state))
+    finally:
+        app._flash = spoken
+    check("F12 a scene is never offered a length that strands its own work",
+          lowest == floor and floor > 1 and not said,
+          (lowest, floor, said))
+
     real = animation.Animation._wobble_prompt
 
     def blunt(self, *_):

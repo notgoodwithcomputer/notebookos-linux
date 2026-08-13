@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "Rapor yazılamadı. %s",
  "The room a door placed here opens into": "Buraya konan kapının açıldığı oda",
  "The room the game opens in": "Oyunun açıldığı oda",
+ "The scene cannot be shorter than %d frames.": "Sahne %d kareden kısa olamaz.",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "Ekran normalde açık kalır, böylece bilgisayar yanına gittiğiniz anda hazırdır. Ekran karardığında hiçbir şey kaybolmaz — devam etmek için bir tuşa basın.",
  "The service retries by itself. Replugging the dongle also restarts it.": "Hizmet kendiliğinden yeniden dener. Çubuğu çıkarıp takmak da onu yeniden başlatır.",
  "The sliding-tile number puzzle.": "Kayan sayı taşları bulmacası.",

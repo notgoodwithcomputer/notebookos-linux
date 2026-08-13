@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "Izveštaj nije zapisan. %s",
  "The room a door placed here opens into": "Soba u koju vodi vrata postavljena ovde",
  "The room the game opens in": "Soba u kojoj se igra otvara",
+ "The scene cannot be shorter than %d frames.": "Scena ne može biti kraća od %d kadrova.",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "Ekran obično ostaje uključen, pa je računar spreman čim mu priđete. Ništa se ne gubi kad ekran potamni — pritisnite bilo koju tipku da nastavite.",
  "The service retries by itself. Replugging the dongle also restarts it.": "Služba sama pokušava ponovo. Vađenje i vraćanje modula takođe je pokreće iznova.",
  "The sliding-tile number puzzle.": "Slagalica s kliznim pločicama.",

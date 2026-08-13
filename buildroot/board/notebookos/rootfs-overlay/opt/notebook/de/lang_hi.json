@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "रिपोर्ट नहीं लिखी गई। %s",
  "The room a door placed here opens into": "यहाँ रखा दरवाज़ा जिस कक्ष में खुलता है",
  "The room the game opens in": "गेम जिस रूम में खुलेगा",
+ "The scene cannot be shorter than %d frames.": "दृश्य %d फ़्रेम से छोटा नहीं हो सकता।",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "आम तौर पर स्क्रीन चालू ही रहती है, ताकि पास आते ही कंप्यूटर तैयार मिले। स्क्रीन बुझ जाए तो कुछ नहीं खोता — कोई भी कुंजी दबाकर काम जारी रखें।",
  "The service retries by itself. Replugging the dongle also restarts it.": "सेवा अपने आप फिर प्रयास करती है। डोंगल निकालकर लगाने से भी वह फिर शुरू होती है।",
  "The sliding-tile number puzzle.": "टाइल सरकाकर नंबर मिलाने वाली पहेली।",

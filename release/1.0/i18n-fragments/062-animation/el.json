@@ -176,6 +176,7 @@
  "The film is at its full length.": "Η ταινία έφτασε στο πλήρες μήκος της.",
  "The marker names the current frame.": "Το σημείο ονομάζει το τρέχον καρέ.",
  "The recording is saved in Music.": "Η εγγραφή φυλάσσεται στη Μουσική.",
+ "The scene cannot be shorter than %d frames.": "Η σκηνή δεν μπορεί να είναι μικρότερη από %d καρέ.",
  "The waveform could not be drawn.": "Η κυματομορφή δεν σχεδιάστηκε.",
  "This file could not be read as an Animation project. It was left untouched.": "Το αρχείο δεν διαβάστηκε ως έργο κινουμένων σχεδίων. Έμεινε ανέγγιχτο.",
  "This film has changes that are not saved.": "Αυτή η ταινία έχει μη αποθηκευμένες αλλαγές.",

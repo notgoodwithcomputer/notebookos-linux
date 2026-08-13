@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "Отчёт не был записан. %s",
  "The room a door placed here opens into": "Комната, в которую ведёт поставленная здесь дверь",
  "The room the game opens in": "Комната, в которой начинается игра",
+ "The scene cannot be shorter than %d frames.": "Сцена не может быть короче %d кадров.",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "Экран обычно остаётся включённым, чтобы компьютер был готов, как только вы к нему подойдёте. Когда экран гаснет, ничего не теряется — нажмите любую клавишу, чтобы продолжить.",
  "The service retries by itself. Replugging the dongle also restarts it.": "Служба повторяет попытки сама. Вынуть и снова вставить модуль — тоже перезапуск.",
  "The sliding-tile number puzzle.": "Головоломка с передвижными числами.",

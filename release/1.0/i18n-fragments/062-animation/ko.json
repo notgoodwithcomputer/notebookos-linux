@@ -176,6 +176,7 @@
  "The film is at its full length.": "이 작품은 최대 길이에 도달했습니다.",
  "The marker names the current frame.": "표시는 현재 프레임에 이름을 붙입니다.",
  "The recording is saved in Music.": "녹음은 음악에 저장됩니다.",
+ "The scene cannot be shorter than %d frames.": "장면은 %d 프레임보다 짧을 수 없습니다.",
  "The waveform could not be drawn.": "파형을 그릴 수 없습니다.",
  "This file could not be read as an Animation project. It was left untouched.": "이 파일을 애니메이션 작품으로 읽을 수 없습니다. 파일은 그대로 두었습니다.",
  "This film has changes that are not saved.": "이 작품에 저장하지 않은 변경 사항이 있습니다.",

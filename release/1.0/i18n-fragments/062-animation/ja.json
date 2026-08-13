@@ -176,6 +176,7 @@
  "The film is at its full length.": "この作品は長さの上限に達しています。",
  "The marker names the current frame.": "目印は今のコマに名前を付けます。",
  "The recording is saved in Music.": "録音はミュージックに保存されます。",
+ "The scene cannot be shorter than %d frames.": "シーンは %d コマより短くできません。",
  "The waveform could not be drawn.": "波形を描けませんでした。",
  "This file could not be read as an Animation project. It was left untouched.": "このファイルはアニメーション作品として読み込めませんでした。ファイルには手を付けていません。",
  "This film has changes that are not saved.": "この作品には保存していない変更があります。",

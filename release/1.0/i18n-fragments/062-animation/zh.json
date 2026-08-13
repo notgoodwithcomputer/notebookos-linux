@@ -176,6 +176,7 @@
  "The film is at its full length.": "这部片子已达到最大长度。",
  "The marker names the current frame.": "标记为当前帧命名。",
  "The recording is saved in Music.": "录音保存在音乐里。",
+ "The scene cannot be shorter than %d frames.": "场景不能短于 %d 帧。",
  "The waveform could not be drawn.": "画不出波形。",
  "This file could not be read as an Animation project. It was left untouched.": "这个文件无法作为动画作品读取。文件原样未动。",
  "This film has changes that are not saved.": "这部片子有尚未保存的改动。",

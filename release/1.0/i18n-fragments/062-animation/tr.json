@@ -176,6 +176,7 @@
  "The film is at its full length.": "Film tam uzunluğuna ulaştı.",
  "The marker names the current frame.": "İşaret, geçerli kareyi adlandırır.",
  "The recording is saved in Music.": "Kayıt Müzik içine kaydedilir.",
+ "The scene cannot be shorter than %d frames.": "Sahne %d kareden kısa olamaz.",
  "The waveform could not be drawn.": "Dalga biçimi çizilemedi.",
  "This file could not be read as an Animation project. It was left untouched.": "Bu dosya animasyon projesi olarak okunamadı. Dosyaya dokunulmadı.",
  "This film has changes that are not saved.": "Bu filmde kaydedilmemiş değişiklikler var.",

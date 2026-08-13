@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "La raporto ne estis skribita. %s",
  "The room a door placed here opens into": "La ĉambro al kiu malfermiĝas pordo metita ĉi tie",
  "The room the game opens in": "La ĉambro en kiu la ludo malfermiĝas",
+ "The scene cannot be shorter than %d frames.": "La sceno ne povas esti pli mallonga ol %d kadroj.",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "Normale la ekrano restas ŝaltita, do la komputilo pretas tuj kiam vi alvenas. Nenio perdiĝas kiam la ekrano malheliĝas — premu iun ajn klavon por daŭrigi.",
  "The service retries by itself. Replugging the dongle also restarts it.": "La servo mem reprovas. Elŝovo kaj reenŝovo de la modulo ankaŭ restartigas ĝin.",
  "The sliding-tile number puzzle.": "La puzlo de ŝovaj numeritaj kaheloj.",

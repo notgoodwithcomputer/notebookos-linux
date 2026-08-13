@@ -176,6 +176,7 @@
  "The film is at its full length.": "La película ya tiene su duración máxima.",
  "The marker names the current frame.": "La marca nombra el fotograma actual.",
  "The recording is saved in Music.": "La grabación se guarda en Música.",
+ "The scene cannot be shorter than %d frames.": "La escena no puede tener menos de %d fotogramas.",
  "The waveform could not be drawn.": "La forma de onda no se pudo dibujar.",
  "This file could not be read as an Animation project. It was left untouched.": "Este archivo no se pudo leer como proyecto de animación. Quedó intacto.",
  "This film has changes that are not saved.": "Esta película tiene cambios sin guardar.",

@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "レポートを書き出せませんでした。%s",
  "The room a door placed here opens into": "ここに置いた扉が開く先の部屋",
  "The room the game opens in": "ゲームが始まるルーム",
+ "The scene cannot be shorter than %d frames.": "シーンは %d コマより短くできません。",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "画面はふだんつけたままなので、席に着けばすぐに使えます。画面が暗くなっても何も失われません — どれかキーを押せば続きから使えます。",
  "The service retries by itself. Replugging the dongle also restarts it.": "サービスは自動で再試行する。ドングルの抜き差しでも再起動する。",
  "The sliding-tile number puzzle.": "数字を滑らせて並べるパズルです。",

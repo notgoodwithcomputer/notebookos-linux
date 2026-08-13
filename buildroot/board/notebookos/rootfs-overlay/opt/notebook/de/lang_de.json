@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "Der Bericht wurde nicht geschrieben. %s",
  "The room a door placed here opens into": "Der Raum, in den eine hier gesetzte Tür führt",
  "The room the game opens in": "Der Raum, in dem das Spiel beginnt",
+ "The scene cannot be shorter than %d frames.": "Die Szene kann nicht kürzer als %d Bilder sein.",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "Der Bildschirm bleibt normalerweise an, damit der Computer bereit ist, sobald jemand davor steht. Wird er dunkel, geht nichts verloren — eine beliebige Taste drücken und weiter.",
  "The service retries by itself. Replugging the dongle also restarts it.": "Der Dienst versucht es von selbst erneut. Auch Abziehen und Wiedereinstecken des Sticks startet ihn neu.",
  "The sliding-tile number puzzle.": "Das Schiebepuzzle mit Zahlen.",

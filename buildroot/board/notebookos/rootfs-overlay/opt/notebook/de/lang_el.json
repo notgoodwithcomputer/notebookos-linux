@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "Η αναφορά δεν γράφτηκε. %s",
  "The room a door placed here opens into": "Το δωμάτιο στο οποίο ανοίγει μια πόρτα που τοποθετείται εδώ",
  "The room the game opens in": "Το δωμάτιο στο οποίο ανοίγει το παιχνίδι",
+ "The scene cannot be shorter than %d frames.": "Η σκηνή δεν μπορεί να είναι μικρότερη από %d καρέ.",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "Η οθόνη κανονικά μένει ανοιχτή, ώστε ο υπολογιστής να είναι έτοιμος μόλις πλησιάσετε. Δεν χάνεται τίποτα όταν σκοτεινιάζει η οθόνη — πατήστε ένα πλήκτρο για να συνεχίσετε.",
  "The service retries by itself. Replugging the dongle also restarts it.": "Η υπηρεσία ξαναπροσπαθεί μόνη της. Βγάλσιμο και ξαναβάλσιμο του στικ την ξαναξεκινά επίσης.",
  "The sliding-tile number puzzle.": "Το παζλ με τους αριθμούς που γλιστρούν.",

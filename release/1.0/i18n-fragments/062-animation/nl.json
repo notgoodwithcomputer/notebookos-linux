@@ -176,6 +176,7 @@
  "The film is at its full length.": "De film heeft zijn volledige lengte bereikt.",
  "The marker names the current frame.": "De markering benoemt het huidige frame.",
  "The recording is saved in Music.": "De opname wordt bewaard in Muziek.",
+ "The scene cannot be shorter than %d frames.": "De scène kan niet korter zijn dan %d frames.",
  "The waveform could not be drawn.": "De golfvorm kon niet worden getekend.",
  "This file could not be read as an Animation project. It was left untouched.": "Dit bestand kon niet als animatieproject worden gelezen. Het is onaangeroerd gelaten.",
  "This film has changes that are not saved.": "Deze film heeft niet-opgeslagen wijzigingen.",

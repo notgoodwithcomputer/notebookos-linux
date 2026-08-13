@@ -3195,8 +3195,10 @@ class Animation(nbapp.AppWindow):
             name.set_valign(Gtk.Align.START)
             names.add_widget(name)
             row.pack_start(name, False, False, 0)
-            if kind == 'int':
-                widget = Gtk.SpinButton.new_with_range(1, SCENE_FRAME_MAX, 1)
+            if head == 'int':
+                low, high = ((kind[1], kind[2]) if isinstance(kind, tuple)
+                             else (1, SCENE_FRAME_MAX))
+                widget = Gtk.SpinButton.new_with_range(low, max(low, high), 1)
                 widget.set_value(initial)
                 widget.connect('value-changed',
                                lambda item, k=key: state.__setitem__(k, item.get_value_as_int()))
@@ -3362,6 +3364,13 @@ class Animation(nbapp.AppWindow):
         self._prompt_note = None
         if note:
             quiet = Gtk.Label(label=_t(note), xalign=0)
+            # The note carries real sentences AND, in the slot picker, the
+            # name of whatever is under the pointer. Wrapping to a bounded
+            # two lines fits the sentences without letting a long drawing
+            # name change the height of the card under someone's hand.
+            quiet.set_line_wrap(True)
+            quiet.set_max_width_chars(46)
+            quiet.set_lines(2)
             quiet.set_ellipsize(Pango.EllipsizeMode.END)
             quiet.get_style_context().add_class('animation-muted')
             card.pack_start(quiet, False, False, 0)
@@ -3521,7 +3530,9 @@ class Animation(nbapp.AppWindow):
             self._flash(_t('The exposures would overlap or run past the scene.'))
 
     def _insert_prompt(self, *_):
-        self._overlay_prompt('Insert Frames…', [('count', 'Frames', 1, 'int')],
+        room = max(1, PROJECT_FRAME_MAX - self._project_frames())
+        self._overlay_prompt('Insert Frames…',
+                             [('count', 'Frames', 1, ('int', 1, room))],
                              'Insert', self._insert_apply,
                              'Sounds stay where they are.')
 
@@ -3536,7 +3547,10 @@ class Animation(nbapp.AppWindow):
             self._undo.pop()
 
     def _remove_prompt(self, *_):
-        self._overlay_prompt('Remove Frames…', [('count', 'Frames', 1, 'int')],
+        scene = self.doc.scenes[self.scene_i]
+        here = max(1, scene['length'] - self.playhead)
+        self._overlay_prompt('Remove Frames…',
+                             [('count', 'Frames', 1, ('int', 1, here))],
                              'Remove', self._remove_apply,
                              'Sounds stay where they are.')
 
@@ -3741,10 +3755,23 @@ class Animation(nbapp.AppWindow):
         self.doc.scenes[self.scene_i]['name'] = state['name'] or _t('Scene')
         self._commit_change()
 
+    def _scene_floor(self, scene):
+        """The shortest this scene can be without stranding work."""
+        ends = [run['start'] + run['len']
+                for layer in scene['layers'] for run in layer['runs']]
+        ends += [sound['start'] + 1 for sound in scene['sounds'] if sound]
+        return max(ends) if ends else 1
+
     def _scene_length_prompt(self, *_):
-        self._overlay_prompt('Scene Length…',
-                             [('length', 'Frames', self.doc.scenes[self.scene_i]['length'], 'int')],
-                             'Set Length', self._scene_length_apply)
+        scene = self.doc.scenes[self.scene_i]
+        floor = self._scene_floor(scene)
+        room = self._project_frames() - scene['length']
+        self._overlay_prompt(
+            'Scene Length…',
+            [('length', 'Frames', scene['length'],
+              ('int', floor, max(floor, PROJECT_FRAME_MAX - room)))],
+            'Set Length', self._scene_length_apply,
+            _t('The scene cannot be shorter than %d frames.') % floor)
 
     def _scene_length_apply(self, state):
         scene = self.doc.scenes[self.scene_i]
@@ -3754,7 +3781,8 @@ class Animation(nbapp.AppWindow):
         orphan_sound = any(sound and sound['start'] >= length
                            for sound in scene['sounds'])
         if orphan_run or orphan_sound:
-            self._flash(_t('Move drawings and sounds inside the new scene length first.'))
+            self._flash(_t('The scene cannot be shorter than %d frames.')
+                        % self._scene_floor(scene))
             return
         if not self._room_for(length - scene['length']):
             self._flash(_t('The film is at its full length.'))

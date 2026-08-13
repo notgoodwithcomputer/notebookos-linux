@@ -176,6 +176,7 @@
  "The film is at its full length.": "La filmo atingis sian plenan longon.",
  "The marker names the current frame.": "La marko nomas la nunan kadron.",
  "The recording is saved in Music.": "La registraĵo konserviĝas en Muziko.",
+ "The scene cannot be shorter than %d frames.": "La sceno ne povas esti pli mallonga ol %d kadroj.",
  "The waveform could not be drawn.": "La ondformo ne desegneblis.",
  "This file could not be read as an Animation project. It was left untouched.": "Ĉi tiu dosiero ne legeblis kiel animacia projekto. Ĝi restis netuŝita.",
  "This film has changes that are not saved.": "Ĉi tiu filmo havas nekonservitajn ŝanĝojn.",

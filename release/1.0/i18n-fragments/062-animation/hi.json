@@ -176,6 +176,7 @@
  "The film is at its full length.": "फ़िल्म अपनी पूरी लंबाई पर है।",
  "The marker names the current frame.": "चिह्न मौजूदा फ़्रेम को नाम देता है।",
  "The recording is saved in Music.": "रिकॉर्डिंग संगीत में सहेजी जाती है।",
+ "The scene cannot be shorter than %d frames.": "दृश्य %d फ़्रेम से छोटा नहीं हो सकता।",
  "The waveform could not be drawn.": "तरंग-रूप नहीं बन सका।",
  "This file could not be read as an Animation project. It was left untouched.": "यह फ़ाइल एनिमेशन परियोजना की तरह पढ़ी नहीं जा सकी। इसे छुआ नहीं गया।",
  "This film has changes that are not saved.": "इस फ़िल्म में सहेजे बिना बदलाव हैं।",

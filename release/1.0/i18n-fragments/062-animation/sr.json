@@ -176,6 +176,7 @@
  "The film is at its full length.": "Film je dostigao punu dužinu.",
  "The marker names the current frame.": "Oznaka imenuje trenutni kadar.",
  "The recording is saved in Music.": "Snimak se čuva u Muzici.",
+ "The scene cannot be shorter than %d frames.": "Scena ne može biti kraća od %d kadrova.",
  "The waveform could not be drawn.": "Talasni oblik nije mogao da se nacrta.",
  "This file could not be read as an Animation project. It was left untouched.": "Ova datoteka nije mogla da se pročita kao projekat animacije. Ostala je netaknuta.",
  "This film has changes that are not saved.": "Ovaj film ima nesačuvane izmene.",

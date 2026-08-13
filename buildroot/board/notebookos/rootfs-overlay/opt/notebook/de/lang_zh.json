@@ -3230,6 +3230,7 @@
  "The report was not written. %s": "报表未写入。%s",
  "The room a door placed here opens into": "放置在此处的门通往的房间",
  "The room the game opens in": "游戏开始时所在的房间",
+ "The scene cannot be shorter than %d frames.": "场景不能短于 %d 帧。",
  "The screen normally stays on, so the computer is ready the moment you walk up to it. Nothing is lost when the screen goes dark — press any key to carry on.": "屏幕通常保持常亮，这样您一走近电脑就能马上使用。屏幕变暗时不会丢失任何内容 — 按任意键即可继续。",
  "The service retries by itself. Replugging the dongle also restarts it.": "服务会自行重试。拔插适配器也会让它重启。",
  "The sliding-tile number puzzle.": "数字滑块拼图。",
