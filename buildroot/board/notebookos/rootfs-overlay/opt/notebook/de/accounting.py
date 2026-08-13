@@ -12,7 +12,7 @@ The ledger ships EMPTY (balance 0) — no seeded transactions. Entries typed int
 the form are appended live with a running balance and autosaved to a config
 file so the working ledger survives close/reboot. Click any posted row to edit
 it in place, or delete it after a confirmation (the Delete key on a focused row
-opens the same confirm — deletion is destructive and has no undo); balances, the
+opens the same confirm; a deletion is reversible from Edit ▸ Undo); balances, the
 chart and the autosave all recompute afterwards. That config file is the sole
 source of truth; the File menu adds an entry, exports the ledger to a PDF under
 $NB_HOME/Documents, and closes — it does no file open/save management.
@@ -37,6 +37,7 @@ import nbapp
 import nbicons
 import nbprint
 import nbtransitions
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 # Auto-persist — the working ledger is flushed to
@@ -121,6 +122,36 @@ def _cents(v):
         return 0.0
 
 
+_MONTH_ABBR = ("jan", "feb", "mar", "apr", "may", "jun",
+               "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def _short_date_parts(text):
+    """(day, month, year-or-None) for a shown date like "6 Aug" / "06 August" /
+    "6 Aug 2027", or None if it is not one of those.
+
+    The ledger's display column holds the SHORT form — a year does not fit (see
+    tools/accounting_dates_selftest: "26 Sep 2026" measures 61pt against the
+    58pt the PDF gives that column) — but a person retyping a date is allowed to
+    write one, and if they do it is the only unambiguous thing on the row."""
+    parts = str(text).replace(",", " ").split()
+    day = mon = year = None
+    for p in parts:
+        low = p.lower()[:3]
+        if low in _MONTH_ABBR and mon is None:
+            mon = _MONTH_ABBR.index(low) + 1
+            continue
+        if p.isdigit():
+            n = int(p)
+            if len(p) == 4 and year is None:
+                year = n
+            elif 1 <= n <= 31 and day is None:
+                day = n
+    if day is None or mon is None:
+        return None
+    return day, mon, year
+
+
 def _recovered_note(n):
     """"We got your history back" — two COMPLETE sentences chosen by the count,
     not "%d entr%s". No English suffix turns "entry" into "entries", and even
@@ -129,6 +160,26 @@ def _recovered_note(n):
     used to read "Recovered 1 entries from a damaged ledger file"."""
     return (_t("Recovered 1 entry from a damaged ledger file") if n == 1
             else _t("Recovered %d entries from a damaged ledger file") % n)
+
+
+def _unreadable_note():
+    """Nothing at all could be read out of the ledger file.
+
+    Two COMPLETE sentences, and the first is the one seventeen catalogs already
+    carry: the fact that the damaged file is KEPT is added beside it rather than
+    by rewording it, because a reworded string is a string with seventeen stale
+    translations. Two whole sentences joined by a space also survive translation
+    in a way a fragment glued to a noun does not — the same reason
+    `_recovered_note` picks between complete sentences instead of suffixing a
+    plural.
+
+    Saying it is the point. Measured: the original bytes always survive as
+    accounting.json.damaged-<stamp>, on the open-and-close path as well as after
+    an edit. Somebody told only that "a new ledger was started" has every reason
+    to conclude their figures are gone, and in a money app that is the worst
+    thing a true sentence can do."""
+    return (_t("The ledger file could not be read. A new ledger was started.")
+            + " " + _t("The damaged file was kept."))
 
 
 def _salvage_tx(text):
@@ -142,7 +193,7 @@ def _salvage_tx(text):
     {...} run, string-aware so a description containing a brace or a quote
     cannot confuse the scan, and json.loads each one on its own. Entries that
     parse are returned in file order; only the damaged part is lost."""
-    out = []
+    out = []          # (start offset, obj) — the offset is what detects nesting
     stack = []
     in_str = False
     esc = False
@@ -168,8 +219,83 @@ def _salvage_tx(text):
             # the whole-file wrapper {"tx": [...], "opening": 0} has no "amt",
             # so only real transactions are collected
             if isinstance(obj, dict) and "amt" in obj:
-                out.append(obj)
-    return out
+                # An "amt"-bearing object NESTED INSIDE this one is not a
+                # transaction — it is a sub-object of this one, and it was
+                # collected first because its brace closed first. Keeping both
+                # INVENTED an entry: one real transaction carrying
+                # {"cur":"USD","amt":2} salvaged as TWO rows, one of them a
+                # phantom $2.00 with a blank description, and the status line
+                # counted it ("Recovered 2 entries" from a one-entry file).
+                # Everything collected since this object's own start offset
+                # lies inside it, so it comes off the tail.
+                while out and out[-1][0] > start:
+                    out.pop()
+                out.append((start, obj))
+    return [obj for _start, obj in out]
+
+
+def _salvage_opening(text):
+    """The opening balance out of a DAMAGED ledger file, or None.
+
+    `_salvage_tx` recovers every intact transaction but deliberately keeps only
+    objects carrying "amt", so the outer wrapper — which is where `opening`
+    lives, and which never closes in a truncated file — was dropped with the
+    damage. The recovered ledger then opened with an opening balance of zero and
+    EVERY BALANCE ON THE SCREEN WAS OUT BY THAT AMOUNT, silently, on the one
+    screen whose whole job is to be right about money. The status line said
+    "Recovered 3 entries from a damaged ledger file" and looked like a complete
+    account of what had been lost.
+
+    Scanned with the same string-awareness `_salvage_tx` uses, and accepted
+    first at BRACE DEPTH 1 — inside the outer object but not inside a
+    transaction — so a description that happens to contain the text
+    `"opening": 500` cannot be mistaken for the real key. Recovering a wrong
+    opening balance would be worse than recovering none.
+
+    DEPTH 0 IS THE FALLBACK, never the preference. When the damage takes the
+    wrapper's own opening brace — the head of the file, not its tail — every
+    transaction still closes its braces, so the real `"opening"` key sits at
+    depth ZERO and the depth-1 rule read right past it: measured, a ledger
+    missing only its first byte recovered both entries and NO opening, and
+    every balance on screen was short by it. A depth-0 key can only be wrapper
+    text whose brace was lost, so it is believed — but only after the whole
+    scan finds no depth-1 candidate, so an intact wrapper always wins."""
+    depth = 0
+    in_str = False
+    esc = False
+    at_zero = None
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            if depth in (0, 1) and text.startswith('"opening"', i):
+                m = _re.match(r'"opening"\s*:\s*(-?\d+(?:\.\d+)?)', text[i:])
+                if m:
+                    try:
+                        val = float(m.group(1))
+                    except ValueError:
+                        val = None
+                    if depth == 1:
+                        return val
+                    if at_zero is None:
+                        at_zero = val
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        i += 1
+    return at_zero
 
 
 class Accounting(nbapp.AppWindow):
@@ -192,6 +318,11 @@ class Accounting(nbapp.AppWindow):
         self.opening = state["opening"]
         self._damaged = state["damaged"]
         self._quarantine_pending = state["quarantine"]
+        # Tracked as a FLAG, not read back off the widget: get_visible() is
+        # False on a window that has not been realised yet, so asking the widget
+        # at save time would persist "hidden" for anything that closed early.
+        self._chart_shown = state["chart"]
+        self._extra = state["extra"]
         self.fdir = "debit"           # entry form direction: "debit" / "credit"
         self.filter = ""              # raw FIND query ("" = show all)
         self._terms = ()              # its lower-cased words, ANDed
@@ -218,21 +349,73 @@ class Accounting(nbapp.AppWindow):
         if state["note"]:
             self._flash(state["note"], kind="error")
 
+        # UNDO OVER THE WHOLE LEDGER. Deleting an entry used to be permanent —
+        # the confirm card said "This cannot be undone", and it was telling the
+        # truth. A mis-aimed Delete key on a focused row destroyed a real
+        # financial record with no way back, which is a heavy thing for an app
+        # whose entire subject is being right about money. Built HERE, after the
+        # UI exists, so a restore has something to refresh; its baseline is the
+        # ledger as it was loaded. See nbapp.UndoHistory.
+        self.undo = nbapp.UndoHistory(self._undo_snapshot, self._undo_restore)
+        self.undo.reset()
+
+        # Apply the saved chart preference once the tree is actually up.
+        # Hiding it any earlier is undone by show_all(), and hiding the wrapper
+        # with no_show_all set stops the chart INSIDE it from ever being shown
+        # at all (that mistake removed the whole chart from the app). The signal
+        # is on the WRAPPER, not on the window: the wrapper is mapped whichever
+        # route shows the tree, so this holds for the desktop and for a render
+        # harness that reparents the content, where the window is never mapped
+        # and a window-level handler silently never runs.
+        self.chartwrap.connect("map", self._apply_chart_pref)
+
         # Final flush: File->Close / Esc / logo all route through
         # Gtk.Window.close -> "destroy", which re-saves the working ledger.
         self.connect("destroy", self._on_destroy)
+
+    # ----------------------------------------------------------------- undo
+    def _undo_snapshot(self):
+        """The whole book: every entry, and the opening balance.
+
+        Fresh dicts, never the live ones — the history keeps this object for as
+        long as the step exists, and an entry edited in place afterwards would
+        otherwise rewrite the history that is supposed to undo it. (academics
+        paid for exactly that with its `meets` lists.)"""
+        return {"tx": [dict(t) for t in self.tx], "opening": self.opening}
+
+    def _undo_restore(self, state):
+        overlays = (self._close_confirm, self._close_edit)
+        for close in overlays:
+            try:
+                close()
+            except Exception:
+                pass
+        self.tx = [dict(t) for t in (state.get("tx") or [])]
+        self.opening = state.get("opening", 0.0)
+        # Back to the first page: the entry the step concerns is far more likely
+        # to be near the top than wherever the reader had paged to.
+        self._shown = self._PAGE
+        self._autosave()          # an undone deletion must survive the close too
+        self._refresh()
 
     # ------------------------------------------------------------- persistence
     @staticmethod
     def _num(v, default):
         """Coerce a JSON scalar to a FINITE float; bool, junk and non-finite
         values (NaN / Infinity, which json.load will happily produce) all fall
-        back to `default` so garbage on disk can never poison the ledger."""
+        back to `default` so garbage on disk can never poison the ledger.
+
+        OverflowError is in the net because json.load also produces Python
+        ints of ANY size, and float() of one too large for a double RAISES
+        where an oversized string merely returns inf — so a file carrying
+        `"amt": 999…9` (400 digits) crashed the app at _load_state before the
+        window existed, every launch, until the file was deleted by hand.
+        _cents already knew this; this coercion sits in front of it."""
         if isinstance(v, bool):
             return default
         try:
             f = float(v)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
         return f if math.isfinite(f) else default
 
@@ -261,6 +444,19 @@ class Accounting(nbapp.AppWindow):
             iso = t.get("iso")
             if isinstance(iso, str) and _ISO_RE.match(iso):
                 rec["iso"] = iso
+            # CARRY THROUGH WHAT THIS VERSION DOES NOT KNOW ABOUT. Validating
+            # into a fresh dict silently DELETED every other field on the entry,
+            # at LOAD — so merely opening the ledger and letting it close
+            # destroyed them. The top-level keys were fixed in task 046 and the
+            # EDIT path after that, but the read path kept rebuilding each row:
+            # measured, an entry carrying `entry_id`, `reconciled` and
+            # `category` lost all three on open+save, which is the OS-wide
+            # store-preservation gate's accounting failure. The validated
+            # fields above still win, so nothing here can smuggle a bad `amt`
+            # past the checks.
+            for key, value in t.items():
+                if key not in rec:
+                    rec[key] = value
             out.append(rec)
         return out
 
@@ -274,8 +470,15 @@ class Accounting(nbapp.AppWindow):
         deliberately cannot cover the case below: valid JSON of the wrong shape
         parses perfectly, and only this app knows that the shape is not a
         ledger. Without this the next autosave would write an empty book
-        straight over whatever the file really held."""
+        straight over whatever the file really held.
+
+        Returns True once the file no longer stands to be overwritten (moved
+        aside, or already gone), False when the move FAILED and the bytes are
+        still in harm's way — the caller keeps its pending flag on a False so
+        the move is retried at the next save rather than forgotten."""
         try:
+            if not os.path.exists(TX_FILE):
+                return True
             stamp = time.strftime("%Y%m%d-%H%M%S")
             dest = "%s.damaged-%s" % (TX_FILE, stamp)
             n = 2
@@ -283,8 +486,9 @@ class Accounting(nbapp.AppWindow):
                 dest = "%s.damaged-%s-%d" % (TX_FILE, stamp, n)
                 n += 1
             os.replace(TX_FILE, dest)
+            return True
         except OSError:
-            pass
+            return False
 
     def _load_state(self):
         """Return the recovered working ledger, or an empty one on first run.
@@ -296,7 +500,7 @@ class Accounting(nbapp.AppWindow):
         that emptiness back over the only copy, is the one failure this app can
         never have. Never seeds sample data."""
         st = {"tx": [], "opening": 0.0, "note": "", "damaged": False,
-              "quarantine": False}
+              "quarantine": False, "chart": True, "extra": {}}
         if not os.path.exists(TX_FILE):
             return st
         try:
@@ -312,9 +516,15 @@ class Accounting(nbapp.AppWindow):
             # them now, so the user gets their history back and not a blank book.
             st["damaged"] = True
             st["tx"] = self._parse_tx(_salvage_tx(text))
+            # The opening balance rides in the wrapper, which is exactly the
+            # part a truncated file loses — and without it every recovered
+            # balance is out by that amount. Quantised like every other amount
+            # that comes through the door (see _cents).
+            op = _salvage_opening(text)
+            if op is not None:
+                st["opening"] = _cents(self._num(op, 0.0))
             n = len(st["tx"])
-            st["note"] = _recovered_note(n) if n else \
-                _t("The ledger file could not be read. A new ledger was started.")
+            st["note"] = _recovered_note(n) if n else _unreadable_note()
             return st
         raw = data.get("tx") if isinstance(data, dict) else data
         # Transactions stored as an object keyed by id rather than a list. The
@@ -325,6 +535,17 @@ class Accounting(nbapp.AppWindow):
             raw = list(raw.values())
         st["tx"] = self._parse_tx(raw)
         if isinstance(data, dict):
+            # Whether the balance chart is shown. A view the user turned OFF
+            # through View > Hide Balance Chart came straight back at the next
+            # launch, because the toggle only ever touched the live widget —
+            # the "applied to the process, never written down" shape.
+            st["chart"] = bool(data.get("chart", True))
+            # Top-level keys this version does not recognise. _autosave rebuilds
+            # the file from scratch, so anything not named there was DELETED by
+            # the act of saving — the same round-trip loss academics had. A store
+            # written by a newer build, or hand-edited, keeps what it came with.
+            st["extra"] = {k: v for k, v in data.items()
+                           if k not in ("tx", "opening", "chart")}
             # Quantised at the door like every amount (see _cents). The opening
             # balance feeds BOTH routes to the balance — the running column
             # accumulates from it a rounded step at a time, the headline rounds
@@ -345,8 +566,7 @@ class Accounting(nbapp.AppWindow):
             st["quarantine"] = True
             st["tx"] = []
             st["opening"] = 0.0
-            st["note"] = _t(
-                "The ledger file could not be read. A new ledger was started.")
+            st["note"] = _unreadable_note()
         elif len(st["tx"]) < len(raw):
             # A ledger, but some of its entries were not: keep the good ones,
             # keep the file that still holds the bad ones, and say how many
@@ -365,11 +585,26 @@ class Accounting(nbapp.AppWindow):
             # immediately before the write that would otherwise replace it —
             # the same moment nbapp picks for the files it can detect, so there
             # is never a window in which the ledger has no file at all.
-            if self._quarantine_pending:
-                self._quarantine()
+            # Pending stays raised until the move actually HAPPENS: it used to
+            # clear unconditionally, so one failed attempt (a read-only or full
+            # disk, exactly when saves fail too) spent the only chance — and
+            # the first save after the disk came back then wrote straight over
+            # the original bytes with no aside. Measured: asides [], file gone.
+            if self._quarantine_pending and self._quarantine():
                 self._quarantine_pending = False
-            nbapp.atomic_write_json(TX_FILE, {"tx": self.tx,
-                                              "opening": self.opening})
+            payload = dict(getattr(self, "_extra", None) or {})
+            # `opening` and `chart` go BEFORE the tx array. json.dump writes
+            # keys in this order, and the realistic damage is a write cut short
+            # — losing the TAIL — so whatever sits after a years-long tx array
+            # is what a truncation always destroys. With `opening` at the tail
+            # a 40-byte cut recovered every entry and lost the opening balance
+            # (measured: opening 250.0 -> 0.0, note "Recovered 5 entries"
+            # reading like a complete account). Ahead of the array, a cut costs
+            # the newest entries only — the least a truncation can cost.
+            payload.update({"opening": self.opening,
+                            "chart": bool(getattr(self, "_chart_shown", True)),
+                            "tx": self.tx})
+            nbapp.atomic_write_json(TX_FILE, payload)
             self._save_warned = False
         except Exception as exc:
             # See academics._save_to_disk. A silently failed write is the worst
@@ -403,6 +638,9 @@ class Accounting(nbapp.AppWindow):
                 GLib.source_remove(sid)
             except Exception:
                 pass
+        # The form's day-clock, for the same reason: it holds a reference to a
+        # widget tree that is about to stop existing.
+        self._stop_form_clock()
 
         self._autosave()
         return False
@@ -535,13 +773,21 @@ class Accounting(nbapp.AppWindow):
         def fit(s, size, maxw, bold=False):
             if _text_w(cr, s, size, bold) <= maxw:
                 return s
-            # ASCII "..." rather than U+2026 stays, but for a different reason
-            # now: it is the ellipsis every other export in this OS uses, and
-            # Pango would render either. It is no longer a fallback guard --
-            # _show_text picks a face per glyph.
-            while s and _text_w(cr, s + "...", size, bold) > maxw:
+            # U+2026, the same ellipsis everything else in this OS truncates
+            # with. The ASCII "..." this used to append was kept on the grounds
+            # that it was "the ellipsis every other export in this OS uses" —
+            # which was not true when it was written and is not true now:
+            # academics, journal, installer and gbahelp all append "…", and so
+            # does the delete-confirm card in THIS FILE, forty lines of scroll
+            # away. The original reason was a real one (cairo's toy font API
+            # does no per-glyph fallback, so an exotic character could come out
+            # as a tofu box) but it stopped applying when this renderer moved to
+            # _show_text, which is PangoCairo and picks a face per glyph — as
+            # the comment itself went on to admit.
+            ell = "…"
+            while s and _text_w(cr, s + ell, size, bold) > maxw:
                 s = s[:-1]
-            return s + "..."
+            return s + ell
 
         # Column geometry: date + flexible description on the left, three
         # right-aligned money columns on the right. COL_W is the money column
@@ -553,6 +799,16 @@ class Accounting(nbapp.AppWindow):
         COL_W = 86
         date_x = ML
         desc_x = ML + 58
+        # The date column is 58pt and the string in it is not bounded by
+        # anything else: `date` round-trips from the file verbatim, and the row
+        # editor accepts a retyped date including a year on purpose. The screen
+        # ellipsizes this column for exactly that reason; the PDF did not, so a
+        # date wider than 58pt was drawn straight through the description.
+        # Measured: "26 September 2026", typed into the row editor, is 81pt and
+        # overran to x=135 against a description starting at 112; a 690-char
+        # date measured 3320pt on a 612pt page. 6pt of gutter keeps the common
+        # "26 Sep 2026" (52pt) intact.
+        DATE_W = desc_x - date_x - 6
         bal_r = PW - MR
         cred_r = bal_r - COL_W
         deb_r = cred_r - COL_W
@@ -614,7 +870,8 @@ class Accounting(nbapp.AppWindow):
                 surf.show_page()
                 y = table_header(MT)
             amt = t["amt"]
-            text_at(date_x, y, str(t["date"]), 9.5, False, MUTED)
+            text_at(date_x, y, fit(str(t["date"]), 9.5, DATE_W), 9.5, False,
+                    MUTED)
             text_at(desc_x, y, fit(str(t["desc"]), 10, desc_room(amt)), 10,
                     False, INK)
             if amt < 0:
@@ -730,6 +987,26 @@ class Accounting(nbapp.AppWindow):
 
         stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         stats.get_style_context().add_class("statlist")
+        # The panel has to ADD UP. With a non-zero opening balance it did not:
+        # CREDIT +$1,105.00 and DEBIT -$2,280.74 against a BALANCE of $1,224.26
+        # is a summary whose own three figures disagree by exactly the term that
+        # was not on screen. The ledger has always stored `opening`, the report
+        # card has always printed it, and the sidebar — the figures somebody
+        # actually looks at — left it out. Shown only when it is non-zero: at
+        # zero the other three reconcile on their own and the row is noise.
+        self.opening_lbl = self._stat(stats, "OPENING", None)
+        # The row APPEARS when an opening balance is set and goes when it is
+        # cleared, so it is a state change and the OS rule is that every state
+        # change animates (PAPER-PHYSICS Amendment 3). set_visible() snapped it
+        # into the middle of the figures. A Revealer driven by
+        # nbtransitions.reveal slides it, with the same slight spring the rest
+        # of the sidebar uses, and honours the still-policy for free.
+        _orow = self.opening_lbl.get_parent()
+        stats.remove(_orow)
+        self.opening_rev = Gtk.Revealer()
+        self.opening_rev.add(_orow)
+        stats.pack_start(self.opening_rev, False, False, 0)
+        stats.reorder_child(self.opening_rev, 0)
         self.credit_lbl = self._stat(stats, "CREDIT", "credit")
         self.debit_lbl = self._stat(stats, "DEBIT", "debit")
         self.count_lbl = self._stat(stats, "ENTRIES", None)
@@ -827,6 +1104,14 @@ class Accounting(nbapp.AppWindow):
         # menu can show / hide it.
         self.chartwrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.chartwrap.get_style_context().add_class("chartwrap")
+        # NOT set_no_show_all(). That was the first attempt at making the saved
+        # preference survive show_all(), and it removed the chart from the app
+        # entirely: no_show_all on a container stops show_all() recursing into
+        # its CHILDREN too, so the wrapper could be made visible while the
+        # DrawingArea inside it never was — allocation 1x1, nothing drawn, and
+        # the whole "Balance over time" block missing from the window. The
+        # preference is applied on "map" instead (see __init__), once the shell
+        # has shown the tree, which is the only moment at which hiding it sticks.
         ccap = Gtk.Label(label=_t("BALANCE OVER TIME"), xalign=0)
         ccap.get_style_context().add_class("caption")
         self.chartwrap.pack_start(ccap, False, False, 0)
@@ -900,9 +1185,15 @@ class Accounting(nbapp.AppWindow):
         unless the width really changed, so calling it from size-allocate can
         never loop; crash-safe, because a gutter is not worth a ledger."""
         try:
-            vsb = self._rowscroll.get_vscrollbar()
-            w = (vsb.get_allocated_width()
-                 if (vsb is not None and vsb.get_visible()) else 0)
+            # Measure the space actually LOST by the rows, not the scrollbar's
+            # own allocated width: those differ. Measured at 1024x722 with 200
+            # rows, the scrollbar allocates 17px but the viewport gives up 20 —
+            # the extra 3px is CSS spacing a widget's allocation does not report
+            # — so reserving the scrollbar's width left every heading 3px right
+            # of its figures whenever the ledger was long enough to scroll.
+            vp = self._rowscroll.get_child()
+            w = max(0, (self._rowscroll.get_allocated_width()
+                        - vp.get_allocated_width())) if vp is not None else 0
             if w != self._hdr_gutter:
                 self._hdr_gutter = w
                 self._ledgerhead.set_margin_end(w)
@@ -1023,13 +1314,62 @@ class Accounting(nbapp.AppWindow):
         return wrap
 
     # ------------------------------------------------------------- behaviour
+    # Re-check the day once a minute while the entry form is open. A PERIODIC
+    # check rather than a single timer armed for midnight: this is a laptop OS
+    # that suspends, and a timer scheduled for a moment the machine spends
+    # asleep does not fire on resume.
+    _FORM_CLOCK_MS = 60000
+
+    def _start_form_clock(self):
+        """Keep the open form's date honest.
+
+        `_stamp_today`'s contract is that "a long-open window never stamps a new
+        entry with a stale day", and it was only ever called at the moment the
+        form was revealed. Measured: a form opened at 23:59 on 31 Dec and
+        committed at 00:01 on 1 Jan stored '31 Dec' / '2026-12-31'.
+
+        Re-stamping refreshes the visible label and the cached ISO TOGETHER, so
+        what the person can see is still exactly what gets committed — the entry
+        form's one invariant, and the reason the fix is here rather than at
+        commit time, where it would make the stored date disagree with the date
+        on screen."""
+        self._stop_form_clock()
+        self._form_clock = GLib.timeout_add(self._FORM_CLOCK_MS,
+                                            self._tick_form_clock)
+
+    def _stop_form_clock(self):
+        tid = getattr(self, "_form_clock", None)
+        if tid:
+            try:
+                GLib.source_remove(tid)
+            except Exception:
+                pass
+        self._form_clock = None
+
+    def _tick_form_clock(self):
+        # Esc closes the form without going through _toggle_form, so the tick
+        # retires itself on finding the form shut rather than trusting every
+        # closing path to say so.
+        try:
+            if not self.form_reveal.get_reveal_child():
+                self._form_clock = None
+                return False
+            self._stamp_today()
+        except Exception:
+            self._form_clock = None
+            return False
+        return True
+
     def _toggle_form(self, *_):
         want = not self.form_reveal.get_reveal_child()
         nbtransitions.reveal(self.form_reveal, want)
         self._form_error("")        # a fresh form starts without a complaint
         if want:
             self._stamp_today()
+            self._start_form_clock()
             self.f_desc.grab_focus()
+        else:
+            self._stop_form_clock()
 
     def _reveal_form(self):
         """Reveal the inline entry form and focus the description field."""
@@ -1037,6 +1377,7 @@ class Accounting(nbapp.AppWindow):
             self._stamp_today()
             self._form_error("")
             nbtransitions.reveal(self.form_reveal, True)
+            self._start_form_clock()
             self.f_desc.grab_focus()
         except Exception:
             pass
@@ -1057,7 +1398,13 @@ class Accounting(nbapp.AppWindow):
         """Refresh the form's date label to today so a long-open window never
         stamps a new entry with a stale day."""
         try:
-            self.fdate.set_text(time.strftime("%-d %b"))
+            now = time.localtime()
+            months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+            self._form_date = "%d %s" % (now.tm_mday, months[now.tm_mon - 1])
+            self._form_iso = "%04d-%02d-%02d" % (now.tm_year, now.tm_mon,
+                                                   now.tm_mday)
+            self.fdate.set_text(self._form_date)
         except Exception:
             pass
 
@@ -1078,9 +1425,21 @@ class Accounting(nbapp.AppWindow):
         Accepts the way people actually type money — a leading '$', thousands
         commas and a stray minus are tolerated. Empty, non-numeric, non-finite
         (inf / nan) and anything that does not reach a cent all return None, so
-        a broken or unrecordable amount is never committed."""
-        s = (raw or "").strip().replace(",", "").replace("$", "") \
-            .replace(MINUS, "-")
+        a broken or unrecordable amount is never committed.
+
+        The pattern validates the SHAPE and not the precision. It rejects what
+        float() alone would have taken ("1,23,456" with mis-grouped thousands,
+        and non-ASCII digits — float("٣") is 3.0), but a typed amount carrying
+        more than two decimals is ROUNDED to cents rather than refused: the
+        refusal path can only answer with `_missing_msg`, whose own docstring
+        records that saying "Enter an amount" to somebody who plainly typed one
+        reads as a bug. Rounding is also what the persisted contract has always
+        been — "12.345" is 12.35 and "1e3" is 1000.00."""
+        s = (raw or "").strip().replace(MINUS, "-")
+        if not _re.match(r'^[-+]?\$?(?:\d{1,3}(?:,\d{3})+|\d+)'
+                         r'(?:\.\d+)?(?:[eE][-+]?\d+)?$', s, _re.ASCII):
+            return None
+        s = s.replace(",", "").replace("$", "")
         try:
             v = abs(float(s))
         except (TypeError, ValueError):
@@ -1122,9 +1481,17 @@ class Accounting(nbapp.AppWindow):
         # DESCRIPTION — but a ledger whose export carries no year cannot
         # be sorted or reconciled across a year boundary, which is the
         # part that actually costs somebody something.
-        entry = {"date": time.strftime("%-d %b"),
-                 "iso": time.strftime("%Y-%m-%d"),
+        # The cached pair is refreshed by _stamp_today when the form opens, so
+        # a window left open overnight cannot stamp yesterday. Neither fallback
+        # may be a blank: an empty "iso" is a row that reaches a spreadsheet
+        # with no date at all, and the cache is only populated once the form has
+        # been toggled open — so every other route to a committed entry
+        # (a selftest, anything programmatic) produced exactly that.
+        shown = getattr(self, "_form_date", None) or self.fdate.get_text()
+        entry = {"date": shown,
+                 "iso": getattr(self, "_form_iso", "") or self._iso_for(shown),
                  "desc": desc, "amt": amt}
+        self.undo.checkpoint("Add Entry")
         self.tx.append(entry)
         self._autosave()   # persist immediately — a committed entry must survive
         self.f_desc.set_text("")
@@ -1136,18 +1503,59 @@ class Accounting(nbapp.AppWindow):
         if self._terms and not self._matches(entry, self._terms):
             self.search.set_text("")
         self._shown = self._PAGE
-        self._refresh()
+        if not self._append_one_row():
+            self._refresh()
+        self.undo.commit()
         # positive confirmation that also clears any lingering validation error
         self._flash(_t("Entry added"))
         self.f_desc.grab_focus()
 
+    @staticmethod
+    def _iso_for(shown):
+        """The ISO date for a short display string like "6 Aug" / "26 Sep 2026",
+        or "" when it is not a date this app can read.
+
+        A short date carries no year, so one has to be supplied: today's. That
+        is right for the only caller — an entry being added now — and wrong for
+        a date typed months later, which is why editing an existing entry goes
+        through `_edited_iso` instead, and carries the year the entry already
+        had."""
+        parts = _short_date_parts(shown)
+        if parts is None:
+            return ""
+        day, mon, year = parts
+        if year is None:
+            year = time.localtime().tm_year
+        try:
+            return "%04d-%02d-%02d" % (year, mon, day)
+        except (TypeError, ValueError):
+            return ""
+
     def add_entry(self, desc, amt, date=None):
         """Append a ledger entry (amt > 0 credit, amt < 0 debit) and refresh.
         Public entry point for programmatic use and selftests."""
-        self.tx.append({"date": date or time.strftime("%-d %b"),
-                        "desc": str(desc), "amt": _cents(amt)})
+        try:
+            value = float(amt)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not math.isfinite(value) or _cents(value) == 0:
+            return False
+        self.undo.checkpoint("Add Entry")
+        # Stamp an "iso" the way _on_add does. Without one the entry is
+        # second-class in its own store: the CSV export writes t.get("iso", "")
+        # into the column its own docstring calls the thing that makes the sheet
+        # "sortable and reconcilable", so the row arrives in a spreadsheet with
+        # an empty Date, and `_edited_iso` has no year to carry when the date is
+        # later retyped. The short display string cannot stand in for it — it
+        # holds no year at all.
+        shown = date or time.strftime("%-d %b")
+        self.tx.append({"date": shown, "iso": self._iso_for(shown),
+                        "desc": str(desc), "amt": _cents(value)})
         self._autosave()
-        self._refresh()
+        if not self._append_one_row():
+            self._refresh()
+        self.undo.commit()
+        return True
 
     @staticmethod
     def _money(n):
@@ -1164,6 +1572,23 @@ class Accounting(nbapp.AppWindow):
         # "$0.00", never "−$0.00".
         sign = MINUS if (n < 0 and cents != 0) else ""
         return "%s$%s" % (sign, format(cents, ",.2f"))
+
+    @staticmethod
+    def _ltr(s):
+        """Keep a SIGNED money figure together in a right-to-left interface.
+
+        Delegates to `nbi18n.ltr`, which is this method promoted OS-wide after
+        the same defect was found in eleven other apps (see tools/rtl_check.py).
+        Kept as a method rather than replaced at the seven call sites so there
+        is one name to mutate when red-proofing accounting_rtl_selftest, which
+        must not reach into a campaign-owned module to do it.
+
+        The defect, for the reader who lands here first: a leading "+" or MINUS
+        is a bidi-WEAK character before a run of European numerals, so in an RTL
+        interface the Unicode algorithm lays the sign out on the far side --
+        measured under yi, '+$1,105.00' drew as '$1,105.00+'. In a ledger the
+        sign is the only thing on the row that says which way the money went."""
+        return nbi18n.ltr(s)
 
     def _cmoney(self, n):
         """`_money` for text drawn with cairo. GTK labels render the
@@ -1186,16 +1611,81 @@ class Accounting(nbapp.AppWindow):
             vals.append(b)
         return vals
 
-    def _refresh(self):
+    def _refresh_totals(self):
+        """The sidebar figures. Cheap, and shared by the full rebuild and the
+        single-row fast path below."""
         total = round(self.opening + sum(t["amt"] for t in self.tx), 2)
         credit = round(sum(t["amt"] for t in self.tx if t["amt"] > 0), 2)
         debit = round(-sum(t["amt"] for t in self.tx if t["amt"] < 0), 2)
         self.balance.set_text(self._money(total))
+        self.opening_lbl.set_text(self._money(self.opening))
+        # Hide the ROW, not the figure: a caption left behind with no value is
+        # worse than no row at all. set_no_show_all keeps a later show_all()
+        # from putting it back — the trap that once hid the balance chart's
+        # DrawingArea while its wrapper still reported itself visible.
+        rev = getattr(self, "opening_rev", None)
+        if rev is not None:
+            nbtransitions.reveal(rev, bool(_cents(self.opening)))
         self.credit_lbl.set_text(
-            ("+" + self._money(credit)) if credit else self._money(0))
+            self._ltr("+" + self._money(credit)) if credit
+            else self._money(0))
         self.debit_lbl.set_text(
-            (MINUS + self._money(debit)) if debit else self._money(0))
+            self._ltr(MINUS + self._money(debit)) if debit
+            else self._money(0))
         self.count_lbl.set_text(str(len(self.tx)))
+        return total
+
+    def _append_one_row(self):
+        """Show a newly APPENDED entry by inserting ONE row, instead of
+        rebuilding the whole visible page.
+
+        Adding an entry rebuilt every row on screen. Measured on a 600-entry
+        ledger: 153 ms per add -- 44 ms building 150 row widgets, the rest
+        destroying the old ones and letting GTK settle -- for a change that
+        touches exactly one row. Appending CANNOT alter any existing row: a
+        running balance is the total AFTER that entry, so earlier rows keep
+        theirs, and every existing entry's chronological index is unchanged
+        because the new one goes on the end.
+
+        Only valid when nothing filters or reorders the view. Returns False
+        otherwise, and the caller falls back to `_refresh()`. The search is
+        checked BOTH ways -- the parsed terms and the raw entry text -- because
+        clearing the box only schedules a 130 ms timer, so for that window
+        `_terms` is already empty while the rows on screen are still filtered.
+
+        `accounting_fastpath_selftest` asserts this produces a widget tree
+        identical to the one `_refresh()` builds; that equivalence is the whole
+        licence for the shortcut."""
+        if self._terms or self.search.get_text().strip() or not self.tx:
+            return False
+        kids = self.rows.get_children()
+        if not kids or self.empty in kids:
+            return False              # coming from the empty state
+        total = self._refresh_totals()
+        row = self._tx_row(self.tx[-1], total, len(self.tx) - 1)
+        self.rows.pack_start(row, False, False, 0)
+        self.rows.reorder_child(row, 0)
+
+        def is_more(w):
+            return w.get_style_context().has_class("morerow")
+
+        # Keep the page at its length, and the footer's count true.
+        for extra in [w for w in self.rows.get_children()
+                      if not is_more(w)][self._shown:]:
+            self.rows.remove(extra)
+            extra.destroy()
+        for w in [w for w in self.rows.get_children() if is_more(w)]:
+            self.rows.remove(w)
+            w.destroy()
+        if len(self.tx) > self._shown:
+            self.rows.pack_start(self._more_row(len(self.tx)), False, False, 0)
+        self.rows.show_all()
+        self._chart_cache = None      # data moved -- force a chart re-render
+        self.chart.queue_draw()
+        return True
+
+    def _refresh(self):
+        self._refresh_totals()
 
         # running balance — accumulate chronologically over the WHOLE ledger
         # (so a filtered row still shows the true balance it stood at), display
@@ -1243,14 +1733,24 @@ class Accounting(nbapp.AppWindow):
         "food" finds the groceries, "mar" finds March (dates are stored "12
         Mar") and "212.40" finds one figure off a paper statement. Terms are
         ANDed across those fields, which is what makes the real question —
-        "what did I spend on food in March?" — a single query: `food mar`."""
+        "what did I spend on food in March?" — a single query: `food mar`.
+
+        THE SIGNED FORM IS SEARCHABLE TOO. Only `abs(amt)` used to be in the
+        haystack, so "212.40" found the entry and "-212.40" found NOTHING — and
+        a debit copied off a paper statement carries its minus about as often as
+        not. Worse, this ledger DISPLAYS a typographic minus (U+2212), so a
+        figure copied out of the app's own column could never match itself. Both
+        forms are indexed and the term's minus is normalised, so "3.50" still
+        finds money in and out alike, while "-3.50" and "−3.50" find only money
+        that went out."""
         try:
-            hay = "%s %s %.2f" % (t.get("desc", ""), t.get("date", ""),
-                                  abs(t.get("amt", 0.0)))
+            amt = t.get("amt", 0.0)
+            hay = "%s %s %.2f %.2f" % (t.get("desc", ""), t.get("date", ""),
+                                       abs(amt), amt)
         except (TypeError, ValueError):
             hay = "%s %s" % (t.get("desc", ""), t.get("date", ""))
         hay = hay.lower()
-        return all(term in hay for term in terms)
+        return all(term.replace(MINUS, "-") in hay for term in terms)
 
     def _on_search(self, entry):
         """Track the query eagerly, but coalesce keystroke bursts: rebuilding
@@ -1283,7 +1783,8 @@ class Accounting(nbapp.AppWindow):
             n = len(display)
             net = round(sum(t["amt"] for _i, t, _b in display), 2)
             self.find_n.set_text(_t("%d match%s") % (n, "" if n == 1 else "es"))
-            self.find_net.set_text(("+" + self._money(net)) if net > 0
+            self.find_net.set_text(self._ltr("+" + self._money(net))
+                                   if net > 0
                                    else self._money(net))
             ctx = self.find_net.get_style_context()
             ctx.remove_class("credit")
@@ -1303,7 +1804,7 @@ class Accounting(nbapp.AppWindow):
         if self._terms:
             return _t("Nothing here matches “%s”.") % self.filter
         if self._damaged:
-            return _t("The ledger file could not be read. A new ledger was started.")
+            return _unreadable_note()
         return _t("No entries. Add one above.")
 
     def _more_row(self, n):
@@ -1386,7 +1887,8 @@ class Accounting(nbapp.AppWindow):
         self._money_cell(deb, 2)
         box.pack_start(deb, False, False, 0)
 
-        cred = Gtk.Label(label=("+" + self._money(amt)) if amt > 0 else "",
+        cred = Gtk.Label(label=self._ltr("+" + self._money(amt))
+                         if amt > 0 else "",
                          xalign=1)
         cred.get_style_context().add_class("txcredit")
         self._money_cell(cred, 3)
@@ -1402,7 +1904,7 @@ class Accounting(nbapp.AppWindow):
 
     def _row_key(self, _w, ev, idx):
         """Delete key on a focused ledger row asks before removing that entry
-        (deletion is destructive and has no undo)."""
+        (a deletion is reversible — see the undo history)."""
         if ev.keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
             self._confirm_delete(idx)
             return True
@@ -1461,6 +1963,7 @@ class Accounting(nbapp.AppWindow):
         layer = Gtk.Fixed()
         W, H = self._overlay_size()
         scrim = Gtk.EventBox()
+        scrim.get_style_context().add_class("scrim")
         scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         scrim.set_size_request(W, H)
         scrim.connect("button-press-event",
@@ -1613,19 +2116,74 @@ class Accounting(nbapp.AppWindow):
         # explicitly: editing a description must not quietly cost the entry the
         # only machine-readable date it has, and the editor exposes the SHORT
         # date only — the user is retyping "6 Aug", not a year.
-        entry = {"date": date, "desc": desc, "amt": amt}
-        iso = self.tx[idx].get("iso")
+        self.undo.checkpoint("Edit Entry")
+        entry = dict(self.tx[idx])
+        entry.update({"date": date, "desc": desc, "amt": amt})
+        iso = self._edited_iso(self.tx[idx], date)
         if iso:
             entry["iso"] = iso
         self.tx[idx] = entry
         self._autosave()         # a committed edit must survive
         self._close_edit()
         self._refresh()
+        self.undo.commit()
         self._flash(_t("Entry updated"))
 
+    @staticmethod
+    def _edited_iso(old, new_date):
+        """The machine-readable date an edited entry should keep.
+
+        THE BUG THIS EXISTS FOR: `iso` was carried over unconditionally, with a
+        comment explaining — correctly — that editing a DESCRIPTION must not
+        cost the entry the only sortable date it has. But the editor exposes the
+        date too, and when the user changed it the stale `iso` came along. The
+        CSV writes both columns, so an entry retyped from "03 Aug" to "01 Jan"
+        exported as `['2026-08-03', '01 Jan', ...]`: the machine-readable column
+        and the shown column naming different days, on a file whose entire
+        reason for existing is that a spreadsheet can sort it.
+
+        The rule MOVES the iso with the date rather than dropping it. Dropping
+        was the first fix tried here and it was wrong: `accounting_dates_selftest`
+        holds the contract "editing does not drop the ISO date", and it is right
+        to — an edit that costs the row its sortable date is its own small data
+        loss. Keeping the YEAR while updating the day and month is not inventing
+        anything: the entry already carried that year, and the user changed the
+        parts they changed. This app's "never invent a year" doctrine is about a
+        row that NEVER recorded one, and that case is still honoured below.
+
+          * the shown date did not change   -> keep the iso unchanged
+          * the new text carries a YEAR     -> believe it; on a row where the
+                                               user wrote one it is the only
+                                               unambiguous thing there is
+          * the entry already had an iso    -> keep its year, take the new day
+                                               and month, so the two columns
+                                               agree
+          * the entry never had an iso      -> still none. A year cannot be
+                                               inferred from a row that never
+                                               recorded one; the CSV cell stays
+                                               empty, which a person can see and
+                                               fix.
+          * the text is not a date at all   -> nothing to derive; it stays in
+                                               `date` as the user's own words.
+        """
+        iso = old.get("iso")
+        if str(new_date) == str(old.get("date", "")):
+            return iso
+        parts = _short_date_parts(new_date)
+        if parts is None:
+            return None
+        day, mon, year = parts
+        if year is None:
+            if not (iso and _ISO_RE.match(str(iso))):
+                return None            # never had a year; do not invent one
+            try:
+                year = int(str(iso).split("-")[0])
+            except ValueError:
+                return None
+        return "%04d-%02d-%02d" % (year, mon, day)
+
     def _confirm_delete(self, idx):
-        """Ask before removing entry `idx` — deletion is destructive and has no
-        undo. Drawn as an in-window overlay card (same no-compositor-safe
+        """Ask before removing entry `idx`. Drawn as an in-window overlay card (same no-compositor-safe
         pattern as the editor / report cards), so it always paints on top."""
         if not (0 <= idx < len(self.tx)):
             return
@@ -1639,6 +2197,7 @@ class Accounting(nbapp.AppWindow):
         layer = Gtk.Fixed()
         W, H = self._overlay_size()
         scrim = Gtk.EventBox()
+        scrim.get_style_context().add_class("confirmscrim")
         scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         scrim.set_size_request(W, H)
         scrim.connect("button-press-event",
@@ -1655,7 +2214,17 @@ class Accounting(nbapp.AppWindow):
         title = Gtk.Label(label=_t("Delete Entry"), xalign=0)
         title.get_style_context().add_class("confirmtitle")
         card.pack_start(title, False, False, 0)
-        msg = Gtk.Label(label=_t("Delete “%s”? This cannot be undone.") % desc,
+        # NO "This cannot be undone." — it was true when written and is not
+        # now: this ledger grew a full undo history, so Ctrl+Z or Edit ▸ Undo
+        # Delete Entry brings the row straight back. Saying otherwise is the
+        # app telling the reader something untrue about its own behaviour,
+        # which is the one thing it may not do — and it is the FRIGHTENING
+        # direction of untrue, since it invites somebody to keep a row they
+        # meant to remove. The sentence is dropped rather than replaced with
+        # "you can undo this": the confirm itself is on the way out (undo
+        # replaces confirmation, campaign decision), and this is the smallest
+        # change that makes the card honest today.
+        msg = Gtk.Label(label=_t("Delete “%s”?") % desc,
                         xalign=0)
         msg.set_line_wrap(True)
         msg.set_max_width_chars(38)
@@ -1720,12 +2289,162 @@ class Accounting(nbapp.AppWindow):
         focused row both route through _confirm_delete first)."""
         if not (0 <= idx < len(self.tx)):
             return
+        self.undo.checkpoint("Delete Entry")
         del self.tx[idx]
         self._autosave()         # a deletion must survive too
         self._close_confirm()
         self._close_edit()
         self._refresh()
+        self.undo.commit()
         self._flash(_t("Entry deleted"))
+
+    def _opening_card(self):
+        """Set the opening balance — the figure the ledger starts from.
+
+        THE GAP THIS FILLS: `opening` has been in the saved schema since the
+        beginning. The loader reads it, the balance arithmetic adds it, the
+        Ledger Summary prints it as a line of its own, the running-balance
+        column starts from it, and the damage salvage now goes to some trouble
+        to recover it — and there was NO WAY FOR ANYBODY TO SET IT. It could
+        only ever be non-zero in a hand-edited or imported file. That is the
+        same shape as a class's `room` and an assignment's `note` in academics:
+        a field the model can express and the interface cannot reach, which
+        reads to the user as the app simply not having the feature.
+
+        It matters most on the first day: a ledger you start today does not
+        start from nothing, it starts from whatever is already in the account,
+        and without this every balance the app showed was wrong by that amount
+        until you invented a fake first entry to correct it."""
+        self._close_menu()
+        self._close_edit()
+        layer = Gtk.Fixed()
+        W, H = self._overlay_size()
+        scrim = Gtk.EventBox()
+        scrim.get_style_context().add_class("scrim")
+        scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        scrim.set_size_request(W, H)
+        scrim.connect("button-press-event",
+                      lambda *a: (self._close_edit(), True)[1])
+        layer.put(scrim, 0, 0)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        card.get_style_context().add_class("editcard")
+        title = Gtk.Label(label=_t("Opening Balance"), xalign=0)
+        title.get_style_context().add_class("edittitle")
+        card.pack_start(title, False, False, 0)
+
+        why = Gtk.Label(label=_t("What the account held before the first entry."),
+                        xalign=0)
+        why.get_style_context().add_class("sumkey")
+        why.set_line_wrap(True)
+        why.set_max_width_chars(34)
+        card.pack_start(why, False, False, 0)
+
+        self._o_amt = Gtk.Entry()
+        # Shown as a plain number, not through _money: this is a field to type
+        # in, and "$2,400.00" is a thing to read. Zero shows as empty so the
+        # first use is not a 0.00 to clear before typing.
+        self._o_amt.set_text("" if not self.opening
+                             else ("%.2f" % abs(self.opening)))
+        self._o_amt.set_width_chars(12)
+        self._o_amt.set_alignment(1.0)   # right-aligned, like every amount
+        self._o_amt.get_style_context().add_class("finput")
+        self._o_amt.connect("activate", lambda *_: self._save_opening())
+        card.pack_start(self._o_amt, False, False, 0)
+
+        # An account can be overdrawn, so the opening balance has a direction
+        # exactly as an entry does — and for the same reason the entry form has
+        # one: _parse_amount deliberately strips the sign.
+        self._odir = "credit" if self.opening >= 0 else "debit"
+        dirs = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        dirs.get_style_context().add_class("dirseg")
+        self._o_btns = {}
+        for key, label in (("credit", _t("In credit")),
+                           ("debit", _t("Overdrawn"))):
+            b = Gtk.Button(label=label)
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            b.get_style_context().add_class("dirbtn")
+            if key == self._odir:
+                b.get_style_context().add_class("on")
+            b.connect("clicked", lambda _b, k=key: self._set_odir(k))
+            self._o_btns[key] = b
+            dirs.pack_start(b, True, True, 0)
+        card.pack_start(dirs, False, False, 0)
+
+        self._o_err = Gtk.Label(xalign=0)
+        self._o_err.get_style_context().add_class("formerr")
+        # Driven by hand: an empty error label still takes its row, which left a
+        # blank band above the buttons on a card that has nothing wrong with it.
+        self._o_err.set_no_show_all(True)
+        card.pack_start(self._o_err, False, False, 0)
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        actions.pack_start(Gtk.Box(), True, True, 0)
+        cancel = Gtk.Button(label=_t("Cancel"))
+        cancel.set_relief(Gtk.ReliefStyle.NONE)
+        cancel.get_style_context().add_class("cancelbtn")
+        cancel.connect("clicked", lambda *_: self._close_edit())
+        save = Gtk.Button(label=_t("Save"))
+        save.set_relief(Gtk.ReliefStyle.NONE)
+        save.get_style_context().add_class("savebtn")
+        save.connect("clicked", lambda *_: self._save_opening())
+        actions.pack_start(cancel, False, False, 0)
+        actions.pack_start(save, False, False, 0)
+        card.pack_start(actions, False, False, 0)
+
+        card_win = Gtk.EventBox()
+        card_win.add(card)
+        layer.put(card_win, 0, 0)
+        self._overlay.add_overlay(layer)
+        layer.show_all()
+        self._center_card(layer, card_win, W, H)
+        self._edit_layer = layer     # Esc / scrim dismiss it like the editor
+        try:
+            self._o_amt.grab_focus()
+        except Exception:
+            pass
+
+    def _apply_chart_pref(self, *_a):
+        """Hide the balance chart if that is what was saved.
+
+        Fires from the wrapper's own "map". Only ever HIDES: the widget is
+        already visible by the time this runs, and calling set_visible(True)
+        from inside a map handler is a no-op with a chance of a re-entrancy
+        surprise for nothing."""
+        try:
+            if not getattr(self, "_chart_shown", True):
+                self.chartwrap.hide()
+        except Exception:
+            pass
+
+    def _set_odir(self, key):
+        self._odir = key
+        for k, b in getattr(self, "_o_btns", {}).items():
+            ctx = b.get_style_context()
+            (ctx.add_class if k == key else ctx.remove_class)("on")
+
+    def _save_opening(self):
+        """Commit the opening balance. Empty means zero — the way to clear it."""
+        raw = self._o_amt.get_text().strip()
+        if raw:
+            n = self._parse_amount(raw)
+            if n is None:
+                try:
+                    self._o_err.set_text(self._missing_msg("x", None, raw))
+                    self._o_err.show()
+                except Exception:
+                    pass
+                self._o_amt.grab_focus()
+                return
+        else:
+            n = 0.0
+        self.undo.checkpoint("Opening Balance")
+        self.opening = _cents(n if self._odir == "credit" else -n)
+        self._autosave()
+        self._close_edit()
+        self._refresh()
+        self.undo.commit()
+        self._flash(_t("Opening balance set"))
 
     def _close_edit(self):
         """Dismiss the open editor overlay; return True if one was showing."""
@@ -1900,6 +2619,14 @@ class Accounting(nbapp.AppWindow):
                     (_t("Print…"), self._print),
                     nbapp.SEP,
                     (_t("Close    Esc"), self.close)]
+        if name == "Edit":
+            # Undo/redo lead the menu, as they do in every editor in this OS —
+            # and they have to be VISIBLE, not only bound to a key nobody can
+            # discover. Deleting a ledger entry was permanent until now.
+            return nbapp.undo_menu_items(self.undo) + [nbapp.SEP] \
+                + super().menu_items("Edit") + [
+                nbapp.SEP,
+                (_t("Opening Balance…"), self._opening_card)]
         if name == "View":
             # A clear toggle: name the action it will actually perform, based
             # on the chart's current visibility.
@@ -1915,12 +2642,19 @@ class Accounting(nbapp.AppWindow):
         return super().menu_items(name)
 
     def _toggle_chart(self):
-        """Show or hide the balance-over-time chart (a genuine view toggle)."""
+        """Show or hide the balance-over-time chart (a genuine view toggle).
+
+        The choice is WRITTEN DOWN. It used to live only in the widget, so
+        hiding the chart lasted until the window closed and it was back at the
+        next launch — a preference the app accepted, acted on, and quietly
+        forgot."""
         try:
-            if self.chartwrap.get_visible():
-                self.chartwrap.hide()
-            else:
+            self._chart_shown = not self.chartwrap.get_visible()
+            if self._chart_shown:
                 self.chartwrap.show()
+            else:
+                self.chartwrap.hide()
+            self._autosave()
         except Exception:
             pass
 
@@ -1948,16 +2682,17 @@ class Accounting(nbapp.AppWindow):
             if self.opening and not self._terms:
                 rows.append(("OPENING", self._money(self.opening), None))
             rows += [
-                ("CREDIT", "+" + self._money(credit) if credit
+                ("CREDIT", self._ltr("+" + self._money(credit)) if credit
                  else self._money(0), "credit"),
-                ("DEBIT", (MINUS + self._money(debit)) if debit
+                ("DEBIT", self._ltr(MINUS + self._money(debit)) if debit
                  else self._money(0), "debit"),
             ]
             if self._terms:
                 # A subset has no "balance" — it has a net, which is what these
                 # entries did to the balance between them.
                 net = round(credit - debit, 2)
-                rows.append(("NET", ("+" + self._money(net)) if net > 0
+                rows.append(("NET", self._ltr("+" + self._money(net))
+                             if net > 0
                              else self._money(net), "strong"))
             else:
                 total = round(self.opening + sum(t["amt"] for t in tx), 2)
@@ -1975,6 +2710,7 @@ class Accounting(nbapp.AppWindow):
         layer = Gtk.Fixed()
         W, H = self._overlay_size()
         scrim = Gtk.EventBox()
+        scrim.get_style_context().add_class("scrim")
         scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         scrim.set_size_request(W, H)
         scrim.connect("button-press-event",
@@ -2047,6 +2783,12 @@ class Accounting(nbapp.AppWindow):
             if self._terms:
                 self.search.set_text("")
                 return True
+        # Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, at the window level so they work from
+        # the ledger, the entry form and the FIND box alike. Below Escape, so
+        # dismissing an overlay still wins; above the base handler, which would
+        # otherwise pass them on to whatever holds focus.
+        if nbapp.undo_keys(self.undo, ev):
+            return True
         return super()._on_key(w, ev)
 
     # -------------------------------------------------------------------- css
@@ -2149,6 +2891,21 @@ class Accounting(nbapp.AppWindow):
         .morerow:hover { background: #F4F2EC; }
         .morelab { font-size: 14px; font-weight: 600; color: #3A362E; }
         .morecount { font-size: 12px; color: #9A9484; }
+
+        /* The veil behind every overlay card. This app built four scrims (the
+           row editor, the delete confirm, the opening balance and the report)
+           and styled none of them, so all four cards floated over the ledger at
+           full contrast. That is worse here than in a text app: a card covers
+           the LEFT of the figures behind it, so "$950.00" reads as "50.00" and
+           a delete confirmation is drawn over a ledger showing wrong numbers.
+           0.18 and the colour are the OS-wide .scrim, as in tasks and settings.
+           The rule is what makes it paint at all -- an EventBox owns a
+           GdkWindow and draws nothing without a background. */
+        .scrim { background: rgba(26,25,22,0.18); }
+        /* Heavier behind the DELETE confirm, the one card whose
+           background must not read as live figures -- settings.py draws
+           the same distinction for the same reason. */
+        .confirmscrim { background: rgba(26,25,22,0.32); }
 
         /* in-place row editor (drawn as an overlay card) */
         .editcard { background: #FCFBF8; border: 1px solid #C9C4B6;
