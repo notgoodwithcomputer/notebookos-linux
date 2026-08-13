@@ -2318,7 +2318,7 @@ class Animation(nbapp.AppWindow):
                 ('First Frame    Home', self._go_start),
                 ('Last Frame    End', self._go_end),
                 nbapp.SEP,
-                ('Add Marker    M', self._marker_prompt),
+                ('Add Marker…    M', self._marker_prompt),
             ]
         if name == 'Scene':
             return [
@@ -3178,6 +3178,10 @@ class Animation(nbapp.AppWindow):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         card.get_style_context().add_class('animation-prompt')
         card.pack_start(Gtk.Label(label=_t(title), xalign=0), False, False, 0)
+        # One column for the names so the controls beside them line up. The
+        # New Animation card has two rows of choices and they started at
+        # different places, which is the first card anyone opens.
+        names = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         for key, label, initial, kind in rows:
             row = Gtk.Box(spacing=8)
             # a row whose control wants width gets it: the name of the
@@ -3189,7 +3193,8 @@ class Animation(nbapp.AppWindow):
             name = Gtk.Label(label=_t(label), xalign=0)
             # beside a tall control the name is a heading, not a floating word
             name.set_valign(Gtk.Align.START)
-            row.pack_start(name, not expand, not expand, 0)
+            names.add_widget(name)
+            row.pack_start(name, False, False, 0)
             if kind == 'int':
                 widget = Gtk.SpinButton.new_with_range(1, SCENE_FRAME_MAX, 1)
                 widget.set_value(initial)
@@ -3554,12 +3559,16 @@ class Animation(nbapp.AppWindow):
         markers = self.doc.scenes[self.scene_i]['markers']
         existing = next((m for m in markers if m['frame'] == self.playhead),
                         None)
-        self._overlay_prompt('Marker',
+        # The card names the operation it is about to do: opened on a
+        # frame that already carries a marker it renames one, and saying
+        # "Add" there described something else entirely.
+        self._overlay_prompt('Rename Marker…' if existing else 'Add Marker…',
                              [('text', 'Name',
                                existing['text'] if existing else '', 'text')],
-                             'Add', self._marker_apply,
-                             'An empty name removes the marker.'
-                             if existing else None)
+                             'Rename' if existing else 'Add',
+                             self._marker_apply,
+                             'An empty name removes the marker.' if existing
+                             else 'The marker names the current frame.')
 
     def _marker_apply(self, state):
         markers = self.doc.scenes[self.scene_i]['markers']

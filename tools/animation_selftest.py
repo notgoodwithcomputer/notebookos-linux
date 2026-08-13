@@ -1486,12 +1486,76 @@ def message_truth_family():
     shutil.rmtree(scratch)
 
 
+def ellipsis_promise_family():
+    """MENU-CONVENTIONS §1: an ellipsis promises the app will ask before
+    anything happens, and no ellipsis promises it acts at once.
+
+    Add Marker opened a card without one. Checking this by reading labels
+    cannot see it — the promise is about what the ACTION does, so the only
+    way to check it is to invoke every item and watch."""
+    if not gtk_available():
+        skip("F15 ellipsis promise", "no display")
+        return
+    import nbapp as _nbapp
+    # These hand off to the file picker or the printer of the moment, which
+    # a headless run cannot drive; their labels are checked by menu
+    # conformance instead.
+    HANDOFF = {"Add Sound…", "Open…", "Save As…", "Export Film…",
+               "Export Movie…", "Place Image…", "New…", "Quit", "Close"}
+    app = animation.Animation()
+    said = []
+    app._flash = lambda text, *a, **k: said.append(text)
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+    app.doc.scenes[0]["layers"][0]["mouth_slots"] = [cel.id] * 3
+
+    broken = []
+    for menu in ("Animation", "File", "Edit", "View", "Timeline", "Scene",
+                 "Drawing", "Layer", "Sound"):
+        for item in app.menu_items(menu):
+            if not item or item is _nbapp.SEP or not isinstance(item, tuple):
+                continue
+            label, action = item[0], item[1]
+            bare = label.split("    ")[0].strip()
+            if action is None or bare in HANDOFF:
+                continue
+            app._close_prompt()
+            del said[:]
+            try:
+                action()
+            except Exception as exc:
+                broken.append((label, "raised %s" % type(exc).__name__))
+                continue
+            asked = app._prompt_layer is not None
+            app._close_prompt()
+            # a refusal that explains itself is not the action happening
+            if said and not asked:
+                continue
+            if asked != bare.endswith("…"):
+                broken.append((bare, "asks with no ellipsis" if asked
+                               else "promises to ask but acts at once"))
+    check("F15 every menu item keeps the promise its ellipsis makes",
+          not broken, broken)
+
+    graded, scratch = module_mutant(
+        "F15-marker",
+        [("('Add Marker…    M', self._marker_prompt),",
+          "('Add Marker    M', self._marker_prompt),")])
+    sabotaged = graded.Animation()
+    labels = [item[0] for item in sabotaged.menu_items("Timeline")
+              if item and item is not _nbapp.SEP and isinstance(item, tuple)]
+    silent = [text for text in labels if text.startswith("Add Marker")]
+    mutant("F15 a card opened from a label with no ellipsis is caught",
+           silent == ["Add Marker    M"], silent)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 workflow_family()
 thumbnail_family()
 control_range_family()
 recording_family()
 message_truth_family()
+ellipsis_promise_family()
 
 total = len(PASSES) + len(FAILS) + len(SKIPS) + len(MUTANTS) + len(UNCAUGHT_MUTANTS)
 print("TALLY total=%d passed=%d failed=%d skipped=%d mutants-caught=%d mutants-uncaught=%d" %
