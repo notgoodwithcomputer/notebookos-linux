@@ -2760,8 +2760,140 @@ def dock_controls_family():
     shutil.rmtree(scratch)
 
 
+def selection_family():
+    """Choosing what to work on, by pointing at it.
+
+    Clicking the canvas picks the topmost VISIBLE layer that has ink under
+    the pointer — click-through, which is how you grab a character standing
+    in front of a background. Clicking the sheet picks the exposure under
+    the pointer. Neither had ever run here, and both decide what every
+    subsequent edit applies to."""
+    if not gtk_available():
+        skip("F27 pointing at things", "no display")
+        return
+    from gi.repository import Gdk
+
+    kept = animation.STORE_FILE + ".select-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(40, 30))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    scene = app.doc.scenes[0]
+    scene["length"] = 30
+    while len(scene["layers"]) < 2:
+        scene["layers"].append(animation.new_layer("Layer 2"))
+    app.sheet = animation.Sheet(app.doc, 0)
+
+    def inked(name, spots):
+        cel = app.doc.add_cel(name)
+        surface = cel.decoded(0)
+        for x, y in spots:
+            animation.write_pixel(surface, x, y, "#1A1916")
+        cel.version += 1
+        return cel
+
+    low = inked("Behind", [(5, 5), (18, 12)])
+    high = inked("In front", [(20, 20), (18, 12)])
+    scene["layers"][0]["runs"].append(animation.make_run(low.id, 0, 30))
+    scene["layers"][1]["runs"].append(animation.make_run(high.id, 0, 30))
+    app._refresh_lists()
+
+    picks = {}
+    app.selection = None
+    app._select_at_pixel((5, 5))
+    picks["ink on the layer behind"] = app.layer_i == 0
+    app._select_at_pixel((20, 20))
+    picks["ink on the layer in front"] = app.layer_i == 1
+    app.layer_i = 0
+    app._select_at_pixel((18, 12))
+    picks["ink on both picks the front one"] = app.layer_i == 1
+    app._select_at_pixel((38, 2))
+    # clicking where nothing is drawn lets go of what was held
+    picks["bare paper deselects"] = app.selection is None
+    check("F27 clicking the canvas picks the drawing under the pointer",
+          all(picks.values()),
+          [tag for tag, ok in picks.items() if not ok])
+
+    # a hidden layer is not in the way
+    scene["layers"][1]["visible"] = False
+    app.layer_i = 1
+    app._select_at_pixel((18, 12))
+    hidden_skipped = app.layer_i == 0
+    scene["layers"][1]["visible"] = True
+    check("F27 a hidden layer cannot be picked through the canvas",
+          hidden_skipped, app.layer_i)
+
+    # and the sheet: pressing an exposure selects exactly that exposure
+    app.selection = None
+    scene["layers"][0]["runs"] = [animation.make_run(low.id, 4, 6),
+                                  animation.make_run(low.id, 14, 5)]
+    app.sheet = animation.Sheet(app.doc, 0)
+    rows = len(scene["layers"])
+    press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    press.x = animation.TL_GUTTER + 5 * app.column_width
+    press.y = (animation.TL_ROWS_TOP +
+               (rows - 1) * animation.TL_ROW_H + 2)
+    press.button = 1
+    app._timeline_press(app.timeline, press)
+    release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+    release.x, release.y, release.button = press.x, press.y, 1
+    app._timeline_release(app.timeline, release)
+    check("F27 pressing an exposure on the sheet selects that exposure",
+          app.selection == (0, 4, 10), app.selection)
+
+    # dragging at the left edge walks the view back toward the start
+    app.view_origin = 40
+    app._edge_scroll(animation.TL_GUTTER + 2)
+    walked_back = app.view_origin < 40
+    app._edge_scroll(app.timeline.get_allocated_width() - 2)
+    check("F27 dragging at an edge walks the view along the sheet",
+          walked_back and app.view_origin >= 0, app.view_origin)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F27-picks-the-bottom",
+        [("        for index in reversed(range(len(scene['layers']))):",
+          "        for index in range(len(scene['layers'])):")])
+    upside_down = graded.Animation()
+    upside_down.doc = graded.AnimationDocument(canvas=(40, 30))
+    upside_down.scene_i = upside_down.layer_i = upside_down.playhead = 0
+    other = upside_down.doc.scenes[0]
+    other["length"] = 30
+    while len(other["layers"]) < 2:
+        other["layers"].append(graded.new_layer("Layer 2"))
+    upside_down.sheet = graded.Sheet(upside_down.doc, 0)
+    for name in ("Behind", "In front"):
+        cel = upside_down.doc.add_cel(name)
+        graded.write_pixel(cel.decoded(0), 18, 12, "#1A1916")
+        cel.version += 1
+    for index, cel in enumerate(upside_down.doc.cels[:2]):
+        other["layers"][index]["runs"].append(graded.make_run(cel.id, 0, 30))
+    upside_down.layer_i = 0
+    upside_down._select_at_pixel((18, 12))
+    mutant("F27 a canvas that picks the layer behind is caught",
+           upside_down.layer_i != 1, upside_down.layer_i)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+selection_family()
 dock_controls_family()
 export_outcome_family()
 close_guard_family()
