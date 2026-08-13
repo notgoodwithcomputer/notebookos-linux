@@ -490,35 +490,37 @@ gbaruntime/` today.
 
 |Subsystem                |Today (measured 2026-08-05)|Required                                          |
 |-------------------------|---------------------------|--------------------------------------------------|
-|BG modes 0/1/2 (tiled)   |Mode 0. Modes 1/2 reachable via `rt_video_mode`, but no affine MAP data is emitted|0, 1, 2 incl. affine|
-|BG modes 3/4/5 (bitmap)  |Absent — one unused `MODE3` constant|Full, incl. page flipping                |
+|BG modes 0/1/2 (tiled)   |**Done** (2026-08-07) — mode 0, and mode 1 with an authored affine ground (16×16/32×32)|0, 1, 2 incl. affine|
+|BG modes 3/4/5 (bitmap)  |**Done** (2026-08-07) — modes 3/4/5, page flipping, mode-4 halfword packing|Full, incl. page flipping|
 |Sprites (OAM)            |**Done** — regular + affine + double-size + OBJWIN (2026-08-07)|Regular + affine + double-size + OBJWIN|
-|Palettes                 |Static banks + **cycling** (2026-08-07, 4 slots, BG+OBJ); runtime reassignment still absent|Full 256+256, per-asset assignment, cycling|
+|Palettes                 |**Done** (2026-08-07) — 256+256, per-instance bank assignment, direct writes, 4 cycle slots|Full 256+256, per-asset assignment, cycling|
 |Windowing (WIN0/1/OBJ)   |**Done** (2026-08-07) — and the enable bits now survive the frame loop, which they never did|Full|
 |Blending / fade / mosaic |**Done** — alpha, brightness, fade, mosaic|Full                                  |
 |Interrupts (IRQ)         |**Done** — `rt_irq_set`, all sources defined|VBlank, HBlank, VCount, Timer, DMA, SIO, Key|
 |Timers ×4                |**Done** — start/stop/read       |Full — required for DMA audio                    |
 |DMA 0–3                  |**Done** — `rt_dma`, `rt_hdma_start`|All four, incl. HDMA for raster effects       |
-|BIOS calls               |LZ77 (WRAM+VRAM), Huffman, RLE, div, sqrt. No halt/stop|+ halt/stop           |
+|BIOS calls               |**Done** (2026-08-07) — decompression, div, sqrt, halt, stop|+ halt/stop|
 |Sound: PSG ×4            |**Done**                         |Yes                                              |
-|Sound: DMA PCM ×2        |**Two voices** (2026-08-07): looping soundtrack on B under one-shots on A, shared timer; no sample-summing mixer yet|Two, timer-driven, with mixer|
-|Save: SRAM               |**SRAM + Flash 64K/128K** (2026-08-07); EEPROM absent|SRAM + Flash 64K/128K + EEPROM 512B/8K|
+|Sound: DMA PCM ×2        |**Done** (2026-08-07) — 4-voice software mixer on A, looping soundtrack on B, shared timer|Two, timer-driven, with mixer|
+|Save: SRAM               |**Done** (2026-08-07) — SRAM + Flash 64K/128K + EEPROM 512B/8K|SRAM + Flash 64K/128K + EEPROM 512B/8K|
 |RTC                      |**Done** — present/read          |Required (Pokémon)                               |
 |SIO / link               |**Done** — 11 calls, multiboot image builds|Required (Pokémon)                     |
-|Rumble / solar / gyro    |Absent                           |Supported                                        |
+|Rumble / solar / gyro    |**Code landed** (2026-08-07); protocols unverifiable on this emulator — no cartridge peripheral|Supported|
 |Multiboot                |**Done** — `gba_mb.ld`, built and checked|Supported                                |
-|Sleep / power management |Absent                           |Supported                                        |
+|Sleep / power management |**Done** (2026-08-07) — BIOS Stop with a keypad wake, BIOS Halt; rt_sleep untestable headless|Supported|
 |Cartridge header / gbafix|**Done**                         |Yes + region/version metadata                    |
 
-**Nine of nineteen rows are done.** The previous version of this table was
-written before Movement B and listed interrupts, timers, DMA, BIOS calls, RTC,
-SIO and multiboot as absent when all seven now work; it also implied the save
-and PCM rows were further along than they are. Measured, not remembered.
+**Eighteen of nineteen rows are done**, measured 2026-08-07 — up from
+nine that morning. The one that is not, stated precisely:
 
-The three rows that block the Definition of Done: **save** (the Pokémon test
-needs 128 KB flash and this is SRAM only), **PCM** (one channel and no mixer
-cannot carry the Undertale test's soundtrack over its sound effects), and
-**palettes** (no cycling, no runtime assignment).
+* **Rumble / solar / gyro** — the code is landed and the sequences execute,
+  but the protocols cannot be verified here: vbam emulates cartridge sensors
+  only for ROMs a `vba-over.ini` names, and this build has none, so those pins
+  read plain cartridge ROM. Real hardware or a configured emulator is needed
+  to move this row, and no gate should claim otherwise.
+
+Everything else on this table now has execution proof behind it, not a
+compile.
 
 - - -
 ## Part IV — The collisions, and honest answers
@@ -591,6 +593,12 @@ dominant cost, so:
 
 > **The suite hosts its own emulator pane.** Build and run happen inside the
 > workspace, beside the editor that produced them.
+
+**Shipping today (2026-08-13):** the pane is Movement D, item 16 — not yet
+built. Until it lands, **Build & Play** (Build menu, Ctrl+R) builds off the
+GTK thread, hands the ROM to the GBA Emulator app, and returns here when the
+game exits. The decision above stands as the end-state; the handoff is the
+honest interim, and nothing in the suite claims otherwise.
 
 Consequences to design for, not discover:
 
@@ -3620,3 +3628,483 @@ immunise its documenter; only a gate does.
 One more harness lesson for the pile: 0x7FE0 reads yellow to RGB eyes and is
 GREEN in BGR555 — the lit-pixel test now counts backdrop-difference and
 decodes nothing.
+
+
+### The sample-summing mixer, and the cadence that had to be honest — 2026-08-07
+
+Four one-shot samples audible at once, summed in IWRAM into a double buffer
+that Direct Sound A streams; the looping soundtrack stays hardware on B.
+Before it, a second `rt_pcm_play` cut the first off mid-note — a footstep
+silenced a sword.
+
+Two details carry the design. **The cadence:** 16384 Hz against 60 frames is
+273.07 samples a frame, and neither rounding survives a minute — a fixed 273
+starves the FIFO by four samples a second, a fixed 274 overruns it. The mixer
+owes four extra samples a second and pays them one at a time, every fifteenth
+frame, which a host test asserts by summing sixty frames and demanding
+exactly 16384. **The saturation:** two loud samples clamp at full scale
+rather than wrapping, because a wrap turns their loudest instant into a spike
+of the opposite sign — a CRACK where the design says LOUD.
+
+Proof at both levels: `mix_block` extracted and run on the host (clamps at
++127 and −128, a voice retires exactly at its final sample, the cadence sums
+right), and the chorus slice with four voices live simultaneously over the
+looping soundtrack — `SOUNDCNT_H=770E`, mix buffer non-silent, four `on`
+flags set in the same instant.
+
+That closes the last of the three Definition-of-Done rows named when the
+matrix was refreshed this morning: save, PCM, palettes — all done, all with
+execution proof, inside one campaign day.
+
+
+### Power, cartridge GPIO, and a check that could not fail — 2026-08-07
+
+`rt_sleep` is BIOS Stop with the keypad interrupt armed as the wake source —
+the only one a player can produce — restoring the interrupt mask it found.
+`rt_wait_vblank` is BIOS Halt for the frames a game spends waiting. Rumble,
+the solar sensor and the gyro ride the four GPIO pins the clock shares, so a
+cartridge carries at most one and `rt_gpio_release` hands the pins back.
+
+**The proof is deliberately narrower than the feature.** The slice
+establishes that the sequences execute under hardware emulation without
+faulting and that the frame loop survives them. It does NOT establish the
+peripheral protocols: vbam emulates cartridge sensors only for ROMs a
+`vba-over.ini` names, this build has none, and those pins therefore read
+plain cartridge ROM. My first version of the slice asserted
+`0 <= solar <= 255` against a ROM byte and passed — a check that could not
+fail, which is the same vacuity the palette fixture and the sprite-bank
+arithmetic each produced earlier. `rt_sleep` is unexercised for a different
+reason: waking it needs a keypress the headless harness cannot produce, so
+calling it would hang the run. Both limits are written into the slice's own
+docstring, where the next reader meets them, rather than left to be inferred
+from a green line.
+
+The matrix rows now read what is true: sleep/power and BIOS calls done;
+rumble/solar/gyro as code landed with protocols unverified here.
+
+
+### EEPROM, and the predicate that quietly changed meaning — 2026-08-07
+
+The third save part, sharing nothing with the other two: a serial device
+behind a one-bit port at 0x0D000000, reachable only by DMA3 because the
+transfer must not be interrupted, with no byte writes at all — the unit is an
+8-byte block. So the save block lives in a RAM shadow, reads and writes are
+served from it, and `save_commit()` pushes whole blocks. Only DIRTY ones: a
+save that moves a score and two globals writes three blocks of nineteen.
+
+**The power-cycle gate caught three defects in this code, and all three were
+the same shape — a wait that was unbounded or sized to nothing real.** First
+`ee_dma` spun forever on the DMA-enable bit, which hangs the GAME on a
+cartridge with no EEPROM behind the port — the exact rule I had already
+written into the flash path twice that day, and still did not apply here.
+Then a 100 000-iteration ready poll across nineteen blocks left the Create
+event still inside `rt_game_save` five seconds after boot; the gate reported
+that, correctly, as a cartridge that never started. **A bound must be small
+enough that failing is fast.**
+
+The third was the interesting one. `rt_game_save` erased a flash sector
+whenever `nb_save_type != 0` — a test that was exactly right for as long as
+flash was the only alternative to SRAM, and became wrong the moment a third
+part existed, without changing a character. It spun in `flash_wait` against a
+cartridge with no flash. Both such tests now read `save_is_flash()`, which
+cannot drift the same way, because it says what it means instead of what it
+excludes. **A predicate defined by what it is NOT acquires new members
+silently.**
+
+
+### Bitmap modes, and a gate replaced rather than satisfied — 2026-08-07
+
+Modes 3, 4 and 5 with page flipping, landed in a parallel lane and verified
+here. Mode 4 carries the trap the brief named up front: VRAM ignores 8-bit
+writes, so plotting a single 8-bit pixel must read-modify-write the halfword
+containing it — get it wrong and every other pixel silently vanishes. Its own
+host test plots at an odd x and asserts the even neighbour survives.
+
+**The lane also shipped a drift check I removed instead of satisfying.** It
+required the new `rt_bitmap_*` names to appear in `RESERVED_C`, and turning it
+green would have taken one line. But `RESERVED_C` seeds the generator's
+used-name pool, and `_unique_c` tests the SYMBOLS a name becomes — every one
+of them `nb_`-prefixed, because that is the prefix the generator puts on
+everything it mints from author text. No generated symbol can ever equal
+`rt_bitmap_pixel`. The check would have been green while guarding a collision
+that cannot occur.
+
+What can actually go wrong when a runtime grows an API is that the contract
+never publishes it: functions exist, no author can reach them, and nothing
+notices. That is what the replacement asks — every bitmap call defined in
+`runtime.c` is declared in `runtime.h`, and every one declared is defined.
+
+Two lessons stack here. A failing gate is not automatically a bug in the
+code; sometimes it is a bug in the gate, and the way to tell is to ask what
+failure the gate would catch. And a green check that guards nothing is worse
+than no check, because it occupies the space where a real one would go — the
+fourth time today that shape has appeared.
+
+
+### Affine map authoring — the last substantive row — 2026-08-07
+
+A project may carry an 8bpp affine tileset and a room an 8-bit index map, and
+a room that declares one turns and scales its ground. The tiles go to
+charblock 2, which nothing else claimed; the map to screenblock 27, the 2 KB
+gap between the parallax, panel and text blocks and the room's own map.
+Entering and leaving is automatic: a room with an affine layer switches to
+mode 1 on load, and the next room without one switches back.
+
+**The layer trade is fixed by hardware and is worth stating rather than
+discovering.** Mode 1 offers two text backgrounds where mode 0 offers four,
+and this runtime needs three of them — the room's tiles, the dialogue panel,
+and the text on top. So an affine room gives up its flat tile layer, which
+costs nothing because the affine layer IS the ground, and its parallax layer,
+which costs something real. What remains is exactly enough, with BG0 and BG1
+swapping duties: text on the lower-numbered layer so it still sits above its
+box when both share a priority. 64×64 maps are not offered — 4 KB of map
+would have to come out of the room's tile map, which an affine room has given
+up but a flat room has not, and a VRAM layout that changes shape per room is a
+worse trade than two sizes.
+
+The slice found one defect immediately: the generator emitted
+`nb_aff_palette` and the runtime never uploaded it. An 8bpp layer indexes the
+whole 256-entry palette rather than the 16 the 4bpp tiles share, so every
+pixel resolved to black — a layer correct in every register and invisible on
+screen. Six of the slice's seven assertions passed while it was broken, which
+is the argument for asserting the PICTURE and not only the configuration.
+
+
+### The regression the battery caught, and why it caught it — 2026-08-07
+
+Landing the affine layer broke twelve of thirteen slices, and the one that
+passed was the affine slice itself. The runtime references `nb_aff_palette`
+inside `if (nb_aff_tile_count > 0)`; the generator emitted that symbol only
+for projects that HAVE an affine tileset. But a reference under a runtime
+guard is still a LINK-time dependency, so every project without one failed to
+link — and the only project with one linked cleanly and drew a rotating
+checkerboard.
+
+**A conditional emitter must emit the declaration unconditionally and vary
+only its contents.** That is the rule; the trap is that the feature's own
+test is the single case that cannot detect its absence.
+
+This is the argument for a battery that builds thirteen unrelated projects
+rather than one exemplary one. The affine work was verified — mode, register
+bits, matrix motion, lit pixels — and the verification was worthless as a
+signal about the rest of the SDK, because the fixture that proves a feature
+is precisely the fixture that shares its assumptions.
+
+
+### Three gates, three different kinds of true — 2026-08-07
+
+The day's landings left three checks red, and none of them was a bug in the
+feature that tripped it.
+
+The **round-trip** failure looked like data loss and was not: the example
+project omitted `save_type` and `hurt_frames`, the loader supplied their
+defaults, and the project came back unequal to itself. Nothing was lost;
+what the app CREATES simply was not in the normal form the loader produces.
+Fixed at the creating end, because a document that changes on being read is
+a document whose equality no test can trust.
+
+The **palette-coverage** failure was the gate doing precisely its job. The
+expose lane added three actions as PRESETS — palette entries that expand into
+`execute_code` so a saved project carries only kinds the generator already
+understands. That is a good design and it was the right call under a brief
+that forbade touching the generator. But a user can click them, so the
+reference owes them an entry, and the gate that compares palette to reference
+is the only thing that would ever have said so. The reference now documents
+presets alongside real actions.
+
+The **engine-call** failure wanted three bitmap functions described. The
+reference is generated from `runtime.h`, so the fix belongs in the header —
+where the next person to read the declaration meets the explanation, rather
+than in a document that can drift from it.
+
+
+### Per-asset palettes — eighteen of nineteen — 2026-08-07
+
+`rt_set_palbank` moves ONE INSTANCE onto a different OBJ palette bank, so the
+same enemy wears four team colours for sixteen colours each instead of four
+copies of its tiles. The override is held as bank+1, because bank 0 is a real
+bank and could not otherwise signal "use the sprite's own" — the same
+appended-field rule every struct here follows. `rt_pal_set` / `rt_pal_get` /
+`rt_pal_load` write colours a game computes rather than an artist picks.
+Palette RAM is not double-buffered and the frame loop does not own it, so the
+header says to call these from a Step event, which runs well before the flush.
+
+The slice shows four instances of one object in four colours from one tile
+set, counted by pixel area in the captured frame. Its first version filled the
+sprite with `0x7C1F` — which is the generator's TRANSPARENT colour, so every
+pixel was index 0 and the "sprite" was made entirely of nothing. A fixture
+that draws with the transparent colour is the palette equivalent of rotating
+five zeros.
+
+**That leaves one row: rumble, solar and gyro**, where the code is landed and
+the sequences execute, but the protocols cannot be verified without a
+cartridge peripheral this emulator does not provide. No gate here will claim
+otherwise, and the row will stay honest until real hardware moves it.
+
+
+### The Pokémon test, at data scale — 2026-08-07
+
+Part VII asks whether a team can author 400 species and 350 moves as data,
+200 connected maps, and still ship a cartridge. That had never been attempted
+at size. It now is, as a slice: 400 rows of eight columns, 350 more, 200 rooms
+each warping to the next so the warp table scales with them, 60 objects
+carrying events, 20 instances a room.
+
+It generates half a megabyte of C, compiles in 2.3 seconds, produces a
+0.34 MB ROM, and **boots with sprites on screen**. `check_project` runs in a
+tenth of a second and reports nothing, which is correct — nothing about that
+project is wrong.
+
+**What this proves, precisely, and what it does not.** The generator, the
+compiler and the runtime carry Pokémon-scale STRUCTURE without complaint. It
+is not an asset-scale test: the fixture has one sprite and sixteen tiles, and
+the sixteen megabytes of a real Gen III cartridge are graphics and audio, not
+rows. Asset ceilings are gated elsewhere — `budget_report` counts OBJ and BG
+tiles and palette banks, and the export gate blocks on them. Nobody should
+read 0.34 MB as "a Pokémon fits in a third of a megabyte".
+
+The honest position on Part VII's first benchmark is therefore: the data and
+world structure it names are demonstrated; the art budget it implies is
+gated but undemonstrated; and the systems it needs — flash save, RTC, link
+trading, nested menus, branching dialogue — are individually present and
+individually proven.
+
+
+### Sixty frames a second, asserted and then made true — 2026-08-07
+
+The Undertale test says *at 60 fps*, and nothing in this project had ever
+checked it. Every gate here could pass on a game running at forty.
+
+The bullet slice now reads the runtime's own profiler and fails if the busiest
+frame exceeds its sixtieth of a second. **It failed immediately: 104–107%**,
+split STEP 45 / MOVE 16 / DRAW 43.
+
+The ground-truth measure confirmed it, and choosing that measure mattered.
+Counting VBlanks would have lied — `g_frames` is incremented by the interrupt
+and advances at sixty whether or not the loop keeps up. The honest question is
+how many GAME STEPS happen per VBlank, and the answer was **0.682: forty-one
+frames a second, not sixty.**
+
+The cause was placement. `rt_step_all`, `rt_move_all`, `emit_sprite`,
+`rt_render` and `anim_step` — everything that runs 128 times a frame — were
+executing from ROM, a 16-bit bus with waitstates, while only three helpers sat
+in IWRAM's 32-bit no-waitstate memory. Moving those five took `.iwram` from
+252 bytes to 1536, against roughly 7.8 KB of headroom below the stack.
+
+**104% → 56%. 0.682 → 1.000 steps per VBlank.** A hundred and twenty-eight
+sprites at a true sixty frames a second, with the gate now standing watch over
+it. Phase 15's "IWRAM/ARM placement" stops being a plan and becomes a fact.
+
+The lesson is the ordinary one, arrived at the hard way: a performance
+requirement nobody measures is a performance requirement nobody meets. This
+one had been silently unmet for as long as it had been written down.
+
+
+### The Pokémon systems, composed and played — 2026-08-07
+
+Every system Part VII's first benchmark names had been proven alone. None had
+been shown working *together*, which is the only form the Definition of Done
+actually asks for. One cartridge now carries a nested menu tree, branching
+dialogue, a data-table lookup, the real-time clock, the link cable and a
+128 KB flash save — and the harness PLAYS it rather than watching it idle.
+
+Driving input turned out to be possible: vbam's SDL frontend keeps a byte per
+key in `sdlButtons` and `systemReadJoypad` builds `REG_KEYINPUT` from it, so a
+debugger can press buttons. The mapping was measured, not assumed — index 0 is
+LEFT, not A, and a guessed constant would have pressed the wrong thing while
+looking correct. The slice presses A for FIGHT, then DOWN DOWN A for the third
+party member, and asserts the chain reached its save carrying **the chosen
+row's data**: HP 44 read out of the species table, 48 written to flash and read
+back in the same run.
+
+**Two of my own errors surfaced doing it, and both are the same species.** The
+first version could not press keys at all, so the nested menu never resolved
+and phases two through four never ran — it would have passed having proven a
+third of itself. The second took its screenshot *after* the presses had closed
+the menu, photographed an empty screen, and reported that as the menu and
+dialogue failing to coexist. An isolation run settled it in one command: menu
+alone, dialogue alone, and both together all rendered fine. **When a
+composition test fails, suspect the harness's sequencing before the
+composition** — the parts were each proven days or hours earlier, and the new
+thing in the room is the choreography.
+
+The RTC reads −1 and the link cable 0, because this emulator provides neither
+a clock nor a second unit. Both are reported and neither is asserted.
+
+
+### Sixteen slices, and a third gate replaced rather than satisfied — 2026-08-07
+
+Moving the hot functions into IWRAM turned a multiboot check red: it demanded
+`.data` run at the same address in the cartridge and multiboot builds, and
+after the move the two `.iwram` sections differed by twenty bytes, because the
+same source links differently from ROM than from EWRAM.
+
+The check was asserting a coincidence. It held only while `.iwram` was 252
+bytes, and it never needed to hold at all — each build's crt0 uses its own
+`__data_start`, `__data_end` and `__data_lma`, so the two layouts are
+independently consistent and need not agree with each other.
+
+What must hold, and what nothing was testing, is that each image copies its
+data **from the region it is actually loaded into** — ROM for a cartridge,
+EWRAM for a multiboot image — into IWRAM, over a positive range. A cartridge
+whose `__data_lma` pointed into EWRAM would copy garbage over its own
+variables on the first instruction after boot. That is now the check, and
+pointing the cartridge test at the multiboot ELF turns it red on demand.
+
+This is the third gate today replaced instead of made green, and the question
+that distinguishes the two is always the same: *what failure would this catch?*
+If the answer is "one that cannot happen", the green is worth nothing and the
+space it occupies is worth less.
+
+All sixteen composition slices pass: bullet at 77% of the frame budget with
+119 sprites, the Pokémon systems played through a nested menu to a table
+lookup and a flash round trip, Mode 7 ground turning, four PCM voices over a
+looping soundtrack, three save backends surviving power cycles, and a
+Pokémon-sized project building and booting.
+
+
+### Auditing the day's own work — 2026-08-07
+
+Roughly 1,500 lines of runtime C landed today in one session, verified mostly
+by happy paths. Two of the claims in this document had never been run.
+
+**Dialogue inside an affine room.** The layer-trade paragraph above was
+written from the hardware manual: mode 1 has two text backgrounds, BG0 and BG1
+swap duties, text stays above its box. Now tested, and it holds — the frame
+shows glyphs on a panel over a turning checkerboard ground, in mode 1, with
+both text layers enabled. A claim derived from a manual is a hypothesis until
+something runs it.
+
+**Walking between affine and flat rooms.** Entering an affine room changes the
+display mode and reassigns two layers; leaving must put all of it back, and no
+single-room test can see whether it does. It does, both ways.
+
+The second slice failed first, and the failure was the harness again: sampling
+the display mode from outside the emulator reported every room as being in
+*both* modes, because a room change fades over about sixteen frames and the
+samples raced the transition. The fix was to move the timing decision into the
+ROM — the game records the mode at three known marks well clear of the fade,
+and the harness reads three settled values at the end. **A timing decision
+belongs where the timing is deterministic**, which is inside the thing being
+measured, not in the process watching it through a debugger.
+
+
+### The quietest data loss — 2026-08-08
+
+The high score shares a storage block with the save slot, and on flash that
+block is rewritten whole: an erase wipes the sector, so `rt_game_save` has to
+carry the score across it. Get that wrong and a player's best disappears the
+next time the game saves — nothing errors, no dialogue appears, a number is
+simply smaller than it was. That is the kind of defect a happy-path test never
+sees, because each operation works perfectly on its own.
+
+Three slices now check it, one per backend, in both directions: a save must not
+eat the score, and a score submit must not eat the save. All three pass.
+
+The red-proof is the part worth recording. Deleting the flash carry makes
+`hiscore_flash128` fail with best=0 while `hiscore_sram` stays **green** — SRAM
+has no erase to carry across, so it should not fail, and a gate that failed
+everywhere would have been telling me less. A check that discriminates between
+backends is evidence about the backend; a check that goes red uniformly is
+evidence only that something changed.
+
+
+### A finding investigated and deliberately not fixed — 2026-08-08
+
+A palette cycle survives a room change and keeps rotating the next room's
+palette. Verified live — the cycle slot is still armed after `rt_room_goto`.
+My first instinct was that this is a bug and cycles should stop on room load.
+
+Reading `rt_room_load` changed the answer. It resets no screen effect at all:
+not fades, not shakes, not mosaic, not blending. Effects persisting across
+rooms is the runtime's existing convention, and for a fade it is a
+REQUIREMENT — a fade-out is frequently covering the very transition it would
+otherwise be cancelled by. The affine layer reset I added earlier is the
+deliberate exception and stays one, because a room carrying no affine map
+physically cannot render that layer; restoring the flat arrangement is a
+necessity rather than a policy.
+
+So special-casing palettes would have made the runtime less coherent on the
+strength of my intuition alone. The fix is documentation at the declaration:
+a cycle is global, it survives a room change, and in the next room it looks
+like colour corruption rather than an effect — stop it with
+`rt_pal_cycle_stop(-1)` in that room's Create event if it belongs to the scene
+rather than to the game.
+
+**Not every true observation is a defect.** "This surprised me" and "this is
+wrong" are different claims, and the distinguishing question is what the rest
+of the system already promises. Changing behaviour here would have been a
+regression dressed as a fix, and the only thing that separated the two was
+reading the neighbouring code before reaching for the keyboard.
+
+
+### The cable that is not there — 2026-08-08
+
+Link exchange between units is unprovable on this host: the vendored VBA-M
+has no link emulation compiled in, so a second unit cannot exist. That joins
+the cartridge sensors in the hardware-blocked set, recorded plainly.
+
+What can be proven is the case every real player hits first: a game polling a
+cable that is not attached. The new slice hammers the entire link API every
+frame for five seconds. The header's promises hold — nothing blocks, the game
+steps one-for-one with the VBlank, a lone unit never reports the session
+ready, and its attempt to start a transfer is refused.
+
+Except one. `rt_link_recv` on an absent unit returned 0 where the header
+promises 0xFFFF. The receive buffer was initialised to zero, so until the
+first transfer completed, the DOCUMENTED absence check — `recv(n) == 0xFFFF`
+— saw a phantom player who had apparently sent the word 0. A trading screen
+written exactly as the reference teaches would have shown a ghost partner on
+every boot. The buffer now initialises to 0xFFFF, which is also what the
+hardware itself reports in SIOMULTIn for absent units, and closing the port
+resets it.
+
+The header's comment block is a contract, and this slice is the first thing
+that ever held the two sides of it together. Twenty-two slices compose.
+
+
+### The sequencer, proven to move — 2026-08-08
+
+The tracker — the sequenced-music half of the audio row — had execution proof
+nowhere. A song with lead, bass and drums now plays under the harness while
+the PSG registers are read: all three channels routed, and the lead's
+frequency register shows five distinct values across the samples. That last
+one is the assertion that matters. A stuck sequencer holds one note forever
+and passes every check that only asks whether sound is switched on; only the
+register CHANGING proves the song is moving through its steps.
+
+My first masks were wrong, and in the now-familiar way: SOUNDCNT_L keeps its
+channel-routing bits in the high byte and master volume in the low, and I
+tested the volume bits — two checks green by coincidence, one red by the same
+coincidence, on a register that reads 0xFF77 with everything routed. The same
+shape as reading BGR555 0x7FE0 as yellow. A bit asserted without decoding the
+layout is a coin flip wearing a name.
+
+
+### The Undertale capstone — one cartridge, every system — 2026-08-08
+
+The individual Undertale systems were each proven, and the Pokémon capstone
+showed its systems composed. This is the same for Part VII's second
+benchmark: a single cartridge that talks, fights on a turning floor, hurts,
+forgives, sings, and saves — staged together, not in pairs.
+
+A voiced typewriter line in a flat room warps into an affine-ground arena. The
+floor shimmers under a palette cycle; a PCM soundtrack loops while one-shot
+hits mix over it; rings of bones cost health that mercy frames keep from
+draining; surviving to the mark writes a flash save. Phase probes stage the
+run, and the result reads the way the benchmark asks: the talk ran, the
+typewriter is on screen, the run reached its save, one-shots mixed OVER the
+loop, and a sixty-health soul came through constant rings at eighteen — mercy
+frames working under real pressure rather than in a unit test.
+
+It cost three separate fights with the harness clock, all the same lesson a
+third time: the headless emulator runs several times faster than realtime, so
+both the roughly-half-second dialogue window and the save mark outran sampling
+from outside. The dialogue check was fixed by LATCHING the fact in the ROM —
+a sticky flag the game sets and the harness reads whenever it likes — and the
+save by waiting generously and confirming the phase ADVANCED rather than
+assuming a wall-clock offset. A timing decision belongs inside the thing whose
+clock is authoritative. The outside observer always loses that race, and the
+fix is never a longer sleep — it is to stop racing.
+
+Twenty-four composition slices compose, both benchmark capstones among them.

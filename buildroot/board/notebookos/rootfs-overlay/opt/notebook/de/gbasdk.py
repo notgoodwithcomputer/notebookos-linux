@@ -6705,7 +6705,26 @@ class GbaSdk(nbapp.AppWindow):
                 "far_div": min(8, max(1, gbabuild._int(rec.get("far_div"), 2))),
                 "edge_open": bool(rec.get("edge_open")),
                 "warps": warps})
+            # The optional AFFINE ground (16x16 or 32x32 cell list). No
+            # editor authors one yet, but the generator reads it — loading
+            # used to DELETE it silently and the next autosave made the
+            # deletion permanent (audit #4).
+            raw_aff = rec.get("affine")
+            if isinstance(raw_aff, list) and raw_aff:
+                rooms[-1]["affine"] = [max(0, min(255, gbabuild._int(t)))
+                                       for t in raw_aff[:1024]]
+            elif raw_aff is not None:
+                lost[0] += 1      # an affine ground was there and unreadable
         out["rooms"] = rooms
+        # Its tile art rides at the top level, the shape the generator reads
+        # (a dict holding 8x8 pixel lists under "tiles").
+        raw_at = data.get("affine_tileset")
+        if isinstance(raw_at, dict) and isinstance(raw_at.get("tiles"), list):
+            out["affine_tileset"] = {
+                "tiles": [self._ints(t, 64, TRANSPARENT)
+                          for t in self._records(raw_at.get("tiles"))][:256]}
+        elif raw_at is not None:
+            lost[0] += 1          # an affine tile set was there, unreadable
 
         tables = []
         for rec in self._records(data.get("tables")):
