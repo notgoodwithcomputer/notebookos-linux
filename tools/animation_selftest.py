@@ -3475,8 +3475,112 @@ def slide_and_onion_family():
     shutil.rmtree(scratch)
 
 
+def stamping_family():
+    """A lip-sync pass: the app's signature workflow, and the one place it
+    deliberately does NOT snapshot per change.
+
+    One snapshot covers the whole pass, taken when the mode opens, because
+    a snapshot serialises the entire film. That is the right trade. What it
+    cost until now is that nothing marked the film unsaved while stamping,
+    so closing in the middle of a pass took a whole take with it and the
+    guard never asked."""
+    if not gtk_available():
+        skip("F32 stamping mouths", "no display")
+        return
+
+    kept = animation.STORE_FILE + ".stamp-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    said = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: said.append(text)
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    scene = app.doc.scenes[0]
+    scene["length"] = 40
+    app.sheet = animation.Sheet(app.doc, 0)
+    mouths = [app.doc.add_cel("Mouth %d" % index) for index in range(3)]
+
+    # without slots, the mode refuses and says why
+    del said[:]
+    app._toggle_stamp_mouths()
+    check("F32 stamping without mouth slots refuses, and says so",
+          not app.stamp_mouths and len(said) == 1, (app.stamp_mouths, said))
+
+    scene["layers"][0]["mouth_slots"] = [m.id for m in mouths]
+    app._doc_dirty = False
+    app._undo = []
+    app._toggle_stamp_mouths()
+    opened = app.stamp_mouths and len(app._undo) == 1
+    app._doc_dirty = False
+
+    before = app.doc.bytes()
+    for frame in range(6):
+        app.playhead = frame
+        app._stamp_mouth(1 + frame % 3)
+    check("F32 opening the mode takes one snapshot for the whole pass",
+          opened and len(app._undo) == 1, len(app._undo))
+    check("F32 stamping lays a mouth on each frame it is asked for",
+          len(scene["layers"][0]["runs"]) == 6 and app.doc.bytes() != before,
+          len(scene["layers"][0]["runs"]))
+    check("F32 and the film is unsaved from the FIRST stamp, not the last",
+          app._doc_dirty and app._needs_guard(),
+          (app._doc_dirty, app._needs_guard()))
+
+    # one undo takes the whole pass back
+    app.history.undo()
+    check("F32 one undo puts back everything the pass stamped",
+          app.doc.bytes() == before, len(app.doc.scenes[0]["layers"][0]["runs"]))
+
+    # an empty slot says so rather than stamping nothing
+    del said[:]
+    app.doc.scenes[app.scene_i]["layers"][0]["mouth_slots"] = [mouths[0].id]
+    app.sheet = animation.Sheet(app.doc, app.scene_i)
+    app.playhead = 0
+    app._stamp_mouth(3)
+    check("F32 asking for a slot nothing is in says so",
+          len(said) == 1, said)
+    app._flash = spoken
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F32-stamp-leaves-no-trace",
+        [("        self._mark_dirty()\n        self.canvas.queue_draw()\n"
+          "        self.timeline.queue_draw()",
+          "        self.canvas.queue_draw()\n        self.timeline.queue_draw()")])
+    quiet = graded.Animation()
+    quiet._flash = lambda *a, **k: None
+    quiet.doc = graded.AnimationDocument(canvas=(160, 120))
+    quiet.scene_i = quiet.layer_i = quiet.playhead = 0
+    other = quiet.doc.scenes[0]
+    quiet.sheet = graded.Sheet(quiet.doc, 0)
+    other["layers"][0]["mouth_slots"] = [quiet.doc.add_cel("M").id]
+    quiet._doc_dirty = False
+    quiet._stamp_mouth(1)
+    mutant("F32 a stamped mouth the close guard would not ask about is caught",
+           not quiet._needs_guard())
+    quiet._alive = False
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+stamping_family()
 slide_and_onion_family()
 library_and_palette_family()
 ordering_family()

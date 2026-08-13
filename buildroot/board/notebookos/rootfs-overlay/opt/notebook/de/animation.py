@@ -3107,6 +3107,12 @@ class Animation(nbapp.AppWindow):
                          make_run(slots[index], self.playhead, 1),
                          replace=True)
         self._cache.clear()
+        # Deliberately no snapshot per stamp — one covers the whole pass,
+        # taken when the mode opens, because a snapshot serialises the
+        # entire film. But the film HAS changed, and until now nothing said
+        # so: close in the middle of a pass and the guard let a whole
+        # lip-sync take go without asking.
+        self._mark_dirty()
         self.canvas.queue_draw()
         self.timeline.queue_draw()
 
