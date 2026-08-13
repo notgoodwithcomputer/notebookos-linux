@@ -3940,11 +3940,19 @@ def hover_and_preview_family():
     # the card's widgets have no size until the window lays them out, and
     # this preview scales itself by its own ALLOCATION — drawn unallocated
     # it paints a sub-pixel smudge that looks the same at every strength
-    for _ in range(40):
-        while Gtk.events_pending():
-            Gtk.main_iteration_do(False)
     previews = [w for w in getattr(app, "_prompt_previews", [])
                 if hasattr(w, "_wobble_surface")]
+    for _ in range(120):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        if previews and previews[0].get_allocation().width > 1:
+            break
+    if previews and previews[0].get_allocation().width <= 1:
+        # the offscreen stage never laid the card out; give the preview the
+        # size it asks for so the drawing under test has somewhere to land
+        wanted = previews[0].get_preferred_size()[1]
+        previews[0].size_allocate(
+            Gdk.Rectangle(0, 0, max(2, wanted.width), max(2, wanted.height)))
     shots = []
     for strength in (0.8, 1.7):
         app._prompt_state["strength"] = strength
@@ -4183,8 +4191,103 @@ def remaining_paths_family():
     shutil.rmtree(scratch)
 
 
+NAMES_IN_JAPANESE = r"""
+import os, sys
+sys.path.insert(0, os.environ["ANIM_REAL_DE"])
+sys.path.insert(0, os.environ["ANIM_DE"])
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+import nbapp
+nbapp.claim_single_instance = lambda *a, **k: None
+nbapp.screen_size = lambda: (1024, 722)
+import animation
+
+
+def labels_of(container):
+    out = []
+    stack = [container]
+    while stack:
+        widget = stack.pop()
+        if isinstance(widget, Gtk.Label):
+            out.append(widget.get_text())
+        if isinstance(widget, Gtk.Container):
+            stack.extend(widget.get_children())
+    return out
+
+
+app = animation.Animation()
+app.doc = animation.AnimationDocument(canvas=(160, 120))
+app.scene_i = app.layer_i = app.playhead = 0
+app.doc.scenes[0]["layers"][0]["name"] = "Room"
+app.sheet = animation.Sheet(app.doc, 0)
+app.doc.add_cel("Room")
+app._refresh_lists()
+print("LAYER:" + "|".join(labels_of(app.layer_list)))
+print("DRAWING:" + "|".join(labels_of(app.cel_list)))
+"""
+
+
+def verbatim_family():
+    """The film's own words are not the app's, and must not be translated.
+
+    A layer called "Room" came out as ルーム in Japanese: the auto-translate
+    layer walks every label and cannot tell a name the app wrote from a
+    name the person typed. Nothing in an English session can show this, so
+    this runs a real Japanese one."""
+    if not gtk_available():
+        skip("F37 the film's own names", "no display")
+        return
+
+    def names_under(module_dir):
+        env = dict(os.environ)
+        env["NB_LANG"] = "ja"
+        env["ANIM_DE"] = module_dir
+        env["ANIM_REAL_DE"] = str(DE)
+        env["NB_HOME"] = tempfile.mkdtemp(prefix="animation-verbatim-")
+        env.pop("ANIM_TRACE", None)
+        finished = subprocess.run([sys.executable, "-c", NAMES_IN_JAPANESE],
+                                  capture_output=True, text=True, env=env,
+                                  timeout=180)
+        shutil.rmtree(env["NB_HOME"], ignore_errors=True)
+        seen = {}
+        for line in finished.stdout.split("\n"):
+            if line.startswith("LAYER:"):
+                seen["layer"] = line[6:].split("|")
+            elif line.startswith("DRAWING:"):
+                seen["drawing"] = line[8:].split("|")
+        return seen, finished.stderr
+
+    seen, complaint = names_under(str(DE))
+    translated = _t_in("ja", "Room")
+    check("F37 a Japanese session still shows a layer named Room as Room",
+          "Room" in seen.get("layer", []) and
+          translated not in seen.get("layer", []),
+          (seen.get("layer"), complaint[-200:]))
+    check("F37 and a drawing named Room as Room",
+          "Room" in seen.get("drawing", []) and
+          translated not in seen.get("drawing", []), seen.get("drawing"))
+
+    graded, scratch = module_mutant(
+        "F37-translates-the-film",
+        [("            nbi18n.set_verbatim(name, layer['name'])",
+          "            name.set_text(layer['name'])")])
+    del graded
+    astray, _complaint = names_under(str(scratch))
+    mutant("F37 a layer name run through the catalog is caught",
+           translated in astray.get("layer", []), astray.get("layer"))
+    shutil.rmtree(scratch)
+
+
+def _t_in(code, text):
+    """What the catalog for `code` would make of `text`."""
+    with open(DE / ("lang_%s.json" % code), encoding="utf-8") as handle:
+        return json.load(handle).get(text, text)
+
+
 dialog_limits_family()
 drop_family()
+verbatim_family()
 remaining_paths_family()
 hover_and_preview_family()
 history_restore_family()

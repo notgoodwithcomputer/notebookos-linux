@@ -17,6 +17,7 @@ from gi.repository import Gtk, Gdk, GLib, GdkPixbuf, Pango, PangoCairo
 import nbapp
 import nbicons
 import nbpicker
+import nbi18n
 from nbi18n import _t
 SELFTEST_MARKER = 'animation-062-real'
 FORMAT = 1
@@ -2145,7 +2146,8 @@ class Animation(nbapp.AppWindow):
         picture = Gtk.Image.new_from_surface(self._cel_thumb_surface(cel))
         box.pack_start(picture, False, False, 2)
         words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        name = Gtk.Label(label=cel.name, xalign=0)
+        name = Gtk.Label(xalign=0)
+        nbi18n.set_verbatim(name, cel.name)      # the film's words again
         name.set_ellipsize(Pango.EllipsizeMode.END)
         words.pack_start(name, False, False, 0)
         takes = Gtk.Label(label=(_t('%d take%s') %
@@ -2288,7 +2290,11 @@ class Animation(nbapp.AppWindow):
             eye.set_active(layer.get('visible', True))
             eye.connect('toggled', self._toggle_layer, index)
             box.pack_start(eye, False, False, 2)
-            name = Gtk.Label(label=layer['name'], xalign=0)
+            name = Gtk.Label(xalign=0)
+            # The film's own words, not the app's: a layer called "Room"
+            # came out as ルーム in Japanese because the catalog happens to
+            # hold that word. Nothing the person named may be translated.
+            nbi18n.set_verbatim(name, layer['name'])
             name.set_ellipsize(Pango.EllipsizeMode.END)
             box.pack_start(name, True, True, 2)
             if layer.get('mouth_slots'):
