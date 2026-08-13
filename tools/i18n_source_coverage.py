@@ -18,12 +18,15 @@ from __future__ import annotations
 import ast
 import json
 import os
+import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")
 
-# Module -> how many untranslated _t() literals it carried on 2026-08-12.
+# Module -> how many untranslated _t() literals it carries. Every entry
+# only ever comes DOWN: the settings.py line dropped from 7 the first
+# time another lane fixed one, which is the ratchet working.
 # Every one of these is a string a person reads in English no matter which
 # of the 17 languages they chose. Several are failure messages, which is the
 # worst moment to fall back to a language someone may not read.
@@ -43,7 +46,7 @@ DEBT = {
     "novel.py": 3,
     "screenplay.py": 2,
     "sequencer.py": 66,
-    "settings.py": 7,
+    "settings.py": 6,
     "shell.py": 1,
     "tasks.py": 3,
     "usbwriter.py": 1,
@@ -51,6 +54,23 @@ DEBT = {
     "workout.py": 1,
     "writer.py": 3,
 }
+
+
+def tracked():
+    """The modules git actually carries.
+
+    An app still uncommitted is work in progress, not a shipping surface,
+    and its author is mid-flight. Report what it owes; do not fail the run
+    for it, and do not bake it into the ledger where a rename would leave a
+    stale entry behind."""
+    try:
+        out = subprocess.run(["git", "ls-files", DE], cwd=REPO,
+                             capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    if out.returncode:
+        return None
+    return {os.path.basename(line) for line in out.stdout.split("\n") if line}
 
 
 def literals(path):
@@ -85,6 +105,8 @@ def main():
 
     bad = 0
     counts = {}
+    carried = tracked()
+    pending = []
     for name in sorted(os.listdir(DE)):
         if not name.endswith(".py") or name.startswith("lang_"):
             continue
@@ -100,6 +122,9 @@ def main():
         if not gaps:
             continue
         counts[name] = len(gaps)
+        if carried is not None and name not in carried:
+            pending.append((name, len(gaps)))
+            continue
         allowed = DEBT.get(name, 0)
         if len(gaps) > allowed:
             bad += 1
@@ -118,6 +143,10 @@ def main():
             print("LEDGER STALE  %s now has %d untranslated, ledger says %d — "
                   "lower the number so it cannot climb back" % (name, actual, allowed))
 
+    for name, count in sorted(pending):
+        print("NOT YET COMMITTED  %s owes %d translations — its lane's to "
+              "fix before it ships, not counted against this gate"
+              % (name, count))
     total = sum(counts.values())
     print("%d untranslated _t() literals in %d modules (ledger allows %d)"
           % (total, len(counts), sum(DEBT.values())))
