@@ -2208,9 +2208,6 @@ class Animation(nbapp.AppWindow):
         if target is None or cel is None:
             Gtk.drag_finish(context, False, False, time)
             return
-        if target is None or cel is None:
-            Gtk.drag_finish(context, False, False, time)
-            return
         layer_index, frame = target
         scene = self.doc.scenes[self.scene_i]
         runs = scene['layers'][layer_index]['runs']

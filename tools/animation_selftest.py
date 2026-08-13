@@ -28,6 +28,7 @@ os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="animation-selftest-hom
 sys.path.insert(0, str(DE))
 
 import cairo  # noqa: E402
+from gi.repository import GLib  # noqa: E402
 import animation  # noqa: E402
 
 CLIP_SKIP = '                if left > clip_x1 or left + width + 1 < clip_x0:\n                    continue'
@@ -934,6 +935,146 @@ def _find_widgets(root, predicate, out):
             _find_widgets(child, predicate, out)
 
 
+def drop_family():
+    """Dragging a drawing from the library onto the sheet had no check of
+    any kind, and a test that bypasses the drop cannot see a drop bug.
+
+    The stamp has to land on the cell under the pointer, stop at the next
+    exposure, refuse to overlap one, and survive a payload that is not a
+    drawing at all."""
+    if not gtk_available():
+        skip("F21 dropping a drawing", "no display")
+        return
+    from gi.repository import Gtk
+
+    # Dropping commits, and a commit reaches the store that every later
+    # Animation() in this run restores from — which is how this family
+    # silently rewrote the fixtures of two families after it.
+    kept = animation.STORE_FILE + ".drop-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    scene = app.doc.scenes[0]
+    while len(scene["layers"]) < 3:
+        scene["layers"].append(
+            animation.new_layer("Layer %d" % (len(scene["layers"]) + 1)))
+    dropped = app.doc.add_cel("Dropped")
+    second = app.doc.add_cel("Sitting")
+    app.sheet = animation.Sheet(app.doc, 0)
+    app._refresh_lists()
+    app._update_playhead()
+
+    said = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: said.append(text)
+    finished = []
+    real_finish = Gtk.drag_finish
+    Gtk.drag_finish = lambda ctx, ok, delete, when: finished.append(ok)
+
+    class Payload:
+        def __init__(self, text):
+            self._text = text
+
+        def get_text(self):
+            return self._text
+
+    top = len(scene["layers"]) - 1
+    column = app.column_width
+
+    def drop(frame, screen_row, text):
+        del said[:], finished[:]
+        app._timeline_drag_data_received(
+            app.timeline, None,
+            animation.TL_GUTTER + frame * column,
+            animation.TL_ROWS_TOP + screen_row * animation.TL_ROW_H + 2,
+            Payload(text), 0, 0)
+        return finished[0] if finished else None
+
+    def runs_on(layer):
+        return [(r["cel"], r["start"], r["len"])
+                for r in scene["layers"][layer]["runs"]]
+
+    try:
+        landed = drop(10, 0, str(dropped.id))
+        check("F21 a dropped drawing lands on the cell under the pointer "
+              "and holds to the scene end",
+              landed and runs_on(top) == [(dropped.id, 10,
+                                           scene["length"] - 10)],
+              runs_on(top))
+        check("F21 the drop selects what it just made",
+              app.selection == (top, 10, scene["length"]) and
+              app.layer_i == top and app.playhead == 10,
+              (app.selection, app.layer_i, app.playhead))
+
+        before = drop(4, 0, str(second.id))
+        check("F21 a drop before an exposure stops where that one starts",
+              before and runs_on(top) == [(second.id, 4, 6),
+                                          (dropped.id, 10,
+                                           scene["length"] - 10)],
+              runs_on(top))
+
+        onto = drop(12, 0, str(second.id))
+        check("F21 a drop onto an occupied frame is refused, and says why",
+              onto is False and len(said) == 1 and "overlap" in said[0].lower(),
+              (onto, said))
+
+        refusals = {
+            "not a drawing at all": drop(20, 1, "not a number"),
+            "a drawing that is gone": drop(20, 1, "99999"),
+            "in the gutter": None,
+            "above the rows": None,
+        }
+        del said[:], finished[:]
+        app._timeline_drag_data_received(app.timeline, None, 4,
+                                         animation.TL_ROWS_TOP + 2,
+                                         Payload(str(dropped.id)), 0, 0)
+        refusals["in the gutter"] = finished[0] if finished else None
+        del said[:], finished[:]
+        app._timeline_drag_data_received(
+            app.timeline, None, animation.TL_GUTTER + 40, 4,
+            Payload(str(dropped.id)), 0, 0)
+        refusals["above the rows"] = finished[0] if finished else None
+        check("F21 a drop that means nothing is refused rather than guessed",
+              all(value is False for value in refusals.values()), refusals)
+
+        check("F21 the sheet's own invariant survives every drop",
+              assert_runs(scene))
+    finally:
+        Gtk.drag_finish = real_finish
+        app._flash = spoken
+
+    # A committed change arms an autosave timer. Leave that armed and it
+    # fires inside whichever LATER family next pumps the main loop, writing
+    # this fixture's film into the store that every Animation() restores
+    # from — which is how a drop test rewrote a loudness test's active
+    # layer. Put the window down before leaving.
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F21-drop-anywhere",
+        [("        if not 0 <= frame < scene['length']:\n            return None",
+          "        if False:\n            return None")])
+    loose = graded.Animation()
+    off_the_end = loose._timeline_drop_target(
+        animation.TL_GUTTER + 10 ** 6, animation.TL_ROWS_TOP + 2)
+    mutant("F21 a drop target that accepts a frame past the scene is caught",
+           off_the_end is not None, off_the_end)
+    shutil.rmtree(scratch)
+
+
 def dialog_limits_family():
     if gtk_available():
         # The canvas-size lesson: a test that bypasses a dialog cannot see a
@@ -1340,7 +1481,9 @@ def control_range_family():
           strength == [(.7, 1.8)] and clamped, strength)
 
     scene = app.doc.scenes[0]
-    scene["layers"][0]["mouth_slots"] = [app.doc.add_cel().id for _ in range(3)]
+    app.layer_i = min(app.layer_i, len(scene["layers"]) - 1)
+    scene["layers"][app.layer_i]["mouth_slots"] = [app.doc.add_cel().id
+                                                   for _ in range(3)]
     home = Path(os.environ["NB_HOME"])
     tone = home / "loud.wav"
     with wave.open(str(tone), "wb") as handle:
@@ -2010,6 +2153,7 @@ def sheet_paint_family():
 
 
 dialog_limits_family()
+drop_family()
 workflow_family()
 first_run_family()
 dock_reach_family()
