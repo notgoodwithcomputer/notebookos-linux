@@ -3124,6 +3124,10 @@ class Animation(nbapp.AppWindow):
                                lambda item, k=key: state.__setitem__(k, item.get_value_as_int()))
             elif kind == 'float':
                 widget = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 2, .01)
+                # a slider you cannot drag is not a control: without a width
+                # the prompt's row packing collapsed these to a stub, and the
+                # thresholds are the whole point of the loudness card
+                widget.set_size_request(260, -1)
                 widget.set_value(initial)
                 widget.connect('value-changed', self._prompt_float_changed,
                                state, key)
@@ -3209,7 +3213,8 @@ class Animation(nbapp.AppWindow):
                 widget = Gtk.Entry(text=str(initial))
                 widget.connect('changed',
                                lambda item, k=key: state.__setitem__(k, item.get_text()))
-            expand = isinstance(kind, str) and kind == 'slots-picker'
+            expand = isinstance(kind, str) and kind in ('slots-picker', 'float',
+                                                        'mouth-preview', 'meter')
             row.pack_start(widget, expand, expand, 0)
             card.pack_start(row, False, False, 0)
         if note:
