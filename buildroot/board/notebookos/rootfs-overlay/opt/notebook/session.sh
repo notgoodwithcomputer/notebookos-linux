@@ -525,6 +525,14 @@ fi
 # backlight (brightness keys just no-op).
 python3 /opt/notebook/de/nbmediakeys.py >/dev/null 2>&1 &
 
+# Govorimo radio service: the daemon behind the LoRa chat app. The wrapper
+# matches it to the hardware (e22:/dev/lora when a provisioned dongle is
+# present, none otherwise) and restarts it across plug events; the app's
+# socket link reconnects by itself. Headless, safe before sign-in.
+export GOVORIMO_SOCKET=/run/govorimo.sock
+export GOVORIMO_STAMP=/run/govorimo-provisioned.stamp
+sh /opt/notebook/govorimod-run.sh >/dev/null 2>&1 &
+
 # ---- sign in -------------------------------------------------------------
 # BEFORE anything of the desktop is drawn, and NOT backgrounded: the desktop
 # must not exist behind it.

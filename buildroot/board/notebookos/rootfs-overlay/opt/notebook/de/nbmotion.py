@@ -102,9 +102,12 @@ DURATION_BANDS = {
 # --------------------------------------------------------------------------
 # Easing tokens — Article VI §2
 # --------------------------------------------------------------------------
-# Cubic, and cubic only: nothing here may overshoot. A spring, a bounce or an
-# elastic curve returns values outside [0, 1], which on a flat Papertone
-# surface reads as a wobble and is forbidden by the design language.
+# Arrival has a slight SPRING: a small, bounded overshoot that settles back onto
+# the target, so motion feels lively rather than mechanical. Every curve lands
+# EXACTLY on its endpoints; the little excursion past the target in between is
+# the life. A big bounce, an elastic wobble, 3D or liquid glass stay OUT (they do
+# not fit the paper style) — but a restrained spring is the house feel, and
+# animation belongs on every state change, not a whitelist of a few.
 def _clamp01(t):
     if t <= 0.0:
         return 0.0
@@ -141,20 +144,40 @@ def ease_in_out(t):
     return 1.0 - ((-2.0 * t + 2.0) ** 3) / 2.0
 
 
+def ease_out_back(t):
+    """Arrival with a slight SPRING: fast in, a small overshoot past the target,
+    then settles onto it. Lands EXACTLY at the endpoints (0 at 0, 1 at 1); the
+    ~7% excursion past 1.0 in between is the life. The default for anything
+    ARRIVING. Where the value is an opacity the overshoot is invisible (GTK
+    clamps it, so a fade reads as a clean ease-out); where it is a position or a
+    size it reads as the spring."""
+    t = _clamp01(t)
+    s = 1.20158
+    u = t - 1.0
+    return 1.0 + (s + 1.0) * u * u * u + s * u * u
+
+
 LINEAR = linear
 EASE_OUT = ease_out
 EASE_IN = ease_in
 EASE_IN_OUT = ease_in_out
+EASE_OUT_BACK = ease_out_back
 
 EASINGS = {
     "linear": linear,
     "ease-out": ease_out,
     "ease-in": ease_in,
     "ease-in-out": ease_in_out,
+    "ease-out-back": ease_out_back,
 }
 
 #: Which curve each class of change takes, so a caller picks a MEANING.
-ARRIVE = ease_out
+#: ARRIVE springs, so it is for a GEOMETRIC arrival — a position or a scale that
+#: can meaningfully overshoot its target and settle back. Do NOT use it for an
+#: opacity or colour fade: opacity clamps at 1.0, so an overshoot is invisible at
+#: best and a held-too-early frame at worst. Fades stay on EASE_OUT (the default
+#: on fade_to/Track/animate), which is why those defaults are EASE_OUT, not ARRIVE.
+ARRIVE = ease_out_back        # a slight spring: lively arrival, settles onto target
 DEPART = ease_in
 MOVE = ease_in_out
 

@@ -1797,6 +1797,12 @@ class AppWindow(Gtk.Window):
         _dw, _dh = screen_size()
         self.set_default_size(_dw, _dh)
         self.connect("map-event", self._assert_fullscreen)
+        # The close mirror of the first-map fade-in (system.app-close):
+        # connect_after so an app's OWN delete-event guard (illustrator's
+        # discard prompt, the installer's mid-install lock) runs first — a
+        # veto stops the emission before this handler ever sees it, and
+        # those flows finish via destroy(), which skips delete-event.
+        self.connect_after("delete-event", self._close_fade)
 
         self._menu_buttons = {}     # menu name -> its Gtk.Button
         self._menu_layer = None     # open-dropdown overlay layer, if any
@@ -1852,6 +1858,51 @@ class AppWindow(Gtk.Window):
                     pass
             except Exception:                                     # noqa: BLE001
                 pass
+            # nbmotion-inventory: system.app-launch
+            # A calm FADE-IN on the app's first appearance — the launch cue the
+            # Finder used to grow a paper card for (replaced 2026-08-09 on the
+            # design owner's direction: a simple fade, not a growing card). It is
+            # widget-level opacity on the content overlay, so it works with or
+            # without a compositor. Done ONLY when motion is live, and only
+            # transiently: fade_to lands at 1.0, and any failure restores 1.0, so
+            # an app can never come up invisible. Launch CONTINUITY is unchanged —
+            # the Finder holds the screen until the .mapped beacon above.
+            try:
+                import nbmotion
+                if nbmotion.policy(nbmotion.PAGE) > 0:
+                    self._overlay.set_opacity(0.0)
+                    nbmotion.fade_to(self._overlay, 1.0,
+                                     nbmotion.PAGE, nbmotion.EASE_OUT)
+            except Exception:                                     # noqa: BLE001
+                try:
+                    self._overlay.set_opacity(1.0)
+                except Exception:                                 # noqa: BLE001
+                    pass
+        return False
+
+    def _close_fade(self, *_):
+        # nbmotion-inventory: system.app-close
+        # A calm FADE-OUT on the way shut — the departure retraces the
+        # arrival above (same PAGE token, DEPART easing), added 2026-08-10 on
+        # the design owner's direction. Runs at most once: the flag makes a
+        # second Esc/Ctrl+W an immediate close, and ANY failure falls through
+        # to the default close, so a window can never become unclosable.
+        # Instant-equivalent: under a still policy the guard is False and the
+        # close proceeds untouched.
+        if getattr(self, "_close_fade_done", False):
+            return False
+        try:
+            import nbmotion
+            ov = getattr(self, "_overlay", None)
+            if ov is not None and nbmotion.policy(nbmotion.PAGE) > 0:
+                self._close_fade_done = True
+                anim = nbmotion.fade_to(
+                    ov, 0.0, nbmotion.PAGE, nbmotion.DEPART,
+                    on_done=lambda _ok: self.destroy())
+                if anim is not None:
+                    return True      # hold the close; destroy lands on_done
+        except Exception:                                         # noqa: BLE001
+            pass
         return False
 
     # -- chrome --
@@ -2110,90 +2161,43 @@ class AppWindow(Gtk.Window):
         # widget: the growth is paint (F2), the reveal is a position + show.
         self._close_menu()
         alloc = self.get_allocation()
-        _sw, _sh = screen_size()
-        W = alloc.width if alloc.width > 1 else _sw
-        H = alloc.height if alloc.height > 1 else _sh
-        layer = Gtk.Fixed()
-        scrim = Gtk.EventBox()
-        scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        scrim.set_size_request(W, H)
-        scrim.connect("button-press-event", lambda *a: (self._close_about(), True)[1])
-        layer.put(scrim, 0, 0)
-
-        # the frame the card grows as: a pass-through DrawingArea over the layer
-        grow_da = Gtk.DrawingArea()
-        grow_da.set_size_request(W, H)
-        layer.put(grow_da, 0, 0)
+        W = alloc.width if alloc.width > 1 else screen_size()[0]
 
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         card.get_style_context().add_class("nbabout")
-        nm = Gtk.Label(label=_t(self.app_name)); nm.get_style_context().add_class("a-name")
+        nm = Gtk.Label(label=_t(self.app_name))
+        nm.get_style_context().add_class("a-name")
         nm.set_xalign(0.5)
         # Neutral, technical identity line: app name above, OS + version below.
         sub = Gtk.Label(label=nb_pretty_name())
-        sub.get_style_context().add_class("a-sub"); sub.set_xalign(0.5)
+        sub.get_style_context().add_class("a-sub")
+        sub.set_xalign(0.5)
         card.pack_start(nm, False, False, 0)
         card.pack_start(sub, False, False, 0)
-        card_win = Gtk.EventBox()   # own GdkWindow so it blits (see _open_menu)
-        card_win.add(card)
-        card_win.set_no_show_all(True)
-        layer.put(card_win, 0, 0)
-        self._overlay.add_overlay(layer)
-        scrim.show()
-        grow_da.show()
-        # Center on the actual window using the card's measured natural size, so
-        # a long app name stays centered at any resolution (not a fixed 1920x1080).
-        _min, nat = card_win.get_preferred_size()
-        cw = nat.width if nat.width > 1 else 340
-        ch = nat.height if nat.height > 1 else 140
-        tx, ty = max((W - cw) // 2, 0), max((H - ch) // 2, 0)
-        target = (float(tx), float(ty), float(cw), float(ch))
-        layer.move(card_win, tx, ty)
-        self._about_layer = layer
-        self._about_card = card_win
-        self._about_target = target
 
+        # Grow from the app-name title's rectangle; with no title resolved, drop
+        # from a seam at the top centre rather than centring (About always names
+        # an origin). The scrim, the grow, the reveal-on-landing and the retract-
+        # on-close are the shared nbtransitions.present_card -- the same presenter
+        # Get Info and the confirm use, so About is no longer a hand-rolled copy.
         anchor = _title_anchor(self._menu_buttons.get(self.app_name),
-                               self._overlay) or \
-            (target[0] + target[2] / 2, 0.0, 2.0, 2.0)
-        self._about_grow = nbtransitions.GrowCard(grow_da)
-        grow_da.connect_after("draw", lambda _w, cr:
-                              self._about_grow.paint(cr))
-
-        def _landed(_ok):
-            if self._about_card is not None:
-                self._about_card.show()
-
-        self._about_grow.grow(anchor, target, on_done=_landed)
+                               self._overlay) or (float(W) / 2.0, 0.0, 2.0, 2.0)
+        card_win, close = nbtransitions.present_card(
+            self._overlay, card, anchor, css_class="",
+            on_close=lambda: setattr(self, "_about_close", None))
+        self._about_card = card_win
+        self._about_close = close
 
     def _close_about(self):
-        layer = getattr(self, "_about_layer", None)
-        if layer is None:
+        # Retract the card to the title, then remove it -- present_card owns the
+        # retract/remove and clears _about_close via the on_close we gave it.
+        # Returns True when there was an About to dismiss (so Esc consumes the
+        # key), False when there was not (so Esc falls through to the menu/quit).
+        close = getattr(self, "_about_close", None)
+        if close is None:
             return False
-        grow = getattr(self, "_about_grow", None)
-        card = getattr(self, "_about_card", None)
-        if card is not None:
-            card.hide()          # the frame retracts; the text does not shrink
-        if grow is not None and getattr(grow, "active", False) \
-                and nbtransitions is not None:
-            self._about_grow = None
-            self._about_card = None
-            grow.retract(on_done=lambda _ok: self._about_remove(layer))
-            return True
-        self._about_remove(layer)
+        close()
         return True
-
-    def _about_remove(self, layer):
-        if getattr(self, "_about_layer", None) is not layer and \
-                self._about_layer is not None:
-            layer = self._about_layer
-        try:
-            self._overlay.remove(layer)
-        except Exception:                                         # noqa: BLE001
-            pass
-        self._about_layer = None
-        self._about_card = None
-        self._about_grow = None
 
     def _on_key(self, _w, ev):
         if ev.keyval == Gdk.KEY_Escape:

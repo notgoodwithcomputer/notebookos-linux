@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""nbtransitions — the four transitions Notebook OS is allowed to have.
+"""nbtransitions — the shared container transitions every app reaches for.
 
 de/nbmotion.py owns *time*: the duration tokens, the easing curves, the policy
 that decides whether anything may move, and a retargetable scalar driven by the
 frame clock. This module owns *containers*: it turns those tokens into the
-handful of container-level changes the interaction constitution actually
-sanctions, so that no app has to reason about `Gtk.StackTransitionType`,
-Reduced Motion and NB_ACCEL on its own and get a different answer each time.
+common container-level changes, so that no app has to reason about
+`Gtk.StackTransitionType`, Reduced Motion and NB_ACCEL on its own and get a
+different answer each time.
 
     page switch      a Gtk.Stack changing page, with a DIRECTION
     inline reveal    a Gtk.Revealer opening or closing a disclosure
     content replace  one widget crossfading into another inside a holder
     result highlight a CSS class held briefly on the thing that just changed
 
-That is the complete list. Anything not on it is not a transition, it is
-decoration, and the answer is no.
+These are the shared primitives, not a whitelist of the only motion allowed. The
+design rule is the opposite of restrictive: animate every state change, keeping
+the lively slight-spring character. The only things out of bounds are 3D and
+liquid glass, because they do not fit the paper style. An app that needs a
+transition these four do not cover writes its own on nbmotion's Scalar/Track and
+the same policy — this module just spares it the boilerplate for the common ones.
 
 Four rules run through every function here:
 
@@ -22,10 +26,10 @@ Four rules run through every function here:
    `Gtk.Stack`'s own animation and a reveal is `Gtk.Revealer`'s own: one
    internal frame-clock animation inside the toolkit, in C, with no Python
    running per frame. What this module contributes is the *policy* — which
-   transition type, how long, or none at all. The ban on animating
-   width/height/margin/padding applies to hand-rolled animation of somebody
-   else's layout properties; a Revealer animating its own allocation is the
-   widget doing the single job it exists for.
+   transition type, how long, or none at all. Layout may animate — a Revealer
+   sliding its own allocation open is exactly the widget doing the job it exists
+   for — but prefer letting GTK drive it over hand-rolling a per-frame width or
+   margin tween in Python, which is what invites jank on the software path.
 
 2. **Instant is equivalent, not degraded.** When policy says still — Reduced
    Motion, software rendering, no frame clock — every function here lands on
@@ -59,10 +63,11 @@ import nbmotion
 try:
     import gi
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, GLib
+    from gi.repository import Gtk, GLib, Gdk
 except Exception:                                                 # noqa: BLE001
     Gtk = None
     GLib = None
+    Gdk = None
 
 
 # --------------------------------------------------------------------------
@@ -78,6 +83,8 @@ BACK = "back"
 CROSSFADE = "crossfade"
 SLIDE_DOWN = "slide-down"
 SLIDE_UP = "slide-up"
+SLIDE_RIGHT = "slide-right"     # a horizontal disclosure; see _REVEALER_TYPES
+SLIDE_LEFT = "slide-left"
 
 #: Durations come from nbmotion; this module defines NO numbers of its own.
 PAGE = nbmotion.PAGE
@@ -104,6 +111,14 @@ _REVEALER_TYPES = {
     CROSSFADE: "CROSSFADE",
     SLIDE_DOWN: "SLIDE_DOWN",
     SLIDE_UP: "SLIDE_UP",
+    # A disclosure on a HORIZONTAL run — a pill opening along a breadcrumb, a
+    # control appearing in a toolbar. Named by where the content opens TOWARDS,
+    # which is why these are their own words rather than FORWARD/BACK: those two
+    # mean the opposite thing for a Stack (FORWARD sends the outgoing page
+    # LEFT), and one vocabulary that points two ways is how a direction gets
+    # inverted by somebody reading it in good faith.
+    SLIDE_RIGHT: "SLIDE_RIGHT",
+    SLIDE_LEFT: "SLIDE_LEFT",
 }
 
 
@@ -300,6 +315,13 @@ class PageSwitcher:
 
         The token is the whole point of the return value: hold it across any
         deferred work and check `is_current()` before touching the UI."""
+        # nbmotion-inventory: app.page-pane-switch
+        # This is the directional pane switch, consistent OS-wide: `direction`
+        # is inferred from `order` so a move to a later page slides forward and
+        # an earlier one back, on ONE shared primitive, so the direction cannot
+        # drift between apps. Adopted by academics/cookbook/language/packages/
+        # sequencer/settings/video; the apps that still hand-roll a Stack switch
+        # are ratcheted in tools/page_switch_consistency_check.py.
         if direction is None:
             direction = self.direction_to(name)
         duration = self.duration if duration is None else duration
@@ -671,6 +693,82 @@ def _remove_class(widget, css_class):
 
 
 # --------------------------------------------------------------------------
+# 4. Continuous value (app.progress: continuous, never stepped)
+# --------------------------------------------------------------------------
+def smooth_fraction(bar, fraction, duration=None, on_done=None):
+    """Glide a progress bar to `fraction` instead of STEPPING to it.
+
+    A bar that jumps 0.2 -> 0.4 reads as stepped; gliding the fill between the
+    fractions the work actually reports is "continuous, never stepped"
+    (app.progress). The fraction is a physical quantity -- how much work is done
+    -- so the glide is LINEAR: a spring or ease would lie about the rate. It
+    RETARGETS from wherever the fill is on screen, so a rapid sequence of reports
+    heads to the newest one and the bar never jumps back or stalls. One
+    nbmotion.Scalar is kept on the bar (`_nbt_frac`) and reused across reports.
+
+    Under policy-still (Reduced Motion, software, no frame clock) the bar is set
+    to `fraction` at once and `on_done(True)` has already run when this returns:
+    the instant path is EQUIVALENT, which is nbmotion.Scalar's own contract.
+
+    `bar` is anything with get_fraction()/set_fraction() (a Gtk.ProgressBar). A
+    None bar, or one with no engine to drive it, sets the value directly and
+    reports the end state, so a caller keeps one code path.
+    """
+    if bar is None:
+        return 0
+    try:
+        target = max(0.0, min(1.0, float(fraction)))
+    except Exception:                                             # noqa: BLE001
+        return 0
+    dur = nbmotion.FEEDBACK if duration is None else duration
+    sc = getattr(bar, "_nbt_frac", None)
+    if sc is None:
+        try:
+            start = max(0.0, min(1.0, float(bar.get_fraction())))
+        except Exception:                                         # noqa: BLE001
+            start = target
+
+        def _frame(v):
+            try:
+                bar.set_fraction(max(0.0, min(1.0, float(v))))
+            except Exception:                                     # noqa: BLE001
+                pass          # a destroyed bar raises here; nothing to paint
+
+        try:
+            sc = nbmotion.Scalar(widget=bar, value=start, on_frame=_frame,
+                                 easing=nbmotion.LINEAR)
+        except Exception:                                         # noqa: BLE001
+            sc = None
+        if sc is None:
+            try:
+                bar.set_fraction(target)
+            except Exception:                                     # noqa: BLE001
+                pass
+            _fire(on_done, True)
+            return 0
+        bar._nbt_frac = sc
+
+    def _land(ok):
+        # Nothing to land or report to once the bar is gone (same convention as
+        # replace's _arrived): a destroy drops the completion silently.
+        if not _alive(bar):
+            return
+        # Land EXACTLY on the target when a glide COMPLETES: a fill left at 0.999
+        # by a frame-quantised animation never reads as "done". A superseded or
+        # cancelled glide (ok False) leaves the fill for whoever retargeted it and
+        # only reports.
+        if ok:
+            try:
+                bar.set_fraction(target)
+            except Exception:                                     # noqa: BLE001
+                pass
+        _fire(on_done, bool(ok))
+
+    sc.animate_to(target, dur, nbmotion.LINEAR, on_done=_land)
+    return nbmotion.policy(dur, False)
+
+
+# --------------------------------------------------------------------------
 # The anchored card (PAPER-PHYSICS Article B: nothing appears from nowhere)
 # --------------------------------------------------------------------------
 # A confirm card grows from the control that raised it; an About card drops
@@ -772,14 +870,31 @@ class GrowCard:
             self._t = 1.0
             self._fire(on_done, True)
             return self
+        # SURFACE_IN, not PAGE: a card is "a menu, card, tooltip, sheet or app
+        # arriving" in §D1's mapping, and retract() below already departs on
+        # SURFACE_OUT — growing at PAGE made the arrival 40ms slower than its
+        # own departure, which §B3 ("departure retraces arrival") forbids.
+        # ARRIVE, not EASE_OUT: this is the one GEOMETRIC arrival in the shared
+        # layer (it travels a rectangle), so Amendment 3's lively slight spring
+        # applies. The fades elsewhere keep EASE_OUT deliberately — opacity has
+        # nowhere to overshoot to.
+        # BOUND ON THE SPRING, measured: ARRIVE peaks at 1.053, so the rect
+        # briefly exceeds its target by 5.3% of the anchor->target delta. Against
+        # present_card's CENTRED target that stays inside the host until the card
+        # reaches ~90% of a host dimension (at 1024x722: 921x649 is inside,
+        # 942x664 clips). Every card that uses this today — Get Info, Confirm,
+        # About — is far below that, so the overshoot is not clamped and the
+        # spring is honest. A near-FULLSCREEN card would have its edge cut for
+        # the ~40ms of overshoot; give that one a clamp rather than flattening
+        # the spring for everybody.
         if self._scalar is None:
             self._scalar = nbmotion.Scalar(
                 widget=self.host, value=0.0, on_frame=self._frame,
-                duration=nbmotion.PAGE, easing=nbmotion.EASE_OUT)
+                duration=nbmotion.SURFACE_IN, easing=nbmotion.ARRIVE)
         self._t = 0.0
         self._scalar.jump_to(0.0)
-        self._scalar.animate_to(1.0, duration=nbmotion.PAGE,
-                                easing=nbmotion.EASE_OUT, on_done=on_done)
+        self._scalar.animate_to(1.0, duration=nbmotion.SURFACE_IN,
+                                easing=nbmotion.ARRIVE, on_done=on_done)
         return self
 
     def retract(self, on_done=None):
@@ -836,3 +951,136 @@ class GrowCard:
                 on_done(bool(completed))
             except Exception:                                     # noqa: BLE001
                 pass
+
+
+def _call(fn):
+    """Run a no-argument card callback once, swallowing its exceptions (an
+    app's on_shown/on_close bug must not strand a half-presented overlay)."""
+    if fn is None:
+        return
+    try:
+        fn()
+    except Exception:                                             # noqa: BLE001
+        pass
+
+
+# GrowCard is the PAINT of an anchored card; present_card is the whole
+# PRESENTATION. It builds the scrim + grow layer + real content card on a host's
+# Gtk.Overlay, grows the paper frame from `anchor` to the card's centred target,
+# reveals the real content on landing, and retracts to the anchor on close.
+# Extracted verbatim from the Finder's Get-Info/confirm presenter so every app
+# gets the same anchored card from ONE tested place instead of a fifth hand-
+# rolled copy (PAPER-PHYSICS Article B). GrowCard.grow raises without an anchor,
+# so a caller that means to grow from a control cannot forget where it came
+# from. present_card allows ONE sanctioned exception: an explicit anchor=None
+# centre-grows, for a surface with genuinely no on-screen origin -- the Finder's
+# grid view, where a selected icon resolves no row rectangle. That is a decision
+# the caller makes by passing None, not a silent default.
+def present_card(overlay, box, anchor, on_close=None, on_shown=None,
+                 css_class="nbcard", size_from=None):
+    """Present `box` as a card that GROWS FROM `anchor` on `overlay` and
+    retracts to it on close. Returns `(card_win, close)`:
+
+      * card_win  the EventBox holding `box`; emits `destroy` when removed, so a
+                  caller filling it asynchronously can watch that.
+      * close     call it (or wire it to Esc / a button) to retract and remove.
+
+    `anchor` is (x, y, w, h) in `overlay` coordinates, or None to centre-grow
+    when the surface has no on-screen origin (grid view). With nbtransitions'
+    motion still (Reduced Motion, software, no frame clock) the card lands at
+    its target and `on_shown()` runs before this returns -- the instant path is
+    EQUIVALENT, not skipped. `size_from` overrides where the host size is read
+    (default: the overlay's own allocation).
+
+    `on_shown` fires the moment the real content is revealed -- on landing for
+    the animated path, immediately for the instant one -- so a destructive
+    confirm can focus its SAFE default only once the card exists."""
+    if Gtk is None or overlay is None:
+        _call(on_shown)                      # headless: no surface to build
+        return (None, (lambda *_a: _call(on_close)))
+    host = size_from if size_from is not None else overlay
+    try:
+        alloc = host.get_allocation()
+        W = alloc.width if alloc.width > 1 else 1024
+        H = alloc.height if alloc.height > 1 else 722
+    except Exception:                                             # noqa: BLE001
+        W, H = 1024, 722
+    layer = Gtk.Fixed()
+    scrim = Gtk.EventBox()
+    if Gdk is not None:
+        scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+    scrim.set_size_request(W, H)
+    layer.put(scrim, 0, 0)
+    grow_da = Gtk.DrawingArea()
+    grow_da.set_size_request(W, H)
+    layer.put(grow_da, 0, 0)
+    card_win = Gtk.EventBox()
+    if css_class:
+        card_win.get_style_context().add_class(css_class)
+    card_win.add(box)
+    card_win.set_no_show_all(True)
+    layer.put(card_win, 0, 0)
+    overlay.add_overlay(layer)
+    scrim.show()
+    grow_da.show()
+    _min, nat = card_win.get_preferred_size()
+    cw = nat.width if nat.width > 1 else 340
+    ch = nat.height if nat.height > 1 else 220
+    tx, ty = max((W - cw) // 2, 0), max((H - ch) // 2, 0)
+    # §E4 check 4: an arriving surface's rest edge may not be off the grid.
+    # A CENTRED card lands on the 4u grid only when its natural size happens to
+    # be a multiple of 8 — measured at 1024x722, more than half of plausible
+    # card widths put BOTH edges 1-3px off it. §E3.8: "A surface that stops
+    # 11 px from a hairline is the single most visible way to prove the grid is
+    # decorative." Snapping the REST position costs at most 3px of centring —
+    # invisible — and buys an edge that lands where the grid says.
+    # The unit is read from nbapp rather than copied: design_tokens ->
+    # nbapp is a LOCKSTEP pair grid_check enforces, and a third copy here is
+    # exactly the drift that check exists to catch. Imported lazily because
+    # nbapp imports this module; any failure falls back to the centred value,
+    # since a card that is 2px off the grid is still infinitely better than a
+    # card that does not appear.
+    try:
+        import nbapp as _nbapp
+        _u = int(getattr(_nbapp, "GRID_UNIT", 4)) or 4
+        tx, ty = (tx // _u) * _u, (ty // _u) * _u
+    except Exception:                                             # noqa: BLE001
+        pass
+    target = (float(tx), float(ty), float(cw), float(ch))
+    layer.put(card_win, tx, ty)
+
+    state = {"grow": None, "closing": False}
+
+    def remove(*_a):
+        if layer.get_parent() is not None:
+            overlay.remove(layer)
+        card_win.destroy()                   # fires the handle's "destroy"
+        _call(on_close)
+
+    def close(*_a):
+        if state["closing"]:
+            return True
+        state["closing"] = True
+        g = state["grow"]
+        if g is not None and getattr(g, "active", False):
+            g.retract(on_done=lambda _ok: remove())
+        else:
+            remove()
+        return True
+
+    scrim.connect("button-press-event", close)
+    if Gdk is not None:
+        card_win.add_events(Gdk.EventMask.KEY_PRESS_MASK)
+
+    def reveal(*_a):
+        card_win.show()
+        _call(on_shown)
+
+    if anchor is not None:
+        g = GrowCard(grow_da)
+        grow_da.connect_after("draw", lambda _w, cr: g.paint(cr))
+        state["grow"] = g
+        g.grow(anchor, target, on_done=lambda _ok: reveal())
+    else:
+        reveal()
+    return (card_win, close)

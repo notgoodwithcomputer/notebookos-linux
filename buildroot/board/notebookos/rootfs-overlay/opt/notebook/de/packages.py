@@ -49,9 +49,9 @@ NAME, KEY, KIND, SIZE, SIZE_B, MODIFIED, MTIME, DESC, PATH = range(9)
 # table columns must leave a genuinely readable NAME column at 1024 — otherwise
 # the package name is the one thing that ellipsizes away ("…Application") and
 # the list becomes unusable on the machine it most needs to work on. Budget at
-# 1024: 212 sidebar + 300 inspector + 56 gutters + 246 of fixed columns leaves
-# ~135px for the name, and every extra pixel of a wider screen goes to it.
-SIDEBAR_W = 212
+# 1024: 240 sidebar + 300 inspector + 56 gutters + 246 of fixed columns leaves
+# ~107px for the name, and every extra pixel of a wider screen goes to it.
+SIDEBAR_W = 240
 INSPECTOR_W = 300
 COL_KIND, COL_MODIFIED, COL_SIZE = 88, 92, 66
 # The NAME header cell alone carries a floor, so the "NAME"/"KIND" labels can

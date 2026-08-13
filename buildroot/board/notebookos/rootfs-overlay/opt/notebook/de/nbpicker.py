@@ -26,6 +26,7 @@ from gi.repository import Gtk, Gdk, GObject  # noqa: E402
 
 import nbicons
 import nbapp
+import nbmotion
 import finder
 
 LIST_ICON_PX = 20
@@ -179,12 +180,52 @@ class _Picker:
         dlg.connect("key-press-event", self._on_key)
 
         dlg.show_all()
+        self._arrive(inner)
         self._apply_view()
         self._load(self.cur)
         (self.name_entry if self.mode == "save" else self.search).grab_focus()
         dlg.run()                        # modal nested loop; grab is automatic
         dlg.destroy()
         return self._result
+
+    def _arrive(self, body):
+        """Settle the toplevel dialog's body into place without gating it.
+
+        The synchronous picker API receives the parent window, but not the menu
+        item that raised it, so this Gtk.Dialog cannot honestly use the shared
+        anchored-card presenter.  Paint translation gives its own content a
+        geometric arrival without animating allocation; the final frame removes
+        the draw hook, making the animated and instant end states identical.
+        """
+        state = {"offset": -12.0, "handler": 0}
+
+        def draw(_widget, cr):
+            cr.translate(0.0, state["offset"])
+            return False
+
+        def frame(value):
+            state["offset"] = float(value)
+            body.queue_draw()
+
+        def land(_completed=True):
+            state["offset"] = 0.0
+            handler = state["handler"]
+            if handler:
+                state["handler"] = 0
+                body.disconnect(handler)
+            body.queue_draw()
+
+        try:
+            state["handler"] = body.connect("draw", draw)
+            # nbmotion-inventory: app.picker
+            self._arrival_motion = nbmotion.animate(
+                body, frame, -12.0, 0.0, duration=nbmotion.SURFACE_IN,
+                easing=nbmotion.ARRIVE, on_done=land)
+        except Exception:                                        # motion never gates I/O
+            try:
+                land(False)
+            except Exception:
+                pass
 
     def _card_size(self):
         alloc = self.parent.get_allocation()
