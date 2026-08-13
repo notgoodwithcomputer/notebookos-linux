@@ -1202,6 +1202,14 @@ class Animation(nbapp.AppWindow):
                 self._reports = reports
         elif os.path.exists(STORE_FILE):
             self.doc, self._store_read_only, self._reports = load_store(STORE_FILE)
+            remembered = self.doc._extra.pop('doc_path', None)
+            if remembered and not self._store_read_only:
+                resolved = _resolve_path(remembered)
+                if os.path.exists(resolved):
+                    self.doc_path = resolved
+                    # the title is how a person knows WHICH film they are in
+                    self.set_title(_t('Animation') + ' - ' +
+                                   os.path.basename(resolved))
         self.sheet = Sheet(self.doc)
         self._build()
         for scene in self.doc.scenes:
@@ -4690,7 +4698,16 @@ class Animation(nbapp.AppWindow):
         if self._store_read_only:
             return False
         try:
-            save_document(self.doc, STORE_FILE)
+            # The recovery store also remembers WHICH film was open, the way
+            # writer.py's store carries its path — Article III §3 restores the
+            # open document, not merely its contents. Stored portably and
+            # only here: a .anim must never name itself, or copying one would
+            # change its bytes.
+            payload = self.doc.serial()
+            payload['doc_path'] = (_portable_path(self.doc_path)
+                                   if self.doc_path else None)
+            os.makedirs(os.path.dirname(STORE_FILE), exist_ok=True)
+            nbapp.atomic_write_json(STORE_FILE, payload)
             self._dirty = False
             self._save_error = None
             self.save_chip.set_text(_t('Saved %s') % time.strftime('%H:%M'))

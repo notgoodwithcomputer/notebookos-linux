@@ -565,6 +565,17 @@ def store_family():
           animation._resolve_path(os.path.join("Music", "take.wav")) == inside and
           animation._resolve_path(outside) == outside)
 
+    # Article III §3 restores the OPEN DOCUMENT, not merely its contents:
+    # the recovery store carries which film was bound, stored portably,
+    # and a film that has since been deleted must not be re-bound.
+    store_payload = animation.AnimationDocument(canvas=(160, 120)).serial()
+    store_payload["doc_path"] = os.path.join("Documents", "remembered.anim")
+    restored, _reports = animation.AnimationDocument.parse(store_payload)
+    check("F7 the recovery store keeps the document binding as _extra",
+          restored._extra.get("doc_path") == os.path.join("Documents",
+                                                          "remembered.anim"),
+          str(restored._extra)[:60])
+
     damaged = copy.deepcopy(raw)
     damaged["cels"][0]["takes"] = [base64.b64encode(b"not png").decode("ascii")]
     parsed_damaged, damaged_reports = animation.AnimationDocument.parse(damaged)
