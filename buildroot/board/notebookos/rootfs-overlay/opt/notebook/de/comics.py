@@ -211,6 +211,10 @@ CSS = b"""
 .comics-selection { color: #C8341E; }
 .comics-saved { color: #7FA98C; }
 .comics-unsaved { color: #C8341E; }
+.comics-bubbletext { background: #FFFFFF; border: 1px solid #C9C4B6;
+                     border-radius: 6px; padding: 6px; }
+.comics-bubbletext:focus { border-color: #1A1916; }
+.comics-bubbletext text { background: #FFFFFF; color: #1A1916; }
 """
 
 
@@ -229,10 +233,12 @@ def view_pixel(x, y, zoom, width=PAGE_PX_W, height=PAGE_PX_H, clamp=False):
 
 
 def fit_zoom(width, height, available_width, available_height):
+    # A continuous fit: the ladder is for STEPPING, never for fitting.
+    # Snapping the fit down to a rung rendered the page up to a quarter
+    # smaller than the window allows (0.227 available became 1/6).
     limit = min(float(available_width) / width,
                 float(available_height) / height)
-    choices = [z for z in ZOOM_STEPS if z <= limit]
-    return choices[-1] if choices else ZOOM_MIN
+    return max(ZOOM_MIN, min(ZOOM_MAX, limit))
 
 
 def px4(hex_):
@@ -1187,12 +1193,18 @@ class Comics(nbapp.AppWindow):
         self.size_grp.pack_start(size_row,False,False,0)
         self.ramp_area=Gtk.DrawingArea(); self.ramp_area.set_size_request(-1,30); self.ramp_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.ramp_area.connect("draw",self._draw_ramp); self.ramp_area.connect("button-press-event",self._on_ramp_press)
         self.size_grp.pack_start(self.ramp_area,False,False,0); dock.pack_start(self.size_grp,False,False,0)
+        # Colour comes right after the brush: it is the control a drawing app
+        # is USED through, and at 722px it sat 210px below the dock's fold.
+        dock.pack_start(self._caption("Colour"),False,False,4)
+        colour_row=Gtk.Box(spacing=8); self.colour_chip=Gtk.DrawingArea(); self.colour_chip.set_size_request(32,24); self.colour_chip.connect("draw",self._draw_colour_chip); self.colour_name=Gtk.Label(label=mix_name(self.color),xalign=0); self.colour_name.set_ellipsize(Pango.EllipsizeMode.END); colour_row.pack_start(self.colour_chip,False,False,0); colour_row.pack_start(self.colour_name,True,True,0); dock.pack_start(colour_row,False,False,0)
+        mix=Gtk.Button(label=_t("Mix Colour…")); mix.connect("clicked",lambda *_:self._mix_prompt()); dock.pack_start(mix,False,False,0)
+        self.palette_area=Gtk.DrawingArea(); self.palette_area.set_size_request(PAL_COLS*13,7*13); self.palette_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.palette_area.set_has_tooltip(True); self.palette_area.connect("draw",self._draw_palette); self.palette_area.connect("button-press-event",self._on_palette_press); self.palette_area.connect("query-tooltip",self._palette_tooltip); dock.pack_start(self.palette_area,False,False,0)
+        dock.pack_start(self._caption("Recent"),False,False,2); self.recent_area=Gtk.DrawingArea(); self.recent_area.set_size_request(PAL_COLS*13,13); self.recent_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.recent_area.set_has_tooltip(True); self.recent_area.connect("draw",self._draw_recent); self.recent_area.connect("button-press-event",self._on_recent_press); self.recent_area.connect("query-tooltip",self._recent_tooltip); dock.pack_start(self.recent_area,False,False,0)
         self.shape_grp=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=4); self.shape_grp.pack_start(self._caption("Shapes"),False,False,4)
         shape_row=Gtk.Box(spacing=4); self.outline_btn=Gtk.ToggleButton(label=_t("Outline")); self.filled_btn=Gtk.ToggleButton(label=_t("Filled")); self.outline_btn.set_active(True); self.outline_btn.connect("clicked",lambda *_:self._set_fill_shapes(False)); self.filled_btn.connect("clicked",lambda *_:self._set_fill_shapes(True)); shape_row.pack_start(self.outline_btn,True,True,0); shape_row.pack_start(self.filled_btn,True,True,0)
         for button in (self.outline_btn,self.filled_btn): button.set_relief(Gtk.ReliefStyle.NONE); button.get_style_context().add_class("comics-stepbtn"); button.get_style_context().add_class("wide"); button.get_child().get_style_context().add_class("comics-marklabel")
         self.shape_grp.pack_start(shape_row,False,False,0); dock.pack_start(self.shape_grp,False,False,0)
-        dock.pack_start(self._caption("Bubble"),False,False,4)
-        self.bubble_group=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=4); styles=Gtk.Grid(column_spacing=3,row_spacing=3); self.bubble_style="speech"; self.bubble_size=40; self.bubble_bold=False; self.bubble_italic=False
+        self.bubble_group=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=4); self.bubble_group.pack_start(self._caption("Bubble"),False,False,4); styles=Gtk.Grid(column_spacing=3,row_spacing=3); self.bubble_style="speech"; self.bubble_size=40; self.bubble_bold=False; self.bubble_italic=False
         for i,style in enumerate(("speech","thought","shout","caption")):
             btn=Gtk.Button(label=_t(style.title())); btn.set_relief(Gtk.ReliefStyle.NONE); btn.get_style_context().add_class("comics-stepbtn"); btn.get_style_context().add_class("wide"); btn.get_child().get_style_context().add_class("comics-marklabel"); btn.connect("clicked",lambda _w,style=style:self._bubble_setting("style",style)); styles.attach(btn,i%2,i//2,1,1)
         self.bubble_group.pack_start(styles,False,False,0); bramp=Gtk.Box(spacing=2)
@@ -1201,11 +1213,6 @@ class Comics(nbapp.AppWindow):
         self.bubble_group.pack_start(bramp,False,False,0); fmt=Gtk.Box(spacing=4); bold=Gtk.ToggleButton(label="B"); italic=Gtk.ToggleButton(label="I")
         for button in (bold,italic): button.set_relief(Gtk.ReliefStyle.NONE); button.get_style_context().add_class("comics-stepbtn"); button.get_child().get_style_context().add_class("comics-marklabel")
         bold.connect("toggled",lambda w:self._bubble_setting("bold",w.get_active())); italic.connect("toggled",lambda w:self._bubble_setting("italic",w.get_active())); fmt.pack_start(bold,False,False,0); fmt.pack_start(italic,False,False,0); self.bubble_group.pack_start(fmt,False,False,0); dock.pack_start(self.bubble_group,False,False,0)
-        dock.pack_start(self._caption("Colour"),False,False,4)
-        colour_row=Gtk.Box(spacing=8); self.colour_chip=Gtk.DrawingArea(); self.colour_chip.set_size_request(32,24); self.colour_chip.connect("draw",self._draw_colour_chip); self.colour_name=Gtk.Label(label=mix_name(self.color),xalign=0); self.colour_name.set_ellipsize(Pango.EllipsizeMode.END); colour_row.pack_start(self.colour_chip,False,False,0); colour_row.pack_start(self.colour_name,True,True,0); dock.pack_start(colour_row,False,False,0)
-        mix=Gtk.Button(label=_t("Mix Colour\u2026")); mix.connect("clicked",lambda *_:self._mix_prompt()); dock.pack_start(mix,False,False,0)
-        self.palette_area=Gtk.DrawingArea(); self.palette_area.set_size_request(PAL_COLS*13,7*13); self.palette_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.palette_area.set_has_tooltip(True); self.palette_area.connect("draw",self._draw_palette); self.palette_area.connect("button-press-event",self._on_palette_press); self.palette_area.connect("query-tooltip",self._palette_tooltip); dock.pack_start(self.palette_area,False,False,0)
-        dock.pack_start(self._caption("Recent"),False,False,2); self.recent_area=Gtk.DrawingArea(); self.recent_area.set_size_request(PAL_COLS*13,13); self.recent_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK); self.recent_area.set_has_tooltip(True); self.recent_area.connect("draw",self._draw_recent); self.recent_area.connect("button-press-event",self._on_recent_press); self.recent_area.connect("query-tooltip",self._recent_tooltip); dock.pack_start(self.recent_area,False,False,0)
         self.canvas = Gtk.DrawingArea()
         self.canvas.set_size_request(PAGE_PX_W, PAGE_PX_H)
         self.canvas.connect("draw", self._draw_canvas)
@@ -2047,9 +2054,15 @@ class Comics(nbapp.AppWindow):
             cr.rectangle(75 * z + 0.5, 75 * z + 0.5,
                          (PAGE_PX_W - 150) * z, (PAGE_PX_H - 150) * z); cr.stroke()
         if self.grid and z >= GRID_FROM:
+            # Only the rules that cross the clip: at GRID_FROM+ the canvas is
+            # 13000px wide and cairo would discard everything else anyway —
+            # after paying for the full path each repaint.
+            cx0, cy0, cx1, cy1 = cr.clip_extents()
             cr.set_source_rgba(*_rgb("#C9C4B6"), 0.45); cr.set_line_width(1)
-            for x in range(1, PAGE_PX_W): cr.move_to(x * z + 0.5, 0); cr.line_to(x * z + 0.5, PAGE_PX_H * z)
-            for y in range(1, PAGE_PX_H): cr.move_to(0, y * z + 0.5); cr.line_to(PAGE_PX_W * z, y * z + 0.5)
+            for x in range(max(1, int(cx0 / z)), min(PAGE_PX_W, int(cx1 / z) + 2)):
+                cr.move_to(x * z + 0.5, cy0); cr.line_to(x * z + 0.5, cy1)
+            for y in range(max(1, int(cy0 / z)), min(PAGE_PX_H, int(cy1 / z) + 2)):
+                cr.move_to(cx0, y * z + 0.5); cr.line_to(cx1, y * z + 0.5)
             cr.stroke()
         self._draw_selection(cr, z)
         self._draw_brush_cursor(cr, z)
@@ -2360,8 +2373,14 @@ class Comics(nbapp.AppWindow):
         state = copy.deepcopy(bubble)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         view = Gtk.TextView()
-        view.set_size_request(360, 96)
+        view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        view.set_accepts_tab(False)
+        view.get_style_context().add_class("comics-bubbletext")
         view.get_buffer().set_text(state["text"])
+        holder = Gtk.ScrolledWindow()
+        holder.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        holder.set_size_request(360, 96)
+        holder.add(view)
 
         def changed(buf):
             start, end = buf.get_bounds()
@@ -2371,7 +2390,7 @@ class Comics(nbapp.AppWindow):
             self._object_overlay.pop(self.doc.active, None)
             self.canvas.queue_draw()
         view.get_buffer().connect("changed", changed)
-        content.pack_start(view, True, True, 0)
+        content.pack_start(holder, True, True, 0)
 
         def cancel():
             if new_before is not None:
@@ -2387,12 +2406,20 @@ class Comics(nbapp.AppWindow):
             self._push(new_before or before,
                        "Add Bubble" if new_before is not None else "Edit Bubble")
             self._touch_page(self.doc.active)
+
+        def key(_view, ev):
+            if ev.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and \
+                    (ev.state & Gdk.ModifierType.CONTROL_MASK):
+                self._close_prompt(run_cancel=False); apply(); return True
+            return False
+        view.connect("key-press-event", key)
         self._overlay_prompt("Edit Bubble", "Edit the bubble lettering.",
                              [("Cancel", cancel), ("Apply", apply)], content,
-                             cancel=cancel)
+                             cancel=cancel, focus=view)
         self._dialog_widgets = {"text": view}
 
-    def _overlay_prompt(self, title, body, buttons, content=None, cancel=None):
+    def _overlay_prompt(self, title, body, buttons, content=None, cancel=None,
+                        focus=None):
         """Modal in-window prompt, Illustrator's idiom: a Fixed layer holding
         a scrim sized to the LIVE window and a card moved to its measured
         centre. The inner-Overlay version this replaces let the scrim's size
@@ -2450,8 +2477,14 @@ class Comics(nbapp.AppWindow):
         cw = nat.width if nat.width > 1 else 420
         ch = nat.height if nat.height > 1 else 200
         layer.move(card_win, max((W - cw) // 2, 0), max((H - ch) // 2, 0))
-        if focus_btn is not None:
+        # A prompt whose point is its content (the bubble lettering) focuses
+        # that content so typing works at once; button-only prompts keep the
+        # safe default (Cancel) so a stray Return can never commit.
+        if focus is not None:
+            focus.grab_focus()
+        elif focus_btn is not None:
             focus_btn.grab_focus()
+        self.pos_lbl.set_text("")
 
     def _close_prompt(self, run_cancel=True):
         layer, self._prompt_layer = self._prompt_layer, None
