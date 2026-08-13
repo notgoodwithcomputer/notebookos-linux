@@ -5341,18 +5341,45 @@ class Animation(nbapp.AppWindow):
         self._overlay_prompt('Unsaved changes', [], 'Save',
                              lambda _state: save_then(), stake)
         layer = self._prompt_layer
-        # Add the explicit Discard choice beside the safe Save/Cancel pair.
+        # Add the explicit Discard choice beside the safe Save/Cancel pair —
+        # INSIDE the action row. Packing it into the card body left a stray
+        # full-width button underneath the row, which read as a mistake.
         discard = Gtk.Button(label=_t('Discard'))
         discard.connect('clicked', lambda *_: (self._close_prompt(),
                                                 discard_then()))
-        for child in layer.get_children():
-            if isinstance(child, Gtk.EventBox):
-                box = child.get_child()
-                if isinstance(box, Gtk.Box):
-                    box.pack_start(discard, False, False, 0)
-                    discard.show()
+
+        def _action_row(w):
+            if isinstance(w, Gtk.Button) and w.get_label() == _t('Cancel'):
+                return w.get_parent()
+            if isinstance(w, Gtk.Container):
+                for child in w.get_children():
+                    found = _action_row(child)
+                    if found is not None:
+                        return found
+            return None
+
+        row = _action_row(layer)
+        if row is not None:
+            row.pack_start(discard, True, True, 0)
+            row.reorder_child(discard, 1)     # Cancel | Discard | Save
+            discard.show()
+        else:
+            for child in layer.get_children():
+                if isinstance(child, Gtk.EventBox):
+                    box = child.get_child()
+                    if isinstance(box, Gtk.Box):
+                        box.pack_start(discard, False, False, 0)
+                        discard.show()
 
     def _on_delete(self, *_):
+        # Closing an UNBOUND film loses nothing: the recovery store carries
+        # it, destroy flushes it, and the next launch restores it — the
+        # Comics close model. The card here contradicted the status chip
+        # ('Saved 15:08' beside 'changes that are not saved') and
+        # interrogated a doodle. New/Open KEEP their guard even for unbound
+        # films: those replace the recovery film, so their stake is real.
+        if self._save_error is None and not self.doc_path:
+            return False
         if not self._needs_guard():
             return False
         self._guard_document(self.destroy)
