@@ -4012,8 +4012,180 @@ def hover_and_preview_family():
     shutil.rmtree(scratch)
 
 
+def remaining_paths_family():
+    """The last few things nothing had driven: placing a picture, removing
+    a sound, locking the palette, replacing an export, and the playback
+    tick that moves the film along."""
+    if not gtk_available():
+        skip("F36 the last paths", "no display")
+        return
+    from gi.repository import Gtk
+
+    kept = animation.STORE_FILE + ".last-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    home = tempfile.mkdtemp(prefix="animation-last-")
+    app = animation.Animation()
+    said = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: said.append(text)
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    scene = app.doc.scenes[0]
+    scene["length"] = 24
+    app.sheet = animation.Sheet(app.doc, 0)
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+    app._refresh_lists()
+
+    # placing a picture puts ink in the drawing, and undoes
+    picture = os.path.join(home, "stamp.png")
+    drawn = cairo.ImageSurface(cairo.FORMAT_ARGB32, 40, 30)
+    ctx = cairo.Context(drawn)
+    ctx.set_source_rgb(.78, .2, .12)
+    ctx.rectangle(0, 0, 40, 30)
+    ctx.fill()
+    drawn.write_to_png(picture)
+    import nbpicker
+    previous_open = nbpicker.open_file
+    nbpicker.open_file = lambda *a, **k: picture
+    before = app.doc.bytes()
+    app._place_image()
+    placed = app.doc.bytes() != before
+    app.history.undo()
+    check("F36 placing a picture draws it into the film, and undoes",
+          placed and app.doc.bytes() == before, placed)
+
+    nbpicker.open_file = lambda *a, **k: os.path.join(home, "not-a-picture.png")
+    open(os.path.join(home, "not-a-picture.png"), "w").write("nonsense")
+    del said[:]
+    steady = app.doc.bytes()
+    app._place_image()
+    check("F36 a file that is not a picture is refused, and says so",
+          len(said) == 1 and app.doc.bytes() == steady, said)
+    nbpicker.open_file = previous_open
+
+    # removing a sound
+    scene = app.doc.scenes[app.scene_i]
+    scene["sounds"][0] = {"path": "somewhere.wav", "start": 0, "mute": False}
+    app._selected_sound = (app.scene_i, 0)
+    before = app.doc.bytes()
+    app._remove_sound()
+    gone = scene["sounds"][0] is None and app.doc.bytes() != before
+    app.history.undo()
+    scene = app.doc.scenes[app.scene_i]
+    check("F36 removing a sound takes it off the row, and undoes",
+          gone and scene["sounds"][0] is not None,
+          (gone, scene["sounds"][0]))
+
+    # locking the palette
+    app.doc.palette = ["#C8341E", "#1A1916"]
+
+    class Switch:
+        def __init__(self, state):
+            self.state = state
+
+        def get_active(self):
+            return self.state
+
+    app._palette_lock(Switch(True))
+    locked = app.doc.palette_only
+    app._palette_lock(Switch(False))
+    check("F36 the palette lock turns on and off",
+          locked and not app.doc.palette_only, (locked, app.doc.palette_only))
+
+    # exporting over a film that is already there asks first
+    videos = animation.VIDEOS_DIR
+    os.makedirs(videos, exist_ok=True)
+    existing = os.path.join(videos, "already.mp4")
+    with open(existing, "wb") as handle:
+        handle.write(b"an older export")
+    app._close_prompt()
+    app._export_apply({"kind": "video", "range": "scene", "name": "already",
+                       "size": (160, 120), "native": False, "gif_scale": 1})
+    def offers(window, word):
+        found = []
+        if window._prompt_layer is not None:
+            _find_widgets(window._prompt_layer,
+                          lambda w: isinstance(w, Gtk.Button) and
+                          (w.get_label() or "").strip() == word, found)
+        return bool(found)
+
+    asked = offers(app, "Replace")
+    app._close_prompt()
+    check("F36 exporting over a film already there asks before replacing it",
+          asked and open(existing, "rb").read() == b"an older export", asked)
+    os.unlink(existing)
+
+    # the playback tick moves the film along and stops at the end
+    app.audio = types.SimpleNamespace(
+        available=False, samples_delivered=0, start=lambda *a, **k: False,
+        stop=lambda *a, **k: None, play_once=lambda *a, **k: None,
+        position_samples=lambda: 0)
+    app._playing = True
+    app._audio_clips = []
+    app.loop = False
+    app._play_origin = 0
+    app._playing_started = time.monotonic() - 0.5
+    app._play_tick(None, None)
+    moved = app.playhead > 0
+    app._playing_started = time.monotonic() - 600
+    app._play_tick(None, None)
+    check("F36 playback walks the film along and stops at the end",
+          moved and not app._playing, (moved, app._playing, app.playhead))
+    app._flash = spoken
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+    shutil.rmtree(home, ignore_errors=True)
+
+    graded, scratch = module_mutant(
+        "F36-replaces-without-asking",
+        [("        if os.path.exists(path):", "        if False:")])
+    reckless = graded.Animation()
+    reckless._flash = lambda *a, **k: None
+    reckless.doc = graded.AnimationDocument(canvas=(160, 120))
+    reckless.scene_i = reckless.layer_i = reckless.playhead = 0
+    reckless.sheet = graded.Sheet(reckless.doc, 0)
+    reckless.sheet.ensure_drawing(0, 0)
+    os.makedirs(graded.VIDEOS_DIR, exist_ok=True)
+    target = os.path.join(graded.VIDEOS_DIR, "already.mp4")
+    with open(target, "wb") as handle:
+        handle.write(b"an older export")
+    reckless._export_apply({"kind": "video", "range": "scene",
+                            "name": "already", "size": (160, 120),
+                            "native": False, "gif_scale": 1})
+    asked_first = False
+    if reckless._prompt_layer is not None:
+        buttons = []
+        _find_widgets(reckless._prompt_layer,
+                      lambda w: isinstance(w, Gtk.Button) and
+                      (w.get_label() or "").strip() == "Replace", buttons)
+        asked_first = bool(buttons)
+    mutant("F36 an export that replaces a film without asking is caught",
+           not asked_first)
+    reckless._cancel.set()
+    reckless._alive = False
+    reckless._close_prompt()
+    if os.path.exists(target):
+        os.unlink(target)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+remaining_paths_family()
 hover_and_preview_family()
 history_restore_family()
 serial_freshness_family()
