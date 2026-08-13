@@ -1293,10 +1293,15 @@ class Animation(nbapp.AppWindow):
             button.set_active(tool == self.tool)
             tool_grid.attach(button, index % 2, index // 2, 1, 1)
         dock.pack_start(tool_grid, False, False, 0)
+        # Order is what someone reaches for, most often first. The dock
+        # scrolls, and colour used to sit 641px down a 406px viewport —
+        # the control a drawing app is USED through, below the fold at
+        # every screen size, behind a scrollbar nobody had reason to drag.
         self._build_brush_group(dock)
-        self._build_mirror_group(dock)
-        self._build_pattern_group(dock)
         self._build_colour_group(dock)
+        self._build_shape_group(dock)
+        self._build_pattern_group(dock)
+        self._build_mirror_group(dock)
         self._build_project_palette(dock)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1407,10 +1412,18 @@ class Animation(nbapp.AppWindow):
         self._refresh_lists()
         self._update_playhead()
 
-    def _group_title(self, dock, text):
+    def _group_title(self, dock, text, trailing=None):
         label = Gtk.Label(label=_t(text), xalign=0)
         label.get_style_context().add_class('animation-group')
-        dock.pack_start(label, False, False, 4)
+        if trailing is None:
+            dock.pack_start(label, False, False, 4)
+            return
+        # A value belongs on the line that names it. Its own row cost the
+        # dock 23px, and the dock is where the colour palette has to fit.
+        row = Gtk.Box()
+        row.pack_start(label, True, True, 0)
+        row.pack_start(trailing, False, False, 0)
+        dock.pack_start(row, False, False, 4)
 
     def _mark_btn(self, kind, tip, callback, label=None, key=None,
                   toggle=False, callback_arg=None, group=None, radio=False):
@@ -1615,7 +1628,8 @@ class Animation(nbapp.AppWindow):
     def _build_brush_group(self, dock):
         # Illustrator's group vocabulary, existing catalog keys: one title
         # over the size grid, one over the tip shapes.
-        self._group_title(dock, 'Brush size')
+        self.size_lbl = Gtk.Label(label=_t('%d px') % self.size, xalign=1)
+        self._group_title(dock, 'Brush size', trailing=self.size_lbl)
         # Copied mechanism-for-mechanism from Illustrator: one painted ramp is
         # both a relative-size preview and a six-cell shortcut.
         self.ramp_area = Gtk.DrawingArea()
@@ -1624,8 +1638,8 @@ class Animation(nbapp.AppWindow):
         self.ramp_area.connect('draw', self._draw_brush_ramp)
         self.ramp_area.connect('button-press-event', self._brush_ramp_press)
         dock.pack_start(self.ramp_area, False, False, 0)
-        self.size_lbl = Gtk.Label(label=_t('%d px') % self.size, xalign=1)
-        dock.pack_start(self.size_lbl, False, False, 0)
+
+    def _build_shape_group(self, dock):
         self._group_title(dock, 'Shapes')
         # One per row: a two-across row leaves ~85px for the word, which cut
         # the Greek and Russian tip names (ellipsis_sweep). A dock that

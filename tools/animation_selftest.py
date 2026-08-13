@@ -1644,9 +1644,63 @@ def first_run_family():
     shutil.rmtree(scratch)
 
 
+def dock_reach_family():
+    """The colour palette has to be visible without hunting for it.
+
+    The dock scrolls, and colour sat 641px down a 406px viewport: the
+    control a drawing app is USED through, below the fold at every screen
+    size, behind a scrollbar nobody had a reason to drag. Order in that box
+    is a usability decision, so it is measured, not assumed."""
+    if not gtk_available():
+        skip("F17 dock reach", "no display")
+        return
+    from gi.repository import Gtk
+
+    def fold(module):
+        """Where the dock's visible region ends, and where colour starts."""
+        app = module.Animation()
+        child = app.get_child()
+        app.remove(child)
+        off = Gtk.OffscreenWindow()
+        off.set_size_request(1024, 722)
+        off.add(child)
+        off.show_all()
+        for _ in range(60):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+        docks = []
+        _find_widgets(child,
+                      lambda w: isinstance(w, Gtk.ScrolledWindow) and
+                      w.get_allocation().x == 0, docks)
+        viewport = docks[0].get_allocation().height if docks else 0
+        return viewport, app.palette_area.get_allocation().y
+
+    viewport, colour_at = fold(animation)
+    check("F17 the colour palette starts above the fold of the tool dock",
+          0 < colour_at < viewport - 24, (colour_at, viewport))
+
+    graded, scratch = module_mutant(
+        "F17-colour-last",
+        [("""        self._build_brush_group(dock)
+        self._build_colour_group(dock)
+        self._build_shape_group(dock)
+        self._build_pattern_group(dock)
+        self._build_mirror_group(dock)""",
+          """        self._build_brush_group(dock)
+        self._build_shape_group(dock)
+        self._build_pattern_group(dock)
+        self._build_mirror_group(dock)
+        self._build_colour_group(dock)""")])
+    sunk_viewport, sunk_at = fold(graded)
+    mutant("F17 colour pushed below the fold is caught",
+           sunk_at >= sunk_viewport - 24, (sunk_at, sunk_viewport))
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 workflow_family()
 first_run_family()
+dock_reach_family()
 thumbnail_family()
 control_range_family()
 recording_family()
