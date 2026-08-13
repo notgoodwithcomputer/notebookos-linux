@@ -3046,8 +3046,132 @@ def card_effect_family():
     shutil.rmtree(scratch)
 
 
+def ordering_family():
+    """Reordering layers and scenes, and keeping your place while you do.
+
+    Neither had ever run here. Both swap two things and then have to decide
+    where the person is standing afterwards, which is exactly the sort of
+    bookkeeping that goes wrong quietly."""
+    if not gtk_available():
+        skip("F29 reordering", "no display")
+        return
+
+    kept = animation.STORE_FILE + ".order-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    while len(app.doc.scenes) < 3:
+        app.doc.scenes.append(
+            animation.new_scene("Scene %d" % (len(app.doc.scenes) + 1)))
+    scene = app.doc.scenes[0]
+    while len(scene["layers"]) < 3:
+        scene["layers"].append(
+            animation.new_layer("Layer %d" % (len(scene["layers"]) + 1)))
+    app.sheet = animation.Sheet(app.doc, 0)
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+
+    named = [layer["name"] for layer in scene["layers"]]
+    app.layer_i = 0
+    app._raise_layer()
+    check("F29 raising a layer moves it, and the person moves with it",
+          [l["name"] for l in scene["layers"]] == [named[1], named[0], named[2]]
+          and scene["layers"][app.layer_i]["name"] == named[0],
+          [l["name"] for l in scene["layers"]])
+    app._lower_layer()
+    check("F29 lowering it again puts the order back",
+          [l["name"] for l in scene["layers"]] == named and
+          scene["layers"][app.layer_i]["name"] == named[0],
+          [l["name"] for l in scene["layers"]])
+
+    app.layer_i = len(scene["layers"]) - 1
+    frozen = [l["name"] for l in scene["layers"]]
+    app._raise_layer()
+    app.layer_i = 0
+    app._lower_layer()
+    check("F29 a layer at either end has nowhere further to go",
+          [l["name"] for l in scene["layers"]] == frozen,
+          [l["name"] for l in scene["layers"]])
+
+    # moving the scene you are standing in must not cost you your place
+    app.scene_i = 1
+    app.sheet = animation.Sheet(app.doc, 1)
+    app.doc.scenes[1]["layers"][0]["runs"].append(
+        animation.make_run(cel.id, 0, 30))
+    app.playhead = 17
+    app.layer_i = 0
+    app.selection = (0, 0, 30)
+    app.selection_layers = (0, 0)
+    moved_name = app.doc.scenes[1]["name"]
+    app._move_scene(-1)
+    check("F29 a scene moved earlier takes you with it",
+          app.scene_i == 0 and app.doc.scenes[0]["name"] == moved_name,
+          [s["name"] for s in app.doc.scenes])
+    check("F29 and you keep the frame and the selection you had",
+          app.playhead == 17 and app.selection == (0, 0, 30),
+          (app.playhead, app.selection))
+
+    edges = [s["name"] for s in app.doc.scenes]
+    app._move_scene(-1)
+    check("F29 the first scene has nowhere earlier to go",
+          [s["name"] for s in app.doc.scenes] == edges,
+          [s["name"] for s in app.doc.scenes])
+
+    # layer visibility, through the checkbox the panel shows
+    from gi.repository import Gtk
+    boxes = []
+    _find_widgets(app.layer_list,
+                  lambda w: isinstance(w, Gtk.CheckButton), boxes)
+    lit = app.doc.scenes[app.scene_i]["layers"][0].get("visible", True)
+    if boxes:
+        boxes[-1].set_active(not lit)
+    check("F29 the eye beside a layer hides and shows it",
+          bool(boxes) and
+          app.doc.scenes[app.scene_i]["layers"][0].get("visible", True) != lit,
+          [l.get("visible", True)
+           for l in app.doc.scenes[app.scene_i]["layers"]])
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F29-layer-left-behind",
+        [("        self.layer_i = target\n        self._commit_change()",
+          "        self._commit_change()")])
+    adrift = graded.Animation()
+    adrift._flash = lambda *a, **k: None
+    adrift.doc = graded.AnimationDocument(canvas=(160, 120))
+    adrift.scene_i = adrift.layer_i = 0
+    other = adrift.doc.scenes[0]
+    while len(other["layers"]) < 3:
+        other["layers"].append(
+            graded.new_layer("Layer %d" % (len(other["layers"]) + 1)))
+    adrift.sheet = graded.Sheet(adrift.doc, 0)
+    first = other["layers"][0]["name"]
+    adrift._raise_layer()
+    mutant("F29 a move that leaves the person on the wrong layer is caught",
+           other["layers"][adrift.layer_i]["name"] != first,
+           other["layers"][adrift.layer_i]["name"])
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+ordering_family()
 card_effect_family()
 selection_family()
 dock_controls_family()

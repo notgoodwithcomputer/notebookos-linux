@@ -1201,6 +1201,7 @@ class Animation(nbapp.AppWindow):
         self._selected_sound = None
         self.column_width = 6
         self.view_origin = 0
+        self.selection_layers = None
         self._prompt_layer = None
         self._worker_generation = 0
         self._workers = []
@@ -3762,7 +3763,17 @@ class Animation(nbapp.AppWindow):
         scenes = self.doc.scenes
         scenes[self.scene_i], scenes[target] = scenes[target], scenes[self.scene_i]
         self._clear_scene_thumbs()
+        # Moving the scene you are standing in changes where it sits in the
+        # film, not what is inside it. Switching scenes rightly starts you
+        # at the beginning of a DIFFERENT scene; here it threw away the
+        # frame you were on and the exposures you had selected, every time
+        # you nudged a scene along.
+        where = (self.playhead, self.layer_i, self.selection,
+                 self.selection_layers, self.view_origin)
         self._switch_scene(target)
+        (self.playhead, self.layer_i, self.selection,
+         self.selection_layers, self.view_origin) = where
+        self._update_playhead()
         self._commit_change()
 
     def _cels_used_by(self, scene_index):
