@@ -2071,56 +2071,99 @@ class Animation(nbapp.AppWindow):
                           for cel in self.doc.cels)
         if signature != getattr(self, '_cel_list_signature', None):
             self._cel_list_signature = signature
-            for child in self.cel_list.get_children():
-                self.cel_list.remove(child)
-            if not self.doc.cels:
-                row = Gtk.ListBoxRow()
-                row.set_selectable(False)
-                hint = Gtk.Label(label=_t('The animation has no drawings. Drawing on the canvas makes one.'),
-                                 xalign=0)
-                hint.set_line_wrap(True)
-                # The first sentence someone reads in this app ran into the
-                # right edge of the screen: the row gave it the panel's
-                # whole width and every drawing row beside it has margins.
-                hint.set_margin_start(4)
-                hint.set_margin_end(10)
-                hint.set_margin_top(4)
-                hint.set_margin_bottom(4)
-                hint.get_style_context().add_class('animation-muted')
-                row.add(hint)
-                self.cel_list.add(row)
-            for cel in self.doc.cels:
-                row = Gtk.ListBoxRow()
-                box = Gtk.Box(spacing=8)
-                picture = Gtk.Image.new_from_surface(
-                    self._cel_thumb_surface(cel))
-                box.pack_start(picture, False, False, 2)
-                words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-                name = Gtk.Label(label=cel.name, xalign=0)
-                name.set_ellipsize(Pango.EllipsizeMode.END)
-                words.pack_start(name, False, False, 0)
-                takes = Gtk.Label(label=(_t('%d take%s') %
-                                         (len(cel.takes),
-                                          's' if len(cel.takes) != 1 else '')),
-                                  xalign=0)
-                takes.get_style_context().add_class('animation-muted')
-                words.pack_start(takes, False, False, 0)
-                box.pack_start(words, True, True, 0)
-                row.add(box)
-                row.cel_id = cel.id
-                target = Gtk.TargetEntry.new('application/x-animation-cel',
-                                             Gtk.TargetFlags.SAME_APP, 0)
-                row.connect('drag-begin',
-                            lambda *_a: self._cel_list_release(None, None))
-                row.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target],
-                                    Gdk.DragAction.COPY)
-                row.connect('drag-data-get', self._cel_drag_data_get, cel.id)
-                row.connect('drag-begin', self._cel_drag_begin, cel)
-                self.cel_list.add(row)
-            self.cel_list.show_all()
+            self._sync_cel_rows()
         self._refresh_layers()
         self._refresh_project_palette()
         self._refresh_takes()
+
+    def _build_cel_hint(self):
+        row = Gtk.ListBoxRow()
+        row.set_selectable(False)
+        hint = Gtk.Label(label=_t('The animation has no drawings. Drawing on the canvas makes one.'),
+                         xalign=0)
+        hint.set_line_wrap(True)
+        # The first sentence someone reads in this app ran into the
+        # right edge of the screen: the row gave it the panel's
+        # whole width and every drawing row beside it has margins.
+        hint.set_margin_start(4)
+        hint.set_margin_end(10)
+        hint.set_margin_top(4)
+        hint.set_margin_bottom(4)
+        hint.get_style_context().add_class('animation-muted')
+        row.add(hint)
+        return row
+
+    def _build_cel_row(self, cel):
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(spacing=8)
+        picture = Gtk.Image.new_from_surface(self._cel_thumb_surface(cel))
+        box.pack_start(picture, False, False, 2)
+        words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        name = Gtk.Label(label=cel.name, xalign=0)
+        name.set_ellipsize(Pango.EllipsizeMode.END)
+        words.pack_start(name, False, False, 0)
+        takes = Gtk.Label(label=(_t('%d take%s') %
+                                 (len(cel.takes),
+                                  's' if len(cel.takes) != 1 else '')),
+                          xalign=0)
+        takes.get_style_context().add_class('animation-muted')
+        words.pack_start(takes, False, False, 0)
+        box.pack_start(words, True, True, 0)
+        row.add(box)
+        row.cel_id = cel.id
+        target = Gtk.TargetEntry.new('application/x-animation-cel',
+                                     Gtk.TargetFlags.SAME_APP, 0)
+        row.connect('drag-begin',
+                    lambda *_a: self._cel_list_release(None, None))
+        row.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target],
+                            Gdk.DragAction.COPY)
+        row.connect('drag-data-get', self._cel_drag_data_get, cel.id)
+        row.connect('drag-begin', self._cel_drag_begin, cel)
+        return row
+
+    def _sync_cel_rows(self):
+        """Bring the library list into line with the film, row by row.
+
+        Emptying the list and rebuilding every row cost 92ms at 385
+        drawings and climbs with the library — on the path that runs when
+        someone makes a NEW drawing, which is the commonest action in the
+        app, and Article VIII B2 allows 50ms in a callback. Touch only what
+        actually changed: appending a drawing should cost one row.
+        """
+        rows = getattr(self, '_cel_rows', None)
+        if rows is None:
+            rows = self._cel_rows = {}
+        if not self.doc.cels:
+            for cel_id, (row, _stamp) in list(rows.items()):
+                self.cel_list.remove(row)
+                del rows[cel_id]
+            if getattr(self, '_cel_hint_row', None) is None:
+                self._cel_hint_row = self._build_cel_hint()
+                self.cel_list.add(self._cel_hint_row)
+                self._cel_hint_row.show_all()
+            return
+        if getattr(self, '_cel_hint_row', None) is not None:
+            self.cel_list.remove(self._cel_hint_row)
+            self._cel_hint_row = None
+        alive = {cel.id for cel in self.doc.cels}
+        for cel_id, (row, _stamp) in list(rows.items()):
+            if cel_id not in alive:
+                self.cel_list.remove(row)
+                del rows[cel_id]
+        for index, cel in enumerate(self.doc.cels):
+            stamp = (cel.version, cel.name, len(cel.takes))
+            entry = rows.get(cel.id)
+            if entry is not None and entry[1] == stamp:
+                if entry[0].get_index() != index:
+                    self.cel_list.remove(entry[0])
+                    self.cel_list.insert(entry[0], index)
+                continue
+            if entry is not None:
+                self.cel_list.remove(entry[0])
+            row = self._build_cel_row(cel)
+            self.cel_list.insert(row, index)
+            row.show_all()
+            rows[cel.id] = (row, stamp)
 
     def _cel_drag_data_get(self, _row, _context, selection, _info,
                            _time, cel_id):

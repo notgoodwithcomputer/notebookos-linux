@@ -1643,7 +1643,7 @@ def first_run_family():
 
     graded, scratch = module_mutant(
         "F16-flush",
-        [("                hint.set_margin_end(10)", "                pass")])
+        [("        hint.set_margin_end(10)", "        pass")])
     if resumes:
         os.rename(animation.STORE_FILE, kept)
     try:
@@ -1775,11 +1775,105 @@ def scene_strip_family():
     shutil.rmtree(scratch)
 
 
+def library_family():
+    """The drawing library must stay in step with the film, and adding a
+    drawing must cost one row.
+
+    Emptying the list and rebuilding it took 92ms at 385 drawings and grew
+    with the library, on the path that runs when someone makes a NEW
+    drawing. Article VIII B2 allows 50ms in a callback. This counts rows
+    BUILT rather than milliseconds, so a loaded machine cannot make it lie."""
+    if not gtk_available():
+        skip("F19 drawing library", "no display")
+        return
+    from gi.repository import Gtk
+
+    def names_in(app):
+        out = []
+        for row in app.cel_list.get_children():
+            if not hasattr(row, "cel_id"):
+                continue
+            labels = []
+            _find_widgets(row, lambda w: isinstance(w, Gtk.Label), labels)
+            out.append((row.cel_id, labels[0].get_text() if labels else ""))
+        return out
+
+    def hints_in(app):
+        return [r for r in app.cel_list.get_children()
+                if not hasattr(r, "cel_id")]
+
+    app = animation.Animation()
+    steps = []
+
+    def agrees(tag):
+        want = [(cel.id, cel.name) for cel in app.doc.cels]
+        empty_ok = len(hints_in(app)) == (1 if not app.doc.cels else 0)
+        steps.append((tag, names_in(app) == want and empty_ok))
+
+    agrees("empty")
+    for index in range(6):
+        app.doc.add_cel("Drawing %d" % (index + 1))
+    app._refresh_lists(); agrees("six added")
+    app.doc.cels[2].name = "Renamed"
+    app._refresh_lists(); agrees("renamed")
+    app.doc.cels[2].version += 1
+    app._refresh_lists(); agrees("redrawn")
+    moved = app.doc.cels.pop(1)
+    app._refresh_lists(); agrees("deleted from the middle")
+    app.doc.cels.insert(1, moved)
+    app._refresh_lists(); agrees("put back")
+    app.doc.cels.reverse()
+    app._refresh_lists(); agrees("reversed")
+    del app.doc.cels[:]
+    app._refresh_lists(); agrees("emptied")
+    app.doc.add_cel("After")
+    app._refresh_lists(); agrees("refilled")
+    check("F19 the library list follows the film through every change",
+          all(ok for _tag, ok in steps),
+          [tag for tag, ok in steps if not ok])
+
+    def rows_built(module, app, action):
+        built = []
+        real = module.Animation._build_cel_row
+
+        def counted(self, cel):
+            built.append(cel.id)
+            return real(self, cel)
+        module.Animation._build_cel_row = counted
+        try:
+            action()
+            app._refresh_lists()
+        finally:
+            module.Animation._build_cel_row = real
+        return len(built)
+
+    for _ in range(120):
+        app.doc.add_cel()
+    app._refresh_lists()
+    grew = rows_built(animation, app, lambda: app.doc.add_cel("One more"))
+    check("F19 adding a drawing to a large library builds exactly one row",
+          grew == 1, grew)
+
+    graded, scratch = module_mutant(
+        "F19-rebuild-all",
+        [("            if entry is not None and entry[1] == stamp:",
+          "            if False:")])
+    other = graded.Animation()
+    for _ in range(40):
+        other.doc.add_cel()
+    other._refresh_lists()
+    wasteful = rows_built(graded, other, lambda: other.doc.add_cel("One more"))
+    mutant("F19 rebuilding the whole library for one drawing is caught",
+           wasteful > 1, wasteful)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 workflow_family()
 first_run_family()
 dock_reach_family()
 scene_strip_family()
+library_family()
 thumbnail_family()
 control_range_family()
 recording_family()
