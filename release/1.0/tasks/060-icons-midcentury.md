@@ -224,3 +224,10 @@ Display rerun: nbicons_selftest PASS (bounds/empty/hairline-silhouette
 mutants all fire), construct_all 40/0. Contact sheets + in-situ strip
 reviewed: the filled-silhouette family holds at 16px; worked examples
 (trash/music/folder) meet the brief. VERIFIED per M2.
+
+## REJECTED by the design owner (2026-08-10, after commit)
+"Most of the icons are still bad... it's invariably turned out bad every time
+that method has been used. They have to be ELEGANT." Third rejection of a
+coordinate-authored set — the METHOD is judged, not the style. Superseded by
+task 061: the vendored Lucide 1.31.0 set rendered as real SVG vector paths;
+hand-authored coordinate glyphs are banned going forward.

@@ -496,16 +496,24 @@ feedback, 140 ms for a surface arriving —
 and they conflict with that theme's stated rules.** See §12 for the conflict and
 its resolution; do not implement rows 4–5 without reading it.
 
-Two theme constraints are absolute and are restated here so a motion pass cannot
-lose them:
+> **Superseded by `docs/PAPER-PHYSICS.md` §0.5 Amendment 3 (2026-08-08).** The
+> two bullets below were once stated as absolutes. They are not, and are corrected
+> here so a motion pass does not lose the *actual* rule: **animate every state
+> change, with a lively slight spring; the only things out of bounds are 3D and
+> liquid glass.** The corrected bullets:
 
-- **Only colour and border animate.** No transition on `width`, `height`,
-  `margin` or `padding`: those force GTK to re-layout on every frame, which on a
-  software renderer is exactly how "smooth" becomes "janky". A page transition
-  must therefore be expressed as opacity/colour or as cairo-drawn offset inside a
-  fixed allocation — never as an animated allocation.
-- **Nothing bounces, springs, overshoots, pulses, or slides in from off-screen
-  to be noticed**, and there is never any motion the user did not cause.
+- **Any property may animate; layout is just expensive to animate per-frame.**
+  This is a *performance* rule, not an aesthetic one. A CSS transition on `width`,
+  `height`, `margin` or `padding` forces GTK to re-layout every frame, which on a
+  software renderer is how "smooth" becomes "janky" — so a size/position change is
+  best expressed as opacity, a cairo-drawn offset inside a fixed allocation, or a
+  GTK widget animating its own allocation in C (a `Gtk.Revealer`), rather than a
+  hand-rolled per-frame allocation tween in Python. The bar is cost, not the
+  property.
+- **Arrival carries a lively slight spring** — a small overshoot-and-settle
+  (`nbmotion.ARRIVE = ease_out_back`, ≈7 % past the target, peak ≈1.05), energetic
+  but crisp, landing exactly on the target. What is barred is **3D and liquid
+  glass**, not overshoot. There is still never any motion the user did not cause.
 
 ### §3 Invariants
 

@@ -4,9 +4,10 @@
 # executed rather than assumed. No root required.
 #
 # usage: boot-test.sh [path-to-bzImage]
-#   PASS = kernel boots; AF_UNIX/AF_NETLINK/AF_ALG work; NOTHING else does,
-#   Bluetooth included (removed 2026-08 — the old expectation that
-#   AF_BLUETOOTH must work was this script's own stale assertion).
+#   PASS = kernel boots; AF_UNIX/AF_NETLINK work; NOTHING else does —
+#   Bluetooth and AF_ALG included (both removed 2026-08; AF_ALG existed only
+#   for BlueZ's LE crypto, so it went with it. The old expectations that
+#   AF_BLUETOOTH and AF_ALG must work were this script's own stale assertions).
 #   On an unpurged kernel this prints the probe table and FAILs.
 set -eu
 

@@ -74,7 +74,7 @@ misaligned element is texture in a precise interface and a defect in a sloppy
 one. **Character is not available until the machine is demonstrably well made**,
 which is why every rule here is paired with a gate.
 
-### 0.5 Two amendments to Article VI
+### 0.5 Three amendments to Article VI
 
 **Amendment 1 — the `NB_ACCEL` animation gate is reversed.**
 Article VI §4 makes software rendering suppress motion entirely
@@ -95,14 +95,67 @@ This amendment is load-bearing on hardware coverage: the shipped kernel carries
 NVIDIA machine renders in software permanently. That is the majority of the
 second-hand laptops this OS targets, and it is why Article F is not optional.
 
+**Amendment 3 — the character is a lively slight spring, and nothing is barred
+from animating except 3D and liquid glass.** Earlier drafts of Article D read the
+design thesis ("letterpress, not glass") as a rule about *which properties may
+move* — settle-never-bounce, colour-and-border-only, press-is-instant, never
+animate allocation. That was a misreading, corrected here at the design owner's
+direction: **"letterpress, not glass" is an aesthetic about depth and material,
+not a restriction on motion.** The two things genuinely out of bounds are **3D**
+(perspective, real rotation in Z, depth-faked parallax) and **liquid glass**
+(translucency, backdrop blur, specular light) — because those are what do not fit
+the paper style. Everything else animates, and **every state change gets a
+transition**, carrying a *lively slight spring*: a small overshoot-and-settle
+(`nbmotion.ARRIVE = ease_out_back`, ≈7 % past the target, peak ≈1.05), energetic
+but still crisp.
+
+This supersedes, where they conflict: **§D2** (now settle *with* a slight spring),
+**§D4** (press animates like any other state change — the 0 ms block is removed),
+**§0.6.6 and §F2** (animating layout is *permitted*; the remaining guidance is a
+*performance* preference, not an aesthetic law — see below), and the
+"colour and border only" phrasing wherever it appears. What is **unchanged**:
+Article F's damage-limiting (§F1), the both-paths frame budget (§F3), and
+instant-equivalence under Reduced Motion (§F4) — a lively character still has to
+be a *cheap* one on the software rasteriser.
+
 **Amendment 2 — the §12 conflict resolves toward the full band.**
 Article VI §2 flags rows 4 and 5 of its duration table (surface arrive/depart at
 140–180 ms, page transitions at 180–220 ms) as conflicting with the theme's
 ease-out-everywhere rule, and defers to §12. With motion now pervasive, the full
 band is adopted as written. The theme's vocabulary continues to govern **CSS
-state transitions** (90 ms, colour and border only); the longer tokens govern
-**surfaces and pages**, which the theme has no vocabulary for. They do not
-overlap.
+state transitions** (90 ms feedback: colour, border, shadow and opacity, with the
+slight spring); the longer tokens govern **surfaces and pages**, which the theme
+has no vocabulary for. They do not overlap.
+
+**Amendment 4 — anchored growth is for cards; a whole VIEW is replaced, not
+grown.** Article G originally gave two full-view transitions an anchored grow:
+*App launch* ("icon rectangle grows into the window") and *Open a folder* ("row
+grows into the new listing"). Neither is what the system does.
+
+* **App launch** was changed **at the design owner's direction on 2026-08-09**:
+  the growing paper launch card was retired in favour of the app fading itself in
+  calmly on first map. `finder._zoom_*` is left inert rather than deleted so the
+  launch-continuity path stays valid. The G1 table is corrected below; it had
+  been left describing the retired effect while `motion_inventory.json` already
+  described the new one — the inventory and its own declared source disagreed.
+* **Open a folder** is built as a directional **slide**, matching
+  `finder.navigate-forward`, so that Back is its exact inverse. *This half is the
+  motion lane's call and is marked pending the design owner's confirmation.*
+
+The reasoning is one rule, not two exceptions. Growing an anchor into a **card**
+(Get Info, Confirm, About, overlay card) is cheap, legible, and names where the
+surface came from — §B4. Growing an anchor into a **whole view** is a different
+thing: the destination is a dense listing of text, so the frame either scales a
+bitmap of type (visibly cheap, the opposite of letterpress) or re-lays-out every
+frame, which §F2 exists to discourage on the software rasteriser. A replacement
+is honestly a replacement — §C2 — and the slide has the further virtue of
+travelling along the grid (§E2) using one snapshot and an offset paint (§F1).
+
+So: **anchored growth for cards, directional travel for views, and a fade where
+there is no shared grid to travel along** (an app window is not in the Finder's
+column). Article C identity is unaffected: those full-view changes were never
+transformations of one persisting object, and the inventory now marks
+`finder.open-folder` `transform: false` accordingly.
 
 ### 0.6 Platform facts that bound every rule below
 
@@ -122,11 +175,14 @@ ignores any of these is unimplementable here.
    28 px desktop panel.
 5. **One app, one process, fullscreen.** There is no window management to
    animate.
-6. **Only colour and border may animate in CSS.** No transition on `width`,
-   `height`, `margin` or `padding`: those force a re-layout every frame. Motion
-   that changes position or size must be expressed as opacity, as a cairo-drawn
-   offset inside a fixed allocation, or through `nbmotion.Scalar` — **never as an
-   animated allocation.**
+6. **Layout properties are expensive to animate per-frame, so prefer other
+   means.** Any property may animate (Amendment 3); this is a *performance*
+   fact, not an aesthetic ban. A CSS transition on `width`, `height`, `margin` or
+   `padding` forces a re-layout every frame, which the software rasteriser cannot
+   afford at 60 Hz. So position and size changes are best expressed as opacity, a
+   cairo-drawn offset inside a fixed allocation, `nbmotion.Scalar`, or a GTK
+   widget animating its **own** allocation (a `Gtk.Revealer`) where C drives it —
+   not a hand-rolled per-frame allocation tween in Python.
 7. **The shared engine already exists.** `de/nbmotion.py` (frame-clock driven,
    retargetable, instant-equivalent) and `de/nbtransitions.py` (page switch,
    reveal, replace, highlight). Nothing in this document authorises a second
@@ -293,16 +349,18 @@ token to the class of thing it may move:
 **An app passes a token, never a number.** A literal `250` in an app is how one
 house style becomes seventeen.
 
-### §D2 Settle, never bounce (codification)
+### §D2 Settle with a slight spring (codification, per Amendment 3)
 
-Easing is cubic and cubic only. `ARRIVE = ease_out`, `DEPART = ease_in`,
-`MOVE = ease_in_out`, `linear` only for a value that is already a physical
-quantity (a playhead, an elapsed-time bar) where a curve would be a lie about the
-data.
+`ARRIVE = ease_out_back`, `DEPART = ease_in`, `MOVE = ease_in_out`, `linear` only
+for a value that is already a physical quantity (a playhead, an elapsed-time bar)
+where a curve would be a lie about the data.
 
-Nothing overshoots, springs, bounces, pulses or wobbles. A spring returns values
-outside `[0, 1]`, which on a flat papertone surface reads as a defect. **Paper
-has inertia: it arrives and it stops.**
+Arrival carries a **lively slight spring** — a small overshoot past the target,
+then a settle onto it (`ease_out_back`, `s = 1.20158`, ≈7 % overshoot, peak
+≈1.05). Energetic, still crisp: it is a *slight* spring, not a bouncy or elastic
+one, and it lands exactly on the target. What is barred is not overshoot but
+**3D and liquid glass** (Amendment 3). The earlier "never overshoots, arrives and
+stops" rule is superseded.
 
 ### §D3 Many short settles, not few long floats (normative)
 
@@ -311,20 +369,24 @@ movements — not a smaller number of long, floating ones. This is simultaneousl
 the correct character and the cheaper render, and it is the reason pervasive
 motion is affordable at all. When in doubt, take the shorter token.
 
-### §D4 Press is the exception (codification)
+### §D4 Press animates too (codification, per Amendment 3)
 
-The press-down state has **no** transition — `transition-duration: 0ms` on
-`button:active`, `button:checked`, `check:checked`, `radio:checked`,
-`scale slider:active`. A press is a physical act and any delay between finger and
-ink reads as lag rather than polish. Only the *release* back to rest is eased.
+Press, check and select animate like every other state change. The old 0 ms
+instant-press block (`button:active`, `button:checked`, `check:checked`,
+`radio:checked`, `scale slider:active`) is **removed**: the 90 ms feedback spring
+is short enough that a press still reads as immediate while animating as a
+response rather than a redraw. There is no interaction the design exempts from
+motion.
 
 ### §D5 Gate
 
 `tools/motion_selftest.py` reads `nbmotion.DURATION_BANDS` and already asserts
-each token sits inside its band. **[GAP]** extend to: no numeric literal duration
-appears in any `de/*.py` animation call; no easing function returns a value
-outside `[0, 1]` for `t ∈ [0, 1]`. Red-proof: add an overshoot curve; it must
-fail.
+each token sits inside its band, and that `ARRIVE` springs *slightly* — a curve
+whose peak lands in `(1.0, 1.15]` and which returns to exactly 1 at `t = 1`.
+**[GAP]** extend to: no numeric literal duration appears in any `de/*.py`
+animation call. Red-proof: make `ARRIVE` a curve whose peak exceeds 1.15 (a big
+bounce) or one that never overshoots at all (a flat ease-out); either must fail
+the spring-character check.
 
 ---
 
@@ -506,7 +568,18 @@ re-typing them — the same arrangement `motion_selftest.py` already has with
    ladder (E3.2);
 3. every hairline occupies one of the five permitted positions (E3.7);
 4. no arriving surface's rest edge is off a rule or margin;
-5. no animation travel vector has both a non-zero dx and dy;
+5. no animation travel vector has both a non-zero dx and dy — **LANDED
+   2026-08-11** as `tools/grid_e4_travel_check.py` (kept out of `grid_check.py`
+   so the static-constant ratchet and the motion ratchet do not share a file).
+   It reads the Article G inventory for the modules motion is bound to, and
+   fails a `set_source_surface`/`translate` whose x and y are both non-zero
+   *and* driven by animation state — a static composite at plain local
+   coordinates is drawing, not travel, and flagging it would make the gate cry
+   wolf. Two exemptions are declared WITH REASONS: `GrowCard` (a scale about an
+   anchor, §B4, not a slide) and the maps viewport (the world moves under a
+   fixed frame). Red-proof, exactly as prescribed below: giving the Finder's
+   navigation slide a diagonal arrival fails by name with both axis
+   expressions quoted; the unsabotaged control passes;
 6. `minsize_sweep` measures against `CANVAS_H = screen_h − PANEL_H`, not 740.
 
 Red-proofs, each recorded with the failure text it produced: set one sidebar to
@@ -535,11 +608,15 @@ rasteriser it is unaffordable. Every animation must:
 Constitution Article VI §3 already states the invalidation rule; this article
 makes it a precondition rather than an aspiration.
 
-### §F2 Never animate allocation (codification)
+### §F2 Prefer not to hand-animate allocation (codification, per Amendment 3)
 
-Restated from §0.6.6 because it is the most expensive mistake available: no
-transition on `width`, `height`, `margin` or `padding`. Growth is drawn, not
-allocated — a cairo-drawn scale inside a fixed allocation, or opacity.
+This is a *performance* rule, not an aesthetic one — layout is free to animate
+(Amendment 3), but a hand-rolled per-frame CSS transition on `width`, `height`,
+`margin` or `padding` is the most expensive mistake available, because it forces
+a full re-layout every frame on the software rasteriser. So growth is best
+*drawn* — a cairo scale inside a fixed allocation, or opacity — or delegated to a
+GTK widget that animates its own allocation in C (a `Gtk.Revealer`). The bar is
+cost, not the property.
 
 ### §F3 The frame budget applies on both paths (normative) **[GAP]**
 
@@ -579,7 +656,7 @@ Article C identity.
 |---|---|---|---|
 | Boot → session | — | splash progress, always advancing | `linear` |
 | Splash → desktop | splash | splash lifts, desktop settles beneath | `PAGE` |
-| **App launch** *transform* | **its icon** | icon rectangle grows into the window | `PAGE` |
+| **App launch** | **its icon** | the app fades in calmly on first map (Amendment 4) | `PAGE` |
 | **App close** *transform* | the window | collapses back into the icon | `PAGE` |
 | App → app | outgoing window | outgoing departs, incoming arrives from its icon | `PAGE` |
 | Desktop board appearing | — | cards settle in, staggered along their columns | `SURFACE_IN` |
@@ -589,12 +666,13 @@ Article C identity.
 | Sleep / wake | — | field dims and returns | `PAGE` |
 | Shutdown | — | desktop settles out | `PAGE` |
 
-**App launch is the highest-value entry in this table.** Today
-`finder._launch_module` spawns the process and calls `self.hide()` immediately,
-so on the software path the screen shows nothing but the backdrop for a second or
-more. The Finder must not stand down until the app's window maps, and the gap is
-filled by this transition. `splash.py`'s always-advancing progress is the
-existing pattern to generalise.
+**App launch is the highest-value entry in this table.** It was written against a
+Finder that spawned the process and called `self.hide()` immediately, so on the
+software path the screen showed nothing but the backdrop for a second or more.
+The rule that came out of it still stands and is now implemented: the Finder does
+not stand down until the app's window maps (`_launch_watch` and the `.mapped`
+beacon), and the app fades itself in on that first map. Only the *filling*
+changed — see Amendment 4 for why the growing card was retired.
 
 ### G2 Finder
 
@@ -602,7 +680,7 @@ existing pattern to generalise.
 |---|---|---|---|
 | Navigate forward | the opened row | contents slide left, along the grid | `PAGE` |
 | Navigate back | — | contents slide right | `PAGE` |
-| **Open a folder** *transform* | the clicked row | row grows into the new listing | `PAGE` |
+| **Open a folder** | the clicked row | contents slide left, along the grid — the inverse of Back (Amendment 4) | `PAGE` |
 | List ↔ grid | — | crossfade in place (different presentations, not a transform) | `PAGE` |
 | Selection change | previous row | the highlight **travels** between rows | `SELECT` |
 | Sidebar reveal | its edge | slides along the column edge | `SURFACE_IN` |
@@ -624,7 +702,7 @@ existing pattern to generalise.
 | List remove | — | row closes; neighbours settle up | `SURFACE_OUT` |
 | List reorder | the row's own position | rows travel to their new positions | `SELECT` |
 | Inline edit begin / end | the field | field takes and releases its edit state | `FEEDBACK` |
-| Toolbar state | the control | colour and border only | `FEEDBACK` |
+| Toolbar state | the control | colour, border and shadow ease with the slight spring | `FEEDBACK` |
 | **Any value change** | the value | old value settles out, new settles in | `FEEDBACK` |
 | **Any toggle** | the control | state travels, never jumps | `FEEDBACK` |
 | Progress | — | **continuous**, never stepped | `linear` |
@@ -719,8 +797,9 @@ nobody has seen fail is decoration.
 
 **The theme's ease-out-everywhere rule vs. the longer tokens.** Resolved in §0.5
 Amendment 2: they govern different domains and do not overlap. The theme owns CSS
-state transitions at 90 ms, colour and border only. `nbmotion` owns surfaces and
-pages. Neither may implement the other's domain.
+state transitions at 90 ms (colour, border, shadow and opacity, with the slight
+spring). `nbmotion` owns surfaces and pages. Neither may implement the other's
+domain.
 
 **"No motion the user did not cause" vs. progress and the splash.** A progress
 indicator reflects work the user *did* cause and is therefore not ambient. It is

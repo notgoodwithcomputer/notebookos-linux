@@ -110,3 +110,8 @@ integration sweep, uncommitted); "Composer" app-name key added to all 17
 catalogs directly per the amended additive-key rule (campaign may revise term
 choices); store_damage COVERAGE row recorded (ratchet ALL PASS with
 PYTHONPATH=de). Guest-theme render verified at 1024×722. VERIFIED per M2.
+
+## Design correction (2026-08-10)
+The design owner: "MIDI editor should be sheet music, not piano roll." The
+view-independent song model, MIDI I/O, store, undo and preview stand; the
+piano-roll VIEW is replaced by staff notation in task 059.

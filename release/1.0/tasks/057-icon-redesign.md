@@ -81,3 +81,15 @@ constructors but reported `Gtk couldn't be initialized` for each and finished
 `CONSTRUCT: 0 ok, 39 crashed`. This is the only display-owed gate; no display
 server was probed or started. The cairo proof sheets and exhaustive icon suite
 both ran headlessly.
+
+## Dispatcher verification (batch-0810, 2026-08-10)
+Display rerun: nbicons_selftest PASS (both pass-mutants), construct_all 39/0.
+Contact sheets reviewed side by side; committed with the composer glyph.
+VERIFIED per M2.
+
+## REJECTED by the design owner (2026-08-10, after commit)
+"They're hideous, and many are just incomplete." Two named failure modes:
+line-fragment glyphs that read as unfinished drawings, and timid evolution of
+the old blocky rectangles. Superseded by task 060 — a mid-century modern
+REPLACEMENT (filled geometric silhouettes, negative-space detail). Kept in
+history for the suite scaffolding and the failure record.
