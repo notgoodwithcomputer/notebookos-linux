@@ -4327,8 +4327,11 @@ class Animation(nbapp.AppWindow):
             name_w = layout.get_pixel_size()[0]
             card_w = 42 + name_w + 10
             if x + card_w > limit:
+                # the strip is full: say so, and step past the mark so the
+                # add-a-scene card cannot land on top of it
                 cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
                 _show_text(cr, x, 24, '…')
+                x += _pango_layout(cr, '…', 12).get_pixel_size()[0] + 8
                 break
             if index == self.scene_i:
                 cr.set_source_rgb(234 / 255, 227 / 255, 210 / 255)
@@ -4443,8 +4446,15 @@ class Animation(nbapp.AppWindow):
                 cel = self.doc.cel(run['cel'])
                 cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
                 if width >= 42:
+                    # a name belongs to ITS bar: without this clip a long
+                    # drawing name runs across its neighbours and the sheet
+                    # reads as one smear of text
+                    cr.save()
+                    cr.rectangle(left + 2, y + 2, width - 12, TL_ROW_H - 4)
+                    cr.clip()
                     _show_text(cr, left + 3, y + 15,
                                cel.name if cel else _t('Missing drawing'), 11)
+                    cr.restore()
                 if run.get('take', 0) == 0:
                     _show_text(cr, left + width - 10, y + 15, '~', 11)
         gutter_hairline = TL_GUTTER - .5
