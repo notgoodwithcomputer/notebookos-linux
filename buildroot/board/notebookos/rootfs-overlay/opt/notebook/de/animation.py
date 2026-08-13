@@ -447,7 +447,17 @@ class AnimationDocument:
         return json.dumps(self.serial(), sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
 
     @classmethod
-    def parse(cls, raw):
+    def parse(cls, raw, strict=True):
+        """Rebuild a film from plain data.
+
+        `strict` decodes every take to find damage, which is the whole
+        point when the bytes came off a disk somebody else's program may
+        have touched. Undo and redo hand back bytes this app serialised
+        seconds ago, and validating those cost 125ms an undo on a
+        hundred-and-fifty-drawing film — for an answer known in advance.
+        Takes are stored encoded either way and decode lazily, and
+        Cel.decoded already turns anything unreadable into blank paper.
+        """
         if not isinstance(raw, dict) or raw.get('format') != FORMAT or raw.get('app') != 'animation':
             raise ValueError('unrecognized Animation document')
         canvas = tuple(raw.get('canvas', (320, 240)))
@@ -461,6 +471,9 @@ class AnimationDocument:
                 takes = []
                 hurt = False
                 for encoded in item['takes'][:TAKE_MAX]:
+                    if not strict:
+                        takes.append(encoded)
+                        continue
                     # Strict decode: png_surface swallows a bad PNG into a
                     # blank, which read as silent acceptance of a corrupt
                     # take. A take that will not decode becomes a blank
@@ -5148,7 +5161,8 @@ class Animation(nbapp.AppWindow):
         label, scene, raw = src.pop()
         dst.append((label, self.scene_i, self.doc.bytes()))
         self._trim_history()
-        self.doc, _ = AnimationDocument.parse(json.loads(raw))
+        # our own bytes from seconds ago: no need to re-validate them
+        self.doc, _ = AnimationDocument.parse(json.loads(raw), strict=False)
         self.scene_i = min(scene, len(self.doc.scenes) - 1)
         self.sheet = Sheet(self.doc, self.scene_i)
         self._mark_dirty()

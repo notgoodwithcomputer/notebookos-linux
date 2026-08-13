@@ -3728,8 +3728,117 @@ def serial_freshness_family():
     shutil.rmtree(scratch)
 
 
+def history_restore_family():
+    """Undo hands back bytes this app wrote seconds ago; a file does not.
+
+    Re-validating every take on undo cost 125ms on a hundred-and-fifty
+    drawing film, for an answer known in advance. Skipping that is only
+    safe while the FILE path keeps validating, so this checks both sides of
+    that line — and that undo still restores the film exactly."""
+    if not gtk_available():
+        skip("F34 history restore", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+
+    kept = animation.STORE_FILE + ".history-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    app.sheet = animation.Sheet(app.doc, 0)
+    app.tool = "pencil"
+    for index in range(8):
+        cel = app.doc.add_cel("Drawing %d" % index)
+        animation.write_pixel(cel.decoded(0), 5 + index, 5, "#1A1916")
+        cel.version += 1
+    app._refresh_lists()
+    child = app.get_child()
+    app.remove(child)
+    stage = Gtk.OffscreenWindow()
+    stage.set_size_request(1024, 722)
+    stage.add(child)
+    stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    allocation = app.canvas.get_allocation()
+
+    before = app.doc.bytes()
+    press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    press.x, press.y, press.button = (allocation.width / 2,
+                                      allocation.height / 2, 1)
+    app._canvas_press(app.canvas, press)
+    for step in range(8):
+        motion = Gdk.Event.new(Gdk.EventType.MOTION_NOTIFY)
+        motion.x = allocation.width / 2 + step
+        motion.y = allocation.height / 2 + step
+        app._canvas_motion(app.canvas, motion)
+    release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+    release.x, release.y, release.button = (allocation.width / 2,
+                                            allocation.height / 2, 1)
+    app._canvas_release(app.canvas, release)
+    drew = app.doc.bytes() != before
+    app.history.undo()
+    check("F34 undo puts the film back exactly, byte for byte",
+          drew and app.doc.bytes() == before, drew)
+    app.history.redo()
+    check("F34 and redo puts the stroke back",
+          app.doc.bytes() != before)
+
+    # the two readings of the same damaged data
+    hurt = json.loads(app.doc.bytes().decode())
+    hurt["cels"][0]["takes"][0] = "not a picture at all"
+    guarded, told = animation.AnimationDocument.parse(hurt)
+    trusting, quiet = animation.AnimationDocument.parse(hurt, strict=False)
+    check("F34 reading a file looks at every drawing and reports damage",
+          bool(told) and guarded is not None, told)
+    check("F34 restoring our own bytes takes them as given",
+          not quiet and trusting is not None, quiet)
+
+    # the boundary that makes that safe: a real file is still checked
+    home = tempfile.mkdtemp(prefix="animation-history-")
+    wounded = os.path.join(home, "wounded.anim")
+    with open(wounded, "w", encoding="utf-8") as handle:
+        json.dump(hurt, handle)
+    opened, reports = animation.open_document(wounded)
+    check("F34 opening a damaged film still says a drawing was replaced",
+          opened is not None and bool(reports), reports)
+    shutil.rmtree(home, ignore_errors=True)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F34-trusts-everything",
+        [("                    if not strict:", "                    if True:")])
+    blind_home = tempfile.mkdtemp(prefix="animation-history-mutant-")
+    blind_path = os.path.join(blind_home, "wounded.anim")
+    with open(blind_path, "w", encoding="utf-8") as handle:
+        json.dump(hurt, handle)
+    _blind, blind_reports = graded.open_document(blind_path)
+    mutant("F34 a loader that stops checking real files is caught",
+           not blind_reports, blind_reports)
+    shutil.rmtree(blind_home, ignore_errors=True)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+history_restore_family()
 serial_freshness_family()
 stamping_family()
 slide_and_onion_family()
