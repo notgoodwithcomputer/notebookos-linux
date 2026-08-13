@@ -2403,8 +2403,119 @@ def _nbapp_sep():
     return module.SEP
 
 
+def close_guard_family():
+    """Closing a film with unsaved work must stop and ask, name the film,
+    and offer all three answers.
+
+    The coverage hook said neither _on_delete nor _guard_document had ever
+    run under this suite, and this is the last thing standing between a
+    person and losing an afternoon."""
+    if not gtk_available():
+        skip("F24 the close guard", "no display")
+        return
+    from gi.repository import Gtk
+
+    kept = animation.STORE_FILE + ".guard-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    home = tempfile.mkdtemp(prefix="animation-guard-")
+    app = animation.Animation()
+    app.doc_path = os.path.join(home, "The Couch.anim")
+    animation.save_document(app.doc, app.doc_path)
+    app._doc_dirty = False
+
+    left = []
+    app.destroy = lambda *a, **k: left.append(True)
+
+    check("F24 a film with nothing to lose closes without a word",
+          app._on_delete() is False and app._prompt_layer is None)
+
+    app.sheet.ensure_drawing(0, 0)
+    app._doc_dirty = True
+    stopped = app._on_delete()
+    opened = app._prompt_layer is not None
+    words = []
+    _find_widgets(app._prompt_layer, lambda w: isinstance(w, Gtk.Label), words)
+    said = " ".join(w.get_text() or "" for w in words)
+    check("F24 unsaved work stops the close and names the film at stake",
+          stopped is True and opened and "The Couch" in said, said[:90])
+
+    buttons = []
+    _find_widgets(app._prompt_layer,
+                  lambda w: isinstance(w, Gtk.Button), buttons)
+    offered = {(w.get_label() or "").strip() for w in buttons}
+    check("F24 it offers saving, discarding and going back",
+          {"Save", "Discard", "Cancel"} <= offered, sorted(offered))
+
+    # Cancel leaves everything exactly as it was
+    for button in buttons:
+        if (button.get_label() or "").strip() == "Cancel":
+            button.clicked()
+            break
+    check("F24 going back closes nothing and loses nothing",
+          not left and app._doc_dirty and app._prompt_layer is None)
+
+    # Discard closes, and does not write over the file on disk
+    on_disk = open(app.doc_path, "rb").read()
+    app._on_delete()
+    buttons = []
+    _find_widgets(app._prompt_layer,
+                  lambda w: isinstance(w, Gtk.Button), buttons)
+    for button in buttons:
+        if (button.get_label() or "").strip() == "Discard":
+            button.clicked()
+            break
+    check("F24 discarding closes, and leaves the saved film untouched",
+          bool(left) and open(app.doc_path, "rb").read() == on_disk)
+
+    # Save writes the change, then closes
+    del left[:]
+    app._doc_dirty = True
+    app.sheet.ensure_drawing(0, 1)
+    app._on_delete()
+    buttons = []
+    _find_widgets(app._prompt_layer,
+                  lambda w: isinstance(w, Gtk.Button), buttons)
+    for button in buttons:
+        if (button.get_label() or "").strip() == "Save":
+            button.clicked()
+            break
+    saved_now = open(app.doc_path, "rb").read()
+    check("F24 saving writes the film before it closes",
+          bool(left) and saved_now != on_disk, (bool(left), len(saved_now)))
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+    shutil.rmtree(home, ignore_errors=True)
+
+    graded, scratch = module_mutant(
+        "F24-no-guard",
+        [("        if not self._needs_guard():\n            return False",
+          "        if True:\n            return False")])
+    reckless = graded.Animation()
+    reckless.doc_path = None
+    reckless.sheet.ensure_drawing(0, 0)
+    reckless._doc_dirty = True
+    mutant("F24 closing straight through unsaved work is caught",
+           reckless._on_delete() is False)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+close_guard_family()
 accelerator_family()
 destructive_family()
 workflow_family()
