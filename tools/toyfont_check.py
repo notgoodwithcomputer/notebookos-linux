@@ -45,17 +45,23 @@ TOY = re.compile(r"\b(?:cr|ctx|c)\.(?:show_text|text_path|text_extents"
 
 # Files whose migration belongs to the parallel guest-divergence sweep. Listed
 # by name so this check is useful today rather than only once everything lands.
+# maps/screenplay (2026-07-30) and video/gbasdk/nbmediakeys/nbprint (by
+# 2026-08-13) are MIGRATED and removed, so a regression reports BROKEN
+# instead of quietly "pending".
 PENDING = {
-    # maps.py and screenplay.py were MIGRATED on 2026-07-30 -- removed from the
-    # allowance so a regression reports BROKEN instead of quietly "pending".
-    # Their toy calls had left the Maps empty state invisible and dropped every
-    # line of an exported screenplay in ja/zh/ko/hi/yi.
-    "settings.py", "video.py", "writer.py",
-    "gbasdk.py", "nbmediakeys.py", "sequencer.py",
-    # nbprint.py is the PangoCairo report engine itself; its remaining toy calls
-    # are in the non-text ruling/label paths its own callers do not use for
-    # user prose.
-    "nbprint.py",
+    "writer.py",                 # fonts/tablet session's active sweep
+}
+
+# Deliberate keeps: toy-API call sites whose CONTENT can never need fallback.
+# A keep must name its reason; anything else belongs in PENDING or BROKEN.
+KEEP = {
+    # The printer test page draws fixed English diagnostic lines by design
+    # ("only guaranteed Latin glyphs" — its own comment): a test page is the
+    # one artifact that must render identically on any machine, any locale.
+    "settings.py",
+    # Timeline ruler numerals only ("%d" / "%d.%d" bar.beat counters):
+    # ASCII digits exist in every shipped face; no fallback can be needed.
+    "sequencer.py",
 }
 
 
@@ -80,16 +86,18 @@ def main():
         hits = offenders(os.path.join(DE, name))
         if not hits:
             clean.append(name)
+        elif name in KEEP:
+            pending.append((name, hits, "kept (reasoned, see KEEP)"))
         elif name in PENDING:
-            pending.append((name, hits))
+            pending.append((name, hits, "pending (parallel sweep)"))
         else:
             broken.append((name, hits))
     for name, hits in broken:
         print("TOY FONT API  %-16s lines %s" % (
             name, ", ".join(str(h) for h in hits[:12])))
-    for name, hits in pending:
-        print("pending (parallel sweep)  %-16s %d call%s"
-              % (name, len(hits), "" if len(hits) == 1 else "s"))
+    for name, hits, tag in pending:
+        print("%-25s %-16s %d call%s"
+              % (tag, name, len(hits), "" if len(hits) == 1 else "s"))
     print("\n%s: %d files draw text only through Pango, %d pending, %d BROKEN"
           % ("clean" if not broken else "FAILED",
              len(clean), len(pending), len(broken)))

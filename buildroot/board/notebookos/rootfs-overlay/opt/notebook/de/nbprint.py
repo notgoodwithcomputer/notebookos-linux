@@ -999,8 +999,10 @@ def _selftest():
     # render a booklet without a printer present
     import cairo  # noqa: F401
     fd, p = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
+    # a filled bar per page: content enough to prove the plumbing without
+    # touching the toy text API this module's own header bans
     sides = booklet_pdf(p, 6, lambda cr, n, w, h: (
-        cr.move_to(20, 40), cr.show_text("page %d" % n)))
+        cr.rectangle(20, 30, 40 + 8 * n, 12), cr.fill()))
     assert sides == 4, sides          # 6 pages -> 8 slots -> 2 sheets -> 4 sides
     assert os.path.getsize(p) > 0
     os.unlink(p)
