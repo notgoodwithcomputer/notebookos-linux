@@ -3643,10 +3643,20 @@ class Animation(nbapp.AppWindow):
             return
         layer, start, end = self.selection
         self._snapshot(_t('Slide Between Exposures'))
-        if self.sheet.slide(layer, start, end):
+        # A selection's end is EXCLUSIVE everywhere in this app, but slide
+        # looks up a run AT the frame it is given. Handing it `end` asked
+        # about the frame just past the second exposure — so selecting two
+        # exposures and sliding between them refused every time.
+        if self.sheet.slide(layer, start, max(start, end - 1)):
             self._commit_change()
         else:
+            # Four different reasons end up here — the ends are not two
+            # exposures, they are the same one, they hold different
+            # drawings, or something already fills the gap — and every one
+            # of them used to look exactly like the command not working.
             self._undo.pop()
+            self._flash(_t('Select two exposures of the same drawing with '
+                           'space between them.'))
 
     def _marker_prompt(self, *_):
         markers = self.doc.scenes[self.scene_i]['markers']

@@ -149,6 +149,7 @@
  "Scenes": "场景",
  "Select exposures before exporting the selection.": "导出所选之前，请先选中曝光。",
  "Select the exposures to repeat first.": "请先选择要重复的曝光。",
+ "Select two exposures of the same drawing with space between them.": "请选择同一张画的两段曝光，中间留出间隔。",
  "Select whole exposures to repeat.": "请整段选择曝光后再重复。",
  "Selection": "所选",
  "Set Length": "设定长度",

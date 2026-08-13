@@ -3342,8 +3342,142 @@ def library_and_palette_family():
     shutil.rmtree(scratch)
 
 
+def slide_and_onion_family():
+    """Sliding between exposures, and the onion skin behind them.
+
+    Slide is the one place the app moves a drawing across a gap, and it
+    had four ways to refuse and no way to say so. The onion skin is the
+    feature that once drew UNDER opaque paper and so was invisible; it is
+    worth pinning what it actually produces."""
+    if not gtk_available():
+        skip("F31 sliding and onion skin", "no display")
+        return
+
+    kept = animation.STORE_FILE + ".slide-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    scene = app.doc.scenes[0]
+    scene["length"] = 40
+    app.sheet = animation.Sheet(app.doc, 0)
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+    animation.write_pixel(cel.decoded(0), 8, 8, "#1A1916")
+    cel.version += 1
+    other = app.doc.add_cel("Someone else")
+    animation.write_pixel(other.decoded(0), 20, 20, "#C8341E")
+    other.version += 1
+
+    said = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: said.append(text)
+
+    def between(first, second, gap_start=None, occupy=None, second_cel=None):
+        app.sheet.clear(0, 0, scene["length"])
+        app.sheet.stamp(0, animation.make_run(cel.id, first, 2, 0, 0))
+        app.sheet.stamp(0, animation.make_run((second_cel or cel).id,
+                                              second, 2, 30, 12))
+        if occupy is not None:
+            app.sheet.stamp(0, animation.make_run(cel.id, occupy, 1))
+        app.selection = (0, first, second + 2)
+        app.selection_layers = (0, 0)
+        del said[:]
+        before = len(scene["layers"][0]["runs"])
+        app._slide_selection()
+        return len(scene["layers"][0]["runs"]) - before, list(said)
+
+    filled, quiet = between(0, 10)
+    check("F31 sliding fills the gap between two exposures of one drawing",
+          filled == 8 and not quiet, (filled, quiet))
+    positions = [run["dx"] for run in scene["layers"][0]["runs"]]
+    check("F31 and it walks the drawing across, not all at once",
+          positions == sorted(positions) and positions[0] == 0 and
+          positions[-1] == 30 and len(set(positions)) > 3, positions)
+    check("F31 sliding is one change that undoes as one",
+          app.history.undo() is not False)
+
+    refusals = {}
+    added, told = between(0, 10, second_cel=other)
+    refusals["two different drawings"] = added == 0 and len(told) == 1
+    added, told = between(0, 4, occupy=2)
+    refusals["something already in the gap"] = added == 0 and len(told) == 1
+    app.sheet.clear(0, 0, scene["length"])
+    app.sheet.stamp(0, animation.make_run(cel.id, 0, 4))
+    app.selection = (0, 0, 4)
+    app.selection_layers = (0, 0)
+    del said[:]
+    app._slide_selection()
+    refusals["one exposure, no gap"] = len(said) == 1
+    check("F31 every way of refusing a slide says so",
+          all(refusals.values()),
+          [tag for tag, ok in refusals.items() if not ok])
+    app._flash = spoken
+
+    # the onion skin: tinted ink on transparent ground, and cached.
+    # The undo above re-parsed the document, so `cel` is an object from a
+    # film that no longer exists — ask the live one, and its scene too.
+    cel = app.doc.cel(cel.id) or app.doc.cels[0]
+    scene = app.doc.scenes[app.scene_i]
+    app.sheet = animation.Sheet(app.doc, app.scene_i)
+    app.sheet.clear(0, 0, scene["length"])
+    app.sheet.stamp(0, animation.make_run(cel.id, 5, 1))
+    tint = "#C8341E"
+    skin = app._onion_surface(scene, 5, tint)
+    skin.flush()
+    data, stride = skin.get_data(), skin.get_stride()
+
+    def at(x, y):
+        offset = y * stride + x * 4
+        return (data[offset + 2], data[offset + 1], data[offset],
+                data[offset + 3])
+    empty = at(60, 60)
+    marked = at(8, 8)
+    check("F31 the onion skin leaves the paper transparent",
+          empty[3] == 0, empty)
+    check("F31 and tints the ink it does carry",
+          marked[3] > 0 and (marked[0], marked[1], marked[2]) ==
+          animation._rgb255(tint), marked)
+    check("F31 the same neighbour is not composed twice",
+          app._onion_surface(scene, 5, tint) is skin)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F31-silent-slide",
+        [("            self._flash(_t('Select two exposures of the same drawing with '\n"
+          "                           'space between them.'))",
+          "            pass")])
+    mute = graded.Animation()
+    mute.doc = graded.AnimationDocument(canvas=(160, 120))
+    mute.scene_i = mute.layer_i = mute.playhead = 0
+    mute.sheet = graded.Sheet(mute.doc, 0)
+    lone, _r = mute.sheet.ensure_drawing(0, 0)
+    heard = []
+    mute._flash = lambda text, *a, **k: heard.append(text)
+    mute.selection = (0, 0, 2)
+    mute.selection_layers = (0, 0)
+    mute._slide_selection()
+    mutant("F31 a slide that refuses in silence is caught", not heard)
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+slide_and_onion_family()
 library_and_palette_family()
 ordering_family()
 card_effect_family()
