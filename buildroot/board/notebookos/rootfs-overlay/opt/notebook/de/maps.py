@@ -26,6 +26,7 @@ import bisect      # noqa: E402
 
 import nbapp       # noqa: E402
 import nbicons     # noqa: E402
+import nbmotion    # noqa: E402
 from nbi18n import _t  # noqa: E402
 
 MAPS_DIR = "/opt/notebook/maps"
@@ -320,6 +321,9 @@ class Maps(nbapp.AppWindow):
         self._surf_dev = None
         self._surf_cx = 0.0
         self._surf_cy = 0.0
+        self._view_anim = None
+        self._view_gen = 0
+        self._view_moving = False
 
         self.content.pack_start(self._toolbar(), False, False, 0)
         self.canvas = Gtk.DrawingArea()
@@ -449,6 +453,13 @@ class Maps(nbapp.AppWindow):
 
     # ================= map load / view =================
     def _open_map(self, path):
+        # A region choice supersedes travel in the old pack. The new pack still
+        # opens immediately; motion never owns functional state.
+        self._view_gen += 1
+        if self._view_anim is not None:
+            self._view_anim.cancel()
+            self._view_anim = None
+        self._view_moving = False
         try:
             self.pack = NBM2(path)
             self._position_for(path)
@@ -539,9 +550,8 @@ class Maps(nbapp.AppWindow):
         x1, y1 = _merc(b[3], b[2])
         dx = max(1e-6, x1 - x0)
         dy = max(1e-6, y1 - y0)
-        self.scale = max(self._min_scale(), min(w / dx, h / dy) * 0.92)
-        self.cx = (x0 + x1) / 2
-        self.cy = (y0 + y1) / 2
+        scale = max(self._min_scale(), min(w / dx, h / dy) * 0.92)
+        self._animate_view((x0 + x1) / 2, (y0 + y1) / 2, scale)
 
     def _to_screen(self, mx, my, w, h):
         return ((mx - self.cx) * self.scale + w / 2,
@@ -565,13 +575,79 @@ class Maps(nbapp.AppWindow):
         if fx is None:
             fx, fy = w / 2, h / 2
         bmx, bmy = self._to_merc(fx, fy, w, h)
-        self.scale = max(self._min_scale(), min(3.0e5, self.scale * factor))
-        amx, amy = self._to_merc(fx, fy, w, h)
-        self.cx += bmx - amx
-        self.cy += bmy - amy
-        self._invalidate()
-        self.canvas.queue_draw()
-        self._save_cfg()
+        scale = max(self._min_scale(), min(3.0e5, self.scale * factor))
+        # Solve the target centre directly so the mercator point under the
+        # pointer remains under that same pixel for the entire zoom.
+        cx = bmx - (fx - w / 2) / scale
+        cy = bmy + (fy - h / 2) / scale
+        self._animate_view(cx, cy, scale,
+                           anchor=(bmx, bmy, fx, fy, w, h))
+
+    # The renderer's viewport is the moving layer; container transitions would
+    # be both semantically wrong and much more expensive here.
+    # nbmotion-inventory: content.maps
+    def _animate_view(self, cx1, cy1, scale1, duration=None, anchor=None):
+        """Travel to a viewport using the last vector raster as a cheap layer.
+
+        The expensive map is rendered at most once before travel (only when no
+        valid raster exists) and once on landing. Intermediate frames are an
+        affine blit in _draw, including on the software renderer. Policy-still
+        follows this same path and lands synchronously and exactly (§F4).
+        """
+        if not self.pack:
+            return False
+        cx1, cy1, scale1 = float(cx1), float(cy1), float(scale1)
+        cx0, cy0, scale0 = self.cx, self.cy, self.scale
+        if (abs(cx1 - cx0) < 1e-12 and abs(cy1 - cy0) < 1e-12
+                and abs(scale1 - scale0) < 1e-9):
+            return False
+
+        aw = self.canvas.get_allocated_width()
+        ah = self.canvas.get_allocated_height()
+        sf = max(1, int(self.canvas.get_scale_factor() or 1))
+        if (self._surface is None or self._surf_size != (aw, ah)
+                or self._surf_scale != scale0 or self._surf_dev != sf):
+            self._render_surface(aw, ah, sf)
+
+        self._view_gen += 1
+        gen = self._view_gen
+        old = self._view_anim
+        self._view_anim = None
+        if old is not None:
+            old.cancel()
+        log0, log1 = math.log(scale0), math.log(scale1)
+        self._view_moving = True
+
+        def on_frame(e):
+            if gen != self._view_gen:
+                return
+            self.scale = math.exp(log0 + (log1 - log0) * e)
+            if anchor is None:
+                self.cx = cx0 + (cx1 - cx0) * e
+                self.cy = cy0 + (cy1 - cy0) * e
+            else:
+                mx, my, fx, fy, width, height = anchor
+                self.cx = mx - (fx - width / 2) / self.scale
+                self.cy = my + (fy - height / 2) / self.scale
+            # Every pixel of the map layer moves, but the toolbar and status do
+            # not: damage the canvas allocation, never the whole window.
+            self.canvas.queue_draw_area(0, 0, aw, ah)
+
+        def on_done(_finished):
+            if gen != self._view_gen:
+                return
+            self.cx, self.cy, self.scale = cx1, cy1, scale1
+            self._view_moving = False
+            self._view_anim = None
+            self._invalidate()
+            self.canvas.queue_draw_area(0, 0, aw, ah)
+            self._save_cfg()
+
+        self._view_anim = nbmotion.animate(
+            self.canvas, on_frame, 0.0, 1.0,
+            duration=duration or nbmotion.PAGE,
+            easing=nbmotion.ARRIVE, on_done=on_done)
+        return True
 
     # ================= drawing =================
     def _draw(self, w, cr):
@@ -584,17 +660,22 @@ class Maps(nbapp.AppWindow):
         sf = max(1, int(w.get_scale_factor() or 1))
         need = (self._surface is None
                 or self._surf_size != (aw, ah)
-                or self._surf_scale != self.scale
+                or (not self._view_moving and self._surf_scale != self.scale)
                 or self._surf_dev != sf)
         if need:
             self._render_surface(aw, ah, sf)
         cr.set_source_rgb(*LAND)
         cr.paint()
         if self._surface is not None:
-            dx = (self._surf_cx - self.cx) * self.scale
-            dy = (self.cy - self._surf_cy) * self.scale
-            cr.set_source_surface(self._surface, dx, dy)
+            ratio = self.scale / self._surf_scale
+            dx = aw / 2 + (self._surf_cx - self.cx) * self.scale - ratio * aw / 2
+            dy = ah / 2 + (self.cy - self._surf_cy) * self.scale - ratio * ah / 2
+            cr.save()
+            cr.translate(dx, dy)
+            cr.scale(ratio, ratio)
+            cr.set_source_surface(self._surface, 0, 0)
             cr.paint()
+            cr.restore()
         if self._hi is not None:
             hx, hy = self._to_screen(self._hi[0], self._hi[1], aw, ah)
             cr.set_source_rgba(0.78, 0.20, 0.12, 0.9)
@@ -824,6 +905,13 @@ class Maps(nbapp.AppWindow):
     # ================= interaction =================
     def _on_press(self, w, ev):
         if ev.button == 1:
+            # Direct manipulation is 1:1 with the hand. Stop a button/scroll
+            # settle at its current viewport before the drag takes ownership.
+            self._view_gen += 1
+            if self._view_anim is not None:
+                self._view_anim.cancel()
+                self._view_anim = None
+            self._view_moving = False
             self._drag = (ev.x, ev.y)
         return True
 
@@ -889,13 +977,10 @@ class Maps(nbapp.AppWindow):
                 "  " + _t("No place matching “%s”") % self._search.get_text())
             return
         nm, la, lo = best
-        self.cx, self.cy = _merc(la, lo)
-        self._hi = (self.cx, self.cy)
-        self.scale = max(self.scale, 14000.0)
+        cx, cy = _merc(la, lo)
+        self._hi = (cx, cy)
         self._status.set_text("  " + nm)
-        self._invalidate()
-        self.canvas.queue_draw()
-        self._save_cfg()
+        self._animate_view(cx, cy, max(self.scale, 14000.0))
 
     def _show_empty(self):
         # On the canvas, not buried in the status strip, and phrased as
@@ -931,9 +1016,7 @@ class Maps(nbapp.AppWindow):
             return [
                 ("Zoom In", lambda: self._zoom(1.4)),
                 ("Zoom Out", lambda: self._zoom(0.7)),
-                ("Fit Region", lambda: (self._fit(), self._invalidate(),
-                                        self.canvas.queue_draw(),
-                                        self._save_cfg())),
+                ("Fit Region", self._fit),
             ]
         if name == "File":
             return [("Close    Esc", self.close)]

@@ -71,6 +71,7 @@ import wave
 import nbapp
 import nbpicker
 import nbicons
+import nbmotion
 import nbsynth
 import nbtransitions
 from nbi18n import _t  # noqa: E402
@@ -192,6 +193,13 @@ CENTER = (0xD7 / 255, 0xD2 / 255, 0xC5 / 255)   # soft hairline (lane centre)
 HAIR = (0xC9 / 255, 0xC4 / 255, 0xB6 / 255)     # strong hairline
 RAIL = (0xF1 / 255, 0xEE / 255, 0xE6 / 255)     # rail / deck / track-head surface
 SURF = (0xFC / 255, 0xFB / 255, 0xF8 / 255)     # page / control base surface
+
+# Time is impressed onto the warm tape as quiet ink, in three deliberately
+# separate strengths.  Keeping these as ink alpha (rather than three unrelated
+# greys) makes the hierarchy survive on both the live SURF and muted RAIL stock.
+GRID_BAR_ALPHA = 0.24
+GRID_BEAT_ALPHA = 0.12
+GRID_SUB_ALPHA = 0.04
 
 
 def clip_make(s, e, wav=None, off=0.0, gain=1.0, fin=0.005, fout=0.005):
@@ -980,7 +988,10 @@ class Lane(Gtk.DrawingArea):
         self.connect("button-release-event", self._release)
         self.connect("leave-notify-event", self._leave)
         self.connect("scroll-event", self._scroll)
-        self._cache = None       # (static_key, ImageSurface) or None
+        # (static_key, ImageSurface, (view_start, view_span)) or None. The
+        # view it was rendered AT rides along so a frame mid-animation can
+        # stretch it to the view now — see _blit_moving.
+        self._cache = None
         self._play_px = None      # last drawn playhead x, for strip invalidation
         self._press = None        # (x, y) where a drag started, in widget px
         self._loop_drag = None    # (t0, t1) being dragged out, or None
@@ -1264,14 +1275,17 @@ class Lane(Gtk.DrawingArea):
         t0 = app.view_start
         t1 = t0 + app.view_span()
         first = int(math.floor(t0 / spb))
-        # the fine steps: beats, then whatever the snap grid is if it is finer
+        # The fine steps earn their way onto the paper. Beats arrive first;
+        # snap subdivisions need enough air that repeated hairlines cannot
+        # merge into a grey graph-paper field.
         beat = app.sec_per_beat()
         steps = []
-        if bar_px / BEATS_PER_BAR >= 9:
-            steps.append((beat, 0.55))
+        if bar_px / BEATS_PER_BAR >= 10:
+            steps.append((beat, GRID_BEAT_ALPHA))
         gs = app.snap_seconds()
-        if gs and gs < beat - 1e-9 and (self._x_of(gs) - self._x_of(0.0)) >= 7:
-            steps.append((gs, 0.3))
+        if (gs and gs < beat - 1e-9
+                and (self._x_of(gs) - self._x_of(0.0)) >= 12):
+            steps.append((gs, GRID_SUB_ALPHA))
         b = first
         while True:
             at = b * spb
@@ -1279,7 +1293,7 @@ class Lane(Gtk.DrawingArea):
                 break
             x = self._x_of(at)
             if at >= -1e-9:
-                cr.set_source_rgb(*HAIR)
+                cr.set_source_rgba(*INK, GRID_BAR_ALPHA)
                 cr.rectangle(round(x), 0, 1, H)
                 cr.fill()
             for size, alpha in steps:
@@ -1287,11 +1301,16 @@ class Lane(Gtk.DrawingArea):
                 while k < spb - 1e-9:
                     sx = self._x_of(at + k)
                     if 0 <= sx <= W:
-                        cr.set_source_rgba(*CENTER, alpha)
+                        cr.set_source_rgba(*INK, alpha)
                         cr.rectangle(round(sx), 0, 1, H)
                         cr.fill()
                     k += size
             b += 1
+        # A lane ends on a paper rule, not another time division. Its solid
+        # beige tone is intentionally unlike every translucent ink rule above.
+        cr.set_source_rgb(*CENTER)
+        cr.rectangle(0, H - 1, W, 1)
+        cr.fill()
 
     def _paint_static(self, cr, W, H):
         """Render the lane's slow-changing layer (everything except the moving
@@ -1535,12 +1554,72 @@ class Lane(Gtk.DrawingArea):
         cr.fill()
         self._play_px = px
 
+    def _blit_moving(self, cr, W, H):
+        """Paint the cached layer STRETCHED from the view it was rendered at to
+        the view the animation has reached. True if it could.
+
+        THIS IS WHAT MAKES AN ANIMATED ZOOM AFFORDABLE HERE (Article F1). A view
+        change invalidates every input to the cached surface, so easing the view
+        the obvious way would re-rasterise eight full-width lanes on every frame
+        of the animation — the grid, every clip, and a Python loop over a
+        thousand waveform columns each — which is precisely the cost the cache
+        exists to avoid on the software rasteriser.
+
+        A zoom is a similarity transform, so the pixels already in hand ARE the
+        answer, resampled: a surface rendered at (s0, span0) shown at
+        (s1, span1) wants scale span0/span1 about the point where s0 now falls.
+        Mid-flight it is a little soft; on arrival the animation lands and the
+        next frame is a true render at the final view, which is the frame anyone
+        actually reads. Two hundred milliseconds of resampling versus two
+        hundred milliseconds of re-rasterising is the whole trade."""
+        cache = self._cache
+        if not cache or cache[2] is None:
+            return False
+        s0, span0 = cache[2]
+        span1 = self.app.view_span()
+        if span0 <= 0 or span1 <= 0:
+            return False
+        sx = span0 / span1
+        # where the cached surface's left edge (time s0) sits in the view now
+        x0 = (s0 - self.app.view_start) / span1 * W
+        try:
+            cr.save()
+            # the lane is opaque; fill first or the uncovered edge keeps the
+            # last frame's pixels while the view slides in from the side
+            cr.set_source_rgb(*(RAIL if not self.app._audible(
+                self.app.tracks[self.idx]) else SURF))
+            cr.rectangle(0, 0, W, H)
+            cr.fill()
+            cr.translate(x0, 0)
+            cr.scale(sx, 1.0)
+            cr.set_source_surface(cache[1], 0, 0)
+            try:
+                import cairo
+                cr.get_source().set_filter(cairo.FILTER_BILINEAR)
+            except Exception:                                     # noqa: BLE001
+                pass
+            cr.paint()
+            cr.restore()
+        except Exception:                                         # noqa: BLE001
+            try:
+                cr.restore()
+            except Exception:                                     # noqa: BLE001
+                pass
+            return False
+        return True
+
     def _draw(self, w, cr):
         a = w.get_allocation()
         W, H = a.width, a.height
         if W < 4 or H < 4:            # not-yet / degenerately allocated
             return False
         cache = self._cache
+        # While the view is travelling, stretch what is already rendered rather
+        # than rendering again — see _blit_moving. Falls through to a real
+        # render if there is nothing cached yet (the first frame of the app).
+        if self.app.view_moving() and self._blit_moving(cr, W, H):
+            self._paint_overlay(cr, W, H)
+            return False
         key = self._static_key(W, H)
         if not (cache and cache[0] == key):
             try:
@@ -1549,7 +1628,11 @@ class Lane(Gtk.DrawingArea):
                 surf = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
                 self._paint_static(cairo.Context(surf), W, H)
                 surf.flush()
-                cache = self._cache = (key, surf)
+                # the view this raster was taken AT travels with it, so a later
+                # frame can work out how to stretch it (_blit_moving)
+                cache = self._cache = (key, surf,
+                                       (self.app.view_start,
+                                        self.app.view_span()))
             except Exception:
                 # a surface hiccup must never blank the lane — paint direct
                 self._cache = None
@@ -1744,7 +1827,7 @@ class Ruler(Gtk.DrawingArea):
             if x < x0 - px_per_bar:
                 continue
             labelled = (b % step == 0)
-            cr.set_source_rgb(*(HAIR if labelled else CENTER))
+            cr.set_source_rgba(*INK, GRID_BAR_ALPHA)
             cr.rectangle(round(x), 5, 1, 20 if labelled else 12)
             cr.fill()
             # beat ticks, only when they are far enough apart to read
@@ -1753,7 +1836,7 @@ class Ruler(Gtk.DrawingArea):
                     bx = x + k * beat_w
                     if bx >= x0 + aw:
                         break
-                    cr.set_source_rgb(*CENTER)
+                    cr.set_source_rgba(*INK, GRID_BEAT_ALPHA)
                     cr.rectangle(round(bx), 17, 1, 8)
                     cr.fill()
                     if name_beats:
@@ -2427,12 +2510,20 @@ class Sequencer(nbapp.AppWindow):
         self._export = None          # running export thread, or None
         self._clipboard = None       # a clip copied with Ctrl+C, or None
         self._hs_sync = False        # guards the h-scrollbar against itself
+        self._hs_last = None         # the value WE last wrote to it (see below)
         # HOW THE TAPE IS BEING LOOKED AT. Not part of the project: it is a
         # view, like a scroll position, and restoring somebody's zoom from a
         # file they opened on a different screen helps nobody.
         self.zoom = ZOOM_FIT         # x1 = the whole arrangement across a lane
         self.view_start = 0.0        # seconds at the left edge of a lane
         self.tool = TOOL_SELECT
+        # the view's travel (see _animate_view): the running Scalar, whether it
+        # is in flight, and where it is HEADED — a second wheel notch aims on
+        # from the target rather than from wherever the spring has got to.
+        self._view_anim = None
+        self._view_moving = False
+        self._view_target_start = None
+        self._view_target_zoom = None
         # tempo, metronome, length, snap, master and the 8 tracks
         # (name/arm/mute/solo/gain/clips) are restored from disk; a fresh
         # install yields the empty default tape.
@@ -3456,6 +3547,88 @@ class Sequencer(nbapp.AppWindow):
         self.view_start = max(0.0, min(max(0.0, self.length - span),
                                        self.view_start))
 
+    # ---- the view TRAVELS to its new value, it does not jump to it ---------
+    # nbmotion-inventory: app.zoom
+    #
+    # Every change of zoom or scroll position is a state change and animates,
+    # with the house character (nbmotion.ARRIVE — a slight spring that peaks
+    # ~5% past the target and settles onto it). Two details make it read as a
+    # zoom rather than as a lurch:
+    #
+    #   * The zoom is interpolated in LOG space. Linearly, 1x -> 16x spends
+    #     five sixths of the animation already zoomed in; geometrically every
+    #     frame doubles-down by the same ratio, which is what "scaling" means
+    #     and what the eye expects.
+    #   * The ANCHOR is re-pinned every frame rather than interpolated. That is
+    #     what makes it scale ABOUT THE POINTER: the moment under the pointer
+    #     is held to the same pixel throughout, so the picture grows out from
+    #     under the hand instead of sliding sideways underneath it.
+    #
+    # Reduced Motion, no frame clock and a zero token all need no branch here:
+    # Scalar.animate_to lands on the target synchronously and fires on_done
+    # before it returns (nbmotion's §F4 contract), so the still path is the
+    # same code with the animation compressed to nothing.
+    #
+    # See Lane._draw for how this stays affordable on the software rasteriser:
+    # a view change invalidates all eight cached lane surfaces, so while the
+    # view is travelling the lanes BLIT the last good raster scaled to the
+    # moving view and only re-render once, on arrival (Article F1).
+    def _animate_view(self, z1, start1, anchor=None, frac=0.5,
+                      duration=None):
+        """Travel to (zoom z1, view_start start1). Returns True if anything
+        will move.
+
+        `anchor`/`frac` pin a moment to a fraction of the lane for the whole
+        journey; pass anchor=None to interpolate view_start directly, which is
+        what a scroll wants (nothing is being held still — the tape is moving
+        past)."""
+        z1 = max(ZOOM_FIT, min(ZOOM_MAX, float(z1)))
+        z0, s0 = self.zoom, self.view_start
+        span1 = self.length / max(ZOOM_FIT, z1)
+        start1 = max(0.0, min(max(0.0, self.length - span1), start1))
+        if abs(z1 - z0) < 1e-9 and abs(start1 - s0) < 1e-6:
+            return False
+        lz0, lz1 = math.log(max(ZOOM_FIT, z0)), math.log(z1)
+        if anchor is not None:
+            frac = max(0.0, min(1.0, frac))
+        self._view_target_start = start1
+        self._view_target_zoom = z1
+
+        def on_frame(e):
+            # `e` runs 0 -> 1 and, with a spring, a little past 1 and back.
+            self.zoom = max(ZOOM_FIT,
+                            min(ZOOM_MAX, math.exp(lz0 + (lz1 - lz0) * e)))
+            if anchor is None:
+                self.view_start = s0 + (start1 - s0) * e
+            else:
+                self.view_start = anchor - frac * self.view_span()
+            self._clamp_view()
+            self._view_moving = True
+            self.sync_ruler()
+            for lane in getattr(self, "lanes", []):
+                lane.queue_draw()
+
+        def on_done(_finished):
+            # Land EXACTLY on the target whether the spring finished or was
+            # retargeted mid-flight: an animation that leaves the zoom at
+            # 15.97x has quietly made FIT unreachable.
+            self._view_moving = False
+            self._view_target_start = None
+            self._view_target_zoom = None
+            self.zoom, self.view_start = z1, start1
+            self._clamp_view()
+            self._after_view_change()
+
+        self._view_anim = nbmotion.animate(
+            self.stack, on_frame, 0.0, 1.0, duration or nbmotion.PAGE,
+            easing=nbmotion.ARRIVE, on_done=on_done)
+        return True
+
+    def view_moving(self):
+        """True while the view is travelling — the lanes read this to blit
+        instead of re-rasterising, and follow_playhead to keep its hands off."""
+        return bool(getattr(self, "_view_moving", False))
+
     def set_zoom(self, z, anchor=None, frac=0.5):
         """Zoom to `z`, keeping `anchor` at the same place across the lane.
 
@@ -3467,20 +3640,16 @@ class Sequencer(nbapp.AppWindow):
             return False
         if anchor is None:
             anchor = self.pos
-        self.zoom = z
-        self.view_start = anchor - max(0.0, min(1.0, frac)) * self.view_span()
-        self._clamp_view()
-        self._after_view_change()
-        return True
+        frac = max(0.0, min(1.0, frac))
+        span = self.length / max(ZOOM_FIT, z)
+        return self._animate_view(z, anchor - frac * span, anchor, frac)
 
     def zoom_by(self, factor, anchor=None, frac=0.5):
         return self.set_zoom(self.zoom * factor, anchor, frac)
 
     def zoom_fit(self):
         """The whole arrangement, end to end. The way back from anywhere."""
-        self.zoom = ZOOM_FIT
-        self.view_start = 0.0
-        self._after_view_change()
+        return self._animate_view(ZOOM_FIT, 0.0)
 
     def zoom_to(self, s, e):
         """Fill the lanes with the stretch from `s` to `e`, with a little air
@@ -3488,15 +3657,19 @@ class Sequencer(nbapp.AppWindow):
         span = max(0.05, e - s)
         pad = span * 0.06
         span += pad * 2
-        self.zoom = max(ZOOM_FIT, min(ZOOM_MAX, self.length / span))
-        self.view_start = s - pad
-        self._clamp_view()
-        self._after_view_change()
+        return self._animate_view(
+            max(ZOOM_FIT, min(ZOOM_MAX, self.length / span)), s - pad)
 
     def scroll_view(self, seconds):
-        self.view_start += seconds
-        self._clamp_view()
-        self._after_view_change()
+        """Scroll the tape by `seconds`. Animated, and RETARGETING: a second
+        wheel notch part-way through the first one aims further on from where
+        the view has actually reached rather than restarting, which is what
+        makes a flick of the wheel one continuous movement."""
+        base = (self._view_target_start
+                if self.view_moving() and self._view_target_start is not None
+                else self.view_start)
+        return self._animate_view(self.zoom, base + seconds,
+                                  duration=nbmotion.SURFACE_IN)
 
     def _after_view_change(self):
         # Clamped here as well as at every caller, because the callers include
@@ -3519,22 +3692,28 @@ class Sequencer(nbapp.AppWindow):
     def follow_playhead(self):
         """Keep a running playhead on screen.
 
-        BY THE PAGE, NOT BY THE PIXEL. A view that slid under the playhead
-        would rebuild every lane's cached surface ten times a second, which is
-        the one thing the whole cache exists to avoid on a machine with no GPU;
-        and a picture that never stops moving is harder to read than one that
-        jumps once a page. So the view only moves when the playhead has
-        actually left it."""
+        BY THE PAGE, NOT BY THE PIXEL — and then the page TRAVELS. A view that
+        slid continuously under the playhead would rebuild every lane's cached
+        surface ten times a second, which is the one thing the whole cache
+        exists to avoid on a machine with no GPU; and a picture that never
+        stops moving is harder to read than one that turns a page. So the view
+        moves only when the playhead has actually left it, and when it does it
+        animates across like any other state change rather than cutting.
+
+        It must not act while a view animation is ALREADY in flight: this runs
+        on the 100ms transport tick, and the page it is travelling towards does
+        not contain the playhead until it arrives, so every tick in between
+        would retarget the animation to a fractionally later page and the view
+        would creep instead of turning."""
         if self.transport not in ("play", "rec") or self.zoom <= ZOOM_FIT:
+            return
+        if self.view_moving():
             return
         span = self.view_span()
         lo = self.view_start
         if lo <= self.pos <= lo + span:
             return
-        self.view_start = self.pos - span * FOLLOW_AT
-        self._clamp_view()
-        self._sync_hscroll()
-        self.sync_ruler()
+        self._animate_view(self.zoom, self.pos - span * FOLLOW_AT)
 
     def wheel_over_timeline(self, ev, W, t_at, plain_scrolls=False,
                             x_offset=0.0):
@@ -4305,14 +4484,46 @@ class Sequencer(nbapp.AppWindow):
             self._hadj.set_value(self.view_start)
         finally:
             self._hs_sync = False
+        # Remember what we put there, because the flag above is NOT enough:
+        # changing page_size re-clamps the value and GTK3 emits the resulting
+        # value-changed LATER, by which time the flag is clear again. See
+        # _on_hscroll.
+        self._hs_last = self._hadj.get_value()
         # A bar that can never move is noise; it goes away at FIT and comes
         # back the moment there is something off screen to reach.
         self._hscroll.set_sensitive(span < self.length - 1e-6)
 
     def _on_hscroll(self, adj):
+        """The scrollbar moves the view DIRECTLY, with no animation.
+
+        The one place a view change must not be eased: the thumb is under the
+        user's finger and already is the animation. Springing to catch up with
+        it would put the tape behind the hand dragging it, and the overshoot
+        would fight the next motion event."""
         if self._hs_sync:
             return
-        self.view_start = adj.get_value()
+        # READ THE THUMB FIRST. Cancelling a live animation lands it on its own
+        # target, and landing calls _after_view_change -> _sync_hscroll, which
+        # writes that target back into THIS adjustment — so asking `adj` for its
+        # value afterwards returns where the animation was going instead of
+        # where the hand just put it.
+        want = adj.get_value()
+        # ...AND IGNORE OUR OWN WRITE COMING BACK. The _hs_sync flag only
+        # catches a SYNCHRONOUS echo, and GTK3's does not have to be: setting
+        # page_size re-clamps the value and the value-changed for it arrives
+        # after the flag is clear. So a programmatic sync bounced back into
+        # here a moment later and re-asserted the adjustment over the app —
+        # harmless while the two agreed, and a snap-back to the abandoned
+        # target the one time they did not: a drag during a zoom. Comparing
+        # VALUES instead of trusting a flag is immune to when the signal lands.
+        if self._hs_last is not None and abs(want - self._hs_last) < 1e-9:
+            return
+        if self.view_moving():
+            # a drag wins over anything in flight: the hand is the authority
+            nbmotion.cancel_all(self.stack)
+            self._view_moving = False
+            self._view_target_start = self._view_target_zoom = None
+        self.view_start = want
         self._clamp_view()
         self.sync_ruler()
         for lane in getattr(self, "lanes", []):
@@ -5537,6 +5748,17 @@ class Sequencer(nbapp.AppWindow):
             return False
         t = self.transport
         if t in ("play", "rec"):
+            # nbmotion-inventory: content.sequencer
+            #
+            # THE PLAYHEAD MUST STAY LINEAR, AND THAT IS A RULE, NOT AN
+            # OVERSIGHT. Every other state change in this OS animates with a
+            # slight spring (nbmotion.ARRIVE) — the view's own travel a few
+            # hundred lines up does. A playhead may not: it is a PHYSICAL
+            # QUANTITY, the position the sound card has actually reached, and
+            # easing it would draw the head somewhere the audio is not.
+            # Overshoot would put it past a note before the note sounds. See
+            # PAPER-PHYSICS §D2; do not "smooth" this.
+            #
             # The PLAYHEAD FOLLOWS THE SOUND. It used to be advanced by this
             # timer, which meant the picture and the audio were two independent
             # clocks that drifted apart over a long take; now the position comes

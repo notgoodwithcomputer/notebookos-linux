@@ -379,7 +379,7 @@ def normalise(raw, index=0, seen=None):
     due = raw.get("due")
     method = raw.get("method")
     every = raw.get("every")
-    return {
+    rec = {
         "id": bid,
         "payee": payee,
         "account": _text(raw.get("account"), 60),
@@ -397,6 +397,18 @@ def normalise(raw, index=0, seen=None):
         "paid": [p for p in (_payment(x) for x in _records(raw.get("paid")))
                  if p is not None],
     }
+    # CARRY THROUGH WHAT THIS VERSION DOES NOT KNOW ABOUT. Normalising by
+    # building a fresh dict silently DELETED every other field on the record,
+    # and the loss reached the file: measured, a bill carrying `category`,
+    # `reconciled` and `sort_hint` lost all three by nothing more than opening
+    # the app and letting it save. That is the read-side loss class — no user
+    # action, no warning — and it is what a store written by a newer build, by a
+    # future feature, or by hand looks like. The known fields above still win,
+    # so nothing here can smuggle a bad `amount` past the normaliser.
+    for key, value in raw.items():
+        if key not in rec:
+            rec[key] = value
+    return rec
 
 
 def read_bills(path=STORE):
@@ -568,7 +580,13 @@ class Bills(nbapp.AppWindow):
         super().__init__()
         self.bills = self._load()
         self.sel = self.bills[0]["id"] if self.bills else ""
-        self.sort = "due"
+        # The View menu offers three orders and applied them correctly, and NONE
+        # of them survived closing the app: `sort` was set here and never
+        # written down. A preference accepted, acted on, and forgotten. Read
+        # back through SORTS so a hand-edited or newer value cannot put the list
+        # into an order `_ordered` has no branch for.
+        stored = (getattr(self, "_extra", None) or {}).get("sort")
+        self.sort = stored if stored in self.SORTS else "due"
         self._save_error = ""
         self._deleted = None
         self._flash_id = 0
@@ -597,6 +615,9 @@ class Bills(nbapp.AppWindow):
             return []              # missing / unreadable: an empty bill list
         seen = set()
         src = raw.get("bills") if isinstance(raw, dict) else raw
+        self._extra = dict((k, v) for k, v in raw.items()
+                           if k not in ("bills",)) \
+            if isinstance(raw, dict) else {}
         out = []
         for i, item in enumerate(_records(src)):
             bill = normalise(item, i, seen)
@@ -610,7 +631,17 @@ class Bills(nbapp.AppWindow):
     def _save(self):
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
-            nbapp.atomic_write_json(STORE, {"bills": self.bills}, indent=1)
+            # Keys this version does not know about are the store's, not
+            # ours: a newer build, a future feature or a hand-edit puts them
+            # there and a save must not be what removes them. Measured, a store
+            # carrying `schema` and `ledger_name` lost both on the first save.
+            payload = dict(getattr(self, "_extra", None) or {})
+            payload["bills"] = self.bills
+            # getattr, not self.sort: _save is reachable from objects that
+            # never ran __init__ (bills_selftest builds one headless), and a
+            # save is not the place to start raising.
+            payload["sort"] = getattr(self, "sort", "due")
+            nbapp.atomic_write_json(STORE, payload, indent=1)
             self._save_error = ""
         except OSError as exc:
             # A read-only or full disk must not stop the app working, and must
@@ -1720,6 +1751,14 @@ class Bills(nbapp.AppWindow):
                     return
                 record["id"] = target["id"]
                 record["paid"] = target["paid"]
+                # An edit rewrites the fields this sheet can reach and must
+                # leave the rest of the record alone. Building a fresh dict
+                # DELETED everything else on it — measured, editing a bill that
+                # carried `category`, `reconciled` and `sort_hint` lost all
+                # three, and the loss went straight to disk on the save below.
+                for key, value in target.items():
+                    if key not in record:
+                        record[key] = value
                 self.bills[self.bills.index(target)] = record
                 self.sel = record["id"]
                 self._save()
@@ -1885,19 +1924,32 @@ class Bills(nbapp.AppWindow):
                 line.append(_t("Account %s") % bill["account"])
             line.append(_t(METHOD_LABEL[bill["method"]]))
             text.emit("  ·  ".join(line), 10, color="#6E695E")
+            # WHERE to send it — the only part that is method-specific.
             if bill["method"] == "mail" and bill["address"]:
                 for ln in bill["address"].splitlines():
                     if ln.strip():
                         text.emit(ln.strip(), 11)
-                if info["post_by"]:
-                    text.emit(_t("Post by %s") % fmt_date(info["post_by"],
-                                                          year=True), 11)
             elif bill["method"] == "phone" and bill["phone"]:
                 text.emit(bill["phone"], 11)
-                if bill["note"]:
-                    text.emit(bill["note"], 10, color="#6E695E")
-            elif bill["note"]:
+
+            # The note is the user's OWN words about this bill and belongs on
+            # every kind of it. It used to hang off the same if/elif chain as
+            # the address, so a posted bill that HAD an address printed the
+            # address and silently dropped the note — measured: a bill noting
+            # "Quote 88" printed everything except that.
+            if bill["note"]:
                 text.emit(bill["note"], 10, color="#6E695E")
+
+            # THE POST-BY DATE IS THE POINT OF THIS APP, and it does not depend
+            # on knowing the address: the lead days are what set it. Nested
+            # inside `if bill["address"]`, a posted bill whose address had not
+            # been filled in printed "Due 17 Aug" and no deadline at all, so the
+            # copy that goes by the phone said post it on the 17th when it had
+            # to be in the post by the 12th. `post_by` is None unless the bill
+            # is posted with a lead, so this is guard enough on its own.
+            if info["post_by"]:
+                text.emit(_t("Post by %s") % fmt_date(info["post_by"],
+                                                      year=True), 11)
             text.rule(gap_after=10.0)
         surf.finish()
 
@@ -1946,19 +1998,23 @@ class Bills(nbapp.AppWindow):
             os.makedirs(DOCS_DIR, exist_ok=True)
             self._render_pdf(os.path.join(DOCS_DIR, PDF_NAME))
         except Exception as exc:                                # noqa: BLE001
-            self._flash(_t("The report was not written. %s")
-                        % (getattr(exc, "strerror", "") or _t("Unknown cause")))
+            self._flash(nbapp.save_failure_reason(
+                exc, os.path.join(DOCS_DIR, PDF_NAME)))
             return
         self._flash(_t("Saved to Documents as %s") % PDF_NAME)
 
     def _print(self):
         self._close_menu()
-        nbprint.print_document(self, self._render_pdf, job_name="Bills")
+        try:
+            nbprint.print_document(self, self._render_pdf, job_name="Bills")
+        except Exception:
+            self._flash(_t("Print failed"))
 
     # -- menus ---------------------------------------------------------------
 
     def _set_sort(self, how):
         self.sort = how
+        self._save()
         self._refresh()
 
     def menu_items(self, name):

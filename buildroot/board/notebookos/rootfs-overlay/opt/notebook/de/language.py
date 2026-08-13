@@ -40,7 +40,7 @@ from datetime import date, timedelta
 import nbapp
 import nbicons
 import nbtransitions
-from nbi18n import _t  # noqa: E402
+from nbi18n import _t, ltr  # noqa: E402
 
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -3063,7 +3063,7 @@ class Language(nbapp.AppWindow):
         stats = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         stats.set_halign(Gtk.Align.CENTER)
         stats.set_margin_top(6)
-        stats.pack_start(self._chip("star", _t("+%d XP") % xp, GOLD),
+        stats.pack_start(self._chip("star", ltr(_t("+%d XP") % xp), GOLD),
                          False, False, 0)
         stats.pack_start(self._chip("target", "%d%%" % (
             int(round(100.0 * correct / graded)) if graded else 100), GREEN),

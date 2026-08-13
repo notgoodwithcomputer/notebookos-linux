@@ -911,7 +911,14 @@ class Tasks(nbapp.AppWindow):
         # 1024-wide panel only 348px for the tasks themselves — the primary
         # content, squeezed under a third of the screen. Both are trimmed to
         # widths their content still sits comfortably in.
-        wrap.set_size_request(252, -1)
+        # Converged onto the OS rail (design_tokens.RAIL = 240) 2026-08-11.
+        # This was one of four sidebars the old rail gate could not see: it
+        # greps for constants named SIDEBAR_W/PANEL_W/DOCK_W/RAIL_W, and this
+        # is an inline literal, so it was never checked. 240 is NARROWER than
+        # the 252 it replaces, so it gives width back to the tasks column
+        # rather than taking it — measured before the change, this window's
+        # minimum was 913px of 1024 in en/ru/de/pl alike (111px spare).
+        wrap.set_size_request(240, -1)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)

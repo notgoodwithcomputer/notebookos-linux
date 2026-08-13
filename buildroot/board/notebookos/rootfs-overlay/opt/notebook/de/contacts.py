@@ -150,12 +150,30 @@ def parse_labeled_text(text, fallback):
         if not line:
             continue
         label, sep, value = line.partition(":")
-        if not sep or not value.strip():
-            label, value = fallback, line
         label = label.strip().lower()
         label = "mobile" if label == "cell" else label
-        out.append({"label": label if label in VALUE_LABELS else fallback,
-                    "value": value.strip()})
+        # A colon only means "label: value" when what precedes it IS a label.
+        # This used to keep the truncated value even when the label was
+        # unrecognised, so anything with a colon in it lost everything before
+        # the first one:
+        #
+        #     http://example.com   ->  //example.com     the scheme, gone
+        #     3:30 meeting         ->  30 meeting        the hour, gone
+        #
+        # Typing a plain URL into a field and having it silently shortened is
+        # the kind of loss nobody looks for afterwards. When the label is not
+        # one of ours the whole line is the value, which is exactly what the
+        # no-colon case already did.
+        # ...and the field's own fallback counts as a label, because
+        # labeled_text WRITES it: a phones field with no explicit label spells
+        # itself "phone: 555-0100", and that has to read back as it was written.
+        # Leaving it out broke the round trip for every unlabelled value — my
+        # own new suite caught it before this shipped.
+        if sep and value.strip() and (label in VALUE_LABELS
+                                      or label == fallback):
+            out.append({"label": label, "value": value.strip()})
+        else:
+            out.append({"label": fallback, "value": line})
     return out
 
 

@@ -42,7 +42,7 @@ COLUMN_W = 620
 # a line here must cost that row its description, not stop Widget Settings
 # opening at all. It did exactly that once.
 TILE_BLURB = {
-    "academics": "Today's classes, with times and rooms",
+    "schedule": "Today's events and classes, hour by hour",
     "homework": "Assignments and their due dates",
     "meals": "Breakfast, lunch and dinner from today's meal plan",
     "workout": "Today's sets against the goal, exercise by exercise",

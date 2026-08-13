@@ -179,6 +179,7 @@ class SystemMonitor(nbapp.AppWindow):
         self._desc_first = {4, 5}       # MEMORY, PROCESSOR: 1st click -> DESC
         self._sort_col = 4              # current model sort column
         self._sort_order = Gtk.SortType.DESCENDING
+        self._load_sort_prefs()
         sort_cols = {2: 4, 3: 5}  # MEMORY->rss_kb(4), PROCESSOR->cpu_pct(5) keys
         # "ID", not "PID": the number is only ever used to tell two identically
         # named rows apart, and the P is a word from another world.
@@ -208,7 +209,7 @@ class SystemMonitor(nbapp.AppWindow):
         # NAME sorts case-insensitively so names group naturally instead of
         # segregating every capitalised command ahead of the lowercase ones.
         self.store.set_sort_func(0, self._cmp_name)
-        self._apply_sort(4, Gtk.SortType.DESCENDING)  # launch: memory, busiest top
+        self._apply_sort(self._sort_col, self._sort_order)
 
         proc_lbl = Gtk.Label(label=_t("RUNNING PROGRAMS"), xalign=0)
         proc_lbl.get_style_context().add_class("smsection")
@@ -274,6 +275,35 @@ class SystemMonitor(nbapp.AppWindow):
     def _on_destroy(self, *_):
         self._alive = False
 
+    def _prefs_path(self):
+        home = os.environ.get("NB_HOME", os.path.expanduser("~"))
+        return os.path.join(home, ".config", "notebook", "sysmon.json")
+
+    def _load_sort_prefs(self):
+        try:
+            import json
+            with open(self._prefs_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                return
+            if data.get("sort_col") in (0, 1, 4, 5):
+                self._sort_col = data["sort_col"]
+            if data.get("sort_desc") is True:
+                self._sort_order = Gtk.SortType.DESCENDING
+            elif data.get("sort_desc") is False:
+                self._sort_order = Gtk.SortType.ASCENDING
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save_sort_prefs(self):
+        try:
+            nbapp.atomic_write_json(self._prefs_path(), {
+                "sort_col": self._sort_col,
+                "sort_desc": self._sort_order == Gtk.SortType.DESCENDING,
+            })
+        except (OSError, TypeError, ValueError) as exc:
+            nbapp.save_failure_reason = str(exc)
+
     # ---- sampling ----
     def refresh(self, manual=False):
         # Once the window is gone the poll must stop: return False so GLib drops
@@ -297,7 +327,7 @@ class SystemMonitor(nbapp.AppWindow):
             self._last_cpu = (tot, idle)
             self._last_sample = now
             self.cpu_bar.set_fraction(cpu)
-            self.cpu_lbl.set_text("%d%% in use" % round(cpu * 100))
+            self.cpu_lbl.set_text(_t("%d%% in use") % round(cpu * 100))
         else:
             dtot = 0   # no meaningful interval this call; reuse cached CPU%
         # mem — an instantaneous reading (no delta), so always refresh it
@@ -646,6 +676,7 @@ class SystemMonitor(nbapp.AppWindow):
         self._sort_col = model_col
         self._sort_order = order
         self.store.set_sort_column_id(model_col, order)
+        self._save_sort_prefs()
         for mc, c in self._sort_widgets.items():
             active = (mc == model_col)
             c.set_sort_indicator(active)

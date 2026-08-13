@@ -31,6 +31,7 @@ import nbpicker
 import nbicons
 import nbvideo
 import nbtransitions
+import nbmotion
 from nbi18n import _t  # noqa: E402
 
 # ---- optional media libs (guarded) ----------------------------------------
@@ -268,6 +269,7 @@ class VideoEditor(nbapp.AppWindow):
         self._suspend_prop = False      # guard while loading Properties fields
         self._trans_cells = {}          # transition key -> palette cell Box
         self._story_cells = []          # storyboard slot Boxes, in order
+        self._timeline_clip_cells = {}  # clip index -> visible timeline Buttons
         self._trans_dots = []           # connector Boxes between slots (SLOTS-1)
         self._tick_labels = []          # ruler tick Labels
         self._lanes = {}                # timeline lane name -> lane Box
@@ -2284,6 +2286,7 @@ class VideoEditor(nbapp.AppWindow):
                 t += step
             ticks.show_all()
         # per-clip lanes, each cell width proportional to duration
+        self._timeline_clip_cells = {}
         for name in ("Video", "Audio", "Titles"):
             lane = self._lanes.get(name)
             if lane is None:
@@ -2296,7 +2299,9 @@ class VideoEditor(nbapp.AppWindow):
                 # lanes add up to the ruler and to the exported file
                 _off, d, td = layout[k]
                 w = max(6, int(round((d - td) * pps)))
-                lane.pack_start(self._lane_cell(name, clip, w, k), False, False, 0)
+                cell = self._lane_cell(name, clip, w, k)
+                self._timeline_clip_cells.setdefault(k, []).append(cell)
+                lane.pack_start(cell, False, False, 0)
             lane.show_all()
         # music lane: a single bar spanning the whole movie
         mlane = self._lanes.get("Music")
@@ -2456,7 +2461,7 @@ class VideoEditor(nbapp.AppWindow):
         if idx is None and self.clips:
             idx = len(self.clips) - 1
         if idx is not None and (force or idx != self._sel_cell):
-            self._select_cell(idx)
+            self._select_cell(idx, user_caused=False)
             # A NEW clip: drop whatever was streaming so _playback_step opens
             # this one. Without this the player kept running the previous clip
             # while the timeline had already moved on — picture and playhead
@@ -2665,7 +2670,7 @@ class VideoEditor(nbapp.AppWindow):
                                     self._bin_default_dur(m)))
         self._save_project()
         self._render_all()
-        self._select_cell(len(self.clips) - 1)
+        self._select_cell(len(self.clips) - 1, user_caused=False)
 
     def _insert_clip(self, clip, at, name=None):
         """Insert `clip` at position `at`, select it, repaint everything.
@@ -2676,7 +2681,7 @@ class VideoEditor(nbapp.AppWindow):
         self.clips.insert(at, clip)
         self._save_project()
         self._render_all()
-        self._select_cell(at)
+        self._select_cell(at, user_caused=False)
 
     def _move_clip(self, delta):
         """Reorder the selected clip left/right by one position."""
@@ -2691,9 +2696,39 @@ class VideoEditor(nbapp.AppWindow):
         self.clips[k], self.clips[j] = self.clips[j], self.clips[k]
         self._save_project()
         self._render_all()
-        self._select_cell(j)
+        self._select_cell(j, user_caused=False)
 
-    def _select_cell(self, idx):
+    def _animate_clip_selection(self, idx):
+        """Let the newly selected clip settle into focus.
+
+        Opacity is paint-only, so the damage stays inside the selected card and
+        its lane cells.  The primitive's non-fade policy makes Reduced Motion
+        land synchronously on 1.0.  Selection is keyed by the current index only
+        while the model is unchanged; insert/delete paths deliberately do not
+        call this because clips have no persistent identity.
+        """
+        widgets = []
+        if 0 <= idx < len(getattr(self, "_story_cells", [])):
+            widgets.append(self._story_cells[idx])
+        widgets.extend(getattr(self, "_timeline_clip_cells", {}).get(idx, []))
+        for widget in widgets:
+            try:
+                widget.set_opacity(0.72)
+
+                def apply(value, target=widget):
+                    target.set_opacity(value)
+
+                # nbmotion-inventory: content.video
+                nbmotion.animate(widget, apply, 0.72, 1.0,
+                                 duration=nbmotion.SELECT,
+                                 easing=nbmotion.EASE_OUT)
+            except Exception:                                  # motion is optional
+                try:
+                    widget.set_opacity(1.0)
+                except Exception:
+                    pass
+
+    def _select_cell(self, idx, user_caused=True):
         self._sel_music = False
         if idx is None or idx < 0 or idx >= len(self.clips):
             self._sel_cell = None
@@ -2701,6 +2736,8 @@ class VideoEditor(nbapp.AppWindow):
             self._sel_cell = idx
         self._render_story()
         self._render_timeline()
+        if user_caused and self._sel_cell is not None:
+            self._animate_clip_selection(self._sel_cell)
         clip = self._sel_clip()
         # the palette reflects the selected clip's transition (none -> cleared)
         self._active_transition = clip.get("transition") if clip else None
@@ -4396,7 +4433,7 @@ class VideoEditor(nbapp.AppWindow):
         self.clips.insert(k + 1, second)
         self._save_project()
         self._render_all()
-        self._select_cell(k + 1)
+        self._select_cell(k + 1, user_caused=False)
 
     def _menu_add_transition(self):
         k = self._sel_cell

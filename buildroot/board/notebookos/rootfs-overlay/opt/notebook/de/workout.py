@@ -38,7 +38,7 @@ from nbi18n import _t  # noqa: E402
 STORE = os.path.join(os.environ.get("NB_HOME", os.path.expanduser("~")),
                      ".config", "notebook", "workout.json")
 
-SIDEBAR_W = 210
+SIDEBAR_W = 240
 # The reading column the exercise list is held to, so one short row does not
 # stretch the width of a 1920 panel (the cap Settings also uses).
 COLUMN_W = 620

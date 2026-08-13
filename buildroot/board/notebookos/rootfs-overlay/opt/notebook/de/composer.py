@@ -21,7 +21,8 @@ import wave
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo  # noqa: E402
 import cairo
 
 import nbapp
@@ -52,6 +53,21 @@ INSTRUMENTS = (
     ("Saw Wave", 81, "saw"), ("Synth Pad", 88, "triangle"),
     ("FX", 98, "sine"), ("Noise / Drums", 0, "noise"),
 )
+
+
+def _show_text(cr, x, y, text, size, bold=False):
+    """Draw `text` with its BASELINE at y via Pango (the house rule: cairo's
+    toy API picks one face and shows .notdef for anything outside it; Pango
+    picks a face per glyph). Same anchor cr.show_text used, so the tuned
+    geometry keeps."""
+    layout = PangoCairo.create_layout(cr)
+    fd = Pango.FontDescription("Nimbus Sans")
+    fd.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
+    fd.set_absolute_size(size * Pango.SCALE)
+    layout.set_font_description(fd)
+    layout.set_text(str(text), -1)
+    cr.move_to(x, y - layout.get_baseline() / Pango.SCALE)
+    PangoCairo.show_layout(cr, layout)
 
 
 def _cap_combo_cells(combo, chars):
@@ -589,7 +605,7 @@ class StaffNotation(Gtk.DrawingArea):
             measures = int(math.ceil((w - self.LEFT) / self.MEASURE_W))
             for m in range(measures + 1):
                 x = self.LEFT + m * self.MEASURE_W; cr.move_to(x, sy); cr.line_to(x, sy + 4 * self.SPACE); cr.stroke()
-                cr.set_font_size(10); cr.move_to(x + 5, sy - 10); cr.show_text(str(m + 1))
+                _show_text(cr, x + 5, sy - 10, str(m + 1), 10)
             for start in range(0, measures * mt, mt):
                 for rs, _rd, name, dotted in measure_rests(tr["notes"], start, start + mt):
                     _draw_rest(cr, self._tick_x(rs) + 5, sy + 2 * self.SPACE, name, dotted)
@@ -757,7 +773,7 @@ class Composer(nbapp.AppWindow):
     def menu_items(self, name):
         if name == "File": return [(_t("New    Ctrl+N"), self._new), (_t("Open…    Ctrl+O"), self._open), ("-", None), (_t("Save    Ctrl+S"), self._save), (_t("Save As…    Ctrl+Shift+S"), self._save_as), ("-", None), (_t("Export MIDI…"), self._export), ("-", None), (_t("Close    Esc"), self.close)]
         if name == "Edit": return [(_t("Undo    Ctrl+Z"), self._undo), (_t("Redo    Ctrl+Shift+Z"), self._redo), ("-", None), (_t("Select All    Ctrl+A"), self._select_all), (_t("Delete Notes    Delete"), self._delete)]
-        if name == "View": return [(_t("Return to beginning"), self._center)]
+        if name == "View": return [(_t("Return to Beginning"), self._center)]
         if name == "Track": return [(_t("Add Track"), self._add_track), (_t("Remove Track"), self._remove_track), (_t("Rename Track…"), self._rename_track), (_t("Mute Track"), self._toggle_mute)]
         return [(_t("Play    Space"), self._play), (_t("Stop"), self._stop)]
 

@@ -21,6 +21,7 @@ import os
 import random
 
 import nbapp
+import nbtransitions
 import nbicons  # pictographic backspace glyph on the ⌫ key
 from nbi18n import _t  # noqa: E402
 
@@ -143,6 +144,23 @@ _WINDOW_DEFAULT = {"xmin": -10.0, "xmax": 10.0, "ymin": -10.0, "ymax": 10.0,
                    "xscl": 1.0, "yscl": 1.0}
 
 
+def _damaged_note():
+    """What the calculator says when it could not read what it saved.
+
+    Two sentences, deliberately, and the second is the one that matters: the
+    person's stored variables and tape are not on screen, that is not something
+    they did, and the file they came from is still on the disk under a
+    .damaged-<stamp> name. Without saying so, the only reasonable conclusion is
+    that the work is gone -- and the natural response, retyping it, is exactly
+    what would make that true.
+
+    The second sentence is accounting's, keyed identically on purpose: the same
+    fact in the same words costs one translation across both apps rather than
+    two near-misses a reader would have to notice are the same thing."""
+    return (_t("The saved calculator could not be read. A new one was started.")
+            + " " + _t("The damaged file was kept."))
+
+
 def _finite(value, fallback):
     """float(value) when it names a real, finite number; the fallback else."""
     try:
@@ -150,6 +168,36 @@ def _finite(value, fallback):
     except (TypeError, ValueError):
         return fallback
     return v if math.isfinite(v) else fallback
+
+
+def window_is_valid(values):
+    """Is this a window a graph can actually be drawn in?
+
+    Lifted out of the Window dialog so it can be CHECKED. Inside the dialog it
+    sat behind a `dialog.run()`, which no test can drive without a modal loop,
+    and the one condition it was missing is exactly the sort a test finds:
+    every comparison here is False when either side is NaN, so an all-NaN
+    window satisfied all four ordering rules and the next draw died with
+    "cannot convert float NaN to integer". float() accepts "nan" and "inf"
+    without complaint.
+
+    Finiteness is therefore checked FIRST and separately, the same screen
+    sanitize_state already puts the stored window through.
+
+    Note which half actually closed the NaN hole, because it is not the obvious
+    one: the rule below is written POSITIVELY -- what a good window IS -- and
+    NaN fails a positive test. The shipped guard was the negative of it,
+    `if xmin >= xmax or ...: raise`, and NaN fails that too, so it was let
+    through. Measured both ways. The isfinite line is what catches inf, which
+    orders perfectly well and is still not a window to draw in."""
+    try:
+        if not all(math.isfinite(float(v)) for v in values.values()):
+            return False
+        return (values["xmin"] < values["xmax"]
+                and values["ymin"] < values["ymax"]
+                and values["xscl"] > 0 and values["yscl"] > 0)
+    except (TypeError, ValueError, KeyError):
+        return False
 
 
 def sanitize_state(state):
@@ -229,9 +277,15 @@ def sanitize_state(state):
         "tape": tape, "tape_results": results, "variables": variables,
         "ans": ans, "fix": fix, "ys": ys, "y_enabled": y_enabled,
         "window": window,
+        # ...and clamped into it, so a trace saved off the edge by an older
+        # build (or by a hand-edited file) comes back on screen rather than
+        # reopening in the same lost place.
+        "trace_x": min(window["xmax"], max(window["xmin"],
+                                           _finite(state.get("trace_x"), 0.0))),
         "tbl_start": _finite(state.get("tbl_start"), 0.0),
-        "tbl_step": _finite(state.get("tbl_step"), 1.0),
-        "trace_x": _finite(state.get("trace_x"), 0.0),
+        # ...and never zero, or every row of the table is the same x. _finite
+        # screens nan/inf; zero parses perfectly well and is still not a step.
+        "tbl_step": _finite(state.get("tbl_step"), 1.0) or 1.0,
         "deg": deg if isinstance(deg, bool) else True, "_extra": extra,
     }
 
@@ -278,6 +332,12 @@ KEYS = [
     ("=", "eq", None, "eq"), ("+", "app", "+", "op"),
 ]
 
+# The function strip is eight keys wide; everything after it folds at six.
+# These two numbers are the layout — see _keypad for what went wrong when the
+# whole list was folded at a single width.
+STRIP_KEYS = 8
+PAD_COLS = 6
+
 ALT_VALUE = {"sin(": "asin(", "cos(": "acos(", "tan(": "atan("}
 
 # The scientific keys whose FACE flips to an inverse (arc-) function when the
@@ -301,7 +361,14 @@ SUP_MARKUP = {"^": "x<sup>y</sup>", "^2": "x<sup>2</sup>"}
 # what each does. Digits and the basic + − × ÷ = . keys are self-evident and
 # deliberately carry no tooltip. sin/cos/tan and DEG get live tooltips in
 # _refresh (they change with the 2nd toggle / angle mode).
+# STO-> and MATH were the only two OPAQUE keys on the pad with no tooltip, and
+# they are the two that open a dialog -- the ones most in need of saying what
+# they do. Both reuse the wording of their own menu item, which is already
+# translated in all 17 catalogs, so naming them cost no new strings and the key
+# and the menu entry now say the same thing.
 TOOLTIPS = {
+    "STO→": "Store Variable…",
+    "MATH": "Function Catalog…",
     "2nd": "Inverse trigonometric functions",
     "sin": "Sine", "cos": "Cosine", "tan": "Tangent",
     "AC": "Clear all",
@@ -463,6 +530,16 @@ def _sci(digits):
     return "%s%se+%d" % ("-" if neg else "", mant, exp)
 
 
+# Mangled source -> compiled code. The graph evaluates ONE expression at 401
+# points per curve per redraw, so without this every sample re-parses and
+# re-compiles the same text. Keyed on the mangled string, which is what actually
+# gets compiled, and cleared wholesale rather than evicted one at a time: this
+# is a calculator, the working set is a handful of expressions, and a plain dict
+# with a ceiling costs nothing to reason about.
+_CODE_CACHE = {}
+_CODE_CACHE_MAX = 256
+
+
 class _PowGuard(ast.NodeTransformer):
     # Rewrite every  a ** b  into  _pow(a, b)  so nested/oversized powers are
     # bounded at runtime. A purely static exponent cap can't see that 9**9**9
@@ -579,14 +656,27 @@ class Calculator(nbapp.AppWindow):
         # 640 on a normal desk, but capped to the live screen (minus the desk
         # margin) so the card can never overflow a small 1366x768 / 1280x800
         # panel. min 320 keeps the keypad usable on an unusually narrow screen.
-        sw, _sh = nbapp.screen_size()
+        sw, sh = nbapp.screen_size()
         card.set_size_request(max(320, min(640, sw - 96)), -1)
+        # ...and the HEIGHT, which this line used to discard as `_sh`. The card
+        # wants 732px; a 1024x768 panel leaves it 595 once the shell strut, the
+        # view bar and the stage's own padding are taken out, so the bottom of
+        # the keypad — "=" among it — sat below the fold and had to be scrolled
+        # to. minsize_sweep cannot see this: it measures the WINDOW, and the
+        # home page is inside a ScrolledWindow that reports a small fixed
+        # minimum whatever the card holds, so the app passed at 1024x722 while
+        # being unusable on one. Compact trims padding, key height and the tape
+        # window; nothing is removed and no font drops below 13px.
+        self._compact = sh < 860
+        if self._compact:
+            shell.get_style_context().add_class("compact")
         card.set_halign(Gtk.Align.CENTER)
         card.set_valign(Gtk.Align.CENTER)
         stage.set_halign(Gtk.Align.CENTER)
         stage.set_valign(Gtk.Align.CENTER)
         stage.pack_start(card, False, False, 0)
 
+        card.pack_start(self._damage_strip(), False, False, 0)
         card.pack_start(self._display(), False, False, 0)
         card.pack_start(self._keypad(), False, False, 0)
         self.stack.add_named(self._graph_page(), "graph")
@@ -596,6 +686,11 @@ class Calculator(nbapp.AppWindow):
         self.connect("key-press-event", self._on_key_calc)
         self.connect("destroy", self._on_destroy)
         self._refresh()
+        # Revealed rather than packed visible, so it SETTLES in with the rest of
+        # the card instead of being there before the window has finished drawing
+        # itself (Amendment 3: every state change travels).
+        if self._damaged:
+            nbtransitions.reveal(self.damage_rev, True)
 
     def _switch_view(self, name):
         self.current_view = name
@@ -668,21 +763,70 @@ class Calculator(nbapp.AppWindow):
         self.y_enabled[i] = check.get_active(); self.graph.queue_draw()
 
     def _table_setting(self, entry, attr):
+        """Take a typed Table Start / Table Step, or leave the old one alone.
+
+        `float()` alone was not enough, the same way it was not enough for the
+        graph window. Measured on the module as it stood, with the table showing
+        Y1 = X:
+
+            Table Step = 0      every one of the 40 rows read x = 0
+            Table Step = nan    every x was nan
+            Table Step = inf    every x was inf, and the first was nan
+            Table Step = 1e400  parses to inf, same as above
+
+        A step of zero is the interesting one: it is a plausible typo, it is
+        accepted in silence, and it produces a table that looks broken with
+        nothing to say why. Written as what a good value IS rather than as a
+        list of bad ones — NaN fails a positive test, and passes a negative one,
+        which is the shape of bug this app already had in window_is_valid."""
         try:
             value = float(entry.get_text())
         except ValueError:
             return
+        if not math.isfinite(value):
+            return
         if attr == "tbl_start":
             self.tbl_start = value
-        else:
+        elif value != 0:                 # a step of 0 is 40 copies of one row
             self.tbl_step = value
+        else:
+            return
         self._refresh_table()
 
     def _eval_x(self, expression, x):
-        old = self.expr
-        self.expr = expression.replace("X", "(%r)" % x)
-        result = self.evaluate()
-        self.expr = old
+        """Evaluate a graph function at one x.
+
+        This used to substitute the sample INTO the source -- `sin(X)` became
+        `sin((1.2345))` -- which meant every one of the 401 samples in a curve
+        was a brand-new string that had to be re-mangled, re-parsed, re-guarded
+        and re-compiled from scratch.
+
+        MEASURED, interleaved before/after over five rounds so machine drift
+        cancels -- a single A-then-B pair on a shared box is not a measurement,
+        and mine said 8x on the first pair and 1.6x on the second:
+
+            before   median 129.0 ms   (min 86.7, max 238.1)
+            after    median  39.8 ms   (min 16.6, max  44.7)
+                     ~3.2x on medians, 5.2x on bests
+
+        That is roughly 8fps becoming roughly 25fps on the software renderer
+        these machines actually use, and every zoom, pan and arrow-key trace
+        paid the old cost again.
+
+        X is bound as a NAME instead. Single uppercase letters are already this
+        calculator's variables, so the environment resolves it with no new
+        machinery, the source string stays identical across the whole curve, and
+        the compiled form is reused. Same substitution semantics as before: a
+        stored variable called X is shadowed by the sample either way."""
+        old_expr = self.expr
+        old_bind = getattr(self, "_x_bind", None)
+        self.expr = expression
+        self._x_bind = x
+        try:
+            result = self.evaluate()
+        finally:
+            self.expr = old_expr
+            self._x_bind = old_bind
         if result == "Error": raise ValueError(self._err_why)
         return float(result)
 
@@ -727,7 +871,17 @@ class Calculator(nbapp.AppWindow):
         name = Gdk.keyval_name(event.keyval)
         enabled = [i for i, on in enumerate(self.y_enabled) if on and self.ys[i].strip()]
         if name in ("Left", "Right"):
-            self.trace_x += (-1 if name == "Left" else 1) * (self.window["xmax"] - self.window["xmin"]) / 100
+            step = (self.window["xmax"] - self.window["xmin"]) / 100
+            # CLAMPED to the window. Held down, this used to walk the trace
+            # straight off the graph and keep going: 400 presses from x=0 in a
+            # [-10, 10] window put it at x=80, pixel 4050 of a 900px canvas,
+            # while the readout confidently reported "X=80 Y=0.984807753012"
+            # for a point nobody could see. trace_x is persisted, so closing
+            # the app did not recover it either -- it reopened just as lost.
+            # A trace that cannot leave the graph cannot get lost on it.
+            self.trace_x = min(self.window["xmax"],
+                               max(self.window["xmin"],
+                                   self.trace_x + (-1 if name == "Left" else 1) * step))
         elif name in ("Up", "Down") and enabled:
             try: p = enabled.index(self.trace_curve)
             except ValueError: p = 0
@@ -741,18 +895,35 @@ class Calculator(nbapp.AppWindow):
         self.trace_label.set_text("Y%d  X=%s  Y=%s" % (self.trace_curve + 1,
             format_number(self.trace_x, self.fix), sy))
 
+    @staticmethod
+    def _table_cell(text, header=False):
+        """One cell of the table, RIGHT-aligned.
+
+        Every cell used to be a plain Gtk.Label, which centres — so a column of
+        numbers had its digits centred against each other and the decimal points
+        wandered from row to row. `0.0174524064373` sat over `0.13917310096`
+        over `0.5`, none of them lined up, and the column could not be read down.
+        Right-aligning ends every value in a column at the same x, which is what
+        makes a numeric column scannable. The header is aligned the same way so
+        it sits over its own column rather than beside it."""
+        lbl = Gtk.Label(label=text, xalign=1.0)
+        lbl.get_style_context().add_class("tblhead" if header else "tblcell")
+        return lbl
+
     def _refresh_table(self):
         for child in self.table_grid.get_children(): self.table_grid.remove(child)
         enabled = [(i, e) for i, e in enumerate(self.ys) if self.y_enabled[i] and e.strip()]
         headers = ["X"] + ["Y%d" % (i + 1) for i, _e in enabled]
-        for c, label in enumerate(headers): self.table_grid.attach(Gtk.Label(label=label), c, 0, 1, 1)
+        for c, label in enumerate(headers):
+            self.table_grid.attach(self._table_cell(label, header=True), c, 0, 1, 1)
         for row in range(40):
             x = self.tbl_start + row * self.tbl_step
-            self.table_grid.attach(Gtk.Label(label=format_number(x, self.fix)), 0, row + 1, 1, 1)
+            self.table_grid.attach(self._table_cell(format_number(x, self.fix)),
+                                   0, row + 1, 1, 1)
             for c, (_i, expression) in enumerate(enabled, 1):
                 try: value = format_number(self._eval_x(expression, x), self.fix)
                 except Exception: value = _t("Undefined")
-                self.table_grid.attach(Gtk.Label(label=value), c, row + 1, 1, 1)
+                self.table_grid.attach(self._table_cell(value), c, row + 1, 1, 1)
         self.table_grid.show_all()
 
     def _zoom(self, kind):
@@ -764,7 +935,18 @@ class Calculator(nbapp.AppWindow):
                 vals = []
                 for e in [e for i, e in enumerate(self.ys) if self.y_enabled[i] and e.strip()]:
                     for seg in sample_segments(lambda x, q=e: self._eval_x(q, x), self.window["xmin"], self.window["xmax"], 120): vals.extend(y for _x, y in seg if abs(y) < 1e6)
-                if vals: self.window["ymin"], self.window["ymax"] = min(vals), max(vals)
+                if vals:
+                    lo, hi = min(vals), max(vals)
+                    # A CONSTANT function makes lo == hi, and a window with no
+                    # height divides by zero in graph_to_pixel on the very next
+                    # draw. Measured: Y1=5, Zoom Fit, ZeroDivisionError inside
+                    # the draw handler -- so the graph stopped painting
+                    # entirely, from two keystrokes and a button. Give a flat
+                    # line room to be a flat line.
+                    if not hi > lo:
+                        pad = max(1.0, abs(lo) * 0.1)
+                        lo, hi = lo - pad, hi + pad
+                    self.window["ymin"], self.window["ymax"] = lo, hi
             else:
                 for a, b in (("xmin", "xmax"), ("ymin", "ymax")):
                     mid = (self.window[a] + self.window[b]) / 2; half = (self.window[b] - self.window[a]) * factor / 2
@@ -776,17 +958,56 @@ class Calculator(nbapp.AppWindow):
         dialog.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL); dialog.add_button(_t("Apply"), Gtk.ResponseType.OK)
         grid = Gtk.Grid(column_spacing=8, row_spacing=4); entries = {}
         for row, key in enumerate(("xmin", "xmax", "ymin", "ymax", "xscl", "yscl")):
-            grid.attach(Gtk.Label(label=key), 0, row, 1, 1); ent = Gtk.Entry(); ent.set_text(str(self.window[key])); grid.attach(ent, 1, row, 1, 1); entries[key] = ent
+            # Xmin / Xmax / ... — the label a graphing calculator puts on these,
+            # rather than the dict key. Left untranslated on purpose, like the
+            # sin/cos/log key faces: they are mathematical notation, not prose.
+            grid.attach(Gtk.Label(label=key.capitalize()), 0, row, 1, 1)
+            ent = Gtk.Entry(); ent.set_text(format_number(self.window[key], self.fix))
+            grid.attach(ent, 1, row, 1, 1); entries[key] = ent
         dialog.get_content_area().add(grid); dialog.show_all()
         if dialog.run() == Gtk.ResponseType.OK:
             try:
                 values = {k: float(e.get_text()) for k, e in entries.items()}
-                if values["xmin"] >= values["xmax"] or values["ymin"] >= values["ymax"] or values["xscl"] <= 0 or values["yscl"] <= 0: raise ValueError()
+                if not window_is_valid(values): raise ValueError()
                 self.window.update(values); self.graph.queue_draw()
             except ValueError: pass
         dialog.destroy()
 
     # ---- display ----
+    def _damage_strip(self):
+        """The line above the readout that appears only when the stored
+        calculator could not be read. Dismissible, because it is news rather
+        than a state: once it has been read it has done its whole job, and a
+        calculator that keeps a paragraph of explanation pinned over its keypad
+        has been made worse by the fix.
+
+        It sits INSIDE the paper card and above the display, so it reads as part
+        of the same sheet -- the alternative, floating it over the readout,
+        would cover the one thing the person opened the app to look at."""
+        self.damage_rev = Gtk.Revealer()
+        strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        strip.get_style_context().add_class("damage-note")
+
+        self.damage_lbl = Gtk.Label(label=_damaged_note(), xalign=0)
+        self.damage_lbl.set_line_wrap(True)
+        self.damage_lbl.set_max_width_chars(30)
+        self.damage_lbl.get_style_context().add_class("damage-text")
+        strip.pack_start(self.damage_lbl, True, True, 0)
+
+        shut = Gtk.Button(label="\u00d7")
+        shut.set_relief(Gtk.ReliefStyle.NONE)
+        shut.set_valign(Gtk.Align.START)
+        shut.set_tooltip_text(_t("Close"))
+        shut.get_style_context().add_class("damage-shut")
+        shut.connect("clicked", self._dismiss_damage)
+        strip.pack_end(shut, False, False, 0)
+
+        self.damage_rev.add(strip)
+        return self.damage_rev
+
+    def _dismiss_damage(self, *_):
+        nbtransitions.reveal(self.damage_rev, False)
+
     def _display(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.get_style_context().add_class("display")
@@ -802,8 +1023,10 @@ class Calculator(nbapp.AppWindow):
 
         tape_scroll = Gtk.ScrolledWindow()
         tape_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        tape_scroll.set_size_request(-1, 92)
+        tape_scroll.set_size_request(
+            -1, 68 if getattr(self, "_compact", False) else 92)
         self.tape_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.tape_box.set_direction(Gtk.TextDirection.LTR)   # expressions, not prose
         tape_scroll.add(self.tape_box)
         box.pack_start(tape_scroll, False, False, 0)
 
@@ -815,6 +1038,7 @@ class Calculator(nbapp.AppWindow):
         # ellipsizing once it hit the edge of the screen. Capped, the card keeps
         # its designed width and the text ellipsizes inside it.
         self.hist_lbl = Gtk.Label(label="", xalign=1)
+        self.hist_lbl.set_direction(Gtk.TextDirection.LTR)
         self.hist_lbl.set_hexpand(True)
         self.hist_lbl.set_ellipsize(Pango.EllipsizeMode.START)
         self.hist_lbl.set_max_width_chars(1)
@@ -835,6 +1059,14 @@ class Calculator(nbapp.AppWindow):
         box.pack_start(self._histbox, False, False, 0)
 
         self.disp_lbl = Gtk.Label(label="0", xalign=1)
+        # The readout is a NUMBER, and it must hug the same edge in every
+        # language: digits are written left to right in Yiddish as in English,
+        # and a figure grows leftward from the units column as it is typed.
+        # Under the process-wide RTL direction the whole display flipped and the
+        # answer sat against the left edge with the room to grow on the wrong
+        # side. The instrument is pinned; the kicker labels above it are text
+        # and stay with the language.
+        self.disp_lbl.set_direction(Gtk.TextDirection.LTR)
         self.disp_lbl.set_hexpand(True)
         self.disp_lbl.set_ellipsize(Pango.EllipsizeMode.START)
         self.disp_lbl.set_max_width_chars(1)
@@ -850,15 +1082,57 @@ class Calculator(nbapp.AppWindow):
 
     # ---- keypad ----
     def _keypad(self):
-        grid = Gtk.Grid()
-        grid.get_style_context().add_class("keypad")
-        grid.set_row_spacing(1)
-        grid.set_column_spacing(1)
-        grid.set_column_homogeneous(True)
-        grid.set_row_homogeneous(True)
+        """Two grids, and the split is the whole point.
+
+        KEYS is written in six groups, and five of them are six keys wide and
+        read as a calculator does — `sqrt pi 7 8 9 div`, `x2 e 4 5 6 x`,
+        `1/x x! 1 2 3 -`, `+/- % 0 . = +`. The FIRST group is eight: the
+        function keys. Laying all 38 out with `divmod(i, 6)` therefore shifted
+        every row after the first by two, and the result on screen was 7 and 8
+        marooned at the end of one row with 9 beginning the next, 4 and 5 ending
+        the row after that, and a hole four cells wide under `=`. The digits
+        were not in a number pad at all.
+
+        Nothing was wrong with the LIST; it was being folded at the wrong width.
+        So the eight function keys get their own eight-wide strip and the
+        remaining thirty fold at six into exactly five full rows, which is why
+        no key had to be added, moved or dropped to fix this and why there is
+        now no empty cell anywhere in the pad.
+
+        The two grids are separate widgets but one surface: same background,
+        same 1px gaps, and the strip carries the pad's own bottom border so the
+        seam between them reads as another key gap rather than a join."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        box.get_style_context().add_class("keypad")
+
+        strip = Gtk.Grid()
+        strip.get_style_context().add_class("keystrip")
+        pad = Gtk.Grid()
+        for g in (strip, pad):
+            g.set_row_spacing(1)
+            g.set_column_spacing(1)
+            g.set_column_homogeneous(True)
+            g.set_row_homogeneous(True)
+            g.get_style_context().add_class("keypad")
+            # A keypad is an INSTRUMENT, not a sentence. nbapp sets the process
+            # default direction to RTL for Yiddish, and Gtk.Grid mirrors its
+            # columns with it — which rendered the number block as 9 8 7 /
+            # 6 5 4 / 3 2 1 / . 0. Digits are written left to right in Hebrew,
+            # Yiddish and Arabic alike, and every calculator sold into those
+            # markets has the standard Western pad; a mirrored one is not a
+            # translation, it is a different machine. Pinned LTR. The chrome
+            # around it — the view bar, the menus, the kicker labels — is text
+            # and stays with the language.
+            g.set_direction(Gtk.TextDirection.LTR)
+        box.pack_start(strip, False, False, 0)
+        box.pack_start(pad, True, True, 0)
 
         for i, kd in enumerate(KEYS):
-            r, c = divmod(i, 6)
+            if i < STRIP_KEYS:
+                grid, r, c = strip, 0, i
+            else:
+                grid = pad
+                r, c = divmod(i - STRIP_KEYS, PAD_COLS)
             label, action, value, ktype = kd
             btn = Gtk.Button()
             btn.set_relief(Gtk.ReliefStyle.NONE)
@@ -880,6 +1154,14 @@ class Calculator(nbapp.AppWindow):
                     child.set_markup(markup)
                 else:
                     child.set_text(label)
+            # ...and the KEY FACES with it. Pinning the grid stops the columns
+            # mirroring but not the glyphs: under an RTL paragraph direction the
+            # bidi algorithm draws "(" as ")" and vice versa, so the two bracket
+            # keys swapped faces while still inserting what they always did —
+            # the key that LOOKED like ")" typed "(". A label inherits the
+            # direction it is realised under, so each face is pinned too.
+            btn.set_direction(Gtk.TextDirection.LTR)
+            child.set_direction(Gtk.TextDirection.LTR)
             btn.add(child)
             tip = "Delete last entry" if action == "back" else TOOLTIPS.get(label)
             if tip is not None:
@@ -894,7 +1176,7 @@ class Calculator(nbapp.AppWindow):
                 self._second_btn = btn
             elif label in INV_KEYS:
                 self._inv_btns.append((label, btn, child))
-        return grid
+        return box
 
     # ---- logic ----
     def _on_press(self, _btn, kd):
@@ -1158,16 +1440,26 @@ class Calculator(nbapp.AppWindow):
             "Ans": getattr(self, "ans", 0),
         }
         env.update({k: v for k, v in getattr(self, "variables", {}).items() if re.match(r"^[A-Z]$", k)})
+        # The graph's sample point, when one is being plotted. Set last so it
+        # shadows a stored variable of the same name -- which is what the old
+        # textual substitution did too.
+        if getattr(self, "_x_bind", None) is not None:
+            env["X"] = self._x_bind
         try:
             # Rewrite  **  into bounded _pow() calls before evaluating so an
             # oversized power (9^9^9) is rejected up front instead of building a
             # giant integer that hangs/OOMs the app. A parse/syntax error on an
             # incomplete expression still degrades to "Error" as before.
-            tree = ast.parse(js, mode="eval")
-            _PowGuard().visit(tree)
-            ast.fix_missing_locations(tree)
-            r = eval(compile(tree, "<calc>", "eval"),  # noqa: S307
-                     {"__builtins__": {}}, env)
+            code = _CODE_CACHE.get(js)
+            if code is None:
+                tree = ast.parse(js, mode="eval")
+                _PowGuard().visit(tree)
+                ast.fix_missing_locations(tree)
+                code = compile(tree, "<calc>", "eval")
+                if len(_CODE_CACHE) >= _CODE_CACHE_MAX:
+                    _CODE_CACHE.clear()
+                _CODE_CACHE[js] = code
+            r = eval(code, {"__builtins__": {}}, env)  # noqa: S307
         except ZeroDivisionError:
             return self._fail(_WHY_ZERO)
         except (OverflowError, MemoryError):
@@ -1402,20 +1694,60 @@ class Calculator(nbapp.AppWindow):
     def _clear_all(self):
         self.press(("AC", "ac", None, "clear"))
 
+    def _store_value(self):
+        """The number STO-> should put into a variable, or None.
+
+        This was `float(self.expr)` behind an `except ValueError: pass`, so
+        storing worked only when the display already held a bare decimal and
+        every other case did nothing AND SAID NOTHING. Measured, all silent:
+
+            1+2       stored nothing      any unevaluated expression
+            sqrt(9)   stored nothing      anything with a function
+            2*PI      stored nothing      anything with a constant
+            -5        stored nothing      <- the keypad's OWN minus key
+
+        The last one is the one that makes this a real bug rather than a
+        limitation: the minus key inserts U+2212 MINUS SIGN, which float() does
+        not accept, so the calculator could not store a negative number typed on
+        its own keypad. Nothing appeared, nothing was said, and the variable
+        silently kept whatever it held before.
+
+        Evaluated through the app's own evaluator now — the same one "=" uses,
+        which is what every one of those cases needed. A genuinely unreadable
+        expression still returns None, and evaluate() has already put the reason
+        on the display by then."""
+        result = self.evaluate()
+        if result == "Error":
+            return None
+        try:
+            value = float(result)
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
+
     def _store_dialog(self):
         dialog = Gtk.Dialog(title=_t("Store Variable"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
         dialog.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL); dialog.add_button(_t("Store"), Gtk.ResponseType.OK)
         entry = Gtk.Entry(); entry.set_max_length(1); entry.set_placeholder_text(_t("Letter A-Z")); dialog.get_content_area().add(entry); dialog.show_all()
         if dialog.run() == Gtk.ResponseType.OK and re.match(r"^[A-Za-z]$", entry.get_text()):
-            try: self.variables[entry.get_text().upper()] = float(self.expr)
-            except ValueError: pass
-            self._save_prefs()
+            value = self._store_value()
+            if value is not None:
+                self.variables[entry.get_text().upper()] = value
+                self._save_prefs()
         dialog.destroy()
 
     def _variables_dialog(self):
         dialog = Gtk.Dialog(title=_t("Variables"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
         dialog.add_button(_t("Close"), Gtk.ResponseType.CLOSE)
-        text = "\n".join("%s = %s" % item for item in sorted(self.variables.items())) or _t("No Stored Variables")
+        # format_number, not str(): this listed variables in a DIFFERENT number
+        # format from every other surface in the app. A stored 1 read "1.0"
+        # here and "1" on the display, and storing 0.1+0.2 listed
+        # "0.30000000000000004" while the display showed "0.3" -- the float
+        # noise %.12g exists to hide. The Fix setting applies here too, for the
+        # same reason: one display mode, everywhere.
+        text = "\n".join("%s = %s" % (name, format_number(value, self.fix))
+                         for name, value in sorted(self.variables.items())) \
+            or _t("No Stored Variables")
         dialog.get_content_area().add(Gtk.Label(label=text, xalign=0)); dialog.show_all(); dialog.run(); dialog.destroy()
 
     def _catalog_dialog(self):
@@ -1442,35 +1774,76 @@ class Calculator(nbapp.AppWindow):
         dialog.destroy()
 
     # ---- persistence ----
-    def _load_prefs(self):
-        """Return the stored angle mode (True = degrees), or the degrees default
-        when the file is missing or malformed. Must never crash the launch."""
-        try:
-            with open(STATE_FILE) as fh:
-                data = json.load(fh)
-            deg = data.get("deg")
-            if isinstance(deg, bool):
-                return deg
-        except Exception:
-            pass
-        return True
+    # _load_prefs used to live here: a SECOND reader of calculator.json that
+    # returned the angle mode and swallowed every error. Nothing called it --
+    # __init__ has read the whole state through _load_state since the tape was
+    # added. Deleted rather than left: it opened the same file with different
+    # damage semantics (no quarantine, no notice, no _store_readable), so wiring
+    # it back up for one small preference would have quietly restored the loss
+    # this file's tests now guard against.
 
     def _load_state(self):
+        """Read calculator.json, and make sure that whatever comes back, the
+        bytes already on disk survive this session's first save.
+
+        TWO damage classes, needing two different helpers, and this app called
+        NEITHER. A file that fails to PARSE is nbapp.preserve_damaged's case. A
+        file that parses into something that is not an object at all -- a JSON
+        array, a bare string, the shape a bad merge or a sync tool that
+        concatenates files produces -- is nbapp.quarantine_unrecognized's,
+        because valid JSON of the wrong shape parses perfectly and only this app
+        knows the shape is not a calculator.
+
+        MEASURED, on the module as it stood: a store holding three variables and
+        a tape, saved as a bare JSON string, was read as "nothing here"; the
+        close-time flush wrote the blank default over it; preserve_damaged's
+        .bak held the bytes for exactly one cycle, and the SECOND open+close
+        overwrote that too. Two opens, two closes, no user action, no message.
+        A wrong-shape ARRAY survived, which is what makes the bug easy to miss:
+        _bak_would_shrink compares payload weight, and an array of the user's
+        real keys outweighs the blank default while a bare string does not.
+
+        `_store_readable` now means one narrow thing -- the original could NOT
+        be moved out of harm's way -- because that is the only case where
+        refusing to save is the lesser loss. It used to mean "the file did not
+        parse", which gated every save for the whole session: the file was kept
+        and everything the person did afterwards was silently discarded at
+        close. contacts.py:494 records that exact cure shipping in journal and
+        the save-failure gate catching it; this app still had it."""
         self._store_readable = True
+        self._damaged = False        # did we fail to read what was there
+        self._damaged_path = None    # where the bytes went, if we could move them
         try:
             with open(STATE_FILE) as fh:
                 data = json.load(fh)
-            return data if isinstance(data, dict) else {}
         except FileNotFoundError:
             return {}
         except Exception:
-            self._store_readable = False
-            return {}
+            self._damaged_path = nbapp.preserve_damaged(STATE_FILE)
+        else:
+            if isinstance(data, dict):
+                return data
+            self._damaged_path = nbapp.quarantine_unrecognized(STATE_FILE)
+        # Both branches land here: something was there and we could not read it.
+        # Saving is safe once the original has been moved aside; when that move
+        # FAILED the original is still sitting at STATE_FILE, and overwriting it
+        # is the one outcome worth refusing.
+        self._damaged = True
+        self._store_readable = (self._damaged_path is not None
+                                or not os.path.exists(STATE_FILE))
+        return {}
 
     def _save_prefs(self):
         """Persist the angle mode to this app's private JSON file. Never crash
         on I/O — a read-only or missing config dir just skips the save."""
         try:
+            # Only when the original could NOT be moved aside. A damaged store
+            # that _load_state quarantined is already safe under its
+            # .damaged-<stamp> name, so saving over the (now absent) file costs
+            # nothing and the session's work is kept. Gating the save on "the
+            # file was damaged" instead is the cure contacts.py:494 records
+            # journal shipping: the file survived and everything the person did
+            # afterwards was silently thrown away at close.
             if not self._store_readable:
                 return
             payload = dict(getattr(self, "_extra", {}) or {})
@@ -1583,11 +1956,44 @@ class Calculator(nbapp.AppWindow):
         .calcnav button { border-radius: 0; min-height: 34px; }
         .calcnav button.active { background: #C8341E; color: #FCFBF8; }
         .graphpage, .tablepage { background: #F8F7F2; padding: 14px; }
+        /* A column of numbers is read DOWN, so the header carries the weight
+           and the rule, and the values line up under it. */
+        .tblhead { font-weight: 600; color: #6E695E; font-size: 12px;
+                   letter-spacing: 0.06em; padding-bottom: 4px;
+                   border-bottom: 1px solid #C9C4B6; }
+        .tblcell { font-size: 13px; color: #1A1916; }
         .calccard { background: #F8F7F2; border: 1px solid #1A1916;
                     box-shadow: 4px 4px 0 rgba(26,25,22,0.12); }
         .calccard * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
 
+        /* The damaged-store notice. It is on the card's own paper with a rule
+           under it, not a coloured alert box floated over the readout: this is
+           a line of the same sheet that happens to be about the sheet. The
+           accent bar on the leading edge is the only colour, and it is the
+           OS-wide warning tone rather than a new one. */
+        .damage-note { background: #F1EEE6; padding: 12px 14px 12px 12px;
+                       border-bottom: 1px solid #1A1916;
+                       border-left: 4px solid #C8341E; }
+        .damage-text { font-size: 12px; color: #3A382F; }
+        /* A button's colour never reaches its own label without this: the label
+           is a separate node, so `.damage-shut { color: }` styles the button
+           box only and the glyph stays default-coloured. */
+        .damage-shut { min-width: 22px; min-height: 22px; padding: 0;
+                       border-radius: 0; color: #6E695E; }
+        .damage-shut label { color: inherit; font-size: 15px; }
+
         .display { padding: 30px 28px 26px; border-bottom: 1px solid #1A1916; }
+
+        /* Short panels (1024x768 and 1280x800). Same layout, tighter metrics:
+           the whole card has to sit above the fold, because a calculator whose
+           "=" needs a scroll is not a calculator. */
+        .compact .calcstage { padding: 14px; }
+        .compact .display { padding: 18px 24px 16px; }
+        .compact .disp-hist { margin-top: 8px; min-height: 18px; }
+        .compact .disp-main { font-size: 44px; min-height: 50px; }
+        .compact .key { min-height: 52px; }
+        .compact .keystrip .key { min-height: 44px; }
+        .compact .damage-note { padding: 9px 12px 9px 10px; }
         .disp-kicker { font-size: 11px; letter-spacing: 0.16em;
                        color: #9A9484; font-weight: 600; }
         .disp-mode { font-size: 12px; letter-spacing: 0.08em; color: #8A857A;
@@ -1613,6 +2019,11 @@ class Calculator(nbapp.AppWindow):
         .keypad { background: #D7D2C5; }
         .key { border: none; border-radius: 0; box-shadow: none;
                min-height: 66px; padding: 0; }
+        /* The function strip packs eight keys into the width the pad gives six,
+           so its keys are shorter and their labels a step down -- a strip key is
+           a destination, not something anyone drums on. */
+        .keystrip .key { min-height: 52px; }
+        .keystrip .key label { font-size: 15px; }
         .key label { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .k-num        { background: #F8F7F2; color: #1A1916; }
         .k-num label  { font-size: 24px; font-weight: 500; }

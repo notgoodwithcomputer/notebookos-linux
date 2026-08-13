@@ -135,6 +135,36 @@ def _date_key(ordinal):
     return "%04d-%02d-%02d" % (y + (1 if m <= 2 else 0), m, d)
 
 
+def _canonical_date(s):
+    """"YYYY-MM-DD" for a day that really exists, or None.
+
+    THE BUG THIS EXISTS FOR: `nbapp.day_ordinal` is deliberately forgiving — it
+    takes 2026-02-29 (2026 is not a leap year) and hands back the ordinal for
+    2026-03-01, and the same for 2026-04-31 and 2026-01-32. The app validated
+    with it, then stored the RAW STRING the user typed and printed that back. So
+    a due date of "2026-01-32" showed in the homework list as **32 January**,
+    and was grouped and sorted as 1 February. Measured, all of these: "29
+    February" in a non-leap year, "30 February", "31 April", "32 January".
+    Showing a day that does not exist, and then behaving as a different day, is
+    two lies in one row.
+
+    Formatting slop is fine and is normalised rather than refused: "2026-1-5"
+    means the fifth of January and comes back as "2026-01-05". Only a day that
+    is not on the calendar returns None."""
+    o = nbapp.day_ordinal(s)
+    if o is None:
+        return None
+    canon = _date_key(o)
+    try:
+        y, m, d = (int(x) for x in str(s).split("-"))
+        cy, cm, cd = (int(x) for x in canon.split("-"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    # The ordinal round-trips to a DIFFERENT calendar day than the one named,
+    # which is precisely how "31 April" is detected: it comes back as 1 May.
+    return canon if (y, m, d) == (cy, cm, cd) else None
+
+
 def _field(label, widget):
     """A labelled control for the dialogs: the label sits above the thing it
     names, so a narrow dialog never has to choose between a readable label and
@@ -169,7 +199,18 @@ _MONTHS = ["January", "February", "March", "April", "May", "June", "July",
 
 
 def _pretty_due(due):
-    """A due date said the way it would be spoken."""
+    """A due date said the way it would be spoken.
+
+    A day that is not on the calendar is said as NOTHING rather than repeated
+    back. The dialog and the loader both refuse one now, so this is the third
+    lock on the same door — but it is the one at the point of display, and this
+    function is also handed lecture dates, which come from anywhere a store has
+    been. Better a row with no date than a row claiming 32 January.
+    """
+    canon = _canonical_date(due)
+    if canon is None:
+        return ""
+    due = canon
     o = nbapp.day_ordinal(due)
     if o is None:
         return ""
@@ -792,11 +833,21 @@ class Academics(nbapp.AppWindow):
                 warn.show()
                 continue
             d = due_ent.get_text().strip()
-            if d and nbapp.day_ordinal(d) is None:
-                warn.set_text(_t("A due date looks like %s")
-                              % _date_key(today))
-                warn.show()
-                continue
+            if d:
+                canon = _canonical_date(d)
+                if canon is None:
+                    # Two different mistakes, two different sentences: a date
+                    # this app cannot read at all, versus a date it can read
+                    # perfectly well that is not on the calendar. Answering
+                    # "a due date looks like 2026-08-11" to somebody who typed
+                    # 2026-02-29 tells them nothing about what is wrong with it.
+                    warn.set_text(
+                        _t("A due date looks like %s") % _date_key(today)
+                        if nbapp.day_ordinal(d) is None
+                        else _t("There is no such day in that month."))
+                    warn.show()
+                    continue
+                d = canon       # store the normalised form, never the raw text
             # Read the radio's POSITION, never its label: nbi18n translates
             # widget text in place, so matching on the string breaks in every
             # language but English. Same rule as _combo_class_index.
@@ -1690,10 +1741,17 @@ class Academics(nbapp.AppWindow):
             cls = class_at.get(cls, -1) if cls >= 0 else -1
             if cls < 0:
                 cls = -1           # an assignment can outlive its class
-            due = str(h.get("due") or "")
+            # Canonical, never the raw text. A store written before the dialog
+            # checked this — or edited by hand — can carry "2026-01-32", which
+            # the list would render as "32 January" while sorting it as the 1st
+            # of February. Anything the calendar does have keeps its day and
+            # gains a normal shape ("2026-1-5" -> "2026-01-05"); anything it
+            # does not have loses the date rather than the assignment, which is
+            # the same trade _clean_meets makes for a nonsense class time.
+            due = _canonical_date(str(h.get("due") or "")) or ""
             rec = dict(h)          # carry anything this version does not know
             rec.update({"title": title[:120], "cls": cls,
-                        "due": due if nbapp.day_ordinal(due) is not None else "",
+                        "due": due,
                         "done": bool(h.get("done")),
                         # Anything that is not the word "exam" is ordinary work,
                         # so a store written before this field existed — and a

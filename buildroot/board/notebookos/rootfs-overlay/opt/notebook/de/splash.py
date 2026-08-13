@@ -28,6 +28,11 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, GdkPixbuf  # noqa: E402
 
+try:
+    import nbmotion  # noqa: E402
+except Exception:    # motion is optional; boot handover is not
+    nbmotion = None
+
 # The splash is the FIRST thing anyone reads on this computer, so it has to be
 # in their language too. nbi18n is a plain JSON read with no GTK dependency, but
 # the splash must come up even if the desktop tree is damaged — so a failed
@@ -220,7 +225,27 @@ class Splash(Gtk.Window):
         self._done = True
         self._fraction = 1.0
         self.bar.queue_draw()
+        # Arm the handover before attempting any motion.  The lift gets only
+        # the grace period that already existed; it can never extend boot.
         GLib.timeout_add(GRACE_MS, Gtk.main_quit)
+        try:
+            if nbmotion is None:
+                raise RuntimeError("nbmotion unavailable")
+            start_x, start_y = self.get_position()
+
+            def _lift(value):
+                # Move the already-painted toplevel: no relayout and no
+                # full-screen opacity repaint on the software renderer.
+                self.move(start_x, int(round(start_y - 32.0 * value)))
+
+            # nbmotion-inventory: system.splash-desktop
+            nbmotion.animate(self, _lift, 0.0, 1.0,
+                             duration=nbmotion.PAGE,
+                             easing=nbmotion.DEPART)
+        except Exception:
+            # Motion is strictly best-effort at boot.  A broken import,
+            # primitive, widget or frame clock hands over immediately.
+            Gtk.main_quit()
 
     def _failsafe(self):
         # never let the splash trap the session behind it

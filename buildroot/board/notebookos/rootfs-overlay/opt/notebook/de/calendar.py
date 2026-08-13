@@ -314,18 +314,43 @@ _MONTH_EXTRA = {"sept": 9, "sep.": 9, "sept.": 9, "jan.": 1, "feb.": 2,
                 "oct.": 10, "nov.": 11, "dec.": 12}
 
 
+def _fold(word):
+    """A typed word, reduced so it can be compared with a CATALOG word without
+    punishing the keyboard the person actually has.
+
+    Two measured failures, both of which are the user typing their own language
+    correctly and the app not understanding:
+
+      fr  the catalog says "Aujourd\u2019hui" with a TYPOGRAPHIC apostrophe
+          (U+2019). Every keyboard produces the ASCII one. So "aujourd'hui"
+          was not recognised and the French word for "today" simply did not
+          work in quick-add.
+      tr  the catalog says "Yar\u0131n" with a DOTLESS i. Python's str.lower()
+          is not locale-aware, so "YARIN".lower() is "yarin" with a DOTTED i
+          and never matches. Typing in capitals lost the word.
+
+    Accents are deliberately NOT stripped: "manana" for "ma\u00f1ana" is a
+    spelling mistake, not something the keyboard did to them, and folding it
+    away would start matching words nobody typed."""
+    w = word.lower().strip(",")
+    for a, b in (("\u2019", "'"), ("\u02bc", "'"), ("\u00b4", "'"),
+                 ("\u0131", "i"), ("\u0130", "i")):
+        w = w.replace(a, b)
+    return w
+
+
 def _word_tokens():
     """(weekday word -> 0-6, month word -> 1-12), in English and in the active
     language, full names and three-letter forms."""
     days, months = {}, {}
     for i, name in enumerate(WEEKDAYS_FULL):
         for form in (name, _t(name)):
-            low = form.lower()
+            low = _fold(form)
             days.setdefault(low, i)
             days.setdefault(low[:3], i)
     for i, name in enumerate(MONTHS):
         for form in (name, _t(name)):
-            low = form.lower()
+            low = _fold(form)
             months.setdefault(low, i + 1)
             months.setdefault(low[:3], i + 1)
     for form, i in _MONTH_EXTRA.items():
@@ -413,9 +438,9 @@ def parse_quick_event(text, base_day, cal_names=()):
     i = 0
     while i < len(words):
         w = words[i]
-        low = w.lower().strip(",")
-        nxt = words[i + 1].lower().strip(",") if i + 1 < len(words) else ""
-        prev = words[i - 1].lower().strip(",") if i else ""
+        low = _fold(w)
+        nxt = _fold(words[i + 1]) if i + 1 < len(words) else ""
+        prev = _fold(words[i - 1]) if i else ""
 
         if len(w) > 1 and w[0] == "#" and cal_names:
             key = low[1:]
@@ -424,19 +449,27 @@ def parse_quick_event(text, base_day, cal_names=()):
                 cal = hit
                 i += 1
                 continue
-        if hour is None and low in ("noon", "midday"):
+        # Localised the same way the weekday and month words are. These three
+        # were the ONLY day/time vocabulary still hard-coded to English, so
+        # "Mittag" and "midi" stayed in the event's name while "Donnerstag" and
+        # "jeudi" were understood — an inconsistency inside one sentence.
+        # _t() returns the English source until the catalogs carry these two
+        # keys, so this is correct today and simply starts working in the other
+        # sixteen languages the moment they land.
+        if hour is None and low in ("noon", "midday", _fold(_t("Noon")),
+                                    _fold(_t("Midday"))):
             hour = 12.0
             i += 1
             continue
-        if hour is None and low == "midnight":
+        if hour is None and low in ("midnight", _fold(_t("Midnight"))):
             hour = 0.0
             i += 1
             continue
-        if day is None and low in ("today", _t("Today").lower()):
+        if day is None and low in ("today", _fold(_t("Today"))):
             day = base_day
             i += 1
             continue
-        if day is None and low in ("tomorrow", _t("Tomorrow").lower()):
+        if day is None and low in ("tomorrow", _fold(_t("Tomorrow"))):
             day = base_day + timedelta(days=1)
             i += 1
             continue
@@ -500,12 +533,12 @@ def parse_quick_event(text, base_day, cal_names=()):
         keep.append(w)
         i += 1
 
-    while keep and keep[-1].lower().strip(",") in _GLUE:
+    while keep and _fold(keep[-1]) in _GLUE:
         keep.pop()
     title = " ".join(keep).strip(" ,-")
     if not title:
         return None
-    if all(w.lower().strip(",") in DAY_WORDS for w in keep):
+    if all(_fold(w) in DAY_WORDS for w in keep):
         return None      # "thursday" on its own names a day, not an event
     return (title, day if day is not None else base_day,
             9.0 if hour is None else hour, cal)
@@ -588,7 +621,12 @@ class Calendar(nbapp.AppWindow):
         self.cur_y = start.year
         self.cur_m = start.month
         self.sel = start
-        self.view = "month"
+        # "calendar.py day" opens on the Day view (the desktop Schedule tile
+        # uses this: the tile IS that view in miniature, so clicking it must
+        # land on the full-size version of what was clicked, not on a month
+        # to go and find it in). As guarded as the date above — any other
+        # argv keeps the month view a normal launch opens on.
+        self.view = "day" if self._parse_initial_view(initial_date) else "month"
 
         # Named calendars (user-managed) and their per-name visibility.
         self.calendars = self._load_calendars()   # [{"name","color"}, ...]
@@ -665,6 +703,22 @@ class Calendar(nbapp.AppWindow):
         if isinstance(arg, date):
             return arg
         return Calendar._iso_to_date(arg)
+
+    @staticmethod
+    def _parse_initial_view(arg):
+        """Whether the launch asked for the Day view: an explicit "day"
+        argument, or one anywhere in argv (the same slot the launch date
+        rides in). Never raises, and anything that is not the one keyword
+        means the default month view — argv garbage must not steer this any
+        more than it steers the date."""
+        if isinstance(arg, str) and arg.strip().lower() == "day":
+            return True
+        try:
+            argv = sys.argv[1:]
+        except Exception:
+            return False
+        return any(isinstance(a, str) and a.strip().lower() == "day"
+                   for a in argv)
 
     def _undo_snapshot(self):
         """The user-owned calendar state needed to reverse a destructive edit."""
@@ -2151,17 +2205,28 @@ class Calendar(nbapp.AppWindow):
         return ev["id"]
 
     def _read_events_file(self):
-        """The raw list of event dicts currently in calendar.json, or None when
-        the file is missing / unreadable / not a list. Never raises."""
+        """The raw list of records currently in calendar.json, or None when the
+        file is missing / unreadable / not a list. Never raises.
+
+        Returns them UNFILTERED. This used to end `[it for it in items if
+        isinstance(it, dict)]`, and that one clause quietly broke the promise
+        _merge_disk_events makes right below it — that a record we cannot read
+        is "carried through the write untouched rather than dropped". A row that
+        is not a dict never reached the orphan path at all, so the next
+        wholesale rewrite dropped it silently.
+
+        Measured: four rows planted on disk (one good event, a bare string, a
+        dict with no date, a dict with only a title) came back as three. Both
+        malformed DICTS were preserved; the string was gone. The filter is also
+        redundant — `_norm_event` opens with its own `isinstance(item, dict)`
+        guard and returns None for anything else, which is exactly the signal
+        the orphan path is waiting for."""
         try:
             with open(EVENTS_FILE) as fh:
                 data = json.load(fh)
         except Exception:
             return None
-        items = self._event_list(data)
-        if items is None:
-            return None
-        return [it for it in items if isinstance(it, dict)]
+        return self._event_list(data)
 
     def _merge_disk_events(self):
         """Fold back any event that appeared in calendar.json since this session
@@ -3232,8 +3297,37 @@ class Calendar(nbapp.AppWindow):
             # 'Unrecognized file' and leaves the model/path/autosave untouched.
             if "calendars" not in data and "events" not in data:
                 return False
+            # A dict document must carry 'events'. _serialize_document always
+            # writes both keys, so anything this app produced has it, and a dict
+            # with only 'calendars' is not one of ours. It used to be accepted,
+            # and because the load below assigns self.events unconditionally, a
+            # document that never mentioned events DELETED them: opening
+            # {"calendars": [...]} over a calendar holding three took it to
+            # zero and swapped the calendar list, reporting success. Silence
+            # about events is not an instruction to discard them. An explicitly
+            # EMPTY list still loads and still clears — that one is the document
+            # saying so.
+            if "events" not in data:
+                return False
             raw_evs = data.get("events")
             if raw_evs is not None and not isinstance(raw_evs, list):
+                return False
+            # ...and the list has to contain at least one thing we can read AS
+            # an event. Checking only that "events" is a list let any foreign
+            # JSON through, and because the load below keeps only what
+            # _norm_event can salvage, "through" meant the calendar was emptied.
+            # Measured, opening each of these over a calendar holding three
+            # events: all three gone, no warning, the Open reported as success.
+            #
+            #     {"events": ["track1", "track2"]}   a playlist
+            #     {"events": [1, 2, 3]}              a log
+            #     {"events": [null, null]}
+            #
+            # An explicitly EMPTY list is a different thing and still loads: a
+            # calendar document with no events in it is a calendar document, and
+            # opening one is a deliberate way to start clean.
+            if raw_evs and not any(self._norm_event(it) is not None
+                                   for it in raw_evs):
                 return False
             raw_cals = data.get("calendars")
         elif isinstance(data, list):
@@ -3638,7 +3732,9 @@ class Calendar(nbapp.AppWindow):
 
 if __name__ == "__main__":
     # Optional "calendar.py YYYY-MM-DD" opens straight onto that day (the
-    # desktop Calendar widget's day-click uses this). Parsing/guarding lives in
-    # Calendar._parse_initial_date; nbapp.run just needs a zero-arg factory.
+    # desktop Calendar widget's day-click uses this), and "calendar.py day"
+    # opens today's Day view (the Schedule tile's click). Parsing/guarding
+    # lives in Calendar._parse_initial_date / _parse_initial_view; nbapp.run
+    # just needs a zero-arg factory.
     _arg = next((a for a in sys.argv[1:] if a and not a.startswith("-")), None)
     nbapp.run(lambda: Calendar(_arg))

@@ -52,6 +52,8 @@ import time
 import nbapp
 import nbpicker
 import nbicons
+import nbmotion
+import nbtransitions
 from nbi18n import _t  # noqa: E402
 
 # ---- optional video engine (guarded) --------------------------------------
@@ -267,6 +269,8 @@ class MediaViewer(nbapp.AppWindow):
         self._btn = {}                 # toolbar name -> Gtk.Button
         self._btn_img = {}             # toolbar name -> its Gtk.Image (for glyphs)
         self._confirm_layer = None     # the in-window confirm overlay, if open
+        self._surface_name = "empty"  # the one stage surface currently shown
+        self._surface_gen = 0          # drops stale crossfade midpoints
 
         # -- filmstrip state --
         self._strip_sig = None         # (paths,) the strip was last built for
@@ -464,9 +468,11 @@ class MediaViewer(nbapp.AppWindow):
         box.hide()
         return box
 
-    def _show_surface(self, which):
+    def _show_surface(self, which, animate=True):
         """Reveal exactly one stage surface: 'empty', 'image', 'video' or
-        'notice'; the others are hidden."""
+        'notice'; the others are hidden. User-requested swaps crossfade; a
+        telemetry/timer caller can pass ``animate=False`` for an instant end
+        state."""
         # Video-fullscreen belongs to the video stage and nothing else. Leaving
         # that stage while it is on — Ctrl+O opening a picture mid-film (the
         # toolbar is hidden, but the shortcut still works), a clip that fails to
@@ -475,10 +481,69 @@ class MediaViewer(nbapp.AppWindow):
         # surface that has no Fullscreen button to press to get any of it back.
         if which != "video" and getattr(self, "_vfull", False):
             self._exit_video_fullscreen()
-        self._empty.set_visible(which == "empty")
-        self._scroll.set_visible(which == "image")
-        self._video.set_visible(which == "video")
-        self._notice.set_visible(which == "notice")
+        surfaces = {"empty": self._empty, "image": self._scroll,
+                    "video": self._video, "notice": self._notice}
+        if which not in surfaces:
+            return
+
+        def _land():
+            for name, widget in surfaces.items():
+                try:
+                    widget.set_visible(name == which)
+                except Exception:
+                    if name == which:
+                        try:
+                            widget.show()
+                        except Exception:
+                            pass
+            self._surface_name = which
+
+        if which == getattr(self, "_surface_name", None):
+            _land()
+            return
+        self._surface_gen = getattr(self, "_surface_gen", 0) + 1
+        gen = self._surface_gen
+        stage = getattr(self, "_stage", None)
+        if not animate:
+            _land()
+            try:
+                stage.set_opacity(1.0)
+            except Exception:
+                pass
+            return
+        if stage is None:
+            _land()
+            return
+
+        def _swap(completed):
+            if gen != self._surface_gen:
+                return
+            _land()                    # content is correct even if fade cancelled
+            if not completed:
+                try:
+                    stage.set_opacity(1.0)
+                except Exception:
+                    pass
+                return
+            try:
+                stage.set_opacity(0.0)
+            except Exception:
+                pass
+            nbmotion.fade_to(stage, 1.0, nbmotion.PAGE,
+                             nbmotion.EASE_OUT)
+
+        # A whole document surface is replaced: depart, swap while invisible,
+        # then arrive. nbmotion's policy makes this synchronous and equivalent
+        # under Reduced Motion or when no frame clock is available.
+        try:
+            nbmotion.fade_to(stage, 0.0, nbmotion.PAGE,
+                             nbmotion.EASE_IN, _swap)
+        except Exception:
+            _land()                    # motion must never gate visible content
+            try:
+                stage.set_opacity(1.0)
+            except Exception:
+                pass
 
     # -- toolbar --
     def _toolbar(self):
@@ -689,7 +754,7 @@ class MediaViewer(nbapp.AppWindow):
         return [p for p in self._siblings
                 if os.path.splitext(p)[1].lower() in IMAGE_EXTS]
 
-    def _rebuild_strip(self):
+    def _rebuild_strip(self, animate_new=True):
         """Rebuild the filmstrip for the current folder, but only when the set of
         image siblings actually changed — walking Previous/Next within a folder
         just re-highlights, never re-decodes."""
@@ -699,6 +764,8 @@ class MediaViewer(nbapp.AppWindow):
             self._highlight_strip()
             self._scroll_strip_to(self._media_path)
             return
+        previous = set(self._strip_sig or ())
+        arriving = set(entries) - previous if animate_new else set()
         self._strip_sig = sig
         self._cancel_thumbs()
         for child in self._strip_row.get_children():
@@ -724,10 +791,33 @@ class MediaViewer(nbapp.AppWindow):
         self._strip_empty.hide()
         self._strip_scroll.show()
         pending = []
+        opening = []
         for p in entries:
-            self._strip_row.pack_start(
-                self._thumb_cell(p, pending), False, False, 0)
+            cell = self._thumb_cell(p, pending)
+            if p in arriving:
+                try:
+                    rev = Gtk.Revealer()
+                    rev.set_reveal_child(False)
+                    rev.add(cell)
+                    self._strip_row.pack_start(rev, False, False, 0)
+                    opening.append(rev)
+                    continue
+                except Exception:
+                    pass
+            self._strip_row.pack_start(cell, False, False, 0)
         self._strip_row.show_all()
+        for rev in opening:
+            try:
+                nbtransitions.reveal(
+                    rev, True, direction=nbtransitions.SLIDE_RIGHT,
+                    duration=nbmotion.SURFACE_IN)
+            except Exception:
+                # A failed animation still leaves the new thumbnail present.
+                try:
+                    rev.set_reveal_child(True)
+                    rev.show_all()
+                except Exception:
+                    pass
         self._highlight_strip()
         self._scroll_strip_to(self._media_path)
         if pending:
@@ -883,7 +973,7 @@ class MediaViewer(nbapp.AppWindow):
         self._siblings = [os.path.join(folder, n) for n in imgs]
         self._sib_idx = imgs.index(base)
 
-    def _display(self, path, rescan=True):
+    def _display(self, path, rescan=True, user_caused=True):
         """Load and show `path`: play video through GStreamer, decode images with
         GdkPixbuf, and report anything unreadable with a neutral notice."""
         self._media_path = path
@@ -900,7 +990,7 @@ class MediaViewer(nbapp.AppWindow):
             self._show_video(path)
             self._fill_info(path, None)
             self._update_controls()
-            self._rebuild_strip()
+            self._rebuild_strip() if user_caused else self._rebuild_strip(False)
             return
 
         # image path — never needs the video engine
@@ -919,17 +1009,17 @@ class MediaViewer(nbapp.AppWindow):
             self._fill_info(path, None)
             self._set_zoom(None)
             self._update_controls()
-            self._rebuild_strip()
+            self._rebuild_strip() if user_caused else self._rebuild_strip(False)
             return
 
         self._orig_pixbuf = pixbuf
         self._fit_mode = True           # a freshly opened image fits the stage
         self._last_alloc = (0, 0)       # force a re-fit for the new image
-        self._show_surface("image")
+        self._show_surface("image", animate=user_caused)
         self._render_image()
         self._fill_info(path, pixbuf)
         self._update_controls()
-        self._rebuild_strip()
+        self._rebuild_strip() if user_caused else self._rebuild_strip(False)
 
     def _show_notice(self, title, sub):
         self._notice_title.set_text(title)
@@ -1230,7 +1320,10 @@ class MediaViewer(nbapp.AppWindow):
         self._set_slide_active(False)
 
     def _slideshow_tick(self):
-        self._step(1)
+        sibs = self._siblings
+        if sibs and len(sibs) > 1:
+            self._sib_idx = (self._sib_idx + 1) % len(sibs)
+            self._display(sibs[self._sib_idx], rescan=False, user_caused=False)
         return True   # keep advancing until toggled off
 
     def _set_slide_active(self, on):
@@ -1673,10 +1766,59 @@ class MediaViewer(nbapp.AppWindow):
             return None
 
     def _toggle_video_fullscreen(self):
+        # nbmotion-inventory: content.media
         if self._vfull:
             self._exit_video_fullscreen()
         else:
             self._enter_video_fullscreen()
+
+    def _fullscreen_chrome(self):
+        return (self._menubar_widget(), getattr(self, "_toolbar_w", None),
+                getattr(self, "_info_w", None), getattr(self, "_film_w", None))
+
+    def _hide_fullscreen_chrome(self, widget):
+        """Fade one chrome surface away, always landing hidden and opaque."""
+        if widget is None:
+            return
+        gen = getattr(widget, "_media_fs_gen", 0) + 1
+        try:
+            widget._media_fs_gen = gen
+        except Exception:
+            pass
+
+        def _hidden(_completed):
+            if getattr(widget, "_media_fs_gen", gen) != gen:
+                return
+            try:
+                widget.hide()
+                widget.set_opacity(1.0)
+            except Exception:
+                pass
+        try:
+            nbmotion.fade_to(widget, 0.0, nbmotion.SURFACE_OUT,
+                             nbmotion.DEPART, _hidden)
+        except Exception:
+            _hidden(False)
+
+    def _show_fullscreen_chrome(self, widget):
+        """Show one chrome surface and fade it in, with a plain-show fallback."""
+        if widget is None:
+            return
+        try:
+            widget._media_fs_gen = getattr(widget, "_media_fs_gen", 0) + 1
+            widget.set_opacity(0.0)
+            widget.show()
+            nbmotion.fade_to(widget, 1.0, nbmotion.SURFACE_IN,
+                             nbmotion.EASE_OUT)
+        except Exception:
+            try:
+                widget.show()
+            except Exception:
+                pass
+            try:
+                widget.set_opacity(1.0)
+            except Exception:
+                pass
 
     def _enter_video_fullscreen(self):
         """Hide all chrome so the video fills the screen edge to edge.
@@ -1697,11 +1839,8 @@ class MediaViewer(nbapp.AppWindow):
         # TOOLBAR (it used to stay up, so "fullscreen" still had a file-chooser
         # strip across the top), the info panel and the filmstrip. Only the
         # video stage and its transport remain.
-        for w in (self._menubar_widget(), getattr(self, "_toolbar_w", None),
-                  getattr(self, "_info_w", None),
-                  getattr(self, "_film_w", None)):
-            if w is not None:
-                w.hide()
+        for w in self._fullscreen_chrome():
+            self._hide_fullscreen_chrome(w)
         if hasattr(self, "_v_full_btn"):
             self._v_full_btn.set_label(_t("Exit Fullscreen"))
             self._v_full_btn.set_tooltip_text(_t("Leave fullscreen (Esc)"))
@@ -1766,14 +1905,8 @@ class MediaViewer(nbapp.AppWindow):
         if ctl is not None:
             ctl.show()
         self._hide_panel(False)
-        bar = self._menubar_widget()
-        if bar is not None:
-            bar.show()
-        for w in (getattr(self, "_toolbar_w", None),
-                  getattr(self, "_info_w", None),
-                  getattr(self, "_film_w", None)):
-            if w is not None:
-                w.show()
+        for w in self._fullscreen_chrome():
+            self._show_fullscreen_chrome(w)
         if hasattr(self, "_v_full_btn"):
             self._v_full_btn.set_label(_t("Fullscreen"))
             self._v_full_btn.set_tooltip_text(_t("Fullscreen video (F)"))
