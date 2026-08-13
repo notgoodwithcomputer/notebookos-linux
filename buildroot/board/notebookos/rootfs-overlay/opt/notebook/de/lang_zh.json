@@ -2800,6 +2800,7 @@
  "Select media": "选择媒体",
  "Select or add an event, then click actions from the palette to build its behaviour.": "选择或添加一个事件，然后从调色板中点击动作来搭建它的行为。",
  "Select the exposures to repeat first.": "请先选择要重复的曝光。",
+ "Select whole exposures to repeat.": "请整段选择曝光后再重复。",
  "Selection": "所选",
  "Send": "发送",
  "Send Back": "下移一层",

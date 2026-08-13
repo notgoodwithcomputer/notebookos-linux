@@ -2779,7 +2779,7 @@ def selection_family():
         os.rename(animation.STORE_FILE, kept)
     app = animation.Animation()
     app._flash = lambda *a, **k: None
-    app.doc = animation.AnimationDocument(canvas=(40, 30))
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
     app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
     scene = app.doc.scenes[0]
     scene["length"] = 30
@@ -2871,7 +2871,7 @@ def selection_family():
         [("        for index in reversed(range(len(scene['layers']))):",
           "        for index in range(len(scene['layers'])):")])
     upside_down = graded.Animation()
-    upside_down.doc = graded.AnimationDocument(canvas=(40, 30))
+    upside_down.doc = graded.AnimationDocument(canvas=(160, 120))
     upside_down.scene_i = upside_down.layer_i = upside_down.playhead = 0
     other = upside_down.doc.scenes[0]
     other["length"] = 30
@@ -2891,8 +2891,164 @@ def selection_family():
     shutil.rmtree(scratch)
 
 
+def card_effect_family():
+    """What each card DOES, driven through the card.
+
+    Coverage said the applies had never run: the marker, insert, remove,
+    repeat, the three renames and the take choice. A card that opens
+    correctly and then applies wrongly is worse than one that will not
+    open, because the person believes it."""
+    if not gtk_available():
+        skip("F28 what the cards do", "no display")
+        return
+
+    kept = animation.STORE_FILE + ".cards-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    scene = app.doc.scenes[0]
+    scene["length"] = 40
+    app.sheet = animation.Sheet(app.doc, 0)
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+    app._refresh_lists()
+
+    def through_card(open_card, changes):
+        """Open a card, answer it, apply it — and report undo fidelity."""
+        before = app.doc.bytes()
+        app._close_prompt()
+        open_card()
+        if app._prompt_layer is None:
+            return None, False
+        state = dict(app._prompt_state)
+        state.update(changes)
+        app._apply_prompt(app._prompt_callback, state)
+        after = app.doc.bytes()
+        return after != before, (app.history.undo() is not False and
+                                 app.doc.bytes() == before)
+
+    results = {}
+
+    app.playhead = 6
+    results["marker"] = through_card(app._marker_prompt, {"text": "Beat"})
+    marked = any(m["frame"] == 6 and m["text"] == "Beat"
+                 for m in scene["markers"])
+
+    app.playhead = 0
+    results["insert frames"] = through_card(app._insert_prompt, {"count": 5})
+    results["remove frames"] = through_card(app._remove_prompt, {"count": 3})
+
+    # copies land at the playhead, so put it somewhere the copies fit —
+    # repeating on top of the exposures being copied is refused, correctly
+    # a whole exposure, copied to somewhere it fits: copy_block takes
+    # complete runs only, and the copies land at the playhead
+    app.sheet.clear(0, 0, scene["length"])
+    app.sheet.stamp(0, animation.make_run(cel.id, 0, 4))
+    app.selection = (0, 0, 4)
+    app.selection_layers = (0, 0)
+    app.playhead = 20
+    app.sheet.clipboard = None
+    results["repeat"] = through_card(app._repeat_prompt, {"count": 2})
+
+    app._library_cel = cel.id
+    results["rename a drawing"] = through_card(
+        lambda: app._rename_cel_prompt(cel_id=cel.id), {"name": "Hopper"})
+    results["rename a layer"] = through_card(app._rename_layer_prompt,
+                                             {"name": "Foreground"})
+    results["rename a scene"] = through_card(app._rename_scene_prompt,
+                                             {"name": "The kitchen"})
+
+    while len(cel.takes) < 3:
+        cel.takes.append(cel.decoded(0))
+    cel.version += 1
+    app.playhead = 0
+    results["choose a take"] = through_card(app._choose_take_prompt,
+                                            {"take": 2})
+
+    # a selection lying inside one long hold copies nothing: the app must
+    # say so rather than appear to work
+    app._close_prompt()
+    app.sheet.clear(0, 0, scene["length"])
+    app.sheet.stamp(0, animation.make_run(cel.id, 0, 30))
+    app.sheet.clipboard = None
+    app.selection = (0, 0, 4)          # four frames inside one long hold
+    app.selection_layers = (0, 0)
+    app.playhead = 32
+    refused = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: refused.append(text)
+    try:
+        app._repeat_apply({"count": 2})
+    finally:
+        app._flash = spoken
+    check("F28 repeating part of a hold refuses out loud instead of doing nothing",
+          len(refused) == 1 and "whole" in refused[0].lower(), refused)
+
+    check("F28 every card changes the film when applied",
+          all(value[0] for value in results.values()),
+          [tag for tag, value in results.items() if not value[0]])
+    check("F28 and undo puts back exactly what each card changed",
+          all(value[1] for value in results.values()),
+          [tag for tag, value in results.items() if not value[1]])
+    check("F28 the marker card puts the marker on the frame it was opened on",
+          marked, scene["markers"])
+
+    # a rename that is only whitespace must not erase the name
+    app._library_cel = cel.id
+    was = cel.name
+    app._close_prompt()
+    app._rename_cel_prompt(cel_id=cel.id)
+    if app._prompt_layer is not None:
+        state = dict(app._prompt_state)
+        state["name"] = "   "
+        app._apply_prompt(app._prompt_callback, state)
+    check("F28 a blank name is refused rather than applied",
+          cel.name.strip() == was.strip() and cel.name.strip() != "",
+          (was, cel.name))
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F28-marker-off-by-one",
+        [("        old = next((m for m in markers if m['frame'] == self.playhead), None)",
+          "        old = next((m for m in markers if m['frame'] == self.playhead + 1), None)")])
+    astray = graded.Animation()
+    astray._flash = lambda *a, **k: None
+    astray.playhead = 3
+    astray._marker_prompt()
+    state = dict(astray._prompt_state)
+    state["text"] = "First"
+    astray._apply_prompt(astray._prompt_callback, state)
+    astray.playhead = 3
+    astray._marker_prompt()
+    state = dict(astray._prompt_state)
+    state["text"] = "Second"
+    astray._apply_prompt(astray._prompt_callback, state)
+    frames = [m["frame"] for m in astray.doc.scenes[astray.scene_i]["markers"]]
+    mutant("F28 a marker card that looks at the wrong frame is caught",
+           len(frames) != 1 or frames.count(3) != 1, frames)
+    astray._alive = False
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+card_effect_family()
 selection_family()
 dock_controls_family()
 export_outcome_family()

@@ -2800,6 +2800,7 @@
  "Select media": "मीडिया चुनें",
  "Select or add an event, then click actions from the palette to build its behaviour.": "कोई इवेंट चुनें या जोड़ें, फिर पैलेट से ऐक्शन पर क्लिक करके उसका बर्ताव तय करें।",
  "Select the exposures to repeat first.": "पहले दोहराने वाले एक्सपोज़र चुनें।",
+ "Select whole exposures to repeat.": "दोहराने के लिए पूरे एक्सपोज़र चुनें।",
  "Selection": "चयन",
  "Send": "भेजें",
  "Send Back": "पीछे भेजें",

@@ -149,6 +149,7 @@
  "Scenes": "シーン",
  "Select exposures before exporting the selection.": "選択範囲を書き出す前に配置を選んでください。",
  "Select the exposures to repeat first.": "先に繰り返す配置を選んでください。",
+ "Select whole exposures to repeat.": "繰り返すには配置をまるごと選んでください。",
  "Selection": "選択範囲",
  "Set Length": "長さを設定",
  "Set Slots": "枠を設定",

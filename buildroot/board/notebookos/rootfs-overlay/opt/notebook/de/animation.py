@@ -620,6 +620,12 @@ class Sheet:
         if not self.clipboard:
             return False
         width, block = self.clipboard
+        if not block:
+            # copy_block takes whole exposures only, so a selection lying
+            # inside one longer hold copies a WIDTH and no runs. Pasting
+            # that used to report success and change nothing, which is
+            # indistinguishable from a feature that does not work.
+            return False
         candidate = []
         for n in range(repeats):
             for li, off, r in block:
@@ -3212,13 +3218,20 @@ class Animation(nbapp.AppWindow):
         self._copy_selection()
         self._clear_exposure()
 
+    def _paste_refusal(self):
+        """Why a paste could not happen, in the person's terms."""
+        clipboard = self.sheet.clipboard
+        if not clipboard or not clipboard[1]:
+            return _t('Select whole exposures to repeat.')
+        return _t('The exposures would overlap or run past the scene.')
+
     def _paste_selection(self, *_):
         self._snapshot(_t('Paste Exposures'))
         if self.sheet.paste(self.playhead):
             self._commit_change()
         else:
             self._undo.pop()
-            self._flash(_t('The exposures would overlap or run past the scene.'))
+            self._flash(self._paste_refusal())
 
     def _overlay_prompt(self, title, rows, apply_label, callback, note=None):
         """Open the shared in-window card and mirror inputs into plain state.
@@ -3592,7 +3605,7 @@ class Animation(nbapp.AppWindow):
             self._commit_change()
         else:
             self._undo.pop()
-            self._flash(_t('The exposures would overlap or run past the scene.'))
+            self._flash(self._paste_refusal())
 
     def _insert_prompt(self, *_):
         room = max(1, PROJECT_FRAME_MAX - self._project_frames())

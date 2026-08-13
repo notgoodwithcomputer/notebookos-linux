@@ -149,6 +149,7 @@
  "Scenes": "场景",
  "Select exposures before exporting the selection.": "导出所选之前，请先选中曝光。",
  "Select the exposures to repeat first.": "请先选择要重复的曝光。",
+ "Select whole exposures to repeat.": "请整段选择曝光后再重复。",
  "Selection": "所选",
  "Set Length": "设定长度",
  "Set Slots": "设定格位",
