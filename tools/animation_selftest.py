@@ -526,6 +526,18 @@ def store_family():
     check("F7 store byte-identical round-trip with nested extras",
           not reports and parsed.bytes() == document.bytes())
 
+    # Damage that arrives MID-SESSION, not at open: the store laws cover a
+    # bad file on disk, but a take can go bad in memory too, and decoded()
+    # is the path every DRAW takes — raising there kills the window mid-paint.
+    broken = animation.Cel(1, "victim", ["!!! not a png !!!"], 40, 30)
+    try:
+        drawn = broken.decoded(0)
+        survived = drawn is not None and drawn.get_width() == 40
+    except Exception:
+        survived = False
+    check("F7 an unreadable take decodes to blank paper, never an exception",
+          survived)
+
     damaged = copy.deepcopy(raw)
     damaged["cels"][0]["takes"] = [base64.b64encode(b"not png").decode("ascii")]
     parsed_damaged, damaged_reports = animation.AnimationDocument.parse(damaged)

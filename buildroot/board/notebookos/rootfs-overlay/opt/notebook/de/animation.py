@@ -330,10 +330,22 @@ class Cel:
         self._extra = extra or {}
 
     def decoded(self, i=0):
+        """The take as a surface, never an exception.
+
+        A load already replaces takes it cannot read (parse strict-decodes),
+        but this is the path every DRAW goes through — and a decode that
+        raises here takes the window down mid-paint, which is the worst
+        place in the app to fail. Anything unreadable becomes blank paper
+        and the drawing survives as an empty cel.
+        """
         t = self.takes[i]
         if isinstance(t, cairo.ImageSurface):
             return t
-        s = decode_b64(t, self.w, self.h) if isinstance(t, str) else png_surface(t, self.w, self.h)
+        try:
+            s = (decode_b64(t, self.w, self.h) if isinstance(t, str)
+                 else png_surface(t, self.w, self.h))
+        except Exception:
+            s = surface(self.w, self.h)
         self.takes[i] = s
         return s
 
