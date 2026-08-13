@@ -2276,8 +2276,136 @@ def destructive_family():
     shutil.rmtree(scratch)
 
 
+def accelerator_family():
+    """Every shortcut a menu advertises has to actually do something.
+
+    The menu bar is where a person learns these, and a label promising
+    Ctrl+R is a promise the key handler has to keep. Reading the handler
+    cannot check it; the only way is to press all thirty and watch."""
+    if not gtk_available():
+        skip("F23 shortcuts", "no display")
+        return
+    from gi.repository import Gdk
+
+    kept = animation.STORE_FILE + ".accel-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    home = tempfile.mkdtemp(prefix="animation-accel-")
+    app = animation.Animation()
+    app.doc_path = os.path.join(home, "film.anim")
+    app.audio = types.SimpleNamespace(
+        available=False, samples_delivered=0, start=lambda *a, **k: False,
+        stop=lambda *a, **k: None, play_once=lambda *a, **k: None,
+        position_samples=lambda: 0)
+    app._flash = lambda *a, **k: None
+    app.sheet.ensure_drawing(0, 0)
+    app.selection = (0, 0, 2)
+    app.selection_layers = (0, 0)
+
+    import nbpicker
+    previous_open, previous_save = nbpicker.open_file, nbpicker.save_file
+    nbpicker.open_file = lambda *a, **k: None
+    nbpicker.save_file = lambda *a, **k: None
+
+    NAMED = {
+        "Plus": Gdk.KEY_plus, "Minus": Gdk.KEY_minus, "Space": Gdk.KEY_space,
+        "Home": Gdk.KEY_Home, "End": Gdk.KEY_End, "Delete": Gdk.KEY_Delete,
+        "Esc": Gdk.KEY_Escape, "Page Up": Gdk.KEY_Page_Up,
+        "Page Down": Gdk.KEY_Page_Down, ",": Gdk.KEY_comma,
+        ".": Gdk.KEY_period, "=": Gdk.KEY_equal, "-": Gdk.KEY_minus,
+        "/": Gdk.KEY_slash, "0": Gdk.KEY_0,
+    }
+
+    def keyval_for(name):
+        if name in NAMED:
+            return NAMED[name]
+        if len(name) == 1:
+            return Gdk.unicode_to_keyval(ord(name.lower()))
+        return None
+
+    def press(accel):
+        parts = accel.split("+")
+        state = 0
+        for part in parts[:-1]:
+            if part.lower() == "ctrl":
+                state |= Gdk.ModifierType.CONTROL_MASK
+            elif part.lower() == "shift":
+                state |= Gdk.ModifierType.SHIFT_MASK
+        keyval = keyval_for(parts[-1])
+        if keyval is None:
+            return None
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.keyval = keyval
+        event.state = state
+        return app._on_key(app, event)
+
+    advertised = []
+    for menu in animation.Animation.menus:
+        for item in app.menu_items(menu):
+            if not item or item is _nbapp_sep() or not isinstance(item, tuple):
+                continue
+            if "    " in item[0]:
+                name, accel = item[0].split("    ", 1)
+                advertised.append((name.strip(), accel.strip()))
+
+    # Esc is the window's, not the document's: outside a prompt this handler
+    # only drops a selection, and leaving the app is nbapp's business.
+    ignored = {"Esc"}
+    dead = []
+    for name, accel in advertised:
+        if accel in ignored:
+            continue
+        app._close_prompt()
+        app.selection = (0, 0, 2)
+        app.selection_layers = (0, 0)
+        if press(accel) is not True:
+            dead.append((name, accel))
+        if app._playing:
+            app._stop_playback()
+    app._close_prompt()
+    check("F23 every shortcut the menus advertise is one the app answers",
+          not dead and len(advertised) >= 25, dead or len(advertised))
+
+    nbpicker.open_file, nbpicker.save_file = previous_open, previous_save
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+    shutil.rmtree(home, ignore_errors=True)
+
+    graded, scratch = module_mutant(
+        "F23-lost-shortcut",
+        [("        if e.keyval in (Gdk.KEY_m, Gdk.KEY_M):",
+          "        if False:")])
+    orphan = graded.Animation()
+    orphan._flash = lambda *a, **k: None
+    event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+    event.keyval = Gdk.KEY_m
+    event.state = 0
+    answered = orphan._on_key(orphan, event)
+    mutant("F23 a shortcut a menu still advertises but nothing answers is caught",
+           answered is not True, answered)
+    shutil.rmtree(scratch)
+
+
+def _nbapp_sep():
+    import nbapp as module
+    return module.SEP
+
+
 dialog_limits_family()
 drop_family()
+accelerator_family()
 destructive_family()
 workflow_family()
 first_run_family()

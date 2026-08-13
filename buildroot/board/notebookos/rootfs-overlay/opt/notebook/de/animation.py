@@ -5441,7 +5441,14 @@ class Animation(nbapp.AppWindow):
         if nbapp.undo_keys(self.history, e):
             return True
         if ctrl and e.keyval in (Gdk.KEY_s, Gdk.KEY_S):
-            return bool(self._save_as() if shift else self._save())
+            # The app took the keystroke whatever the answer was. Reporting
+            # a cancelled Save As as unhandled sends Ctrl+Shift+S onward to
+            # whatever has focus next.
+            if shift:
+                self._save_as()
+            else:
+                self._save()
+            return True
         if ctrl and e.keyval in (Gdk.KEY_n, Gdk.KEY_N):
             self._new()
             return True
