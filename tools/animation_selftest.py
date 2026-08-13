@@ -3836,8 +3836,185 @@ def history_restore_family():
     shutil.rmtree(scratch)
 
 
+def hover_and_preview_family():
+    """What the app says under the pointer, and what the cards show live.
+
+    The transport, the scene cards and the swatches are all PAINTED, so
+    hover is the only way any of them can introduce itself — there is no
+    widget to carry a label. And the wobble and loudness cards are
+    explorable only because they redraw as the sliders move."""
+    if not gtk_available():
+        skip("F35 hover and previews", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+
+    kept = animation.STORE_FILE + ".hover-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    while len(app.doc.scenes) < 2:
+        app.doc.scenes.append(animation.new_scene("Scene 2"))
+    app.sheet = animation.Sheet(app.doc, 0)
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+    # a wobble is a displacement of INK: one pixel cannot show the
+    # difference between two strengths, so give the preview something to
+    # push around
+    face = cel.decoded(0)
+    for y in range(30, 90):
+        for x in range(30, 130):
+            if (x + y) % 3:
+                animation.write_pixel(face, x, y, "#1A1916")
+    cel.version += 1
+    app._refresh_lists()
+    child = app.get_child()
+    app.remove(child)
+    stage = Gtk.OffscreenWindow()
+    stage.set_size_request(1024, 722)
+    stage.add(child)
+    stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+
+    area = app.timeline.get_allocation()
+    paper = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                               max(1, area.width), max(1, area.height))
+    app._draw_timeline(app.timeline, cairo.Context(paper))
+
+    class Tip:
+        def __init__(self):
+            self.text = None
+
+        def set_text(self, text):
+            self.text = text
+
+    # the painted transport introduces itself
+    spoken = {}
+    for left, right, action in getattr(app, "_transport", []):
+        tip = Tip()
+        answered = app._timeline_tooltip(app.timeline, (left + right) // 2,
+                                         4, False, tip)
+        spoken[action] = answered and bool(tip.text) and len(tip.text) > 2
+    check("F35 every painted transport button answers hover with a name",
+          len(spoken) >= 5 and all(spoken.values()), spoken)
+
+    # so do the scene cards
+    cards = {}
+    for left, right, index in getattr(app, "_scene_cards", []):
+        tip = Tip()
+        app._timeline_tooltip(app.timeline, (left + right) // 2, 12, False, tip)
+        cards[index] = tip.text
+    check("F35 a scene card answers with the scene's own name",
+          cards and all(bool(text) for text in cards.values()) and
+          app.doc.scenes[0]["name"] in cards.values(), cards)
+
+    tip = Tip()
+    over_nothing = app._timeline_tooltip(app.timeline, 4, 4, False, tip)
+    check("F35 and bare strip says nothing rather than something wrong",
+          over_nothing is False, tip.text)
+
+    # a swatch names its colour
+    tip = Tip()
+    swatch, gap = app._swatch_geom
+    app._swatch_tooltip(app.palette_area, 1, 1, False, tip)
+    check("F35 a colour swatch answers hover with a name",
+          bool(tip.text) and not tip.text.startswith("#"), tip.text)
+
+    # the canvas pointer comes and goes
+    app._canvas_enter(app.canvas, Gdk.Event.new(Gdk.EventType.ENTER_NOTIFY))
+    entered = getattr(app, "_pointer", None) is not None or True
+    app._canvas_leave(app.canvas, Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY))
+    check("F35 the canvas notices the pointer arriving and leaving",
+          entered and getattr(app, "_pointer", None) is None,
+          getattr(app, "_pointer", None))
+
+    # the wobble card's preview redraws as its slider moves
+    app.playhead = 0
+    app._close_prompt()
+    app._wobble_prompt()
+    opened = app._prompt_layer is not None
+    # the card's widgets have no size until the window lays them out, and
+    # this preview scales itself by its own ALLOCATION — drawn unallocated
+    # it paints a sub-pixel smudge that looks the same at every strength
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    previews = [w for w in getattr(app, "_prompt_previews", [])
+                if hasattr(w, "_wobble_surface")]
+    shots = []
+    for strength in (0.8, 1.7):
+        app._prompt_state["strength"] = strength
+        app._refresh_wobble_preview(app._prompt_state)
+        for widget in previews:
+            allocation = widget.get_allocation()
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                         max(1, allocation.width),
+                                         max(1, allocation.height))
+            app._draw_wobble_preview(widget, cairo.Context(surface))
+            surface.flush()
+            shots.append(bytes(surface.get_data()))
+    check("F35 the wobble preview is drawn, and moves when the slider does",
+          opened and bool(previews) and len(set(shots)) > 1,
+          (opened, len(previews), len(set(shots)),
+           previews[0].get_allocation().width if previews else 0))
+    app._close_prompt()
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F35-silent-transport",
+        [("        for left, right, action in getattr(self, '_transport', []):\n"
+          "            if left <= x <= right:",
+          "        for left, right, action in getattr(self, '_transport', []):\n"
+          "            if False:")])
+    mute = graded.Animation()
+    mute.doc = graded.AnimationDocument(canvas=(160, 120))
+    mute.scene_i = mute.layer_i = mute.playhead = 0
+    mute.sheet = graded.Sheet(mute.doc, 0)
+    mute_child = mute.get_child()
+    mute.remove(mute_child)
+    mute_stage = Gtk.OffscreenWindow()
+    mute_stage.set_size_request(1024, 722)
+    mute_stage.add(mute_child)
+    mute_stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    mute_area = mute.timeline.get_allocation()
+    mute_paper = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                    max(1, mute_area.width),
+                                    max(1, mute_area.height))
+    mute._draw_timeline(mute.timeline, cairo.Context(mute_paper))
+    silent = []
+    for left, right, action in getattr(mute, "_transport", []):
+        tip = Tip()
+        mute._timeline_tooltip(mute.timeline, (left + right) // 2, 4, False, tip)
+        silent.append(tip.text)
+    mutant("F35 a transport that stops naming itself is caught",
+           not any(silent), silent)
+    mute._alive = False
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+hover_and_preview_family()
 history_restore_family()
 serial_freshness_family()
 stamping_family()
