@@ -1565,7 +1565,7 @@ class Comics(nbapp.AppWindow):
                 return
             self._save_error = error
             self._recovery_dirty = True
-            self._flash(_t(nbapp.save_failure_reason(error, COMICS_FILE)), False)
+            self._flash(nbapp.save_failure_reason(error, COMICS_FILE), False)
 
         self.jobs.start("autosave", work, on_done=done, on_error=failed,
                         policy=nbjobs.REPLACE)
@@ -2545,7 +2545,7 @@ class Comics(nbapp.AppWindow):
             save_document(self.doc, path)
         except Exception as exc:
             self._save_error = exc
-            self._flash(_t(nbapp.save_failure_reason(exc, path)), False)
+            self._flash(nbapp.save_failure_reason(exc, path), False)
             return False
         self._flash(_t("Saved %s") % time.strftime("%H:%M"), True)
         return True

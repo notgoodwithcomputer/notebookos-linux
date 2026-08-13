@@ -626,28 +626,133 @@ class Crumbs(Gtk.Box):
         # which components are NEW. None until the first paint, which is what
         # keeps the bar from staging itself when the Finder opens.
         self._pills = None
+        self._on_load = None
+        self._more = None            # the leading "…" pill, when folded
+        self._fold_page = -1         # last viewport width the fold saw
+        # Re-fold when the toolbar's space changes (the window is resizable);
+        # guarded by _fold_page so folding's own re-allocation cannot loop.
+        self.connect("size-allocate", self._on_bar_allocate)
 
     def get_text(self):
         return self._text
 
+    def _on_bar_allocate(self, *_a):
+        try:
+            sw = self.get_parent()
+            adj = sw.get_hadjustment() if sw is not None else None
+            if adj is not None and int(adj.get_page_size()) != self._fold_page:
+                GLib.idle_add(self._scroll_to_end)
+        except Exception:
+            pass
+
     def _scroll_to_end(self):
         """Keep the LAST pill — the folder you are in — in view when the trail
         is wider than the space the toolbar can give it (see the scroller the
-        Finder wraps this in)."""
+        Finder wraps this in).
+
+        FOLDS before it scrolls: a right-anchored overflowing bar clipped the
+        leftmost pill MID-LETTER, and a stray fragment like "e" (the tail of
+        "Home") rendered as a mystery button on the default Applications
+        view. Whole pills now hide behind a leading "…" that navigates to the
+        deepest hidden ancestor — the scene-strip precedent."""
         try:
             sw = self.get_parent()
             adj = sw.get_hadjustment() if sw is not None else None
             if adj is not None:
-                adj.set_value(adj.get_upper() - adj.get_page_size())
+                self._fold_leading(adj)
+
+                # The fold just queued a relayout, so the adjustment's upper
+                # is stale until the next allocate — anchoring now scrolled a
+                # freshly-fitting bar off to the right. Land the anchor one
+                # idle later, over the settled geometry.
+                def _settle():
+                    try:
+                        adj.set_value(max(0.0, adj.get_upper()
+                                          - adj.get_page_size()))
+                    except Exception:
+                        pass
+                    return False
+                GLib.idle_add(_settle)
         except Exception:
             pass
         return False
+
+    def _fold_leading(self, adj):
+        """REBUILD the row with the leading pills folded behind one "…" pill.
+
+        Visibility tricks (set_child_visible, hide) each left a stale half
+        of the negotiation alive — hidden pills that still measured, or still
+        drew at old allocations. Rebuilding the row from the kept tail is
+        deterministic: what is in the box is exactly what measures and draws.
+        """
+        page = int(adj.get_page_size())
+        self._fold_page = page
+        if page <= 1 or not self._pills:
+            return
+        spacing = self.get_spacing()
+        pills = list(self._pills)
+
+        def pill_width(label):
+            probe = Gtk.Button(label=label)
+            probe.set_relief(Gtk.ReliefStyle.NONE)
+            probe.get_style_context().add_class("crumb")
+            probe.show()
+            return probe.get_preferred_width()[1] + spacing
+
+        widths = [pill_width(lbl) for lbl, _t_ in pills]
+        total = sum(widths) - spacing
+        keep_from = 0
+        if total > page:
+            budget = page - pill_width("…")
+            # Fold from the FRONT until the tail fits; the current folder's
+            # pill (the last) is never folded — the bar exists to show it.
+            while keep_from < len(pills) - 1 and total > budget:
+                total -= widths[keep_from]
+                keep_from += 1
+        if keep_from == getattr(self, "_folded_from", 0):
+            return
+        self._folded_from = keep_from
+        for c in self.get_children():
+            self.remove(c)
+        self._more = None
+        if keep_from:
+            more = Gtk.Button(label="…")
+            more.set_relief(Gtk.ReliefStyle.NONE)
+            more.get_style_context().add_class("crumb")
+            hidden = pills[:keep_from]
+            more.set_tooltip_text("  ›  ".join(lbl for lbl, _t_ in hidden))
+            more._hidden_target = hidden[-1][1]
+            more.connect("clicked", self._open_deepest_hidden)
+            self.pack_start(more, False, False, 0)
+            self._more = more
+        last = len(pills) - 1
+        for i in range(keep_from, len(pills)):
+            label, target = pills[i]
+            btn = Gtk.Button(label=label)
+            btn.set_relief(Gtk.ReliefStyle.NONE)
+            ctx = btn.get_style_context()
+            ctx.add_class("crumb")
+            if i == last:
+                ctx.add_class("active")
+            btn.connect("clicked",
+                        lambda _w, t=target: self._on_load and self._on_load(t))
+            self.pack_start(btn, False, False, 0)
+        self.show_all()
+
+    def _open_deepest_hidden(self, _btn):
+        target = getattr(self._more, "_hidden_target", None)
+        if self._on_load is not None and target is not None:
+            self._on_load(target)
 
     def set_trail(self, root_label, trail, on_load):
         # root_label: "Home"/"Computer"; trail: list of (label, target_rel) for
         # each component after the root; on_load: callback(rel) to navigate.
         for c in self.get_children():
             self.remove(c)
+        self._more = None            # rebuilt with the pills it folds
+        self._fold_page = -1
+        self._folded_from = 0
+        self._on_load = on_load
         self._text = root_label + "".join("  ›  " + lbl for lbl, _ in trail)
         pills = [(root_label, "" if root_label == "Home" else "/")] + list(trail)
         last = len(pills) - 1
@@ -677,17 +782,23 @@ class Crumbs(Gtk.Box):
                 ctx.add_class("active")
             btn.connect("clicked", lambda _w, t=target: on_load(t))
             if i < shared:
+                btn._crumb_label = label
+                btn._crumb_target = target
                 self.pack_start(btn, False, False, 0)
                 continue
             try:
                 rev = Gtk.Revealer()
                 rev.set_reveal_child(False)
                 rev.add(btn)
+                rev._crumb_label = label
+                rev._crumb_target = target
                 self.pack_start(rev, False, False, 0)
                 opening.append(rev)
             except Exception:                                     # noqa: BLE001
                 # A crumb you cannot click is a navigation you cannot undo, so
                 # the pill is packed plainly if the Revealer will not build.
+                btn._crumb_label = label
+                btn._crumb_target = target
                 self.pack_start(btn, False, False, 0)
         self.show_all()
         # after the new pills have been sized, not before
