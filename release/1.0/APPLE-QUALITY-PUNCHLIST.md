@@ -36,9 +36,9 @@ with the commit that closes them.
 ## side), Build & Play home in Build menu + play-anyway card (#7), affine
 ## survives loading (#4), spec shipping-note (#14/#15). Suite 574/574.
 ## STILL OPEN:
-- gbaemu keyboard on target: arrows did not move the example player (known
-  weak area — Aug 7 red-gate handoff). Needs vbam input-path work in the
-  wrapper. Re-test after respin.
+- FIXED 6d837782 (pending on-target re-test): nbgame re-asserts game
+  focus every 2s for the whole session + reclaims focus when a stray key
+  hits the stage — the D-pad death + late-window black-stage class.
 - Codex fix-round job task-msrvz3qu-v6gmg3 is a ZOMBIE (silent 1.5h+);
   USER: /codex:cancel it. All its items were completed in-session.
 
@@ -49,10 +49,10 @@ with the commit that closes them.
 - Comics: deeper flows still unaudited at Apple bar: Zine Print full run,
   Export PDF at scale on target, Place Image, select-tool handle affordances
   at low zoom, CJK bubble lettering at 100%.
-- Finder: crumb bar clips the leading pill mid-letter (renders as a stray
-  "e" button on the DEFAULT Applications view). Fix design: leading "…"
-  pill per animation scene-strip precedent. finder.py now COMMITTED clean
-  (7b95eea9) so this is a normal edit now.
+- FIXED 52672195: breadcrumb folds whole pills behind a leading "…"
+  (navigates to the deepest hidden ancestor, tooltip carries the path);
+  the mid-letter "e" sliver class is dead. Verified by synchronous draw
+  + six finder suites.
 - FIXED b8f1a012: board tiles pack flush against the pinned column (a
   content tile's hexpand bubbled into the grid; pinned hexpand=False;
   board_selftest 101/101, its first full pass) + Journal day-zero shows
