@@ -4367,21 +4367,25 @@ class Animation(nbapp.AppWindow):
                               ('preview', 'Preview', None, 'mouth-preview')],
                              'Apply', self._mouth_loudness_apply)
 
-    def _mouth_preview_slots(self, quiet, loud):
-        scene = self.doc.scenes[self.scene_i]
-        sound = next((item for item in scene['sounds']
-                      if item and not item.get('mute')), None)
-        if sound is None:
-            return []
-        try:
-            samples = decode_samples(sound['path'], sound.get('sig'))
-        except Exception:
-            return []
-        if self.selection:
-            _layer, range_start, range_end = self.selection
-        else:
-            range_start, range_end = 0, scene['length']
-        spf = SPF[self.doc.fps]
+    def _mouth_loudness(self, sound, spf, range_start, range_end):
+        """How loud the sound is on each frame of the range, remembered.
+
+        The two thresholds move as a slider moves; this does not depend on
+        them at all. Recomputing it per repaint meant squaring and summing
+        every sample in the range on the GTK thread — a quarter of a second
+        on a 96-frame scene and over a second on a long one, behind the
+        preview's 200ms debounce, so the slider fought back the whole time
+        someone was trying to find the right value.
+
+        The key names everything the answer depends on: which sound, where
+        it starts, where it is trimmed to, the frame rate, and the range.
+        """
+        key = (sound['path'], tuple(sound.get('sig') or ()), sound['start'],
+               sound.get('in_smp', 0), spf, range_start, range_end)
+        remembered = getattr(self, '_mouth_rms', None)
+        if remembered is not None and remembered[0] == key:
+            return remembered[1]
+        samples = decode_samples(sound['path'], sound.get('sig'))
         rms = []
         for frame in range(range_start, range_end):
             source_start = ((frame - sound['start']) * spf +
@@ -4390,8 +4394,26 @@ class Animation(nbapp.AppWindow):
                 rms.append(0.0)
                 continue
             block = samples[source_start:min(len(samples), source_start + spf)]
-            rms.append(math.sqrt(sum(value * value for value in block) /
+            rms.append(math.sqrt(sum(map(int.__mul__, block, block)) /
                                  max(1, len(block))))
+        self._mouth_rms = (key, rms)
+        return rms
+
+    def _mouth_preview_slots(self, quiet, loud):
+        scene = self.doc.scenes[self.scene_i]
+        sound = next((item for item in scene['sounds']
+                      if item and not item.get('mute')), None)
+        if sound is None:
+            return []
+        if self.selection:
+            _layer, range_start, range_end = self.selection
+        else:
+            range_start, range_end = 0, scene['length']
+        try:
+            rms = self._mouth_loudness(sound, SPF[self.doc.fps],
+                                       range_start, range_end)
+        except Exception:
+            return []
         peak = max(rms or [1]) or 1
         lane = [1 if value / peak < quiet else
                 2 if value / peak < loud else 3 for value in rms]

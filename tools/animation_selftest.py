@@ -6384,6 +6384,98 @@ def raw_frame_family():
     shutil.rmtree(scratch)
 
 
+def mouth_loudness_cache_family():
+    """Finding the right threshold does not re-read the sound each time.
+
+    The mouth lane's two thresholds move as a slider moves; how loud the
+    sound is on each frame does not depend on them at all. Recomputing it
+    per repaint squared and summed every sample in the range on the GTK
+    thread — 22ms on a 96-frame scene, 159ms on a 720-frame one, behind the
+    preview's 200ms debounce, so the slider fought back the whole time.
+
+    A cache is only ever as good as its key, so what this family checks is
+    that the answer still moves when it should: with the thresholds, and
+    with where the sound sits in time."""
+    if not gtk_available():
+        skip("F58 the loudness cache", "no display")
+        return
+
+    home = tempfile.mkdtemp(prefix="animation-loud-")
+    path = os.path.join(home, "dialogue.wav")
+    with wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        handle.writeframes(array.array("h", (
+            int(18000 * math.sin(index / 30.0) *
+                (0.05 + 0.95 * ((index // 24000) % 3) / 2.0))
+            for index in range(48000 * 12))).tobytes())
+
+    def with_sound(module):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = 0
+        app.doc.scenes[0]["length"] = 96
+        app.sheet = module.Sheet(app.doc, 0)
+        app.doc.scenes[0]["sounds"][0] = {
+            "path": path, "start": 0, "in_smp": 0, "out_smp": 0,
+            "mute": False, "peaks": "", "duration_smp": 48000 * 12,
+            "_peak_token": 0}
+        return app
+
+    def quiet(app):
+        app._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(app, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(app, timer, None)
+
+    app = with_sound(animation)
+    lane = app._mouth_preview_slots(0.10, 0.45)
+    check("F58 a sound that rises and falls gives a lane that rises and falls",
+          len(lane) == 96 and len(set(lane)) > 1, sorted(set(lane)))
+
+    wider = app._mouth_preview_slots(0.90, 0.95)
+    check("F58 moving a threshold still changes the lane",
+          sum(1 for a, b in zip(lane, wider) if a != b) > 5,
+          sum(1 for a, b in zip(lane, wider) if a != b))
+
+    again = app._mouth_preview_slots(0.10, 0.45)
+    check("F58 and going back gives back the same lane", again == lane)
+
+    def moved_lane(module, app):
+        app.doc.scenes[0]["sounds"][0]["start"] = 30
+        shifted = app._mouth_preview_slots(0.10, 0.45)
+        app.doc.scenes[0]["sounds"][0]["start"] = 0
+        return shifted
+
+    shifted = moved_lane(animation, app)
+    check("F58 moving the sound in time changes what the frames hear",
+          sum(1 for a, b in zip(lane, shifted) if a != b) > 5,
+          sum(1 for a, b in zip(lane, shifted) if a != b))
+    quiet(app)
+
+    graded, scratch = module_mutant("F58-key-that-forgets-the-start", [
+        ("        key = (sound['path'], tuple(sound.get('sig') or ()), sound['start'],\n"
+         "               sound.get('in_smp', 0), spf, range_start, range_end)",
+         "        key = (sound['path'], tuple(sound.get('sig') or ()),\n"
+         "               sound.get('in_smp', 0), spf, range_start, range_end)"),
+    ])
+    forgetful = with_sound(graded)
+    first = forgetful._mouth_preview_slots(0.10, 0.45)
+    stale = moved_lane(graded, forgetful)
+    mutant("F58 a cache that forgets where the sound starts is caught",
+           stale == first, sum(1 for a, b in zip(first, stale) if a != b))
+    quiet(forgetful)
+    shutil.rmtree(scratch)
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6420,6 +6512,7 @@ for _family in (
         wobble_cost_family,
         recolour_family,
         raw_frame_family,
+        mouth_loudness_cache_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
