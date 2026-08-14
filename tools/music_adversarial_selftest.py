@@ -79,6 +79,48 @@ def damaged_store_check():
     check("wrong-shaped playlist store survives open+close byte-for-byte",
           after_shape == wrong_shape, "loader-normalized store was rewritten")
 
+    # The read-only law above protects work that could not be READ. It must not
+    # be triggered by the two caches, which are rebuilt from the audio files
+    # themselves: a single malformed length row used to lock the store for the
+    # whole session, so every playlist made afterwards was accepted by the
+    # sidebar, never written, and gone at the next launch.
+    cached = (b'{"playlists": ["Road trip"], "tracks": {"Road trip": []},'
+              b' "lengths": {"/music/a.mp3": "not-a-row"},'
+              b' "tags": {"/music/a.mp3": ["only", "two"]}}')
+    with open(music.CFG_FILE, "wb") as fh:
+        fh.write(cached)
+    app = bare()
+    app._load()
+    check("a damaged cache row does not lock the store read-only",
+          app._store_load_ok, "playlist saves were disabled by a cache entry")
+    app._playlists = ["Evening"]
+    app._playlist_tracks = {"Evening": []}
+    app._save()
+    with open(music.CFG_FILE, "rb") as fh:
+        saved = fh.read()
+    check("a playlist made after a damaged cache row reaches the disk",
+          b"Evening" in saved, "the new playlist was never written")
+
+    # A write that does not land has to reach the person: playlists are made
+    # one drag at a time, with no Save button to press again.
+    import nbapp
+    import nbnotify
+    posted = []
+    real_write, real_post = nbapp.atomic_write_json, nbnotify.post
+    def fail_write(*_a, **_k):
+        raise OSError("injected music disk full")
+    nbapp.atomic_write_json = fail_write
+    nbnotify.post = lambda t, b="", **k: posted.append((t, b))
+    try:
+        app._save_failure_told = False
+        app._save()
+    finally:
+        nbapp.atomic_write_json = real_write
+        nbnotify.post = real_post
+    check("a failed playlist write says so instead of passing silently",
+          getattr(app, "_save_error", "") and len(posted) == 1,
+          repr(getattr(app, "_save_error", "")) + repr(posted))
+
 
 def shuffle_exhaustion_check():
     tracks = [{"title": x} for x in "ABCD"]

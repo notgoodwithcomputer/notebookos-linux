@@ -2420,6 +2420,17 @@ class Music(nbapp.AppWindow):
                 self._loaded_playlists.append((name, linked))
             # cached track lengths: {path: [stat-key, seconds]}. Anything that
             # isn't that exact shape is simply dropped and re-read.
+            #
+            # A DROPPED CACHE ENTRY IS NOT DAMAGE. Both caches below are
+            # rebuilt from the audio files themselves, so the worst a malformed
+            # one costs is a re-read on the next discovery pass. They used to
+            # set the same `damaged` flag the playlists do, which locks the
+            # store read-only for the whole session: one bad length row -- a
+            # single interrupted write, a file this build wrote in an older
+            # shape -- and every playlist a person made afterwards was accepted
+            # by the sidebar, never written, and gone at the next launch. The
+            # read-only law exists to protect work that could not be READ; a
+            # cache that regenerates itself is not that work.
             lens = data.get("lengths")
             if isinstance(lens, dict):
                 for path, ent in lens.items():
@@ -2428,12 +2439,7 @@ class Music(nbapp.AppWindow):
                         try:
                             self._lengths[str(path)] = [ent[0], int(ent[1])]
                         except (TypeError, ValueError):
-                            damaged = True
                             pass
-                    else:
-                        damaged = True
-            elif "lengths" in data:
-                damaged = True
             # cached tags: {path: [stat-key, title, artist, album]}. Same
             # shape-or-drop rule, so an older music.json with no "tags" key
             # simply re-reads them on the next discovery pass.
@@ -2443,10 +2449,6 @@ class Music(nbapp.AppWindow):
                     if (isinstance(ent, list) and len(ent) == 4
                             and all(isinstance(x, str) for x in ent)):
                         self._tags[str(path)] = list(ent)
-                    else:
-                        damaged = True
-            elif "tags" in data:
-                damaged = True
             self._store_load_ok = not damaged
         except FileNotFoundError:
             self._store_load_ok = True
@@ -2497,8 +2499,12 @@ class Music(nbapp.AppWindow):
                                                       False)),
             }
             nbapp.atomic_write_json(CFG_FILE, data)
-        except Exception:
-            pass
+        except Exception as exc:                                  # noqa: BLE001
+            # Playlists are made one drag at a time and there is no Save button
+            # to press again, so a write that does not land has to say so —
+            # silence here means an evening of sorting reappears as nothing at
+            # the next launch.
+            nbapp.note_save_failure(self, exc, CFG_FILE)
 
     def _undo_snapshot(self):
         return {
