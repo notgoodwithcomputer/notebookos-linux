@@ -7116,6 +7116,144 @@ def undo_cap_family():
     shutil.rmtree(scratch)
 
 
+def transport_family():
+    """Playing a film: the playhead moves, loops, and moves on.
+
+    The transport had never been driven. It advances on a FRAME CLOCK tick,
+    and an offscreen window never ticks one — which is why every earlier
+    check could only read the label. The tick itself is the logic, so this
+    drives that.
+
+    The audio is stubbed on purpose: pressing Play for real builds a
+    GStreamer pipeline into alsasink, and on a machine with no working sink
+    the pump blocks in push-buffer and the whole suite wedges. That cost ten
+    minutes once."""
+    if not gtk_available():
+        skip("F65 the transport", "no display")
+        return
+
+    class Silent:
+        """Stands in for the pipeline: playback must not need a sink."""
+        available = False
+
+        def __init__(self):
+            self.stopped = 0
+
+        def stop(self, *a, **k):
+            self.stopped += 1
+
+        def position_samples(self, *a, **k):
+            return 0
+
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    def rolling(module):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.audio = Silent()
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+        app.doc.scenes[0]["length"] = 48
+        app.sheet = module.Sheet(app.doc, 0)
+        for index in range(4):
+            cel = app.doc.add_cel("P%d" % index)
+            module.write_pixel(cel.decoded(0), 10 + index, 10, "#1A1916")
+            cel.version += 1
+            app.sheet.stamp(0, module.make_run(cel.id, index * 12, 12))
+        return app
+
+    def transport(app, module):
+        for label, _callback in app.menu_items("Timeline"):
+            if label != "-" and (module._t("Play") in label
+                                 or module._t("Stop") in label):
+                return label.strip()
+        return None
+
+    app = rolling(animation)
+    was = transport(app, animation)
+    app._toggle_playback()
+    playing = transport(app, animation)
+    check("F65 pressing Play says the next press will Stop",
+          animation._t("Play") in was and animation._t("Stop") in playing,
+          (was, playing))
+
+    seen = []
+    for _ in range(12):
+        app._play_tick(app.canvas, None)
+        if not seen or app.playhead != seen[-1]:
+            seen.append(app.playhead)
+        time.sleep(0.09)
+    check("F65 and the playhead moves forward, in order",
+          len(seen) > 3 and seen == sorted(seen) and seen[0] < seen[-1], seen[:8])
+
+    # A loop whose start is NOT frame zero, so "came back round" cannot be
+    # confused with "stopped and reset" — they both land on 0 otherwise, and
+    # a mutant that never loops passed unnoticed the first time.
+    app.loop = True
+    app.stamp_mouths = True
+    app.selection = (0, 12, 24)
+    app.playhead = 12
+    app._play_origin = 12
+    app._playing_started = time.monotonic() - 10.0
+    kept_going = app._play_tick(app.canvas, None)
+    # Both "looped round" and "stopped at the end" can leave the playhead on
+    # the same frame, so the telling difference is whether the film is STILL
+    # PLAYING. A loop that does not loop stops instead.
+    check("F65 with Loop on, running past the end comes back round and keeps going",
+          app.playhead == 12 and app._playing and
+          kept_going != GLib.SOURCE_REMOVE,
+          (app.playhead, app._playing))
+    app.stamp_mouths = False
+    app.selection = None
+
+    app.loop = False
+    app.doc.scenes.append(animation.new_scene("Second"))
+    app.scene_i = 0
+    app._play_origin = 0
+    app._playing_started = time.monotonic() - 10.0
+    app._play_tick(app.canvas, None)
+    check("F65 with Loop off, it moves on to the next scene",
+          app.scene_i == 1, app.scene_i)
+
+    app._toggle_playback()
+    resting = app.playhead
+    check("F65 Stop stops, and leaves the playhead where it stopped",
+          not app._playing and app.audio.stopped >= 1 and
+          transport(app, animation) is not None and
+          animation._t("Play") in transport(app, animation) and
+          app.playhead == resting,
+          (app._playing, app.audio.stopped, transport(app, animation)))
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant("F65-loop-that-does-not-loop", [
+        ("        if frame >= loop_end:\n            if self.loop:",
+         "        if frame >= loop_end:\n            if False:"),
+    ])
+    other = rolling(graded)
+    other._toggle_playback()
+    other.loop = True
+    other.stamp_mouths = True
+    other.selection = (0, 12, 24)
+    other.playhead = 12
+    other._play_origin = 12
+    other._playing_started = time.monotonic() - 10.0
+    ended = other._play_tick(other.canvas, None)
+    mutant("F65 a Loop that runs off the end instead of round is caught",
+           (not other._playing) or ended == GLib.SOURCE_REMOVE,
+           (other.playhead, other._playing))
+    other._alive = False
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -7159,6 +7297,7 @@ for _family in (
         menu_bar_fits_family,
         sound_name_family,
         undo_cap_family,
+        transport_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
