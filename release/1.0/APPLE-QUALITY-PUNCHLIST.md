@@ -685,3 +685,32 @@ next person to see 41 will reasonably suspect a break. Whoever owns that
 change should say whether dropping Terminal from the Applications list is
 intended for release — it is a product decision sitting uncommitted, like
 the four files already filed above.
+
+### ON TARGET, this session's own drive (Aug 14, private guest /tmp/nbfv)
+
+Booted the CURRENT built target — not the 2.3 ISO, which predates today's
+work — in a private instance so the ebook/media lane kept boot-work/.
+No respin needed: the overlay had already been synced into
+buildroot/output/target, confirmed by grepping the target's own copies for
+`size-prepared` (ebook) and `_prompt_return_focus` (comics) before booting.
+
+  * Desktop came up clean: panel, board tiles, Finder listing 35 items.
+  * COMICS LAUNCHES AND IS HEALTHY with the day's changes in it — Pencil
+    marked selected at launch, dock in the corrected order (Tools, Brush
+    Size, Colour + Recent, Shapes, Bubble), status line reading "Drag to
+    draw. Square tip, hard edges.", store writing ("Saved 19:31"), 8-page
+    recovery book at 26% Fit.
+  * THE PROMPT PATH I CHANGED WORKS ON TARGET: Mix Colour opens as a
+    proper card (live preview well, R/G/B sliders, Cancel/Apply), Esc
+    dismisses it, and typing `e` afterwards selects the Eraser — so the
+    keyboard reaches the app once a card has closed, which is the
+    user-visible half of 266ccb9c.
+
+HONEST LIMIT ON THAT LAST ONE: pressing `e` proves the WINDOW-level
+shortcut ladder still works after a close, which is what a person notices
+first. It does not by itself prove `get_focus()` returned to the invoker,
+because a window key handler fires with no focus owner at all — that half
+is measured directly on the real widget tree (comics_selftest,
+illustrator_selftest, both red-proved). Observing focus on target would
+need code running inside the app's own process; QMP cannot see it. Said
+plainly rather than counted as more than it is.
