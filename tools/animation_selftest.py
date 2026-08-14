@@ -5763,6 +5763,81 @@ def chrome_never_ships_family():
     shutil.rmtree(scratch)
 
 
+def streaming_family():
+    """A long film is reduced as it streams, never held whole (spec §9).
+
+    This one only ever bites on the machine the OS is for: a film long enough
+    to be worth exporting, on two gigabytes, where holding the frames ends the
+    export and not the argument. It is invisible on a workstation, which is
+    exactly why it wants a measurement rather than a reading.
+
+    Measured on the real exporter, through its own progress callback, against
+    live resident memory — not ru_maxrss, which is a high-water mark that
+    never falls and so reports nothing after the first big family."""
+    if not gtk_available():
+        skip("F51 streaming a long film", "no display")
+        return
+
+    page_mb = os.sysconf("SC_PAGE_SIZE") / 1e6
+
+    def resident():
+        with open("/proc/self/statm") as handle:
+            return int(handle.read().split()[1]) * page_mb
+
+    def stream(module, length=200):
+        doc = module.AnimationDocument(canvas=(320, 240))
+        scene = doc.scenes[0]
+        scene["length"] = length
+        sheet = module.Sheet(doc, 0)
+        for index in range(40):
+            cel = doc.add_cel("D%d" % index)
+            module.write_pixel(cel.decoded(0), 5 + index, 6, "#1A1916")
+            cel.version += 1
+        at = 0
+        while at < length - 4:
+            sheet.stamp(0, module.make_run(doc.cels[at % 40].id, at, 4))
+            at += 4
+        home = tempfile.mkdtemp(prefix="animation-stream-")
+        base = resident()
+        high = [0.0]
+
+        def watch(_fraction):
+            high[0] = max(high[0], resident() - base)
+
+        # the real exporter, not a loop written beside it: this is the code
+        # that has to stay flat, and the code a regression would be in
+        module.export_png_frames(doc, [(scene, f) for f in range(length)],
+                                 os.path.join(home, "frames"), progress=watch)
+        made = len(os.listdir(os.path.join(home, "frames")))
+        shutil.rmtree(home, ignore_errors=True)
+        pixels = length * doc.canvas[0] * doc.canvas[1] * 4 / 1e6
+        return pixels, high[0], made
+
+    pixels, kept, made = stream(animation)
+    check("F51 every frame of a long film is written",
+          made == 200, made)
+    check("F51 and the film passes through without piling up in memory",
+          kept < pixels * 0.1,
+          ("%.0f MB streamed" % pixels, "%.1f MB held" % kept))
+
+    # the regression this guards against is an exporter that keeps what it
+    # has already written — the whole film resident at the end
+    graded, scratch = module_mutant("F51-export-keeps-every-frame", [
+        ("def export_png_frames(doc, frames, directory, cancel=None, progress=None):\n"
+         "    os.makedirs(directory, exist_ok=True)",
+         "def export_png_frames(doc, frames, directory, cancel=None, progress=None):\n"
+         "    os.makedirs(directory, exist_ok=True)\n    _held = []"),
+        ("        composite(doc, scene, frame).write_to_png(tmp)",
+         "        _made = composite(doc, scene, frame)\n"
+         "        _held.append(_made)\n"
+         "        _made.write_to_png(tmp)"),
+    ])
+    spilled, hoarded, _made = stream(graded)
+    mutant("F51 an exporter that holds the whole film is caught",
+           hoarded > spilled * 0.5, "%.1f MB held" % hoarded)
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5792,6 +5867,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        streaming_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
