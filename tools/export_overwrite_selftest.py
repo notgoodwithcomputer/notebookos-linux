@@ -52,7 +52,7 @@ sys.path.insert(0, DE)
 
 import gi  # noqa: E402
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gtk, GLib  # noqa: E402
 
 DOCS = os.path.join(_HOME, "Documents")
 DECOY = b"%PDF-1.4 the user's earlier export -- must survive\n"
@@ -73,6 +73,32 @@ def pump(n=200):
     while Gtk.events_pending() and i < n:
         Gtk.main_iteration()
         i += 1
+
+
+def settle(app, n=400):
+    """Drain the GTK queue AND wait for an export that runs OFF the thread.
+
+    Journal's export moved onto an nbjobs worker, and this gate then reported
+    it broken — "accepting replaces it with a real PDF (51 bytes)", the 51
+    being the decoy still sitting there. The app was fine: measured with a
+    proper wait it writes a 12,008-byte PDF. pump() only drains events that
+    are ALREADY pending, so it returned before the worker had written
+    anything, and the gate blamed the app for its own assumption that export
+    is synchronous.
+
+    Joining the thread is necessary and NOT sufficient: nbjobs hands results
+    back through the GLib main loop, so the delivery has to be pumped too.
+    A genuinely broken export still fails — the join returns, the pump finds
+    no file, and the checks below report it."""
+    jobs = getattr(app, "jobs", None)
+    job = jobs.job("export") if jobs is not None and hasattr(jobs, "job") else None
+    if job is not None:
+        job.join(60)
+    ctx = GLib.MainContext.default()
+    for _ in range(n):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        ctx.iteration(False)
 
 
 # --------------------------------------------------------------------------
@@ -193,7 +219,7 @@ def run_one(module, clsname, seed, export, style):
             check(False, "%s: accepting exports (%s: %s)"
                   % (module, type(exc).__name__, exc))
             return
-    pump()
+    settle(app)
 
     out = open(dest, "rb").read() if os.path.exists(dest) else b""
     check(out.startswith(b"%PDF") and out != DECOY,
@@ -212,7 +238,7 @@ def run_one(module, clsname, seed, export, style):
         app._confirm = lambda *a, **k: (calls.append(a), False)[1]
     try:
         export(app, name)
-        pump()
+        settle(app)
     except Exception as exc:
         check(False, "%s: first export runs (%s: %s)"
               % (module, type(exc).__name__, exc))
