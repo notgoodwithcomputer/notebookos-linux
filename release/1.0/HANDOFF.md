@@ -1861,3 +1861,23 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   matching the messaging-honesty axis: "This manuscript could not be read.
   It has not been changed, and this session is read-only." No path, no
   errno.
+
+- **2026-08-14 (apple-quality) · THE RENDER-HARNESS BUG'S BLAST RADIUS,
+  MEASURED RATHER THAN FEARED.** After fixing uishot.shot_window (1deca4ec)
+  I re-ran every glance batch and, where a render differed, isolated the
+  variable by rendering the SAME code under both the old and new harness —
+  because between the two batches real commits had landed and the shared
+  dev NB_HOME had live state in it, so a plain before/after diff blamed the
+  harness for other people's work (it "changed" all 12 apps; 9 were the
+  clock in the menu bar and the rest were code).
+  RESULT: of the twenty apps rendered this session, the harness altered
+  exactly ONE — Disc Burner. academics, packages, cookbook, music, media,
+  writer, novel and calendar all render IDENTICALLY under both. So every
+  earlier glance reading stands.
+  THE PATTERN IS WIDER THAN THE IMPACT: 15 modules contain a `hide()`
+  within a few lines after their own `show_all()` (academics, bills,
+  burner, calendar, installer, language, media, music, nbpicker, nbpinyin,
+  novel, screenplay, video, widgets, writer). It only bites when that hide
+  runs on the CONSTRUCTION path, which is why burner was the only casualty.
+  Anyone adding a render-time assertion should know the pattern exists in
+  all fifteen.
