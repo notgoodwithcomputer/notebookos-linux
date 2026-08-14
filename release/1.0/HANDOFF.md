@@ -1881,3 +1881,30 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   runs on the CONSTRUCTION path, which is why burner was the only casualty.
   Anyone adding a render-time assertion should know the pattern exists in
   all fifteen.
+
+- **2026-08-14 (apple-quality) · THE SILENTLY-READ-ONLY STORE IS A CLASS,
+  AND CALCULATOR ALREADY SOLVED IT — the OS is mid-migration and nobody
+  wrote that down.** Fixed the user-visible half in Novel (3853e4e2) and
+  Music (c2cf6678): both went read-only on a damaged store and said
+  NOTHING, so a person could write a chapter or sort an evening of
+  playlists into a window that had already decided not to save. Music was
+  the worse of the two — _save() returns before attempting anything, so
+  there was not even a failed write to report.
+  THE PART THAT NEEDS AN OWNER: calculator.py:1805 has a docstring arguing
+  that gating saves on "the file did not parse" IS the defect, and that
+  the cure is to QUARANTINE the unreadable store and keep saving —
+  narrowing its own flag to the one case where refusing is the lesser loss
+  (the move aside FAILED, so the original is still sitting at the path).
+  It cites contacts.py:494 recording that same cure shipping in journal.
+  So three apps (calculator, journal, contacts) have migrated to
+  quarantine-and-continue, while Novel and Music still hold the store
+  read-only for the whole session — and music_adversarial pins the older
+  contract with a RED-PROVED byte-for-byte check, so the two designs are
+  both gated and they disagree.
+  I did not change either one. Which contract wins is the same question as
+  the peer's preserve_damaged item filed above (does a primitive that
+  MOVES the bytes to a dated sibling satisfy "the original survives"?) —
+  they are one decision, not two, and it wants the design owner rather
+  than a fourth session's opinion. Both apps are now HONEST under the
+  current contract either way, so this is not blocking release; it is a
+  coherence debt with a gate on each side of it.
