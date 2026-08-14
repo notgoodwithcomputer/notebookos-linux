@@ -52,10 +52,18 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #
 #   1. music.py is the last app whose probe never finishes. Every other one
 #      of the 33 completes.
-#   2. The violation count oscillates between 54 and 55 across consecutive
-#      runs of an unchanged tree. A gate that answers differently to the same
-#      question cannot go into the aggregate: it would fail on nobody's
-#      change. Find the timing-dependent item before wiring this.
+#   2. The violation count oscillates across consecutive runs of an
+#      UNCHANGED tree: 52, 53, 54 and 55 have all been observed, while the
+#      items invoked stayed at exactly 342 every time. A gate that answers
+#      differently to the same question cannot go into the aggregate — it
+#      would fail on nobody's change, and a flaky gate teaches people to
+#      re-run rather than to look.
+#
+#      WHAT IS MISSING TO CHASE IT: findings that sit WITHIN the ledger are
+#      never printed, so the total moves while the visible output stays
+#      empty, and diffing two runs names nothing. This needs a per-app tally
+#      it can print on request — then two runs can be diffed and the
+#      timing-dependent item named. Do that before anything else here.
 #
 # How it got here, for whoever picks it up. Stubbing the audio pump and the
 # file pickers took invoked items 104 -> 203 and blocked probes 16 -> 11.
