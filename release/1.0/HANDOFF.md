@@ -2082,3 +2082,26 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   nothing is blocked; what is unresolved is whether they should also keep
   saving. This is one decision with the preserve_damaged question, not a
   third: both ask what an app owes a store it could not read.
+
+- **2026-08-14 (apple-quality) · FOUR UNCOMMITTED FILES BELONG TO NEITHER
+  LIVE SESSION, and any ISO built from this tree ships them.**
+  `tools/destructive_action_check.py` (+75/-9, a real refactor: an
+  `inventoried` flag, caller tracking, a reworked classifier),
+  `de/nbprefs.py` (+17), `de/nbpkg_install.py` (+2/-2),
+  `tools/settings_prefs_adversarial_selftest.py` (+5/-2). They have been
+  dirty and unchanged since this session's first `git status` this
+  morning. I have never touched any of them; the ebook/media lane
+  confirms the same. So they are a third party's — an earlier session, or
+  a Codex job nobody claimed.
+  SAFE, BUT UNFINISHED: nbprefs and nbpkg_install byte-compile, 42/42 apps
+  construct, settings_prefs_adversarial passes 7/7. The one visible
+  consequence is that destructive_action_check FAILS on its own ratchet —
+  "STALE DEBT accounting.py Accounting._export_csv NEITHER", i.e. the
+  rewritten classifier no longer needs a debt row that is still listed. So
+  the aggregate's 356-gate run cannot go green while they sit there.
+  I DID NOT COMMIT, REVERT OR REPAIR THEM. Committing would land a
+  half-finished refactor under my name; reverting would destroy work
+  somebody may still be holding; patching the stale row would fight the
+  refactor that caused it. This wants the owner, or an explicit decision to
+  drop them. It is the "uncommitted half-done lane work shipping in an ISO"
+  risk the mandate names, and it has now survived a full day.
