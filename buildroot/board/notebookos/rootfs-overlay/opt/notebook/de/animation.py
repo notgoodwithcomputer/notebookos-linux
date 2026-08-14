@@ -4256,6 +4256,12 @@ class Animation(nbapp.AppWindow):
             return
         self._snapshot(_t('Recolor Drawing to Palette'))
         palette = [(colour, _rgb255(colour)) for colour in self.doc.palette]
+        # A drawing holds a handful of colours and a great many pixels, so
+        # searching the palette per pixel asks the same question hundreds of
+        # thousands of times: 530ms for one take of a filled 320x240, 2117ms
+        # at 640x480, and this runs over EVERY take, on the GTK thread.
+        # Remember the answer per colour instead.
+        nearest = {}
         for take_index_ in range(len(cel.takes)):
             image = cel.decoded(take_index_)
             image.flush()
@@ -4264,9 +4270,12 @@ class Animation(nbapp.AppWindow):
                 if not data[offset + 3]:
                     continue
                 rgb = (data[offset + 2], data[offset + 1], data[offset])
-                colour, _ = min(palette, key=lambda item: sum(
-                    (left - right) ** 2 for left, right in zip(rgb, item[1])))
-                data[offset:offset + 4] = px4(colour)
+                bytes4 = nearest.get(rgb)
+                if bytes4 is None:
+                    colour, _ = min(palette, key=lambda item: sum(
+                        (left - right) ** 2 for left, right in zip(rgb, item[1])))
+                    bytes4 = nearest[rgb] = px4(colour)
+                data[offset:offset + 4] = bytes4
             image.mark_dirty()
         cel.version += 1
         self._commit_change()

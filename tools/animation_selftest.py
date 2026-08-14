@@ -6253,6 +6253,85 @@ def wobble_cost_family():
     shutil.rmtree(scratch)
 
 
+def recolour_family():
+    """Recolouring asks the palette once per colour, not once per pixel.
+
+    A drawing holds a handful of colours and a great many pixels, so the
+    per-pixel search asked the same question hundreds of thousands of times:
+    530ms for one take of a filled 320x240 and 2117ms at 640x480, over every
+    take of the cel, on the GTK thread. Remembering the answer per colour is
+    15x, and exact.
+
+    The risk a cache introduces is answering for the wrong question, so this
+    family drives two colours that share a red channel and must land on
+    different palette entries."""
+    if not gtk_available():
+        skip("F56 recolouring", "no display")
+        return
+
+    def recoloured(module):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = 0
+        app.sheet = module.Sheet(app.doc, 0)
+        cel, _run = app.sheet.ensure_drawing(0, 0)
+        image = cel.decoded(0)
+        # two inks with the SAME red channel, each nearest a different swatch
+        module.write_pixel(image, 4, 4, "#1A1916")
+        module.write_pixel(image, 5, 4, "#1AE8E0")
+        module.write_pixel(image, 6, 4, "#1A1916")
+        module.write_pixel(image, 7, 4, "#C8341E")
+        cel.version += 1
+        app.doc.palette = ["#1A1916", "#19E8E4", "#C8341E", "#FFFFFF"]
+        app._recolor_cel()
+        image = cel.decoded(0)
+        image.flush()
+        data = bytes(image.get_data())
+        stride = image.get_stride()
+
+        def at(x, y):
+            offset = y * stride + x * 4
+            if not data[offset + 3]:
+                return None
+            return (data[offset + 2], data[offset + 1], data[offset])
+
+        app._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(app, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(app, timer, None)
+        return {"dark": at(4, 4), "bright": at(5, 4), "again": at(6, 4),
+                "red": at(7, 4), "paper": at(40, 40),
+                "palette": {module._rgb255(c) for c in app.doc.palette}}
+
+    seen = recoloured(animation)
+    check("F56 every colour left in the drawing is one the palette holds",
+          all(seen[where] in seen["palette"]
+              for where in ("dark", "bright", "again", "red")), seen)
+    check("F56 two inks that share a red channel keep their own answers",
+          seen["dark"] != seen["bright"] and seen["red"] != seen["dark"],
+          (seen["dark"], seen["bright"], seen["red"]))
+    check("F56 the same ink twice gives the same colour twice",
+          seen["dark"] == seen["again"], (seen["dark"], seen["again"]))
+    check("F56 and blank paper stays blank", seen["paper"] is None, seen["paper"])
+
+    graded, scratch = module_mutant("F56-remembered-by-the-wrong-question", [
+        ("                bytes4 = nearest.get(rgb)", "                bytes4 = nearest.get(rgb[0])"),
+        ("                    bytes4 = nearest[rgb] = px4(colour)",
+         "                    bytes4 = nearest[rgb[0]] = px4(colour)"),
+    ])
+    confused = recoloured(graded)
+    mutant("F56 a cache that answers for the wrong colour is caught",
+           confused["dark"] == confused["bright"],
+           (confused["dark"], confused["bright"]))
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6287,6 +6366,7 @@ for _family in (
         lazy_library_family,
         paint_menu_family,
         wobble_cost_family,
+        recolour_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
