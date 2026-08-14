@@ -47,7 +47,7 @@ SELF = os.path.abspath(__file__)
 # queue empties. Twenty rounds of ten milliseconds is 200ms per item —
 # the same for every item on every run, which is what makes the verdict
 # repeatable.
-SETTLE_ROUNDS = 20
+SETTLE_ROUNDS = 120
 SETTLE_TICK = 0.01
 
 OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
@@ -79,21 +79,21 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      what was plugged in at that second. The probe is now told there are no
 #      drives — a real state the app must handle, and the same one every run.
 #
-#      Then screenplay.py appeared, 2 then 1 — the fourth app the tally has
-#      named. I assumed a general late-surface problem and was about to raise
-#      the settle window. MEASURED INSTEAD, and the assumption was wrong:
-#      instrumenting which settle round each surface first appears in gives
-#      worst=1 for both screenplay.py and gbasdk.py. Every surface that
-#      appears at all appears within the first ten milliseconds. A longer
-#      window would buy nothing.
+#      Then screenplay.py appeared, 2 then 1. Run in isolation it gave
+#      1,1,1,2 across four probes with the same 22 items invoked, and the
+#      varying finding was ZINE PRINT — an async export.
 #
-#      So the remaining variation is NOT about waiting. An item is sometimes
-#      opening a surface and sometimes not opening one at all, which points
-#      at state carried between items — the probe invokes many items against
-#      one live app, and what an earlier item leaves behind can decide
-#      whether a later one has anything to ask about. That is where to look
-#      next: invoke the varying item FIRST in its own probe and see whether
-#      it still varies.
+#      An earlier note here said a longer settle would buy nothing, on the
+#      strength of an instrument reporting worst=1. That instrument was
+#      BLIND: it could only see surfaces that appeared inside the window, so
+#      a surface arriving after it was invisible to the very measurement
+#      meant to find it. At 1.2s the same probe gives 1,1,1,1.
+#
+#      What is actually happening: Zine Print opens a PROGRESS card, and the
+#      export then dismisses it. Sample early and a surface is there; sample
+#      late and it is gone. A progress card is not asking anybody anything —
+#      it is the About-box distinction again — so the longer settle gives
+#      both the stable answer and the correct one.
 #
 #      screenplay is ledgered at its lower value, so a run that finds two
 #      still fails — deliberately, because pinning the higher number would
