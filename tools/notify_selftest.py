@@ -398,11 +398,18 @@ else:
     check("hours ago today falls back to the clock",
           ":" in panel._notify_when(now - 4 * 3600)
           or panel._notify_when(now - 4 * 3600) == shell._t("Yesterday"))
-    y_at = now - 30 * 3600
-    same_day = shell.Panel._days_between(time.localtime(y_at),
-                                         time.localtime(now)) == 0
+    # Thirty hours ago is not "yesterday" — before 06:00 it lands on the day
+    # BEFORE yesterday, so this check passed all afternoon and failed every
+    # early morning, naming the app for the clock the runner happened to
+    # start at. The same time of day one day back is yesterday at any hour.
+    y_at = now - 24 * 3600
+    check("the fixture really is one calendar day back",
+          shell.Panel._days_between(time.localtime(y_at),
+                                    time.localtime(now)) == 1,
+          (time.strftime("%d %b %H:%M", time.localtime(y_at)),
+           time.strftime("%d %b %H:%M", time.localtime(now))))
     check("yesterday is named",
-          same_day or panel._notify_when(y_at) == shell._t("Yesterday"),
+          panel._notify_when(y_at) == shell._t("Yesterday"),
           panel._notify_when(y_at))
     check("older than that becomes a date",
           panel._notify_when(now - 6 * 86400) not in
