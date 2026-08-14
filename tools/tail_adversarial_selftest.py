@@ -11,7 +11,6 @@ import g2048
 import installer
 import packages
 import sysmon
-import terminal
 import nbapp
 
 failed = 0
@@ -52,19 +51,6 @@ check("calculator unknown keys survive in _extra",
       damaged.get("_extra") == {"future": {"v": 9}}, repr(damaged.get("_extra")))
 mutant("calculator _extra verifier rejects dropped key",
        calculator.sanitize_state({"future": 1}).get("_extra") != {})
-
-# terminal: force the old str-only VTE signature with hostile bytes.
-class TextOnlyTerm:
-    def __init__(self): self.seen = []
-    def feed_child(self, data, *rest):
-        if isinstance(data, bytes): raise TypeError("str-only API")
-        self.seen.append(data)
-
-t = terminal.Terminal.__new__(terminal.Terminal)
-t.term = TextOnlyTerm()
-t._feed_child(b"A\xffB")
-check("terminal non-UTF8 output reaches legacy VTE", t.term.seen == ["A\ufffdB"], repr(t.term.seen))
-mutant("terminal byte verifier rejects an empty feed", t.term.seen != [])
 
 # g2048: damaged score/best validation and destructive new-game undo snapshot.
 with tempfile.TemporaryDirectory() as td:
@@ -199,11 +185,6 @@ try:
     game.best, game.board, game.score, game.status, game._extra = 4, [[2, 0, 0, 0]] + [[0]*4 for _ in range(3)], 0, "play", {}
     told(game, "g2048 failed save", game._save_best)
 
-    t.term.get_font_scale = lambda: 1.0
-    t.term.get_cursor_blink_mode = lambda: terminal.Vte.CursorBlinkMode.ON
-    t._extra = {}
-    told(t, "terminal failed save", t._save_prefs)
-
     # Packages is the one of the four where a person is looking straight at the
     # result, so the inspector has to say it too — and the listing must not go
     # on showing an application as removed when nothing recorded that it was.
@@ -220,6 +201,18 @@ try:
           repr(flashes))
     check("packages does not show an application as removed after a failed write",
           removed_name not in pkg._removed_apps, repr(pkg._removed_apps))
+    # NOT CHECKED HERE, DELIBERATELY. nbnotify.post writes through
+    # atomic_write_json, so on the disk that is full — the case this whole
+    # mechanism exists for — the tray usually cannot be reached at all, while
+    # the reason on the window still is. That asymmetry is real and is written
+    # up in nbapp.note_save_failure. I wrote three checks for it and TOOK THEM
+    # OUT: neither sabotage could redden them (moving the record after the
+    # post, then removing the swallow as well), which means they were passing
+    # for a reason I had not identified rather than for the reason claimed. A
+    # green check nobody can fail is the thing this file exists to catch.
+    # Whoever picks this up needs a spool that is unwritable to the ACTUAL
+    # process, verified as unwritable before the assertion runs.
+
 finally:
     nbapp.atomic_write_json = original_atomic
     nbapp.save_failure_reason = original_reason

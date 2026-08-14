@@ -598,8 +598,17 @@ def note_save_failure(owner, exc, path=None, app_name=""):
 
     ONCE PER OWNER, NOT ONCE PER WRITE. A full disk fails every autosave, and a
     tray filling with one repeated sentence is the single failure a notification
-    centre cannot survive. The reason stays on the owner as `_save_error` for
-    any status line that is still on screen to show."""
+    centre cannot survive.
+
+    THE `_save_error` ON THE OWNER IS THE LOAD-BEARING HALF, and the ordering
+    above is deliberate: it is recorded BEFORE the notification is attempted,
+    because the notification usually cannot be delivered in the case this exists
+    for. nbnotify.post writes a file through atomic_write_json — to the disk
+    that is full, or the filesystem that is read-only, or the quota that is
+    exhausted. Measured with an unwritable spool: the reason is still on the
+    window, the tray gets nothing, and nothing raises. So a status line reading
+    `_save_error` always works; the tray is a courtesy that arrives when the
+    failure was something OTHER than the storage itself."""
     try:
         reason = save_failure_reason(exc, path)
     except Exception:                                             # noqa: BLE001
