@@ -58,23 +58,21 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 # aggregate would make the aggregate permanently red, which is the same as
 # having no gate at all.
 DEBT = {
-    'accounting.py': 3,
-    'bills.py': 1,
-    'contacts.py': 3,
-    'cookbook.py': 2,
-    'ebook.py': 1,
-    'g2048.py': 2,
+    'accounting.py': 1,
+    'contacts.py': 2,
+    'cookbook.py': 1,
+    'g2048.py': 1,
     'installer.py': 1,
-    'journal.py': 2,
-    'maps.py': 2,
-    'mealplanner.py': 2,
-    'media.py': 2,
-    'packages.py': 3,
-    'settings.py': 9,
-    'sysmon.py': 2,
-    'tasks.py': 4,
-    'usbwriter.py': 2,
-    'widgetsettings.py': 2,
+    'journal.py': 1,
+    'maps.py': 1,
+    'mealplanner.py': 1,
+    'media.py': 1,
+    'packages.py': 2,
+    'settings.py': 2,
+    'sysmon.py': 1,
+    'tasks.py': 3,
+    'usbwriter.py': 1,
+    'widgetsettings.py': 1,
 }
 
 HANDOFF = {
@@ -138,6 +136,49 @@ def _window_class(module, Gtk):
     # Prefer the app class with a menu provider over helper dialog classes.
     candidates.sort(key=lambda c: "menu_items" not in c.__dict__)
     return candidates[0] if candidates else None
+
+
+def _offers_a_choice(surface, Gtk):
+    """Does this surface ASK, or does it only SHOW?
+
+    MENU-CONVENTIONS §1: the ellipsis promises a dialog, a picker or a
+    confirm BEFORE ANYTHING HAPPENS. An About box is not that — it is the
+    action itself, and it asks nothing. Counting any window that appears as
+    "it asked" made every app's About item a violation, all seventeen of
+    them, against a label composed by nbcommands.about_label — a SHARED
+    helper that words it identically everywhere on purpose. A rule that
+    convicts a shared helper seventeen times is a rule about the rule.
+
+    A surface asks when it offers something to answer with: a place to type,
+    a thing to choose, or more than one way out. A single dismissing button
+    is how a presentation closes.
+    """
+    entries = choosers = buttons = 0
+    stack, alive = [surface], []
+    while stack:
+        widget = stack.pop()
+        alive.append(widget)
+        if isinstance(widget, (Gtk.Entry, Gtk.TextView)):
+            entries += 1
+        elif isinstance(widget, (Gtk.ComboBox, Gtk.Switch, Gtk.Scale,
+                                 Gtk.SpinButton, Gtk.CheckButton,
+                                 Gtk.RadioButton, Gtk.TreeView, Gtk.ListBox)):
+            choosers += 1
+        elif isinstance(widget, Gtk.Button):
+            buttons += 1
+        if isinstance(widget, Gtk.Container):
+            try:
+                stack.extend(widget.get_children())
+            except Exception:
+                pass
+    return bool(entries or choosers) or buttons > 1
+
+
+def _new_overlay_widgets(app, before):
+    overlay = getattr(app, "_overlay", None)
+    if overlay is None:
+        return []
+    return [child for child in overlay.get_children() if id(child) not in before]
 
 
 def _overlay_ids(app):
@@ -220,9 +261,13 @@ def probe(name):
             invoked += 1
             while Gtk.events_pending():
                 Gtk.main_iteration_do(False)
-            asked = bool(({id(x) for x in Gtk.Window.list_toplevels()} - before_windows) or
-                         (_overlay_ids(app) - before_overlay) or
-                         (_card_tokens(app) - before_cards))
+            appeared = ([x for x in Gtk.Window.list_toplevels()
+                         if id(x) not in before_windows] +
+                        _new_overlay_widgets(app, before_overlay))
+            asked = bool(appeared) and any(_offers_a_choice(x, Gtk)
+                                           for x in appeared)
+            if not appeared and (_card_tokens(app) - before_cards):
+                asked = True
             if flashes and not asked:
                 continue
             promised = label.lstrip().split("    ", 1)[0].strip().endswith("…")
