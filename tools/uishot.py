@@ -220,7 +220,27 @@ def shot_window(win, w, h, path, settle=80, after_show=None):
     clamp = _PanelClamp(w, h)
     clamp.add(bg)
     off.add(clamp)
+    # show_all() UN-HIDES what an app deliberately hid, and several apps hide
+    # AFTER their own show_all() — Disc Burner ends __init__ with
+    # `self.show_all(); self.prog.hide(); self.stop_btn.hide()`. Rendering it
+    # here therefore drew a live Stop button and a progress bar over an idle
+    # app, and the picture invited a bug report about a control that is
+    # correctly hidden on the guest. The render has to show what the app left
+    # on screen, so: if the app already showed itself, remember which widgets
+    # it had hidden and put them back after show_all. An app that never called
+    # show_all has nothing to preserve and is shown as before.
+    hidden = []
+    if child.get_visible():
+        def _walk(wgt):
+            if not wgt.get_visible():
+                hidden.append(wgt)
+            if isinstance(wgt, Gtk.Container):
+                for ch in wgt.get_children():
+                    _walk(ch)
+        _walk(child)
     off.show_all()
+    for wgt in hidden:
+        wgt.hide()
     # Some widgets only honour state changes once shown — e.g. Gtk.Stack ignores
     # set_visible_child_name until its pages are visible, so an editor selected
     # before show_all reverts to the first page. after_show runs here, post
