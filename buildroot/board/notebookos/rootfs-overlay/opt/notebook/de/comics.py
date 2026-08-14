@@ -2600,21 +2600,68 @@ class Comics(nbapp.AppWindow):
             self._overlay_prompt("Replace file?", _t("\u201c%s\u201d already exists in Documents. Replace it?") % name,
                                  [("Cancel",None,"cancel"),("Replace",lambda:self._export(next_state),"destructive")])
             return
-        cache = collections.OrderedDict()
-        covers = {0, 1, len(self.doc.pages) - 2, len(self.doc.pages) - 1}
-        def draw(cr, number, _w, _h):
-            idx = number - 1
-            flat = _cached_flatten(cache, self.doc.pages, idx)
-            if state["bw"] and idx not in covers:
-                flat = desaturate(flat)
-            draw_flat_page(cr, flat)
-        try:
+        if getattr(self, "_exporting", False):
+            self._flash(_t("An export is already running…"), False)
+            return
+        # Capture on the UI thread the way autosave does — dirty layers as
+        # worker-private surface COPIES, the rest as their encoded bytes —
+        # then rebuild real pages on the worker and run the REAL flatten.
+        # Inline, a full book froze the window for the whole render (~10s
+        # on the shipped machine), stuck behind the just-dismissed card.
+        snapshot, _updates = autosave_snapshot(self.doc)
+        pages_data = snapshot["pages"]
+        covers = {0, 1, len(pages_data) - 2, len(pages_data) - 1}
+        bw = bool(state.get("bw"))
+        self._exporting = True
+        self._flash(_t("Exporting…"), True)
+
+        def work(_job):
+            rebuilt = []
+            for saved in pages_data:
+                layers = []
+                for item in saved["layers"]:
+                    surface = item.pop("_surface", None)
+                    raw = item.pop("_png", None)
+                    if item.pop("_blank", None):
+                        raw = _blank_page_png()
+                    layers.append(Layer(name=item.get("name", ""),
+                                        visible=item.get("visible", True),
+                                        opacity=item.get("opacity", 100),
+                                        surface=surface, png=raw))
+                rebuilt.append({"layers": layers,
+                                "panels": saved["panels"],
+                                "bubbles": saved["bubbles"],
+                                "mask_gutters": saved.get("mask_gutters")})
+            cache = collections.OrderedDict()
+
+            def draw(cr, number, _w, _h):
+                idx = number - 1
+                flat = _cached_flatten(cache, rebuilt, idx)
+                if bw and idx not in covers:
+                    flat = desaturate(flat)
+                draw_flat_page(cr, flat)
             os.makedirs(DOCS_DIR, exist_ok=True)
-            nbprint.simple_pdf(path, len(self.doc.pages), draw,
+            nbprint.simple_pdf(path, len(rebuilt), draw,
                                nbprint.HALF_W_PT, nbprint.HALF_H_PT)
+            return name
+
+        def done(_name):
+            self._exporting = False
             self._flash(_t("Exported %s") % time.strftime("%H:%M"), True)
-        except Exception:
+
+        def failed(_error):
+            self._exporting = False
+            try:
+                # A half-written PDF plays as finished and sits in Documents
+                # looking real — worse than none (the Animation export law).
+                if os.path.exists(path):
+                    os.unlink(path)
+            except Exception:
+                pass
             self._flash(_t("The PDF could not be exported."), False)
+
+        self.jobs.start("export", work, on_done=done, on_error=failed,
+                        policy=nbjobs.REJECT)
 
     def _print_prompt(self):
         state = {"sheets": 0, "bw": False}
