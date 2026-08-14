@@ -10,6 +10,18 @@
 #   run-iso.sh --headless      QMP socket for screenshots
 #   run-iso.sh --boot-installed  boot the scratch disk instead (test the
 #                              system the installer wrote), no ISO
+#   run-iso.sh --debug-shell   same live ISO, but booted with `nbdebug` so the
+#                              serial debug shell runs and tools/gsh.py works
+#
+# WHY --debug-shell EXISTS. /opt/notebook/debugshell.sh only starts a shell
+# when /proc/cmdline carries `nbdebug`; otherwise it sleeps, deliberately, so
+# an image somebody owns does not hand a root shell to anyone with a serial
+# cable. That gate is right, but it silently blocks every on-target check that
+# needs to place a file on the guest — and a shell-less tty still ECHOES, so
+# gsh appears to HANG rather than refuse. The ISO's cmdline lives in its own
+# grub.cfg and cannot be appended to from the QEMU side, so this mode boots
+# the kernel and initrd OUT of the ISO directly (-kernel/-initrd/-append) with
+# the ISO still attached as the live medium the initrd goes looking for.
 #   NB_KVM=0  force software TCG   ·   NB_GL=0  force software virtio-gpu
 #   SCRATCH_GB=8  size of the install target disk
 set -eu
@@ -22,9 +34,13 @@ SCRATCH_GB="${SCRATCH_GB:-8}"
 
 MODE="iso"
 HEADLESS=0
+DEBUGSHELL=0
+# -kernel takes bootindex 0 implicitly, so the CD must not also claim it.
+CD_BOOTIDX=",bootindex=0"
 for a in "$@"; do case "$a" in
   --headless)       HEADLESS=1 ;;
   --boot-installed) MODE="installed" ;;
+  --debug-shell)    DEBUGSHELL=1; CD_BOOTIDX="" ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -73,9 +89,35 @@ else
   echo "run-iso: booting Live ISO $ISO  (+ blank target /dev/vda)"
   BOOTDEV=(
     -drive "file=$ISO,if=none,id=iso0,format=raw,media=cdrom,readonly=on"
-    -device "ide-cd,drive=iso0,bootindex=0"
+    -device "ide-cd,drive=iso0${CD_BOOTIDX}"
     -drive "file=$SCRATCH,if=none,id=hd0,format=raw"
     -device "virtio-blk-pci,drive=hd0"
+  )
+fi
+
+# --debug-shell: boot the ISO's OWN kernel with `nbdebug` appended. The cmdline
+# below is copied from the ISO's grub.cfg live entry; if that entry ever
+# changes, this must follow it, so it is read from the ISO rather than guessed.
+DIRECTBOOT=()
+if [ "$DEBUGSHELL" = "1" ]; then
+  [ "$MODE" = "iso" ] || { echo "--debug-shell needs the live ISO" >&2; exit 2; }
+  command -v 7z >/dev/null || { echo "--debug-shell needs 7z to read the ISO" >&2; exit 2; }
+  KDIR="$WORK/directboot"
+  rm -rf "$KDIR"; mkdir -p "$KDIR"
+  7z e -y -o"$KDIR" "$ISO" live/bzImage live/initrd.img >/dev/null 2>&1
+  7z e -y -o"$KDIR" "$ISO" boot/grub/grub.cfg >/dev/null 2>&1
+  [ -f "$KDIR/bzImage" ] && [ -f "$KDIR/initrd.img" ] || {
+    echo "--debug-shell: could not extract live/bzImage + live/initrd.img from $ISO" >&2
+    exit 2; }
+  # Take the FIRST live entry's arguments verbatim, then add nbdebug. Guessing
+  # them would be the kind of near-miss that boots to an initrd prompt and
+  # looks like a broken image.
+  CMDLINE=$(sed -n 's|^ *linux /live/bzImage *||p' "$KDIR/grub.cfg" | head -1)
+  [ -n "$CMDLINE" ] || CMDLINE="boot=live nb.live=1 console=tty1 loglevel=5"
+  echo "run-iso: --debug-shell, cmdline from the ISO: $CMDLINE nbdebug"
+  DIRECTBOOT=(
+    -kernel "$KDIR/bzImage" -initrd "$KDIR/initrd.img"
+    -append "$CMDLINE nbdebug"
   )
 fi
 
@@ -90,6 +132,7 @@ COMMON=(
   "${GPU[@]}"
   -serial "file:$WORK/serial.log"
   -serial "unix:$WORK/ttyS1.sock,server=on,wait=off"
+  "${DIRECTBOOT[@]}"
 )
 
 if [ "$HEADLESS" = "1" ]; then
