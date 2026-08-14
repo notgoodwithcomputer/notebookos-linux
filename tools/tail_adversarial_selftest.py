@@ -201,17 +201,36 @@ try:
           repr(flashes))
     check("packages does not show an application as removed after a failed write",
           removed_name not in pkg._removed_apps, repr(pkg._removed_apps))
-    # NOT CHECKED HERE, DELIBERATELY. nbnotify.post writes through
-    # atomic_write_json, so on the disk that is full — the case this whole
-    # mechanism exists for — the tray usually cannot be reached at all, while
-    # the reason on the window still is. That asymmetry is real and is written
-    # up in nbapp.note_save_failure. I wrote three checks for it and TOOK THEM
-    # OUT: neither sabotage could redden them (moving the record after the
-    # post, then removing the swallow as well), which means they were passing
-    # for a reason I had not identified rather than for the reason claimed. A
-    # green check nobody can fail is the thing this file exists to catch.
-    # Whoever picks this up needs a spool that is unwritable to the ACTUAL
-    # process, verified as unwritable before the assertion runs.
+    # THE RELIABLE HALF. nbnotify.post writes its record through
+    # atomic_write_json — to the disk that is full, the filesystem that is
+    # read-only, the quota that is exhausted. So in the exact case this
+    # mechanism exists for, the tray usually cannot be reached, while the
+    # reason on the window still can. A status line reads the reason; the tray
+    # is a courtesy.
+    #
+    # MODELLED BY MAKING post() RAISE, not by chmod. My first fixture made the
+    # spool unwritable and could not be reddened by any sabotage — because this
+    # block runs while atomic_write_json is ALREADY patched to fail, so nothing
+    # reached the spool either way and the permissions never mattered. The
+    # fixture has to isolate the property from the state around it.
+    def exploding_post(*_a, **_k):
+        raise OSError(errno.ENOSPC, "the tray is on the full disk too")
+
+    nbnotify.post = exploding_post
+    try:
+        stranded = calculator.Calculator.__new__(calculator.Calculator)
+        reason = nbapp.note_save_failure(stranded, OSError(errno.ENOSPC, "full"),
+                                         "state.json")
+        check("a failed save records its reason even when the tray cannot be written",
+              getattr(stranded, "_save_error", "") == DISK_FULL, repr(reason))
+        check("...and the caller is handed the sentence regardless",
+              reason == DISK_FULL, repr(reason))
+    except Exception as exc:                                      # noqa: BLE001
+        check("a failed save records its reason even when the tray cannot be written",
+              False, "note_save_failure raised: %r" % (exc,))
+        check("...and the caller is handed the sentence regardless", False, "raised")
+    finally:
+        nbnotify.post = capture_post
 
 finally:
     nbapp.atomic_write_json = original_atomic
