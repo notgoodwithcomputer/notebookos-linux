@@ -1683,7 +1683,7 @@ class Contacts(nbapp.AppWindow):
             # contacts to export".
             has = bool(self.people)
             return [
-                ("New Contact", lambda: self._new_contact()),
+                ("New Contact…", lambda: self._new_contact()),
                 nbapp.SEP,
                 (_vc_menu("Import vCard…"), self._import_vcard),
                 (_vc_menu("Export Contact vCard…"),
@@ -1704,7 +1704,7 @@ class Contacts(nbapp.AppWindow):
         if name == "Card":
             has = bool(self.people)
             return [
-                ("New Contact", lambda: self._new_contact()),
+                ("New Contact…", lambda: self._new_contact()),
                 ("Done Editing" if self.editing else "Edit Card",
                  (lambda: self._toggle_edit()) if has else None),
                 nbapp.SEP,

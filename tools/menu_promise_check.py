@@ -58,21 +58,28 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 # aggregate would make the aggregate permanently red, which is the same as
 # having no gate at all.
 DEBT = {
-    'accounting.py': 1,
-    'contacts.py': 2,
+    'accounting.py': 0,  # Ledger Summary — reveals a dismiss-only report, no input or choice.
+    'contacts.py': 0,
+    # New Recipe appends a recipe, selects it and opens the editor on it. It
+    # asks nothing — New Category… beside it does, so the app already drew
+    # the line — but the editor arrives as an overlay full of fields, which
+    # this gate cannot tell from a question. Carried as a known exemption
+    # rather than labelled with a promise the item does not keep.
     'cookbook.py': 1,
-    'g2048.py': 1,
+    'g2048.py': 1,  # New Game — resets the board immediately, with no prompt.
     'installer.py': 1,
-    'journal.py': 1,
-    'maps.py': 1,
-    'mealplanner.py': 1,
-    'media.py': 1,
+    'journal.py': 0,
+    'maps.py': 1,  # Zoom In — adjusts the map view immediately, no dialog.
+    'mealplanner.py': 1,  # Cut — moves selected text to the clipboard immediately, no dialog.
+    'media.py': 1,  # Show Info Panel — reveals the existing panel immediately, no input.
     'packages.py': 2,
+    # System, Sound, Power, Keyboard, Date & Time, Region & Language, Backup,
+    # Default Apps — each switches pages immediately; page controls are not a prompt.
     'settings.py': 2,
-    'sysmon.py': 1,
-    'tasks.py': 3,
-    'usbwriter.py': 1,
-    'widgetsettings.py': 1,
+    'sysmon.py': 1,  # Refresh Now — resamples processes immediately, no dialog.
+    'tasks.py': 0,
+    'usbwriter.py': 1,  # Look for Drives Again — rescans and redraws immediately, no dialog.
+    'widgetsettings.py': 1,  # Hide All from the Desktop — disables all tiles and saves immediately.
 }
 
 HANDOFF = {
@@ -192,7 +199,18 @@ def _overlay_ids(app):
 
 
 def _card_tokens(app):
-    tokens = set()
+    """Which card-ish attributes currently hold something.
+
+    Names, not identities. Keyed on (name, id(value)) this counted a card
+    being REBUILT as a card APPEARING — cookbook's New Recipe adds a recipe
+    and refreshes the editor, which swaps a panel object, and the gate read
+    that as a question being asked. Twice: once to say the label needed an
+    ellipsis, and again, after one was added, to say the opposite.
+
+    A card appears when an attribute that held nothing comes to hold
+    something. Rebuilding what was already there is not asking.
+    """
+    holding = set()
     for name in dir(app):
         if "prompt" not in name.lower() and "card" not in name.lower():
             continue
@@ -201,8 +219,8 @@ def _card_tokens(app):
         except Exception:
             continue
         if value is not None and not callable(value):
-            tokens.add((name, id(value)))
-    return tokens
+            holding.add(name)
+    return holding
 
 
 def probe(name):
@@ -292,10 +310,11 @@ def probe(name):
                         win.destroy()
                     except Exception:
                         pass
-            for attr, token in _card_tokens(app) - before_cards:
+            # Put back whatever this item made appear, so the first asking
+            # action does not hide every later one.
+            for attr in _card_tokens(app) - before_cards:
                 try:
-                    if id(getattr(app, attr)) == token:
-                        setattr(app, attr, None)
+                    setattr(app, attr, None)
                 except Exception:
                     pass
     try:

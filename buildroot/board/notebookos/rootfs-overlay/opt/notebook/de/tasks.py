@@ -852,8 +852,8 @@ class Tasks(nbapp.AppWindow):
             # Documents folder. File now offers only what the app can actually
             # make (docs/MENU-CONVENTIONS.md, the single-store File menu).
             return [
-                ("New Task", self._file_new_task),
-                ("New List", lambda: self._on_new_list(None)),
+                ("New Task…", self._file_new_task),
+                ("New List…", lambda: self._on_new_list(None)),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]
@@ -878,7 +878,7 @@ class Tasks(nbapp.AppWindow):
                           if any(t.get("done") for t in self.tasks) else None))
             return items
         if name == "Lists":
-            items = [("New List", lambda: self._on_new_list(None))]
+            items = [("New List…", lambda: self._on_new_list(None))]
             # Remove List targets the currently selected list, so it greys out
             # (never disappears) while a built-in view is showing. It confirms
             # first — hence the ellipsis — then reassigns that list's tasks to

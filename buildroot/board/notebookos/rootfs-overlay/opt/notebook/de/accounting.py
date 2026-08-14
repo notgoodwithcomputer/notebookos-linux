@@ -2612,7 +2612,7 @@ class Accounting(nbapp.AppWindow):
             # not the three ASCII dots this one item used to carry while every
             # other Print… in the OS used "…". Exports come before Print, the
             # order the single-store File menu is written in.
-            return [(_t("New Entry"), self._reveal_form),
+            return [(_t("New Entry…"), self._reveal_form),
                     nbapp.SEP,
                     (_t("Export to PDF"), self._export_pdf),
                     (_t("Export to CSV"), self._export_csv),

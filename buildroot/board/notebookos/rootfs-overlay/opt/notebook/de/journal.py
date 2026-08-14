@@ -1409,7 +1409,7 @@ class Journal(nbapp.AppWindow):
             # offered when an entry is open and always confirms first.
             have = 0 <= self.active < len(self.entries)
             return [
-                ("New Entry", self.new_entry),
+                ("New Entry…", self.new_entry),
                 ("Delete Entry", self._delete_active if have else None),
                 nbapp.SEP,
                 ("Export to PDF", self._export_pdf),
