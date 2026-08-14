@@ -99,11 +99,11 @@ FIT_PAD = 24
 ZOOM_MIN, ZOOM_MAX, ZOOM_STEP = 0.05, 8.0, 1.25
 # a hard cap on the scaled pixel size, so an extreme zoom can never allocate a
 # multi-gigabyte pixbuf (scale is trimmed to keep the larger side under this)
-MAX_PIX = 8000
+MAX_PIX = nbapp.DECODE_MAX_SIDE
 # the real memory ceiling: a cap on the longer side alone lets 8000x8000
 # through, which is ~256MB once GdkPixbuf holds it as RGBA. Counted in pixels
 # so it means the same thing on every format and every decoder path.
-MAX_AREA = 24_000_000
+MAX_AREA = nbapp.DECODE_MAX_AREA
 # slideshow dwell (ms) before advancing to the next image
 SLIDESHOW_MS = 3500
 # toolbar icon tone (faint ink, matching the design language)
@@ -193,22 +193,9 @@ def _fit_budget(width, height):
     Unknown or nonsensical dimensions collapse to the budget's own square
     rather than to "no limit": a file whose header cannot be read is the last
     file that should be trusted with an unbounded decode."""
-    try:
-        w, h = int(width), int(height)
-    except (TypeError, ValueError):
-        w = h = 0
-    if w <= 0 or h <= 0:
-        side = int(MAX_AREA ** 0.5)
-        return side, side
-    scale = 1.0
-    if max(w, h) > MAX_PIX:
-        scale = MAX_PIX / float(max(w, h))
-    area = (w * scale) * (h * scale)
-    if area > MAX_AREA:
-        scale *= (MAX_AREA / area) ** 0.5
-    if scale >= 1.0:
-        return w, h
-    return max(1, int(w * scale)), max(1, int(h * scale))
+    # One implementation of the numbers, in nbapp, so the reader and the
+    # viewer cannot drift apart about what is too big to decode.
+    return nbapp.decode_budget(width, height)
 
 
 def _bounded_pixbuf(path):

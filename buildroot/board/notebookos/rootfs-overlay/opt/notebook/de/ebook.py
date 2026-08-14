@@ -1499,6 +1499,17 @@ class EbookReader(nbapp.AppWindow):
             return None
         try:
             ldr = GdkPixbuf.PixbufLoader()
+            # BOUNDED WHILE DECODING, not after. The scale below is a DISPLAY
+            # cap — it runs once the whole image is already in memory, so a
+            # cover plate stored at print resolution allocated its full size
+            # first and was only then shrunk to fit the text column. size-
+            # prepared arrives with the real dimensions and before any pixels
+            # exist, which is the only point where a ceiling costs nothing.
+            def _bound(loader, width, height):
+                want = nbapp.decode_budget(width, height)
+                if want != (width, height):
+                    loader.set_size(want[0], want[1])
+            ldr.connect("size-prepared", _bound)
             ldr.write(data)
             ldr.close()
             pb = ldr.get_pixbuf()
@@ -1771,8 +1782,20 @@ class EbookReader(nbapp.AppWindow):
             # and page.render() below still work in logical units and the blit
             # in _pdf_draw still places the page at its logical size; only the
             # grid underneath gets finer.
-            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w * sf, h * sf)
-            surface.set_device_scale(sf, sf)
+            # BOUNDED. Page size times zoom times device scale is three
+            # multipliers and none of them was capped: a large page zoomed in
+            # on a HiDPI panel asks for a surface of w*h*sf^2*4 bytes, and the
+            # zoom is a button a person can keep pressing. On a machine with
+            # no swap that is not a slow render, it is the end of the app.
+            # When the ask is too big the DENSITY drops rather than the page —
+            # the surface carries the scale, so the blit still places the page
+            # at its logical size and the only loss is sharpness.
+            want = nbapp.decode_budget(int(w * sf), int(h * sf))
+            eff = sf * min(1.0, want[0] / float(max(1, int(w * sf))))
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                         max(1, int(w * eff)),
+                                         max(1, int(h * eff)))
+            surface.set_device_scale(eff, eff)
             ctx = cairo.Context(surface)
             # White ground: Poppler leaves un-inked regions transparent, so the
             # white sheet is what makes the page read as paper.

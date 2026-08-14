@@ -513,6 +513,47 @@ def atomic_write_via(path, write):
         raise
 
 
+# Decode ceilings, shared by every app that turns a file into pixels.
+#
+# TWO of them, because one is not a memory bound. DECODE_MAX_SIDE caps the
+# longer side; DECODE_MAX_AREA is what actually bounds the allocation, since
+# 8000x8000 passes any side cap and costs about 256MB the moment it is held as
+# RGBA. The side cap stays for the other shape of trouble — a 30000x50
+# panorama is well inside any area budget and still nothing good.
+DECODE_MAX_SIDE = 8000
+DECODE_MAX_AREA = 24_000_000
+
+
+def decode_budget(width, height):
+    """`width` x `height` brought under both ceilings, aspect ratio kept.
+
+    Unknown or nonsensical dimensions collapse to the budget's own square
+    rather than to "no limit": a file whose header cannot be read is the last
+    file that should be trusted with an unbounded decode.
+
+    Callers use this in two ways. A decoder that can be told a target size
+    applies it BEFORE allocating — GdkPixbuf's size-prepared signal, or
+    rsvg-convert's --width/--height. A renderer that allocates its own surface
+    scales the surface down and lets the result be softer, which is always
+    better than the alternative on a machine with no swap."""
+    try:
+        w, h = int(width), int(height)
+    except (TypeError, ValueError):
+        w = h = 0
+    if w <= 0 or h <= 0:
+        side = int(DECODE_MAX_AREA ** 0.5)
+        return side, side
+    scale = 1.0
+    if max(w, h) > DECODE_MAX_SIDE:
+        scale = DECODE_MAX_SIDE / float(max(w, h))
+    area = (w * scale) * (h * scale)
+    if area > DECODE_MAX_AREA:
+        scale *= (DECODE_MAX_AREA / area) ** 0.5
+    if scale >= 1.0:
+        return w, h
+    return max(1, int(w * scale)), max(1, int(h * scale))
+
+
 def save_failure_reason(exc, path=None):
     """A sentence a person can act on, for a save that did not happen.
 
