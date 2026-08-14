@@ -241,6 +241,66 @@ except AttributeError as exc:
           False)
     print("[not reached: %s]" % exc)
 
+# ---- a damaged sidecar: the bytes are kept, and the person is TOLD -------
+# The flat file carries every task TITLE, so nothing looks lost — but the due
+# dates, priorities and lists live only in the sidecar, and the launch save
+# rewrites it. Every task came back as an undated Today item with no list and
+# nothing said so. The store IS the data here, so this keeps saving (the
+# damaged-store doctrine); what was missing was the telling.
+import json as _json
+_d = tempfile.mkdtemp(prefix="tasks-damaged-")
+os.environ["NB_HOME"] = _d
+_cfg = os.path.join(_d, ".config", "notebook")
+os.makedirs(_cfg, exist_ok=True)
+_meta = os.path.join(_cfg, os.path.basename(tasks.META_FILE))
+_rich = '{"tasks": [{"text": "File tax return", "due": "2026-09-01"}] BROKEN'
+open(_meta, "w").write(_rich)
+
+_p = tasks.Tasks.__new__(tasks.Tasks)
+_real_meta = tasks.META_FILE
+tasks.META_FILE = _meta
+try:
+    got = tasks.Tasks._read_meta(_p)
+finally:
+    tasks.META_FILE = _real_meta
+check("a sidecar that will not parse is marked damaged, so the person is told",
+      getattr(_p, "_meta_damaged", False) is True)
+check("...and it still reads as no usable metadata", got is None)
+
+# A MISSING sidecar is first run, not damage — or every fresh install accuses
+# itself of losing data that never existed.
+_p2 = tasks.Tasks.__new__(tasks.Tasks)
+tasks.META_FILE = os.path.join(_d, "nothing-here.json")
+try:
+    tasks.Tasks._read_meta(_p2)
+finally:
+    tasks.META_FILE = _real_meta
+check("a MISSING sidecar is first run, not damage",
+      getattr(_p2, "_meta_damaged", False) is False)
+
+# The flash timer is recorded, so closing inside its two seconds cannot leave
+# it calling into a torn-down window.
+_p3 = tasks.Tasks.__new__(tasks.Tasks)
+_p3.remaining = type("L", (), {"set_text": lambda *a: None})()
+tasks.Tasks._flash(_p3, "Exported")
+check("a flash records its timer instead of firing and forgetting",
+      getattr(_p3, "_flash_timer", None))
+# getattr with a default throughout: against code that never records the
+# timer these must fail BY NAME, not die on AttributeError three lines later
+# and take the rest of the suite with them.
+_first = getattr(_p3, "_flash_timer", None)
+tasks.Tasks._flash(_p3, "Exported again")
+check("...and flashing twice does not leave two timers racing",
+      getattr(_p3, "_flash_timer", None) not in (None, _first))
+if hasattr(tasks.Tasks, "_cancel_flash_timer"):
+    tasks.Tasks._cancel_flash_timer(_p3)
+    check("...and it is cancellable",
+          getattr(_p3, "_flash_timer", "missing") is None)
+else:
+    check("...and it is cancellable  [not reached: no _cancel_flash_timer]",
+          False)
+shutil.rmtree(_d, ignore_errors=True)
+
 shutil.rmtree(HOME, ignore_errors=True)
 print("OK" if ok else "FAILURES")
 sys.exit(0 if ok else 1)

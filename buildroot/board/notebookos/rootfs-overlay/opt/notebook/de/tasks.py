@@ -202,6 +202,11 @@ class Tasks(nbapp.AppWindow):
         # the richer model sticks for next time. A fresh install writes an empty
         # store (nothing is seeded).
         self._save_tasks()
+        if getattr(self, "_meta_damaged", False):
+            try:
+                self._open_damaged_notice()
+            except Exception:
+                pass
         # Land the caret in the quick-add so a task can be typed the instant the
         # window appears — no click needed to start.
         try:
@@ -271,7 +276,18 @@ class Tasks(nbapp.AppWindow):
         try:
             with open(META_FILE) as fh:
                 data = json.load(fh)
+        except FileNotFoundError:
+            return None            # first run: nothing here to lose
         except Exception:
+            # A sidecar that EXISTS and will not parse is a different thing,
+            # and this used to be the same branch as first-run. The flat file
+            # still carries every title, so nothing looks lost — but the due
+            # dates, priorities and lists live only HERE, and the launch save
+            # below rewrites this file, so every task came back as an undated
+            # Today item with no list and nothing said so. The bytes are kept
+            # (atomic_write_json quarantines them first); what was missing was
+            # telling anybody.
+            self._meta_damaged = True
             return None
         if isinstance(data, dict):
             return data
@@ -667,6 +683,7 @@ class Tasks(nbapp.AppWindow):
                 GLib.source_remove(rid)
             except Exception:
                 pass
+        self._cancel_flash_timer()
         self._save_tasks()
         return False
 
@@ -832,9 +849,28 @@ class Tasks(nbapp.AppWindow):
             self.remaining.set_text(text)
         except Exception:
             pass
-        GLib.timeout_add_seconds(2, self._restore_remaining)
+        # Recorded and re-armed, not fired and forgotten. Closing the window
+        # inside the two seconds left this calling _update_counts against a
+        # torn-down tree; the exception was swallowed, so it never showed as
+        # anything — which is exactly why it survived. Flashing twice in a row
+        # also used to leave two timers racing to restore the count.
+        self._cancel_flash_timer()
+        self._flash_timer = GLib.timeout_add_seconds(
+            2, self._restore_remaining)
+
+    def _cancel_flash_timer(self):
+        tid = getattr(self, "_flash_timer", None)
+        if tid:
+            try:
+                GLib.source_remove(tid)
+            except Exception:
+                pass
+        self._flash_timer = None
 
     def _restore_remaining(self):
+        self._flash_timer = None
+        if getattr(self, "_closed", False):
+            return False
         try:
             self._update_counts()
         except Exception:
@@ -1058,6 +1094,66 @@ class Tasks(nbapp.AppWindow):
         self._centre_card(layer, holder, W, H)
         self._nl_layer = layer
         self._nl_entry.grab_focus()
+
+    def _open_damaged_notice(self):
+        """Say that the dates and lists could not be read — once, on launch.
+
+        A card rather than the header flash: the flash restores itself after
+        two seconds, and a message somebody has to ACT on (their tasks are
+        back but undated) is not one to show for two seconds. The wording is
+        deliberately narrow — the flat file still holds every title, so
+        nothing named "your tasks" is gone, and a card claiming otherwise
+        would frighten somebody about work sitting on their screen."""
+        W, H = self._surface_size()
+        layer = Gtk.Fixed()
+        scrim = Gtk.EventBox()
+        scrim.get_style_context().add_class("scrim")
+        scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        scrim.set_size_request(W, H)
+        scrim.connect("button-press-event",
+                      lambda *a: (self._close_damaged_notice(), True)[1])
+        layer.put(scrim, 0, 0)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        card.get_style_context().add_class("nlcard")
+        title = Gtk.Label(
+            label=_t("Your task dates and lists could not be read"), xalign=0)
+        title.get_style_context().add_class("nltitle")
+        title.set_line_wrap(True)
+        title.set_max_width_chars(34)
+        card.pack_start(title, False, False, 0)
+        body = Gtk.Label(
+            label=_t("The tasks themselves are still here, and the old file "
+                     "was kept."), xalign=0)
+        body.set_line_wrap(True)
+        body.set_max_width_chars(34)
+        card.pack_start(body, False, False, 0)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.set_halign(Gtk.Align.END)
+        ok = Gtk.Button(label=_t("OK"))
+        ok.connect("clicked", lambda *_a: self._close_damaged_notice())
+        row.pack_end(ok, False, False, 0)
+        card.pack_start(row, False, False, 0)
+
+        holder = Gtk.EventBox()
+        holder.add(card)
+        layer.put(holder, 0, 0)
+        self._overlay.add_overlay(layer)
+        layer.show_all()
+        self._centre_card(layer, holder, W, H)
+        self._damaged_layer = layer
+
+    def _close_damaged_notice(self):
+        layer = getattr(self, "_damaged_layer", None)
+        if layer is not None:
+            try:
+                self._overlay.remove(layer)
+            except Exception:
+                pass
+            self._damaged_layer = None
+            return True
+        return False
 
     def _close_newlist(self):
         layer = getattr(self, "_nl_layer", None)
