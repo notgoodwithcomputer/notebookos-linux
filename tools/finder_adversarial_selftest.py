@@ -96,17 +96,31 @@ try:
     check("FINDER-STORE-QUARANTINE damaged prefs retained",
           len([n for n in os.listdir(os.path.dirname(pref)) if n.startswith("finder.json.damaged-")]) == 1)
 
+    # The fourth suite that certified the clobber (a86311a0): it deleted
+    # nbapp.save_failure_reason — a FUNCTION — and then asserted the app had
+    # replaced it with a string, under a name claiming the failure was
+    # "exposed". Nothing was exposed to anyone, and the shared sentence
+    # producer was left unusable for the rest of the process. What a person can
+    # reach is checked instead.
+    import nbnotify
+    expect = finder.nbapp.save_failure_reason(OSError("read-only"))
     calls = []
+    posted = []
     def fail(*args):
         calls.append(args)
         raise OSError("read-only")
-    if hasattr(finder.nbapp, "save_failure_reason"):
-        delattr(finder.nbapp, "save_failure_reason")
-    with mock.patch.object(finder.nbapp, "atomic_write_json", fail):
+    with mock.patch.object(finder.nbapp, "atomic_write_json", fail), \
+            mock.patch.object(nbnotify, "post",
+                              lambda t, b="", **k: posted.append((t, b))):
         finder.Finder._save_prefs(f)
     check("FINDER-STORE-WRITE failed preference save was attempted", len(calls) == 1)
-    check("FINDER-STORE-FAILURE failed save exposes save_failure_reason",
-          "read-only" in getattr(finder.nbapp, "save_failure_reason", ""))
+    check("FINDER-STORE-FAILURE failed save records the reason on the window",
+          getattr(f, "_save_error", "") == expect,
+          repr(getattr(f, "_save_error", "")))
+    check("FINDER-STORE-FAILURE failed save reaches the notification centre",
+          len(posted) == 1 and posted[0][1] == expect, repr(posted))
+    check("FINDER-STORE-FAILURE the shared reason producer survives the failure",
+          callable(finder.nbapp.save_failure_reason))
 
     # A deliberately permissive mutant must be caught by the named recursion assertion.
     permissive = lambda _s, _d: False
