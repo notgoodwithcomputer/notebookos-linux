@@ -6015,6 +6015,43 @@ def lazy_library_family():
           area is not None and drawn and len(app._cel_thumbs) == 1,
           (area is not None, drawn, len(app._cel_thumbs)))
 
+    # Blank paper is white and the rows sit flush, so without a frame a
+    # library of drawings reads as one white column. Painted through a
+    # stand-in allocation: an unrealised widget reports zero, which would
+    # centre the picture off the edge of the surface and prove nothing.
+    class Allocation:
+        def get_allocated_width(self):
+            return animation.THUMB_W
+
+        def get_allocated_height(self):
+            return animation.THUMB_H
+
+    def framed(module, application):
+        picture = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                     module.THUMB_W, module.THUMB_H)
+        application._draw_cel_thumb(Allocation(), cairo.Context(picture),
+                                    application.doc.cels[0].id)
+        picture.flush()
+        data = bytes(picture.get_data())
+        stride = picture.get_stride()
+
+        def at(x, y):
+            offset = y * stride + x * 4
+            return (data[offset + 2], data[offset + 1], data[offset])
+
+        rule = (201, 196, 182)
+        edges = (at(0, module.THUMB_H // 2), at(module.THUMB_W - 1, module.THUMB_H // 2),
+                 at(module.THUMB_W // 2, 0), at(module.THUMB_W // 2, module.THUMB_H - 1))
+        middle = at(module.THUMB_W // 2, module.THUMB_H // 2)
+        return edges, middle, rule
+
+    edges, middle, rule = framed(animation, app)
+    check("F53 and every picture is framed, so a library is not one white column",
+          all(abs(sum(edge)) and max(abs(a - b) for a, b in zip(edge, rule)) <= 2
+              for edge in edges), edges)
+    check("F53 with the frame outside the picture, not over it",
+          middle != rule, middle)
+
     app._alive = False
     for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
         source = getattr(app, timer, None)
@@ -6036,6 +6073,18 @@ def lazy_library_family():
            len(eager._cel_thumbs) >= 40, len(eager._cel_thumbs))
     eager._alive = False
     shutil.rmtree(scratch)
+
+    plain, unframed = module_mutant("F53-pictures-with-no-frame", [
+        ("        cr.rectangle(left + .5, top + .5, THUMB_W - 1, THUMB_H - 1)\n"
+         "        cr.stroke()", "        pass"),
+    ])
+    bare = with_a_library(plain)
+    edges, _middle, rule = framed(plain, bare)
+    mutant("F53 pictures that run together with no frame are caught",
+           not any(max(abs(a - b) for a, b in zip(edge, rule)) <= 2
+                   for edge in edges), edges)
+    bare._alive = False
+    shutil.rmtree(unframed)
 
 
 def paint_menu_family():

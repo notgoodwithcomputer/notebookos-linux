@@ -2303,11 +2303,20 @@ class Animation(nbapp.AppWindow):
         if cel is None:
             return False
         thumb = self._cel_thumb_surface(cel)
-        cr.set_source_surface(
-            thumb,
-            round((area.get_allocated_width() - THUMB_W) / 2.),
-            round((area.get_allocated_height() - THUMB_H) / 2.))
+        left = round((area.get_allocated_width() - THUMB_W) / 2.)
+        top = round((area.get_allocated_height() - THUMB_H) / 2.)
+        cr.set_source_surface(thumb, left, top)
         cr.paint()
+        # Each picture is its own object. Blank paper is white and the rows
+        # sit flush, so seven drawings read as ONE white column in a list
+        # whose whole point is navigating by picture rather than by name.
+        # The Choose Take picker already frames its thumbnails this way.
+        # Half-pixel offsets, or a hairline covers neither pixel and draws
+        # nothing at all.
+        cr.set_source_rgb(201 / 255, 196 / 255, 182 / 255)
+        cr.set_line_width(1)
+        cr.rectangle(left + .5, top + .5, THUMB_W - 1, THUMB_H - 1)
+        cr.stroke()
         return False
 
     def _build_cel_row(self, cel):
