@@ -33,6 +33,11 @@ import nbicons
 import nbtransitions
 from nbi18n import _t  # noqa: E402
 
+try:
+    import nbpkg_install  # signed .nbpkg verify + install (docs/NBPKG.md)
+except Exception:  # a device without the installer still runs Packages
+    nbpkg_install = None
+
 INK = "#1A1916"
 MUTED = "#6E695E"
 FAINT = "#9A9484"
@@ -1291,7 +1296,73 @@ class Packages(nbapp.AppWindow):
                 "chip-on" if active else "chip-off")
             row.pack_end(chip, False, False, 0)
             box.pack_start(row, False, False, 0)
+
+        # Any signed .nbpkg on a plugged-in stick can be installed from here
+        # (docs/NBPKG.md). Each is verified before it is offered — a package
+        # that does not verify is shown as refused, never installed.
+        self._show_installable(box, media)
         box.show_all()
+
+    def _show_installable(self, box, media):
+        if nbpkg_install is None:
+            return
+        packages = nbpkg_install.scan(m[1] for m in media)
+        if not packages:
+            return
+        head = Gtk.Label(label=_t("Apps to install"), xalign=0)
+        head.get_style_context().add_class("source-label")
+        head.set_margin_top(18)
+        box.pack_start(head, False, False, 0)
+        for path, name in packages:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+            row.get_style_context().add_class("source-row")
+            row.pack_start(nbicons.image("box", 24, INK), False, False, 0)
+            txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            txt.set_hexpand(True)
+            # Verify up front so the row shows what it really is, not the
+            # filename's claim — and disables install on anything that fails.
+            try:
+                manifest, _ = nbpkg_install.inspect(path)
+                title = "%s %s" % (manifest["name"], manifest["version"])
+                detail = _t("Verified — ready to install")
+                ok = True
+            except Exception as exc:
+                title = name
+                detail = _t("This package can't be trusted and won't install.")
+                _ = exc
+                ok = False
+            lab = Gtk.Label(label=title, xalign=0)
+            lab.get_style_context().add_class("source-label")
+            txt.pack_start(lab, False, False, 0)
+            det = Gtk.Label(label=detail, xalign=0)
+            det.set_line_wrap(True)
+            det.set_max_width_chars(46)
+            det.set_xalign(0)
+            det.get_style_context().add_class("source-detail")
+            txt.pack_start(det, False, False, 0)
+            row.pack_start(txt, True, True, 0)
+            btn = Gtk.Button(label=_t("Install"))
+            btn.set_valign(Gtk.Align.CENTER)
+            btn.set_sensitive(ok)
+            btn.connect("clicked", self._on_install, path, det)
+            row.pack_end(btn, False, False, 0)
+            box.pack_start(row, False, False, 0)
+
+    def _on_install(self, btn, path, status_label):
+        # Re-verify at the moment of install (the stick could have changed),
+        # then install to the live system. Target is overridable for tests.
+        target = os.environ.get("NB_PKG_TARGET", "/")
+        try:
+            manifest = nbpkg_install.install(path, target=target)
+        except Exception as exc:
+            status_label.set_text(
+                _t("Not installed — %s") % str(exc))
+            return
+        btn.set_sensitive(False)
+        btn.set_label(_t("Installed"))
+        status_label.set_text(
+            _t("Installed %(name)s. Open it from Applications.")
+            % {"name": manifest["app"]["display"]})
 
     # ---------------------------------------------------------------------- css
     def _install_css(self):
