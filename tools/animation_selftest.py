@@ -7254,6 +7254,71 @@ def transport_family():
     shutil.rmtree(scratch)
 
 
+def shape_tools_family():
+    """The shape tools' geometry, which nothing had ever executed.
+
+    A coverage measurement — which methods does the suite RUN, not name —
+    left seventeen of 313 never run, and three of them were the shape
+    helpers: the ellipse outline, the Shift-square, and the Shift-snap to
+    45 degrees. Rectangle, Ellipse and Line are four of this app's nine
+    tools, and their geometry had been carried on trust.
+
+    These are the pure helpers, driven at their awkward cases: a drag in
+    each direction, a zero-length drag, and an ellipse narrow enough that
+    its middle rows must hollow out. The gestures that reach them are
+    already driven elsewhere; what was missing was any statement of what
+    they should produce."""
+    if not gtk_available():
+        skip("F66 the shape tools", "no display")
+        return
+    from gi.repository import Gdk
+
+    check("F66 Shift makes a square from any drag, in every direction",
+          animation._square((10, 10), (30, 16)) == (30, 30) and
+          animation._square((10, 10), (16, 30)) == (30, 30) and
+          animation._square((30, 30), (10, 24)) == (10, 10) and
+          animation._square((10, 10), (10, 10)) == (10, 10),
+          (animation._square((10, 10), (30, 16)),
+           animation._square((10, 10), (16, 30)),
+           animation._square((30, 30), (10, 24))))
+
+    flat = animation._snap45((10, 10), (40, 12))
+    steep = animation._snap45((10, 10), (12, 40))
+    diagonal = animation._snap45((10, 10), (40, 38))
+    still = animation._snap45((10, 10), (10, 10))
+    check("F66 Shift snaps a line to the flat, the steep or the diagonal",
+          flat[1] == 10 and steep[0] == 10 and
+          abs(diagonal[0] - 10) == abs(diagonal[1] - 10) and
+          still == (10, 10),
+          (flat, steep, diagonal, still))
+
+    outline = animation._ellipse_outline([(0, 4, 8), (1, 2, 10), (2, 2, 10),
+                                          (3, 4, 8)])
+    filled = {(x, y) for x, y in outline}
+    check("F66 an ellipse outline keeps its ends whole and hollows the middle",
+          (4, 0) in filled and (8, 0) in filled and
+          (2, 1) in filled and (10, 1) in filled and
+          (6, 1) not in filled and (6, 2) not in filled,
+          sorted(p for p in filled if p[1] == 1))
+
+    graded, scratch = module_mutant("F66-square-that-is-not-square", [
+        ("    n = max(abs(dx), abs(dy))", "    n = min(abs(dx), abs(dy))"),
+    ])
+    mutant("F66 a Shift-square built from the shorter side is caught",
+           graded._square((10, 10), (30, 16)) != (30, 30),
+           graded._square((10, 10), (30, 16)))
+    shutil.rmtree(scratch)
+
+    slanted, scratch = module_mutant("F66-snap-that-does-not-snap", [
+        ("    if ax > 2 * ay:\n        return (b[0], a[1])",
+         "    if False:\n        return (b[0], a[1])"),
+    ])
+    mutant("F66 a Shift-line that will not lie flat is caught",
+           slanted._snap45((10, 10), (40, 12))[1] != 10,
+           slanted._snap45((10, 10), (40, 12)))
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -7298,6 +7363,7 @@ for _family in (
         sound_name_family,
         undo_cap_family,
         transport_family,
+        shape_tools_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
