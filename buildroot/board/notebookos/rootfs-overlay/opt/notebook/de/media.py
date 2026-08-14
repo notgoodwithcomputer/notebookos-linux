@@ -1039,14 +1039,30 @@ class MediaViewer(nbapp.AppWindow):
 
     # -- move the shown file to the Trash --
     def _on_trash(self, _b=None):
-        """Move the file on screen to the Trash, after confirming. It is the
-        same $NB_HOME/.Trash the Finder uses, so nothing is destroyed: the
-        Finder can put it back."""
+        """Move the file on screen to the Trash. It is the same
+        $NB_HOME/.Trash the Finder uses, and this records the origin sidecar
+        the Finder's Put Back reads, so the picture goes back where it came
+        from rather than wherever the user happens to be standing.
+
+        No confirmation: on this OS destruction is reversible instead of
+        interrogated. (The docstring here used to say "after confirming" and
+        the File menu printed an ellipsis promising a card — neither was true
+        since the confirm was retired; see _confirm, which nothing calls.)"""
         path = self._media_path
         if not (path and os.path.isfile(path)):
             return
         self._stop_slideshow()      # taking manual control ends a slideshow
         self._do_trash(path)
+
+    def _trash_origin_path(self, trashed_base):
+        """Where the Finder looks to learn where a trashed item came from.
+        The layout is the Finder's: <trash>/.origins/<name-in-trash>."""
+        d = os.path.join(HOME, ".Trash", ".origins")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            return None
+        return os.path.join(d, trashed_base)
 
     def _do_trash(self, path):
         import shutil
@@ -1065,6 +1081,16 @@ class MediaViewer(nbapp.AppWindow):
                 # a file on another disk (a memory card, a USB stick) cannot be
                 # renamed across the filesystem boundary — copy it over instead
                 shutil.move(path, dst)
+            # Part of the trash transaction, not a cache: without this sidecar
+            # the Finder's Put Back has no folder to return the file to. Media
+            # moved the bytes and forgot where they came from, so a picture
+            # trashed from here could only be dragged back by hand.
+            origin = self._trash_origin_path(os.path.basename(dst))
+            if origin is not None:
+                try:
+                    nbapp.atomic_write_text(origin, path)
+                except (OSError, UnicodeError):
+                    pass
         except (OSError, shutil.Error):
             self._show_notice(
                 _t("This file could not be moved to the Trash"),
@@ -1651,6 +1677,11 @@ class MediaViewer(nbapp.AppWindow):
         self._stop_slideshow()
         self._stop_video()
         self._cancel_thumbs()
+        # The fullscreen controls' auto-hide is a one-shot, so it does not leak
+        # forever — but closing the window while it is pending left it to fire
+        # into a destroyed widget tree three seconds later. Every other timer
+        # here is cancelled on the way out; this one was simply missed.
+        self._fs_cancel_timer()
 
     # -- keyboard --
     def _on_key(self, w, ev):
@@ -1966,13 +1997,14 @@ class MediaViewer(nbapp.AppWindow):
     def menu_items(self, name):
         if name == "File":
             # The app's Open action ahead of the inherited Close. Open carries
-            # its shortcut because _on_key really binds Ctrl+O; Move to Trash
-            # carries an ellipsis because it ASKS first (_on_trash raises a
-            # confirm card) — unlike the Finder's same-named item, which moves
-            # the file straight away and so takes none. It is only offered when
-            # there is a file on screen to move.
+            # its shortcut because _on_key really binds Ctrl+O. Move to Trash
+            # takes NO ellipsis: it moves the file straight away, exactly like
+            # the Finder's same-named item. It printed one for as long as it
+            # promised a confirm card that had already been retired — an
+            # ellipsis is a promise that something opens. It is only offered
+            # when there is a file on screen to move.
             return [("Open…    Ctrl+O", lambda: self._on_open(None)),
-                    ("Move to Trash…",
+                    ("Move to Trash",
                      (lambda: self._on_trash(None)) if self._media_path
                      else None),
                     nbapp.SEP] + super().menu_items(name)

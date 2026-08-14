@@ -228,6 +228,43 @@ def refusal_checks():
           not os.path.exists(src) and open(trashed, "rb").read() == b"kept bytes")
     print("EVIDENCE executed _do_trash on a real file; original moved to NB_HOME/.Trash with identical bytes")
 
+    # Bytes in the Trash are only half of recoverable. The Finder puts an item
+    # back by reading an origin sidecar it wrote at trash time; Media moved the
+    # file and recorded nothing, so a picture trashed from the viewer had no
+    # folder to go back TO. Preserving the bytes and losing the address is not
+    # a recoverable delete, and the check above passed the whole time.
+    origin = os.path.join(HOME, ".Trash", ".origins", "trash-me.png")
+    recorded = ""
+    if os.path.exists(origin):
+        with open(origin, encoding="utf-8") as fh:
+            recorded = fh.read().strip()
+    check("a file trashed from Media records where the Finder must put it back",
+          recorded == src, "sidecar %r holds %r, wanted %r"
+          % (origin, recorded, src))
+    print("EVIDENCE read <trash>/.origins/<name> after _do_trash and compared "
+          "it against the file's original path")
+
+    # ...and the sidecar has to follow the name the file actually took, or Put
+    # Back reads the wrong record. A second file of the same name lands as
+    # "trash-me.png (1)", so its origin belongs under THAT name.
+    other = os.path.join(HOME, "sub", "trash-me.png")
+    os.makedirs(os.path.dirname(other), exist_ok=True)
+    with open(other, "wb") as fh:
+        fh.write(b"second file")
+    viewer._siblings = [other]
+    viewer._sib_idx = 0
+    viewer._do_trash(other)
+    dup_origin = os.path.join(HOME, ".Trash", ".origins", "trash-me.png (1)")
+    dup = ""
+    if os.path.exists(dup_origin):
+        with open(dup_origin, encoding="utf-8") as fh:
+            dup = fh.read().strip()
+    check("a name collision records the origin under the trashed name",
+          dup == other, "sidecar %r holds %r, wanted %r"
+          % (dup_origin, dup, other))
+    print("EVIDENCE trashed a same-named file from another folder and checked "
+          "the collision-renamed sidecar")
+
 
 if __name__ == "__main__":
     fallback_and_orientation_checks()
