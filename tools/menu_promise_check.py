@@ -34,6 +34,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +43,13 @@ DE = os.path.join(ROOT, "buildroot", "board", "notebookos",
 SELF = os.path.abspath(__file__)
 
 # These live lanes are explicitly outside this gate's ownership for now.
+# A card that arrives on an idle callback needs the loop pumped after the
+# queue empties. Twenty rounds of ten milliseconds is 200ms per item —
+# the same for every item on every run, which is what makes the verdict
+# repeatable.
+SETTLE_ROUNDS = 20
+SETTLE_TICK = 0.01
+
 OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 
 # App -> number of currently known behavioral promise violations.
@@ -59,16 +67,20 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      would fail on nobody's change, and a flaky gate teaches people to
 #      re-run rather than to look.
 #
-#      NOW NAMED, by the TALLY line this gate prints on every run. Diffing
-#      two runs of an unchanged tree: gbaemu.py gave 2 then 1, and gbasdk.py
-#      gave 9 then 8. Both GBA apps, each varying by one, which accounts for
-#      the whole 52-56 spread. Every other app was identical across runs.
+#      HALF FIXED, and the other half is not fixable here.
 #
-#      That is where to look: something in those two probes finishes inside
-#      the 25-second window sometimes and not others — an emulator or build
-#      step that opens its surface late. Ledger them as a range, or make the
-#      probe wait for the surface rather than for the clock. Until then this
-#      stays out of the aggregate.
+#      The TALLY line named the pair: gbaemu.py gave 2 then 1, gbasdk.py 9
+#      then 8. Both build their surface a beat late, so draining the event
+#      queue once missed it on some runs. A FIXED settle span (SETTLE_ROUNDS
+#      above) replaced that race, and both are now identical run to run.
+#
+#      What remains is usbwriter.py, 0 then 1, and no settle can fix it: its
+#      probe ENUMERATES REAL USB DRIVES through sysfs, so its answer depends
+#      on what is plugged into the machine at that second. That is the
+#      environment moving, not the gate. Either exclude it from the sweep
+#      with this reason, or ledger it as a range — but do not pretend a
+#      hardware scan is repeatable. Until it is settled, this stays out of
+#      the aggregate.
 #
 # How it got here, for whoever picks it up. Stubbing the audio pump and the
 # file pickers took invoked items 104 -> 203 and blocked probes 16 -> 11.
@@ -346,8 +358,17 @@ def probe(name):
                 skipped += 1
                 continue
             invoked += 1
-            while Gtk.events_pending():
-                Gtk.main_iteration_do(False)
+            # Settle for a FIXED span, not until the queue happens to be
+            # empty. Draining once is a race: a card that arrives on an idle
+            # or a short timeout lands after the queue empties, so the same
+            # item was seen asking on one run and not the next. That is the
+            # whole of this gate's 52-to-56 wobble — the TALLY line named
+            # gbaemu.py (2 then 1) and gbasdk.py (9 then 8), both of which
+            # build their surface a beat late.
+            for _ in range(SETTLE_ROUNDS):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+                time.sleep(SETTLE_TICK)
             appeared = ([x for x in Gtk.Window.list_toplevels()
                          if id(x) not in before_windows] +
                         _new_overlay_widgets(app, before_overlay))
