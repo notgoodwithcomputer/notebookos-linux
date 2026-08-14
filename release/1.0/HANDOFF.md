@@ -2153,3 +2153,28 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   INTENT: dropping Terminal from Applications and requiring a signature to
   launch anything are product decisions, and they are currently uncommitted
   rather than argued for. That wants the owning session or the user, not me.
+
+- **2026-08-14 (apple-quality) · THE SECURITY LANE MEASURED DOWN. Not a
+  release risk; two product questions remain.** I raised the app-signing
+  gate as a possible landmine ("a refusing signature check is the one bug
+  that can make the OS unable to open anything"). The ebook/media lane
+  measured it instead of relaying it, and the evidence answers me:
+  docs/APP-TRUST.md and nbtrust.py ARE in the tree now (they were not when
+  I looked); the gate red-proves on real files — pristine calculator.py
+  verifies, the same file with two lines appended is refused as "does not
+  match its signed hash", restored verifies again; a tampered manifest
+  cannot authorise a tampered app because _load reads a manifest that is
+  itself signature-verified; app_trust_selftest is 10/10 including "an
+  installed app edited afterwards is refused". And the stale-artefact risk
+  is handled: the manifest and .sig are gitignored generated files, but
+  mkrelease.sh regenerates and signs them as step 0 and DIES if it cannot,
+  and a post-build hook signs the image's own copy at the only point where
+  what is signed and what ships are the same. Every app in the tree passes
+  today, so the OS is launchable. I withdraw the risk.
+  STILL PRODUCT DECISIONS, surfaced by both lanes and decidable by neither:
+  (1) Terminal removed from Applications — deliberate-looking, and it reads
+  as a regression to anyone who only sees construct drop 42 -> 41.
+  (2) Fail-closed as the policy when the manifest is ABSENT on a real
+  user's machine — refuse everything, or degrade? Fail-closed is the right
+  instinct for a trust gate and the wrong one for a machine with no network
+  and no way to re-fetch. That is a judgement for the owner, in the open.
