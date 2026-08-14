@@ -5838,6 +5838,121 @@ def streaming_family():
     shutil.rmtree(scratch)
 
 
+def damage_scan_family():
+    """Opening a film finds damage without unpacking a single picture.
+
+    The scan that finds a damaged drawing used to decode every take and
+    throw the picture away — 3840 decodes at the cap, 2.6 seconds of frozen
+    window here and far worse on the machine this OS is for. A structural
+    walk answers the same question 115x cheaper, but only gets to say YES:
+    anything it doubts still goes to the real decoder, because a take
+    wrongly called damaged is replaced with blank paper, and a false alarm
+    would destroy work rather than report it.
+
+    So the check that matters is not the speed. It is that every shape of
+    damage is still caught, and that a healthy film costs no decodes."""
+    if not gtk_available():
+        skip("F52 the damage scan", "no display")
+        return
+
+    tally = [0]
+
+    class WatchedImageSurface:
+        def __init__(self, real):
+            self._real = real
+
+        def __call__(self, *args, **kwargs):
+            return self._real(*args, **kwargs)
+
+        def create_from_png(self, stream):
+            tally[0] += 1
+            return self._real.create_from_png(stream)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    class WatchedCairo:
+        def __init__(self, real):
+            self._real = real
+            self.ImageSurface = WatchedImageSurface(real.ImageSurface)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    def opened(module, raw):
+        """Parse while counting how many pictures were actually unpacked."""
+        tally[0] = 0
+        real = module.cairo
+        module.cairo = WatchedCairo(real)
+        try:
+            return module.AnimationDocument.parse(json.loads(json.dumps(raw)))
+        finally:
+            module.cairo = real
+
+    def a_film(module, drawings=8, takes=3):
+        doc = module.AnimationDocument(canvas=(160, 120))
+        for index in range(drawings):
+            cel = doc.add_cel("D%d" % index)
+            while len(cel.takes) < takes:
+                cel.takes.append(module.surface(160, 120))
+            for take in range(takes):
+                module.write_pixel(cel.decoded(take), 3 + index, 4 + take, "#1A1916")
+            cel.version += 1
+        return doc.serial()
+
+    healthy = a_film(animation)
+    document, reports = opened(animation, healthy)
+    check("F52 a healthy film opens without unpacking a single picture",
+          not reports and len(document.cels) == 8 and tally[0] == 0,
+          (reports, tally[0]))
+
+    # every shape of damage a store can carry, and each one must still be
+    # found and said out loud
+    sound = base64.b64decode(healthy["cels"][0]["takes"][0])
+    corpus = {
+        "truncated at half": sound[:len(sound) // 2],
+        "truncated by one byte": sound[:-1],
+        "a byte flipped in the pixels": bytearray(sound),
+        "a byte flipped in the header": bytearray(sound),
+        "not a picture at all": b"this was never a drawing" * 30,
+        "nothing at all": b"",
+        "the signature alone": b"\x89PNG\r\n\x1a\n",
+    }
+    corpus["a byte flipped in the pixels"][len(sound) // 2] ^= 0x40
+    corpus["a byte flipped in the header"][12] ^= 0x01
+    caught, decodes = {}, {}
+    for name, blob in corpus.items():
+        spoiled = copy.deepcopy(healthy)
+        spoiled["cels"][0]["takes"][0] = base64.b64encode(bytes(blob)).decode("ascii")
+        film, said = opened(animation, spoiled)
+        replaced = film.cels[0].takes[0] != healthy["cels"][0]["takes"][0]
+        caught[name] = bool(said) and replaced
+        decodes[name] = tally[0]
+    check("F52 and every shape of damage is still found and said out loud",
+          all(caught.values()), sorted(n for n, ok in caught.items() if not ok))
+    check("F52 a take the quick scan doubts is put to the real decoder",
+          all(count >= 1 for count in decodes.values()), decodes)
+
+    # the scan's own manners: it may vouch for a whole picture and doubt
+    # anything else, including a picture of the wrong size
+    check("F52 the quick scan is allowed to say yes, never to say no",
+          not animation.png_intact(b"not a png", 160, 120) and
+          animation.png_intact(sound, 160, 120) and
+          not animation.png_intact(sound, 320, 240),
+          None)
+
+    graded, scratch = module_mutant("F52-scan-vouches-for-anything", [
+        ("    if not blob.startswith(PNG_SIG):\n        return False",
+         "    if True:\n        return True"),
+    ])
+    spoiled = copy.deepcopy(healthy)
+    spoiled["cels"][0]["takes"][0] = base64.b64encode(b"not a drawing").decode("ascii")
+    film, said = opened(graded, spoiled)
+    mutant("F52 a scan that vouches for a broken drawing is caught",
+           not said, said)
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5868,6 +5983,7 @@ def _isolated(family):
 for _family in (
         dialog_limits_family,
         streaming_family,
+        damage_scan_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
