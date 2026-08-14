@@ -5315,10 +5315,25 @@ class Animation(nbapp.AppWindow):
                 cr.stroke()
             except Exception:
                 pass
-            cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
             if width >= 60:
-                _show_text(cr, left + 3, y + 15,
-                           os.path.basename(sound['path'])[:24], 11)
+                # The waveform is drawn in this same ink, through this same
+                # band (centred on y+11, reaching 8px either way), so on a
+                # loud take the name and the wave came out as one smear. The
+                # word gets its own paper: the clip's colour laid back down
+                # behind it, so it reads over quiet audio and loud alike.
+                name = os.path.basename(sound['path'])[:24]
+                layout = _pango_layout(cr, name, 11)
+                text_w, text_h = layout.get_pixel_size()
+                if sound.get('_decode_error') or not os.path.exists(sound['path']):
+                    cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
+                else:
+                    cr.set_source_rgb(127 / 255, 169 / 255, 140 / 255)
+                cr.rectangle(left + 1, y + 15 - text_h + 1,
+                             min(width - 2, text_w + 4), text_h)
+                cr.fill()
+                cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+                _show_text(cr, left + 3, y + 15, name, 11)
+            cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
             cr.arc(left + width - 8, y + 11, 3, 0, math.tau)
             if sound.get('mute'):
                 cr.fill()

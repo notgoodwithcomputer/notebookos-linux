@@ -6922,6 +6922,126 @@ def menu_bar_fits_family():
     shutil.rmtree(scratch)
 
 
+def sound_name_family():
+    """A sound's name reads over its own waveform.
+
+    The clip draws the waveform in the film's ink through a band centred on
+    the row, and drew the file's name in that same ink through that same
+    band. Over a quiet take it read; over a loud one the word and the wave
+    came out as a single smear, which is every take that matters. Found by
+    rendering a film with real audio and looking at it — with the peaks
+    absent the name is perfectly legible, so nothing before had shown it.
+
+    The word now gets its own paper: the clip's colour laid back down behind
+    it. Measured as the share of the name's band that is still clip-coloured
+    — under a loud take, ink everywhere means the name is gone."""
+    if not gtk_available():
+        skip("F63 a sound's name", "no display")
+        return
+
+    home = tempfile.mkdtemp(prefix="animation-name-")
+    path = os.path.join(home, "dialogue.wav")
+    with wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        # loud throughout: the case where the wave fills the whole band
+        handle.writeframes(array.array("h", (
+            int(30000 * math.sin(index / 9.0)) for index in range(48000 * 4)
+        )).tobytes())
+
+    def painted(module):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+        app.doc.scenes[0]["length"] = 96
+        app.sheet = module.Sheet(app.doc, 0)
+        samples = module.decode_samples(path)
+        step = max(1, len(samples) // 512)
+        values = []
+        for offset in range(0, len(samples), step):
+            block = samples[offset:offset + step]
+            values.extend((min(block), max(block)))
+        app.doc.scenes[0]["sounds"][0] = {
+            "path": path, "start": 0, "in_smp": 0, "out_smp": 0,
+            "mute": False, "duration_smp": len(samples), "_peak_token": 0,
+            "peaks": base64.b64encode(
+                array.array("h", values).tobytes()).decode("ascii")}
+        # The timeline sizes itself from its allocation, and an unrealised
+        # widget reports zero — so the clip is drawn nowhere and the check
+        # measures an empty picture. Give it a real allocation first.
+        from gi.repository import Gtk as _Gtk
+        holder = _Gtk.OffscreenWindow()
+        body = app.get_child()
+        app.remove(body)
+        holder.add(body)
+        holder.set_size_request(1024, 722)
+        holder.show_all()
+        for _ in range(400):
+            if not _Gtk.events_pending():
+                break
+            _Gtk.main_iteration_do(False)
+        allocation = app.timeline.get_allocation()
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                     max(allocation.width, 1),
+                                     max(allocation.height, 1))
+        context = cairo.Context(surface)
+        app._draw_timeline(app.timeline, context)
+        surface.flush()
+        app._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(app, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(app, timer, None)
+        return surface
+
+    def name_band(surface):
+        """The share of the clip's first 90px that is still its own colour."""
+        surface.flush()
+        data = bytes(surface.get_data())
+        stride = surface.get_stride()
+        clip = (127, 169, 140)
+        rows = {}
+        for y in range(surface.get_height()):
+            for x in range(surface.get_width()):
+                offset = y * stride + x * 4
+                if (data[offset + 2], data[offset + 1], data[offset]) == clip:
+                    rows.setdefault(y, x)
+        if not rows:
+            return -1.0, 0
+        top = min(rows)
+        left = rows[top]
+        kept = total = 0
+        for y in range(top, min(top + 16, surface.get_height())):
+            for x in range(left, min(left + 90, surface.get_width())):
+                offset = y * stride + x * 4
+                total += 1
+                if (data[offset + 2], data[offset + 1], data[offset]) == clip:
+                    kept += 1
+        return (kept / total if total else -1.0), total
+
+    share, sampled = name_band(painted(animation))
+    check("F63 the clip was drawn and found", sampled > 500, sampled)
+    check("F63 a loud take does not swallow the sound's name",
+          share > 0.30, "%.0f%% of the name's band is still the clip" % (share * 100))
+
+    graded, scratch = module_mutant("F63-name-drawn-into-the-wave", [
+        ("                cr.rectangle(left + 1, y + 15 - text_h + 1,\n"
+         "                             min(width - 2, text_w + 4), text_h)\n"
+         "                cr.fill()", "                pass"),
+    ])
+    drowned, _sampled = name_band(painted(graded))
+    mutant("F63 a name drawn straight into the waveform is caught",
+           drowned <= 0.30, "%.0f%%" % (drowned * 100))
+    shutil.rmtree(scratch)
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6963,6 +7083,7 @@ for _family in (
         export_kind_family,
         palette_agreement_family,
         menu_bar_fits_family,
+        sound_name_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
