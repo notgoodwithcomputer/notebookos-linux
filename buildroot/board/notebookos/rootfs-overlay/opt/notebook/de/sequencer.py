@@ -5468,8 +5468,7 @@ class Sequencer(nbapp.AppWindow):
 
     def _clear_takes_confirm(self):
         """Confirm before wiping every recorded take; Undo restores clips."""
-        n = sum(len(tk["clips"]) for tk in self.tracks)
-        if n == 0:
+        if not sum(len(tk["clips"]) for tk in self.tracks):
             return
         self._clear_takes()
 
@@ -5583,7 +5582,8 @@ class Sequencer(nbapp.AppWindow):
                 ("Unmute All Tracks", lambda: self._mute_all(False)),
                 ("Clear Solo", lambda: self._solo_all(False)),
                 nbapp.SEP,
-                ("Remove Every Clip…", lambda: self._clear_takes_confirm()),
+                ("Remove Every Clip…", self._clear_takes_confirm
+                 if sum(len(tk["clips"]) for tk in self.tracks) else None),
             ]
         if name == "Input":
             # Every ALSA capture device, so a USB mic or audio interface can be

@@ -73,6 +73,10 @@ CHECK_GATES = [
     "catalog_dialect_check", "catalog_script_check", "css_parse_check",
     "data_stress_sweep", "dead_setting_check", "ellipsis_sweep",
     "disabled_reason_check",
+    # Static: a menu item that is enabled, does nothing, and says
+    # nothing. Its ledger carries 96 UNVERIFIED guards — read the note
+    # there before trusting a green result to mean the class is closed.
+    "silent_refusal_check",
     "frame_pacing_check", "grid_check",
     # §E4 check 5 (no diagonal travel). Separate from grid_check because that
     # one owns the STATIC constants and is edited whenever a sidebar

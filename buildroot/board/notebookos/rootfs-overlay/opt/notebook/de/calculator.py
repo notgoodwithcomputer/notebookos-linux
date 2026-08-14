@@ -1592,7 +1592,8 @@ class Calculator(nbapp.AppWindow):
         # is never a permanently-greyed menu entry.
         if name == "Edit":
             return [
-                (_t("Copy Result"), self._copy_result),
+                (_t("Copy Result"), self._copy_result
+                 if not getattr(self, "error", False) else None),
                 # Up AND Down both walk the history (see _on_key_calc); only
                 # one of them was on the menu, so half the feature had no way
                 # to be discovered.
