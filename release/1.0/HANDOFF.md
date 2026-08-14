@@ -2132,3 +2132,24 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   WHAT WORKS WITHOUT IT: everything driven through QMP —
   tools/guestdrive.py (click/drag/type/key) plus screendumps. The ⤢
   verification above was done entirely that way.
+
+- **2026-08-14 (apple-quality) · CORRECTION to my "four uncommitted files
+  with no owner" note above: they are an ACTIVE lane, not residue.** Since
+  I filed that, the same working tree has grown a coherent
+  security-hardening change — docs/SECURITY-MODEL.md, etc/inittab,
+  session.sh, post-build.sh, .gitignore, buildroot/.config, shell.py,
+  packages.py, and an app-signing gate in finder.py (`import nbtrust`,
+  fail-closed, plus the REMOVAL of Terminal from APP_MODULES and
+  APP_KIND). That is somebody working right now, not a job that died. My
+  earlier framing — "belongs to neither live session", "survived a full
+  day" — was wrong about a session I had not identified, and I would
+  rather correct it than leave it standing in a file the user reads.
+  WHAT STILL STANDS, because it is about the ISO and not about ownership:
+  a release built from this tree ships all of it, finished or not. As of
+  now it is at least SAFE to build — every touched app module compiles,
+  session.sh and post-build.sh parse, 41/41 apps construct with nothing
+  crashing (41 rather than 42 because Terminal has been dropped from the
+  launcher; see the punch list). The open question is not safety, it is
+  INTENT: dropping Terminal from Applications and requiring a signature to
+  launch anything are product decisions, and they are currently uncommitted
+  rather than argued for. That wants the owning session or the user, not me.
