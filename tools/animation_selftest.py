@@ -4899,6 +4899,76 @@ def sound_row_family():
     shutil.rmtree(home, ignore_errors=True)
 
 
+def compaction_family():
+    """Idle compaction and the serialisation cache, which now meet.
+
+    Compaction turns a drawing nobody is looking at back into its encoded
+    form to keep memory down; serial() caches on the identity of the take
+    objects. They touch the same bytes and both are recent, so what matters
+    is that the film that comes out the other side is the same film."""
+    if not gtk_available():
+        skip("F43 compaction", "no display")
+        return
+
+    def loaded(module):
+        app = module.Animation()
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = 0
+        app.doc.scenes.append(module.new_scene("Scene 2"))
+        app.sheet = module.Sheet(app.doc, 0)
+        for index in range(20):
+            cel = app.doc.add_cel("Drawing %d" % index)
+            module.write_pixel(cel.decoded(0), 3 + index, 4, "#C8341E")
+            cel.version += 1
+        app.sheet.stamp(0, module.make_run(app.doc.cels[0].id, 0, 4))
+        return app
+
+    app = loaded(animation)
+    before = app.doc.bytes()
+    held = sum(1 for cel in app.doc.cels for take in cel.takes
+               if not isinstance(take, str))
+    for _ in range(60):
+        if not app._compact_step():
+            break
+    after = app.doc.bytes()
+    kept = sum(1 for cel in app.doc.cels for take in cel.takes
+               if not isinstance(take, str))
+    check("F43 compaction puts drawings nobody is watching back to sleep",
+          kept < held and kept >= 1, (held, kept))
+    check("F43 and the film it leaves behind is byte for byte the same film",
+          after == before)
+
+    reparsed, reports = animation.AnimationDocument.parse(
+        json.loads(after.decode()))
+    check("F43 a compacted film still reopens as itself, undamaged",
+          reparsed is not None and reparsed.bytes() == after and not reports,
+          reports)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant(
+        "F43-compacts-to-blank",
+        [("                    cel.takes[index] = png_b64(take)",
+          "                    cel.takes[index] = png_b64(surface(cel.w, cel.h))")])
+    spoiled = loaded(graded)
+    was = spoiled.doc.bytes()
+    for _ in range(60):
+        if not spoiled._compact_step():
+            break
+    mutant("F43 compaction that changes what a drawing holds is caught",
+           spoiled.doc.bytes() != was)
+    spoiled._alive = False
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -4928,6 +4998,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        compaction_family,
         sound_row_family,
         drop_family,
         at_the_cap_family,
