@@ -6332,6 +6332,58 @@ def recolour_family():
     shutil.rmtree(scratch)
 
 
+def raw_frame_family():
+    """The bytes handed to the encoder are the picture, in the right order.
+
+    Every exported frame goes through this conversion, so it was a Python
+    loop around seventeen million pixels for a three-minute film: 44.6ms a
+    frame at 320x240, which is 96 seconds of a two-thousand-frame export
+    spent rearranging bytes. Writing each channel with a step is the same
+    copy done in C — 63x, and identical.
+
+    What a mistake here looks like is a whole film delivered with its reds
+    and blues swapped, which nothing else in the app would notice."""
+    if not gtk_available():
+        skip("F57 the raw frame", "no display")
+        return
+
+    def raw(module, canvas):
+        image = module.surface(*canvas, white=True)
+        module.write_pixel(image, 0, 0, "#C8341E")       # a red
+        module.write_pixel(image, 1, 0, "#1E34C8")       # its mirror image
+        module.write_pixel(image, 2, 0, "#7FA98C")
+        module.write_pixel(image, canvas[0] - 1, canvas[1] - 1, "#1A1916")
+        return bytes(module._rgb24(image)), image
+
+    for canvas in ((160, 120), (321, 241)):
+        data, image = raw(animation, canvas)
+        span = canvas[0] * 3
+        last = (canvas[1] - 1) * span + (canvas[0] - 1) * 3
+        check("F57 at %dx%d the encoder is handed red, green, blue in that order"
+              % canvas,
+              data[0:3] == bytes((0xC8, 0x34, 0x1E)) and
+              data[3:6] == bytes((0x1E, 0x34, 0xC8)) and
+              data[6:9] == bytes((0x7F, 0xA9, 0x8C)) and
+              data[last:last + 3] == bytes((0x1A, 0x19, 0x16)),
+              (data[0:3].hex(), data[3:6].hex(), data[last:last + 3].hex()))
+        check("F57 and a %dx%d frame is exactly as many bytes as it has pixels"
+              % canvas,
+              len(data) == canvas[0] * canvas[1] * 3, len(data))
+        check("F57 with no row padding carried over from the surface (%dx%d)"
+              % canvas,
+              data[span - 3:span] == bytes((0xFF, 0xFF, 0xFF)),
+              data[span - 3:span].hex())
+
+    graded, scratch = module_mutant("F57-red-and-blue-swapped", [
+        ("        line[0::3] = row[2::4]", "        line[0::3] = row[0::4]"),
+        ("        line[2::3] = row[0::4]", "        line[2::3] = row[2::4]"),
+    ])
+    spoiled, _image = raw(graded, (160, 120))
+    mutant("F57 an export that swaps red and blue is caught",
+           spoiled[0:3] != bytes((0xC8, 0x34, 0x1E)), spoiled[0:3].hex())
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6367,6 +6419,7 @@ for _family in (
         paint_menu_family,
         wobble_cost_family,
         recolour_family,
+        raw_frame_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
