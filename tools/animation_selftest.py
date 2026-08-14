@@ -4285,8 +4285,148 @@ def _t_in(code, text):
         return json.load(handle).get(text, text)
 
 
+def missing_sound_family():
+    """A film whose sound file somebody has since moved or deleted.
+
+    Ordinary housekeeping in the Music folder, and the film has to survive
+    it: reopen and say what is gone, still draw, still play, and refuse the
+    things that genuinely need the audio — naming the file rather than
+    telling someone to add a sound they can see on the sheet."""
+    if not gtk_available():
+        skip("F38 a sound that went missing", "no display")
+        return
+    from gi.repository import Gtk
+
+    kept = animation.STORE_FILE + ".missing-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    home = tempfile.mkdtemp(prefix="animation-missing-")
+    tone = os.path.join(home, "dialogue.wav")
+    with wave.open(tone, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        handle.writeframes(array.array("h", [900] * 48000).tobytes())
+    document = animation.AnimationDocument(canvas=(160, 120))
+    scene = document.scenes[0]
+    scene["length"] = 48
+    stat = os.stat(tone)
+    scene["sounds"][0] = {"path": tone, "start": 0, "in_smp": 0, "out_smp": 0,
+                          "mute": False, "peaks": "",
+                          "sig": [stat.st_size, int(stat.st_mtime)],
+                          "duration_smp": stat.st_size // 2, "_peak_token": 0}
+    film = os.path.join(home, "with-sound.anim")
+    animation.save_document(document, film)
+    os.unlink(tone)                    # the person tidied their Music folder
+
+    opened, reports = animation.open_document(film)
+    check("F38 reopening a film says which sound file is gone",
+          opened is not None and any("dialogue.wav" in r for r in reports),
+          reports)
+
+    app = animation.Animation()
+    said = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: said.append(text)
+    app.doc = opened
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    app.sheet = animation.Sheet(app.doc, 0)
+    app.audio = types.SimpleNamespace(
+        available=False, samples_delivered=0, start=lambda *a, **k: False,
+        stop=lambda *a, **k: None, play_once=lambda *a, **k: None,
+        position_samples=lambda: 0)
+    app._refresh_lists()
+    app._update_playhead()
+    child = app.get_child()
+    app.remove(child)
+    stage = Gtk.OffscreenWindow()
+    stage.set_size_request(1024, 722)
+    stage.add(child)
+    stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+
+    drew = True
+    try:
+        area = app.timeline.get_allocation()
+        paper = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                   max(1, area.width), max(1, area.height))
+        app._draw_timeline(app.timeline, cairo.Context(paper))
+    except Exception as exception:
+        drew = "%s: %s" % (type(exception).__name__, exception)
+    check("F38 the sheet still draws a sound whose file is gone", drew is True,
+          drew)
+
+    del said[:]
+    played = True
+    try:
+        app._start_playback()
+        app._stop_playback()
+    except Exception as exception:
+        played = "%s: %s" % (type(exception).__name__, exception)
+    check("F38 the film still plays, silently, without falling over",
+          played is True, played)
+
+    del said[:]
+    app._close_prompt()
+    app._export()
+    check("F38 exporting refuses and names the file it needs",
+          app._prompt_layer is None and len(said) == 1 and
+          "dialogue.wav" in said[0], said)
+
+    scene = app.doc.scenes[app.scene_i]
+    scene["layers"][app.layer_i]["mouth_slots"] = [
+        app.doc.add_cel("Mouth %d" % index).id for index in range(3)]
+    del said[:]
+    app._close_prompt()
+    app._mouth_loudness_prompt()
+    check("F38 mouths-from-loudness refuses BEFORE asking for thresholds",
+          app._prompt_layer is None and len(said) == 1 and
+          "dialogue.wav" in said[0], (said, app._prompt_layer is not None))
+    app._flash = spoken
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F38-asks-then-refuses",
+        [("        if not os.path.exists(sound['path']):\n"
+          "            # The card would have opened, taken both thresholds, and only",
+          "        if False:\n"
+          "            # The card would have opened, taken both thresholds, and only")])
+    hopeful = graded.Animation()
+    hopeful._flash = lambda *a, **k: None
+    hopeful.doc, _ = graded.open_document(film)
+    hopeful.scene_i = hopeful.layer_i = hopeful.playhead = 0
+    hopeful.sheet = graded.Sheet(hopeful.doc, 0)
+    other = hopeful.doc.scenes[0]
+    other["layers"][0]["mouth_slots"] = [
+        hopeful.doc.add_cel("Mouth %d" % index).id for index in range(3)]
+    hopeful._mouth_loudness_prompt()
+    mutant("F38 a card that opens on a sound it cannot read is caught",
+           hopeful._prompt_layer is not None)
+    hopeful._close_prompt()
+    hopeful._alive = False
+    shutil.rmtree(scratch)
+    shutil.rmtree(home, ignore_errors=True)
+
+
 dialog_limits_family()
 drop_family()
+missing_sound_family()
 verbatim_family()
 remaining_paths_family()
 hover_and_preview_family()

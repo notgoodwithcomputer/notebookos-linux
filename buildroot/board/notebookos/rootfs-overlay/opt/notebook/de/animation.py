@@ -4087,6 +4087,13 @@ class Animation(nbapp.AppWindow):
         if sound is None:
             self._flash(_t('Add or unmute a sound before making mouths from loudness.'))
             return
+        if not os.path.exists(sound['path']):
+            # The card would have opened, taken both thresholds, and only
+            # then refused — with a line telling someone to add a sound
+            # they can see sitting on the sheet. The file is what is gone.
+            self._flash(_t('A sound file is missing: %s')
+                        % os.path.basename(sound['path']))
+            return
         self._overlay_prompt('Mouth from Loudness…',
                              [('quiet', 'Quiet', .10, ('float', 0., 1.)),
                               ('loud', 'Loud', .45, ('float', 0., 1.)),
@@ -4134,8 +4141,12 @@ class Animation(nbapp.AppWindow):
         if not slots or len(slots) < 3:
             self._flash(_t('Assign at least three mouth slots to the active layer first.'))
             return
-        if not sound or not os.path.exists(sound['path']):
+        if not sound:
             self._flash(_t('Add or unmute a sound before making mouths from loudness.'))
+            return
+        if not os.path.exists(sound['path']):
+            self._flash(_t('A sound file is missing: %s')
+                        % os.path.basename(sound['path']))
             return
         try:
             samples = decode_samples(sound['path'], sound.get('sig'))
