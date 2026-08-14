@@ -302,7 +302,12 @@ _ALLOWED = [
     ("video.py", "_exp_err_file", "ffmpeg stderr scratch"),
     ("gbaemu.py", "_log_path()", "append-only emulator log"),
     ("accounting.py", "DAMAGED_FILE", "writes the quarantine copy itself"),
-    ("accounting.py", "DOCS_DIR, name", "regenerable CSV export of live data"),
+    # Was allowed as a "regenerable CSV export of live data" — true, but it
+    # truncated last month's sheet before writing a byte. It now renders into
+    # nbapp.atomic_write_via's DRAFT, so `dest` here is a temp file in the
+    # destination's directory and the export it replaces is untouched until
+    # the rows are all written.
+    ("accounting.py", 'open(dest, "w"', "writes the atomic writer's draft"),
     # First-run setup writes machine configuration, not documents. The shadow
     # write is a temp + os.replace (the safe pattern this check exists to
     # enforce); the other two are small system files that the installer writes

@@ -691,7 +691,11 @@ class Accounting(nbapp.AppWindow):
         name = self._pdf_name()
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
-            self._render_pdf(os.path.join(DOCS_DIR, name))
+            # Beside the destination, then into place: a render that failed
+            # part-way used to truncate last month's export, which is the file
+            # somebody would have to reproduce their figures from.
+            nbapp.atomic_write_via(os.path.join(DOCS_DIR, name),
+                                   self._render_pdf)
         except Exception:
             self._flash(_t("Export failed"), kind="error")
             return
@@ -708,13 +712,12 @@ class Accounting(nbapp.AppWindow):
         credit stay in separate columns exactly as they read on screen, with the
         running balance beside them, so the export reconciles against the app."""
         name = "ledger-%s.csv" % time.strftime("%Y-%m-%d")
-        try:
-            os.makedirs(DOCS_DIR, exist_ok=True)
+
+        def _write_rows(dest):
             # newline="" is the csv module's documented requirement; without it
             # every row is written with a stray blank line between it and the
             # next on some platforms.
-            with open(os.path.join(DOCS_DIR, name), "w", newline="",
-                      encoding="utf-8") as fh:
+            with open(dest, "w", newline="", encoding="utf-8") as fh:
                 w = csv.writer(fh)
                 # ISO first: it is what makes the export sortable and
                 # reconcilable. The short date is kept beside it so the
@@ -732,6 +735,14 @@ class Accounting(nbapp.AppWindow):
                                 "%.2f" % -amt if amt < 0 else "",
                                 "%.2f" % amt if amt > 0 else "",
                                 "%.2f" % bal])
+
+        try:
+            os.makedirs(DOCS_DIR, exist_ok=True)
+            # open(dest,"w") truncated the previous export before the first row
+            # was written, so a failure part-way through left the figures
+            # half-there — worse than not exporting, because a truncated CSV
+            # still opens in a spreadsheet and still adds up.
+            nbapp.atomic_write_via(os.path.join(DOCS_DIR, name), _write_rows)
         except Exception:
             self._flash(_t("Export failed"), kind="error")
             return

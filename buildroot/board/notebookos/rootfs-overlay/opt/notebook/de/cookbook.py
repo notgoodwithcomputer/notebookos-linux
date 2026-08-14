@@ -22,7 +22,6 @@ from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
 import os
 import json
 import re
-import tempfile
 import time
 import cairo
 
@@ -1567,24 +1566,16 @@ class Cookbook(nbapp.AppWindow):
         part-way had already truncated whatever was there — and the common
         reason to export twice is that the recipe changed, so the file being
         destroyed was the user's previous good PDF, immediately after they
-        answered "Replace". Comics and Journal write their PDFs the same way;
-        the three could share one helper (noted for a later pass — three
-        sessions are landing in this tree hourly and this belongs in the file
-        that has the bug)."""
+        answered "Replace".
+
+        Through nbapp.atomic_write_via rather than a private copy of the
+        dance: Writer, Accounting and Contacts had the same defect, and five
+        apps each hand-rolling temp+replace is how one of them ends up subtly
+        different from the rest."""
         try:
             os.makedirs(DOCUMENTS, exist_ok=True)
-            dest = os.path.join(DOCUMENTS, name)
-            fd, draft = tempfile.mkstemp(prefix=".cookbook-export-",
-                                         suffix=".pdf", dir=DOCUMENTS)
-            os.close(fd)
-            try:
-                self._render_pdf(draft, r)
-                os.replace(draft, dest)
-            finally:
-                # A failed render leaves the draft behind; the destination is
-                # untouched either way.
-                if os.path.exists(draft):
-                    os.unlink(draft)
+            nbapp.atomic_write_via(os.path.join(DOCUMENTS, name),
+                                   lambda draft: self._render_pdf(draft, r))
         except Exception:
             self._flash_status("Export failed")
             return

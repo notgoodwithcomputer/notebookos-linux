@@ -3442,7 +3442,11 @@ class Writer(nbapp.AppWindow):
         if not path:
             return
         try:
-            self._render_pdf(path)
+            # Rendered beside the destination and moved into place only when
+            # complete. This is the one export in the OS where the user has
+            # NAVIGATED to the file being overwritten, so a render that threw
+            # part-way destroyed a document they had just pointed at.
+            nbapp.atomic_write_via(path, self._render_pdf)
             self._flash(_t("Exported %s") % os.path.basename(path))
         except Exception as e:
             self._flash(_export_problem(e), secs=9)

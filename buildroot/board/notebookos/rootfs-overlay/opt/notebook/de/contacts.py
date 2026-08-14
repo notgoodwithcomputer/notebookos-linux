@@ -1496,7 +1496,12 @@ class Contacts(nbapp.AppWindow):
         name = "contacts-" + time.strftime("%Y-%m-%d") + ".pdf"
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
-            self._make_pdf(os.path.join(DOCS_DIR, name))
+            # Beside the destination, then into place. Exporting twice in a day
+            # lands on the same dated name, so a render that threw part-way
+            # destroyed the copy already sitting there. (Print is unaffected:
+            # nbprint hands _make_pdf a temp path of its own.)
+            nbapp.atomic_write_via(os.path.join(DOCS_DIR, name),
+                                   self._make_pdf)
         except Exception:
             self._flash("Export failed")
             return

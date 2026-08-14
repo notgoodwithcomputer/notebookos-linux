@@ -443,6 +443,41 @@ def atomic_write_text(path, text):
         raise
 
 
+def atomic_write_via(path, write):
+    """The same guarantee for a writer that needs a real PATH rather than a
+    string — cairo's PDFSurface, the csv module, an encoder that opens the
+    file itself.
+
+    `write` is handed a temporary path in the DESTINATION's own directory (so
+    the replace below is a rename within one filesystem, not a copy) and must
+    have finished with it when it returns. The destination is untouched until
+    that moment, so a producer that raises half way leaves the previous file
+    exactly as it was.
+
+    This exists because the EXPORT paths were doing what the SAVE paths used
+    to do, and the twin above says why that is bad without ever having been
+    applied to them: Cookbook, Comics and Journal each grew their own copy of
+    this dance after a failed render destroyed a good PDF, and Writer,
+    Accounting and Contacts still wrote straight onto the destination. The
+    usual reason to export a second time is that the document changed, so the
+    file being overwritten is one the user still wants."""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    _reap_stale_tmp(d)
+    fd, tmp = tempfile.mkstemp(prefix=".nbw-", suffix=".tmp", dir=d)
+    os.close(fd)
+    try:
+        write(tmp)
+        os.replace(tmp, path)
+        _fsync_dir(d)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def save_failure_reason(exc, path=None):
     """A sentence a person can act on, for a save that did not happen.
 

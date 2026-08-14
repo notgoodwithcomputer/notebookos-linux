@@ -154,6 +154,69 @@ def test_atomic_text(nbapp, tmp):
           "raised=%s body=%r leftover=%r" % (raised, body[:20], leftover))
 
 
+def test_atomic_via(nbapp, tmp):
+    """atomic_write_via is the same contract for a producer that needs a real
+    PATH — cairo's PDFSurface, the csv module, an encoder that opens the file
+    itself. It exists because the EXPORT paths were doing what the Save paths
+    used to do: Writer, Accounting and Contacts rendered straight onto the
+    destination, so a render that threw part-way truncated the file the user
+    was overwriting — usually their previous export of the same document."""
+    p = os.path.join(tmp, "export.pdf")
+    with open(p, "wb") as fh:
+        fh.write(b"%PDF-1.4 last month's finished export")
+    good = open(p, "rb").read()
+
+    def half_a_render(dest):
+        # A real cairo failure leaves a partly-written file, so write before
+        # raising: a check that only ever saw an untouched empty draft would
+        # pass against a direct-to-destination writer too.
+        with open(dest, "wb") as fh:
+            fh.write(b"%PDF-1.4 half")
+        raise RuntimeError("producer failed part-way")
+
+    raised = False
+    try:
+        nbapp.atomic_write_via(p, half_a_render)
+    except Exception:                                          # noqa: BLE001
+        raised = True
+    leftover = [f for f in os.listdir(tmp) if f.startswith(".nbw-")]
+    check("atomic_write_via keeps the previous file when the producer throws",
+          raised and open(p, "rb").read() == good and not leftover,
+          "raised=%s body=%r leftover=%r"
+          % (raised, open(p, "rb").read()[:20], leftover))
+
+    # The producer must be handed a path in the DESTINATION's directory, or
+    # the replace crosses a filesystem and stops being atomic.
+    seen = {}
+
+    def note(dest):
+        seen["path"] = os.path.abspath(dest)
+        seen["dir"] = os.path.dirname(os.path.abspath(dest))
+        with open(dest, "wb") as fh:
+            fh.write(b"%PDF-1.4 the new one")
+
+    nbapp.atomic_write_via(p, note)
+    # BOTH halves, or this check cannot tell the two cases apart: a writer
+    # that hands the producer the destination ITSELF also satisfies "same
+    # directory", so the same-directory clause alone passes against exactly
+    # the defect this primitive exists to prevent.
+    check("atomic_write_via drafts alongside the destination, not onto it",
+          seen.get("dir") == os.path.dirname(os.path.abspath(p))
+          and seen.get("path") != os.path.abspath(p),
+          repr(seen))
+    check("atomic_write_via lands the new bytes on success",
+          open(p, "rb").read() == b"%PDF-1.4 the new one")
+    check("atomic_write_via leaves no draft behind on success",
+          not [f for f in os.listdir(tmp) if f.startswith(".nbw-")])
+
+    # A destination whose directory does not exist yet is created, the way
+    # every export into Documents relies on.
+    deep = os.path.join(tmp, "Documents", "sub", "new.pdf")
+    nbapp.atomic_write_via(deep, lambda d: open(d, "wb").write(b"ok"))
+    check("atomic_write_via creates the destination directory",
+          os.path.exists(deep) and open(deep, "rb").read() == b"ok")
+
+
 # ---------------------------------------------------------------------------
 #  _bak_would_shrink — the cross-process protector
 # ---------------------------------------------------------------------------
@@ -381,6 +444,7 @@ def main():
     try:
         test_write_path(nbapp, tmp)
         test_atomic_text(nbapp, tmp)
+        test_atomic_via(nbapp, tmp)
         test_bak_would_shrink(nbapp, tmp)
         test_quarantine(nbapp, tmp)
         test_undo(nbapp, tmp)
