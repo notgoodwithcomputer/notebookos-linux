@@ -12,12 +12,12 @@ Run:
   python3 tools/offered_range_check.py --selfcheck
 """
 
-# COVERAGE, STATED PLAINLY. This finds 46 ranged controls across 15 apps and
+# COVERAGE, STATED PLAINLY. This finds 47 ranged controls across 15 apps and
 # can connect only 2 of them to the clamp that will squeeze their value. The
-# other 44 are reported as unconnected rather than as passing, because a gate
+# other 45 are reported as unconnected rather than as passing, because a gate
 # that cannot see the apply has not checked anything about it.
 #
-# Those 44 were read by hand once, on 2026-08-14, and none was wrong: they are
+# Those 45 were read by hand once, on 2026-08-14, and none was wrong: they are
 # mostly bounds that are correct by construction (0..255 for a colour channel,
 # 1..31 for a day, 0..59 for minutes, 1..127 for MIDI velocity), and video.py
 # and sequencer.py already derive theirs from the material. That is a
