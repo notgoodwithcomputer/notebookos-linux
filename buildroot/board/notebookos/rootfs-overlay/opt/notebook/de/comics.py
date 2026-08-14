@@ -2595,6 +2595,10 @@ class Comics(nbapp.AppWindow):
         card_win.add(card)
         layer.put(card_win, 0, 0)
         self._prompt_host.add_overlay(layer)
+        # Who to give the keyboard back to. Without this GTK is left with
+        # no focus owner when the card goes: typing and shortcuts appear
+        # dead until the person clicks back into the page. Novel's idiom.
+        self._prompt_return_focus = self.get_focus()
         self._prompt_layer = layer
         layer.show_all()
         _min, nat = card_win.get_preferred_size()
@@ -2618,11 +2622,20 @@ class Comics(nbapp.AppWindow):
                 cancel()
             return
         self._prompt_layer = None
+        return_focus = getattr(self, "_prompt_return_focus", None)
+        self._prompt_return_focus = None
         if layer:
             cancel = getattr(layer, "_cancel", None)
             self._prompt_host.remove(layer)
             if run_cancel and cancel:
                 cancel()
+            # After the removal, and tolerant of an invoker that was itself
+            # replaced while the card was open.
+            if return_focus is not None:
+                try:
+                    return_focus.grab_focus()
+                except Exception:
+                    pass
 
     def _progress_overlay(self, title, body, on_cancel=None):
         """A persistent meter card that stays up while a render runs.

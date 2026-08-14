@@ -888,8 +888,44 @@ fill_perf_family()
 autosave_family()
 zoom_tolerance_family()
 polish_feedback_family()
+def focus_return_family():
+    """Close a card, start typing — something must be listening.
+
+    GTK leaves NO focus owner when the widget holding it is removed, and an
+    overlay prompt removes its whole layer. Measured before the fix: focus was
+    a Button on the way in and None on the way out, so the keyboard belonged to
+    nothing until the person clicked back into the page. Novel has carried the
+    capture/restore pair for this since its own prompts landed."""
+    if not os.environ.get("DISPLAY"):
+        skip("dialog focus returns to the invoker after a prompt", "DISPLAY is absent")
+        return
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+    win = comics.Comics()
+    win.show_all()
+    for _ in range(60):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    before = win.get_focus()
+    win._overlay_prompt("Focus", "Body", [("OK", lambda: None)])
+    for _ in range(60):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    win._close_prompt()
+    for _ in range(60):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    after = win.get_focus()
+    check("dialog focus returns to the invoker after a prompt",
+          after is not None and after is before,
+          "before=%r after=%r" % (before, after))
+    win.destroy()
+
+
 gtk_family()
 store_cycle_family()
+focus_return_family()
 print("%d checks: %d PASS, %d SKIP, %d FAIL" %
       (len(PASSES) + len(SKIPS) + len(FAILS), len(PASSES), len(SKIPS), len(FAILS)))
 sys.exit(min(255, len(FAILS)))
