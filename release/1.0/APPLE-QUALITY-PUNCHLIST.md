@@ -331,3 +331,91 @@ OLD notes (superseded above):
 - D-x264: BR2_PACKAGE_X264=y is in .config; next ISO needs
   `make -C buildroot ffmpeg-dirclean` first (HANDOFF note) — include in
   respin?
+
+## THE SAVE-FAILURE CLASS — nine apps, four suites (Aug 14, /loop iteration 5)
+
+FIXED a86311a0 / 5d9855a5 / 0c3bc2ae. Nine apps ended their save handler
+with `nbapp.save_failure_reason = str(exc)`, believing a module attribute
+was a channel to publish a reason through. It is a FUNCTION. The
+assignment reached nobody — nothing anywhere reads that name as a value —
+and replaced the shared sentence producer with a string for the rest of
+the process, so the next caller in that process gets a TypeError instead
+of a sentence. Calculator, Language, Packages, Maps, Terminal, 2048,
+Finder, System Monitor, Music. maps.py wrote the belief down in a comment
+("Publish the reason through the shared module attribute, as the other
+apps do"), which is how it reached nine files.
+
+WHAT IT COST A PERSON: course progress, a calculator tape, a best score,
+a view state or a removed-apps list failed to reach the disk and the app
+carried on showing work that was no longer anywhere — the exact outcome
+nbapp's own docstring calls the worst this OS can produce.
+
+FOUR SUITES CERTIFIED IT. tail_adversarial checked, under the name
+"calculator failed save surfaces reason", that the attribute had become a
+string. maps_adversarial, language_adversarial and finder_adversarial
+went further: they `delattr`'d the real function first so their assertion
+could pass. Nothing was surfaced to any person in any of them. This is
+the green gate that is green BECAUSE of the defect — fixing the app turns
+it red, which is the shape that keeps a defect alive across nine files.
+(I found three of the four; the fourth was surfaced by a peer session
+hitting the red at HEAD, after I truncated my own grep with `head -20`
+and cut off the finder row at line 21.)
+
+THE FIX: nbapp.note_save_failure(owner, exc, path) records the sentence
+on the app for a status line that is still on screen, and leaves ONE
+message in the notification centre. That second half is the real repair —
+these saves fire on a timer and again from the destroy handler, so the
+failure usually lands when the window is already going away and the app's
+own status line is going with it, which is precisely what the
+notification centre exists for. Once per owner, never once per write: a
+full disk fails every autosave, and a tray filling with one repeated
+sentence is the single failure a notification centre cannot survive.
+
+PACKAGES, separately: its "Remove application" handler guarded the save
+with `except (OSError, TypeError, ValueError)` around a helper that
+already swallows those same types — dead code, unreachable for the case
+it was written for. A failed removal rebuilt the inspector as though it
+had worked: the app vanished from the listing and came back at the next
+launch with nothing to explain it. The helper now reports whether the
+store reached the disk; the listing re-reads the file rather than trusting
+what it remembered.
+
+MUSIC, separately (5d9855a5): the two caches Music keeps in its store —
+track lengths and tags, both rebuilt from the audio files and both
+documented in place as "simply dropped and re-read" — set the same
+`damaged` flag a corrupt playlist sets, and that flag locks the store
+read-only for the session. One bad length row and Music opens normally,
+accepts every playlist made afterwards, and writes none of it. No Save
+button in the app to press again, nothing on screen. The read-only law
+stays for playlist damage (byte-for-byte, sabotage-proof included); a
+cache that regenerates itself is not the work that law protects.
+
+## JOURNAL — export off the GTK thread (Aug 14)
+
+FIXED 3906683d. File ▸ Export to PDF laid out the whole journal on the
+GTK thread; PangoCairo shapes every line of every entry with its bold,
+italic and quote runs, and until it finished there was no repaint, no
+scrolling and no way to stop. Now an nbjobs worker draws a snapshot of
+the entry list (so an entry typed mid-export cannot change the file being
+written) onto a "<name>.part" sibling that is moved into place — it used
+to write directly onto the destination, so a failure replaced a good PDF
+with a partial one. The sabotage that proved the atomic check exposed the
+loudest form: the previous PDF DELETED outright by the cleanup path.
+
+STILL OPEN, same class, HANDED OFF (cookbook.py is the media/cookbook
+lane's file): cookbook.py:1551 `_render_pdf` lays out text and writes the
+PDF synchronously — long recipes freeze the window with no repaint and no
+cancel. Comics has the pattern to copy (ed0e748b).
+
+STILL OPEN, media.py (Codex task-mst31jv1-dgdyk7 dispatched, verify on
+landing): `_pixbuf_any` decodes on the GTK thread on open — the WebP/SVG
+fallback is subprocess.run(timeout=25), so one click can freeze the
+window for 25 seconds; `_thumb_tick`'s docstring claims GLib.idle_add
+means it "never blocks the GTK main loop", which is false.
+
+ON-TARGET this tick (2.2 guest, real clicks): Journal write → autosave
+("Saved 00:23") → close → the desktop board's Journal tile flips from the
+day-zero empty state to "Written ✓ Friday 14 August". Also fixed a real
+gap in the harness itself: tools/guestdrive.py could not send a modifier
+combo at all, so every Ctrl+key ever sent to a guest landed as a bare
+letter.
