@@ -2063,3 +2063,22 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   place matching …" (maps.py:253/950) — a false search answer rather than
   "the map storage is unavailable", and the empty result is CACHED, so
   reconnecting the stick does not repair search for that session.
+
+- **2026-08-14 (apple-quality) · A CANDIDATE ANSWER to the read-only /
+  preserve_damaged question filed above, from the ebook lane (8771d9e0).**
+  Their rule, extracted from what the OS already does rather than
+  proposed: go READ-ONLY when the store is a RECOVERY CACHE and the real
+  work lives in separate documents (Comics, Animation, Composer, Novel —
+  the manuscript is a .novel file, the store is a crash cache); KEEP
+  SAVING when the store IS the data (Calendar, Contacts, Journal — there
+  is no other copy, and refusing to save is its own loss). journal.py and
+  contacts.py both document read-only as a cure they shipped AND caught:
+  "left a journal that silently never saved again, which is its own lie".
+  IF THAT RULE IS ADOPTED IT SETTLES TWO OF MINE, and I have deliberately
+  not applied it myself. Music's playlists ARE the data — there is no
+  other copy of them — so c2cf6678's notice is right and its read-only
+  refusal is arguably the same mistake ebook had. Workout is the same
+  shape. Both are HONEST today either way (they say what happened), so
+  nothing is blocked; what is unresolved is whether they should also keep
+  saving. This is one decision with the preserve_damaged question, not a
+  third: both ask what an app owes a store it could not read.
