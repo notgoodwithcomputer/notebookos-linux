@@ -2105,3 +2105,30 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   refactor that caused it. This wants the owner, or an explicit decision to
   drop them. It is the "uncommitted half-done lane work shipping in an ISO"
   risk the mandate names, and it has now survived a full day.
+
+- **2026-08-14 (apple-quality) · WHY gsh HANGS ON A CONSUMER ISO, and what
+  it costs.** `tools/gsh.py` times out against 2.3-audit — not a harness
+  bug and not a build regression. `/opt/notebook/debugshell.sh` runs a
+  shell ONLY when `/proc/cmdline` contains `nbdebug`, and otherwise sleeps
+  forever; that is deliberate hardening (the serial console used to be an
+  unauthenticated root shell for anyone with a cable). A shell-less tty
+  still ECHOES, so the probe looks like a HANG rather than a refusal, and
+  the note in memory about gsh predates the gate.
+  COST, and why this is worth writing down: every on-target check that
+  needs a shell is silently blocked on any image booted the normal way.
+  `tools/run-iso.sh` has NO option to append `nbdebug` — the cmdline comes
+  from the ISO's own grub.cfg, so it cannot simply be passed at the QEMU
+  level without bypassing GRUB (-kernel/-append with an extracted kernel
+  and initrd) or editing the boot entry by hand. That is why the gbasdk
+  .part/.old backup row could not be driven on 2.3: creating a bystander
+  directory beside a saved project needs a shell, and the GUI has no way
+  to make one.
+  DONE HERE: gsh now SAYS all of this when it times out, instead of
+  printing "timed out waiting for sentinel" and leaving the next person to
+  rediscover it. WHAT IS STILL OWED: either a debug ISO variant with
+  `nbdebug` in its grub.cfg, or a `--debug-shell` mode in run-iso.sh that
+  boots the extracted kernel directly. Whoever needs shell-driven
+  verification next should build that first rather than lose the same hour.
+  WHAT WORKS WITHOUT IT: everything driven through QMP —
+  tools/guestdrive.py (click/drag/type/key) plus screendumps. The ⤢
+  verification above was done entirely that way.

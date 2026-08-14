@@ -86,6 +86,15 @@ def main():
     print("\n".join(body))
     if rc is None:
         print("[gsh: timed out waiting for sentinel]", file=sys.stderr)
+        print("[gsh: the usual cause is that the guest was booted WITHOUT "
+              "`nbdebug` on the kernel command line. /opt/notebook/"
+              "debugshell.sh only runs a shell when /proc/cmdline contains "
+              "it, and otherwise sleeps — deliberately, so an unauthenticated "
+              "root shell is not offered to anyone who attaches a serial "
+              "cable. A shell-less tty still ECHOES, which is why this looks "
+              "like a hang rather than a refusal. Boot a debug image, or "
+              "drive the UI over QMP instead (tools/guestdrive.py).]",
+              file=sys.stderr)
         return 124
     return int(rc) if rc.isdigit() else 0
 
