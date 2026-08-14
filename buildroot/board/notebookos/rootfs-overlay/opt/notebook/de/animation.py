@@ -5093,13 +5093,18 @@ class Animation(nbapp.AppWindow):
         at_cap = len(self.doc.scenes) >= SCENE_MAX
         if not at_cap:
             limit -= 36
+        # ONE budget for the cards, used by both the loop that decides which
+        # scene to start at and the loop that draws them. They had two, and
+        # so disagreed: reserving the trailing mark's room in the drawing
+        # loop alone dropped one card — the scene you were standing in.
+        card_budget = limit - mark_w
         first = 0
         while True:
             span = 84 + (mark_w if first else 0)
             last = first
             for index in range(first, len(self.doc.scenes)):
                 width_i = _card_width(index)
-                if span + width_i > limit:
+                if span + width_i > card_budget:
                     break
                 span += width_i + 6
                 last = index
@@ -5115,7 +5120,13 @@ class Animation(nbapp.AppWindow):
             entry = self.doc.scenes[index]
             name = entry['name'][:12]
             card_w = _card_width(index)
-            if x + card_w > limit:
+            # Leave the trailing mark's room out of the cards' budget too.
+            # Without this the last card fitted, the '…' was then drawn past
+            # the point the add-a-scene card needed, and the '+' silently
+            # vanished — but only in the MIDDLE of a long film, which is
+            # exactly where someone is when they want another scene. Its
+            # reserved room sat there empty.
+            if x + card_w > card_budget:
                 # the strip is full: say so, and step past the mark so the
                 # add-a-scene card cannot land on top of it
                 cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)

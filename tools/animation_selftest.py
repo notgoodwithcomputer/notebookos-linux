@@ -7319,6 +7319,86 @@ def shape_tools_family():
     shutil.rmtree(scratch)
 
 
+def scene_strip_reach_family():
+    """Wherever you stand in a long film, you can see where you are and add
+    a scene.
+
+    Two properties of the same strip, and they were in tension. The cards
+    are windowed so the current scene stays on the bar; the add-a-scene card
+    sits after the last one; and when the strip is full a '…' says there is
+    more. Reserving room for the mark in the drawing loop alone made the '+'
+    survive and dropped a card — the scene you were standing in. Both loops
+    now share ONE budget, which is the only way two loops agree.
+
+    Driven at the start, the middle and the end of a 21-scene film."""
+    if not gtk_available():
+        skip("F67 the scene strip's reach", "no display")
+        return
+
+    def strip(module, at):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        names = ["Opening", "The couch", "Doorbell", "Hallway", "Argument",
+                 "Kitchen", "Flashback", "Rain", "Chase", "Rooftop", "Fall",
+                 "Hospital", "Waiting", "News", "Return", "Confession",
+                 "Silence", "Morning", "Packing", "Station", "Ending"]
+        app.doc.scenes[0]["name"] = names[0]
+        for name in names[1:]:
+            app.doc.scenes.append(module.new_scene(name))
+        for scene in app.doc.scenes:
+            scene["length"] = 48
+        app.scene_i = at
+        app.layer_i = app.playhead = app.view_origin = 0
+        app.sheet = module.Sheet(app.doc, at)
+        holder = Gtk.OffscreenWindow()
+        body = app.get_child()
+        app.remove(body)
+        holder.add(body)
+        holder.set_size_request(1024, 722)
+        holder.show_all()
+        for _ in range(300):
+            if not Gtk.events_pending():
+                break
+            Gtk.main_iteration_do(False)
+        allocation = app.timeline.get_allocation()
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                     max(allocation.width, 1), 60)
+        app._draw_timeline(app.timeline, cairo.Context(surface))
+        cards = list(getattr(app, "_scene_cards", []))
+        app._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(app, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(app, timer, None)
+        return {index for _l, _r, index in cards}
+
+    from gi.repository import Gtk
+
+    seen = {at: strip(animation, at) for at in (0, 14, 20)}
+    check("F67 the scene you are standing in is on the strip, wherever it is",
+          all(at in seen[at] for at in seen),
+          {at: sorted(x for x in seen[at] if x != "add") for at in seen})
+    check("F67 and the add-a-scene card is there too, at every position",
+          all("add" in seen[at] for at in seen),
+          {at: ("add" in seen[at]) for at in seen})
+
+    graded, scratch = module_mutant("F67-two-budgets-that-disagree", [
+        ("                if span + width_i > card_budget:",
+         "                if span + width_i > limit:"),
+    ])
+    split = {at: strip(graded, at) for at in (0, 14, 20)}
+    mutant("F67 a strip whose two loops disagree loses a card",
+           not all(at in split[at] for at in split) or
+           not all("add" in split[at] for at in split),
+           {at: sorted(str(x) for x in split[at]) for at in split})
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -7364,6 +7444,7 @@ for _family in (
         undo_cap_family,
         transport_family,
         shape_tools_family,
+        scene_strip_reach_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
