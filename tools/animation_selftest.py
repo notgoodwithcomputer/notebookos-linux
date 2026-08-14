@@ -7588,6 +7588,39 @@ for _family in (
 ):
     _isolated(_family)
 
+# Close a card, start typing — something must be listening. This app PASSES
+# today for a reason it does not state: its prompt card never takes focus, so
+# the invoker keeps it and removing the layer takes nothing away. That is
+# fragile. Illustrator's card deliberately grabs its safe button so a stray
+# Space cannot fire a destructive action — a real improvement somebody may
+# well apply here — and the moment it does, this app loses its focus owner
+# exactly as comics and illustrator did (266ccb9c, ee2c69dc). So the property
+# is pinned rather than the mechanism, and this check is what tells whoever
+# adds that grab to add the restore with it.
+if os.environ.get("DISPLAY"):
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+    _w = animation.Animation()
+    _w.show_all()
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    _before = _w.get_focus()
+    _w._overlay_prompt("Focus", [], "OK", lambda *_a: None)
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    _w._close_prompt()
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    _after = _w.get_focus()
+    check("focus survives a prompt closing",
+          _after is not None and _after is _before,
+          "before=%r after=%r" % (_before, _after))
+    _w.destroy()
+
 total = len(PASSES) + len(FAILS) + len(SKIPS) + len(MUTANTS) + len(UNCAUGHT_MUTANTS)
 print("TALLY total=%d passed=%d failed=%d skipped=%d mutants-caught=%d mutants-uncaught=%d" %
       (total, len(PASSES), len(FAILS), len(SKIPS), len(MUTANTS),

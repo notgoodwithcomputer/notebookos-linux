@@ -1171,6 +1171,45 @@ def keyboard_tests():
         app.destroy()
 
 
+def focus_after_prompt_tests():
+    """Close a card, start typing — something must be listening.
+
+    This app PASSES today for a reason it does not state: its confirm card
+    never takes focus, so the invoker keeps it and removing the layer takes
+    nothing away. Illustrator's card deliberately grabs its safe button so a
+    stray Space cannot fire a destructive action — a real improvement somebody
+    may apply here — and the moment it does, this app loses its focus owner
+    exactly as comics and illustrator did. The PROPERTY is pinned, not the
+    mechanism, so whoever adds that grab is told to add the restore with it."""
+    if not os.environ.get("DISPLAY"):
+        return
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+    import sequencer as Q
+    # fresh_app, not Sequencer(): every instance restores CFG_FILE on
+    # construction, so a bare one opens holding the previous test's clips.
+    win = fresh_app(Q)
+    win.show_all()
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    before = win.get_focus()
+    win._confirm("Focus", "Body", "OK", lambda: None)
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    win._close_prompt()
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    after = win.get_focus()
+    check("focus survives a prompt closing",
+          after is not None and after is before,
+          "before=%r after=%r" % (before, after))
+    win.destroy()
+
+
 def main():
     home = tempfile.mkdtemp(prefix="nbseq-selftest-")
     os.environ["NB_HOME"] = home
@@ -1178,6 +1217,7 @@ def main():
         synth_tests()
         app_tests()
         recorder_tests()
+        focus_after_prompt_tests()
         keyboard_tests()
     finally:
         shutil.rmtree(home, ignore_errors=True)
