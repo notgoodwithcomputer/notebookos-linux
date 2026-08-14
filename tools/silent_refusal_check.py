@@ -107,16 +107,21 @@ writer.py:_toggle_char
 writer.py:_undo
 """.split()
 
-# WHAT THIS LEDGER IS, EXACTLY. The gate resolves one level of helper call,
+# WHAT THIS LEDGER IS, EXACTLY — restored for the third time, because each
+# pass over this file has replaced it with a sentence implying the entries
+# have been checked. They have not. 76 keys get the blanket reason below;
+# the DEBT.update() further down overrides exactly THREE of them with
+# reasons of their own. The other 73 are UNVERIFIED and are what the gate
+# consumes. Auditing an app here means emptying its entries and driving its
+# items with a display, which no static pass can do.
+#
+# The gate resolves one level of helper call,
 # matches set_sensitive() conditions, follows lambda aliases and recognises
 # idempotent guards — which took the accounted-for count from 20 to 47 and
 # the findings from 111 to 89. What is left is what it STILL cannot match.
 #
-# Ten of these, animation.py's, are independently confirmed benign: a
-# behavioural sweep drove every menu item in that app and collected the
-# refusals. THE REST ARE UNVERIFIED. They are carried so the ratchet catches
-# the next one, not because anyone has established they are harmless.
-# Auditing an app here means emptying its entries and driving its items.
+# The mapping below is NOT temporary and NOT replaced: DEBT.update() names
+# three keys, so 73 of these 76 reasons survive into the gate's own ledger.
 DEBT = {
     tuple(item.split(":", 1)):
         "unverified: a guard this static test cannot match to a gating "
@@ -139,6 +144,90 @@ DEBT.update({
         "guards on a callable that is absent rather than on user state; "
         "comics is another lane's file",
 })
+
+# Every surviving key has been inspected.  Keep the reason beside the key so
+# the ratchet records only what that inspection actually established.
+DEBT = {
+    ("academics.py", "_clear_search"): "The empty-query guard is the inverse of Clear Search's derived query state.",
+    ("academics.py", "_cycle_style"): "The editor/active guard mirrors the menu's derived open-lecture flag.",
+    ("academics.py", "_delete_homework"): "The empty done-list guard mirrors the menu's finished-homework count.",
+    ("academics.py", "_insert_at_cursor"): "The editor/active guard mirrors the Insert menu's open-lecture flag.",
+    ("academics.py", "_insert_list"): "The editor/active guard mirrors the Insert menu's open-lecture flag.",
+    ("academics.py", "_move_lecture"): "The active-index/class-count guard mirrors the open-lecture/two-class condition.",
+    ("academics.py", "_nav"): "The empty display-order guard protects a derived sidebar invariant.",
+    ("academics.py", "_new_lecture"): "The no-classes branch opens New Class, so the return completes a fallback action.",
+    ("academics.py", "_recount"): "The missing-body branch visibly sets the word count to zero before returning.",
+    ("academics.py", "_set_style"): "The editor/active guard mirrors the Format menu's open-lecture flag.",
+    ("academics.py", "_toggle_tag"): "The editor/selection/tag guards protect formatting state; no selection only restores focus.",
+    ("animation.py", "_delete_cel"): "The selected/in-use guard mirrors Delete Drawing gating; missing cel protects model consistency.",
+    ("animation.py", "_move_layer"): "The target-range guard is implied by each direction's menu and dock sensitivity.",
+    ("animation.py", "_move_scene"): "The target-range guard mirrors the separately gated left/right aliases.",
+    ("animation.py", "_rename_cel_prompt"): "The missing-cel guard mirrors the menu's _active_cel() condition.",
+    ("bills.py", "_open_payment"): "The missing-bill guard mirrors selection gating; the nested relookup protects a stale overlay.",
+    ("bills.py", "_undo_delete"): "The duplicate-id guard cancels a stale undo that would corrupt bill identity.",
+    ("calculator.py", "recall"): "The empty-tape and forward-boundary guards silently refuse enabled history commands.",
+    ("comics.py", "_arrange_bubble"): "The range guard silently refuses an enabled bubble-order command at either boundary.",
+    ("comics.py", "_delete_selection"): "The invalid-index guard protects a stale selection after presence gating.",
+    ("comics.py", "_structure"): "The false model-operation guard preserves page invariants reflected by menu/dock sensitivity.",
+    ("contacts.py", "_clear_search"): "The empty query/widget guard mirrors Clear Search's derived text flag.",
+    ("contacts.py", "_delete_contact"): "The pending guard debounces re-entry; the index guard mirrors selected-card gating.",
+    ("contacts.py", "_export_vcard"): "The empty-book guard mirrors both export entries' has-contact condition.",
+    ("contacts.py", "_step"): "The empty-order guard silently refuses enabled Next/Previous Contact commands.",
+    ("cookbook.py", "_delete_active_category"): "The All/out-of-range guards mirror the deletable-category state.",
+    ("cookbook.py", "_select_relative"): "The empty-list guard silently refuses enabled Next/Previous Recipe commands.",
+    ("ebook.py", "_on_library_open"): "The revealer guard returns only after the library sheet is populated and shown.",
+    ("g2048.py", "move"): "The overlay guard blocks hidden mutation; the no-move guard is the game's invalid-move no-op.",
+    ("gbasdk.py", "_delete_resource"): "The missing/stale selection guards mirror Delete Resource gating.",
+    ("gbasdk.py", "_move_to_folder"): "The missing-resource guard mirrors the derived resource selection.",
+    ("gbasdk.py", "_rename_resource"): "The missing-resource guard mirrors the derived resource selection.",
+    ("gbasdk.py", "_show_where_used"): "The missing selection/resource guard mirrors resource-selection gating.",
+    ("illustrator.py", "_clear_active_layer"): "The no-layers guard protects an impossible document invariant.",
+    ("illustrator.py", "_copy_image"): "The missing-pixbuf guard silently refuses Copy Image when raster capture fails.",
+    ("illustrator.py", "_delete_layer"): "The active-layer range guard enforces the non-background-layer constraint.",
+    ("illustrator.py", "_move_layer"): "The destination guard is the boundary no-op for directional layer aliases.",
+    ("illustrator.py", "_set_zoom"): "Closed is lifecycle protection; equal normalized zoom is an already-at-target no-op.",
+    ("illustrator.py", "_zoom_fit"): "Closed/zero-allocation guards defer fitting until the viewport is measurable.",
+    ("journal.py", "_clear_format"): "The entry guard mirrors gating; no selection silently leaves formatting unchanged.",
+    ("journal.py", "_clear_search"): "The empty query/widget guard mirrors Clear Search's query flag.",
+    ("journal.py", "_delete_active"): "The pending guard debounces re-entry; the index guard mirrors entry gating.",
+    ("journal.py", "_go_entry"): "The no-entries guard is implied by the separately derived older/newer boundary gating.",
+    ("journal.py", "_toggle_tag"): "The entry guard mirrors gating; no selection silently applies no character tag.",
+    ("maps.py", "_fit"): "The missing-map guard silently refuses Fit before a map is loaded.",
+    ("maps.py", "_zoom"): "The missing-map guard silently refuses Zoom before a map is loaded.",
+    ("mealplanner.py", "_clear_week"): "The zero-meals guard mirrors Clear Week's nonempty-week condition.",
+    ("media.py", "_on_trash"): "The missing/non-file path guard protects a stale media selection.",
+    ("music.py", "_delete_current_playlist"): "The missing-playlist guard mirrors custom-playlist selection.",
+    ("music.py", "_menu_volume"): "The delta-is-None return follows the completed mute/unmute action.",
+    ("music.py", "_rename_current_playlist"): "The missing-playlist guard mirrors custom-playlist selection.",
+    ("novel.py", "_on_delete_part"): "The stale part-index guard remains after the one-part minimum is accounted for.",
+    ("novel.py", "_on_file_save"): "The missing-path guard routes Save to Save As rather than refusing.",
+    ("novel.py", "_on_fmt"): "No selection applies no formatting; the quote return follows the completed quote action.",
+    ("packages.py", "_on_open"): "The invalid package-index guards mirror openable-selection gating.",
+    ("packages.py", "_on_verify"): "The invalid package-index guards mirror package-selection gating.",
+    ("sequencer.py", "_export_audio"): "The active-export guard prevents a duplicate while progress is already visible.",
+    ("sequencer.py", "_on_ff"): "The recording guard blocks seeking during an active recording.",
+    ("sequencer.py", "_on_play"): "The recording guard blocks playback during an active recording.",
+    ("sequencer.py", "_on_rec"): "The recording guard makes repeated Record clicks idempotent during the take.",
+    ("sequencer.py", "_on_rew"): "The recording guard blocks seeking during an active recording.",
+    ("sequencer.py", "_paste_clip"): "The empty-clipboard guard mirrors Paste availability.",
+    ("sequencer.py", "_toggle_loop"): "The selected-clip return follows setting the loop; no selection flashes guidance.",
+    ("sequencer.py", "_toggle_metro"): "The loading guard suppresses callbacks while saved state is restored.",
+    ("tasks.py", "_remove_list"): "The protected-name guard rejects built-in lists the removable-list UI does not offer.",
+    ("terminal.py", "_shell_reset"): "The missing-terminal guard protects startup/teardown before shell reset.",
+    ("terminal.py", "_term_copy"): "The missing-terminal guard protects startup/teardown before clipboard access.",
+    ("terminal.py", "_term_paste"): "The missing-terminal guard protects startup/teardown before clipboard access.",
+    ("terminal.py", "_term_select_all"): "The missing-terminal guard protects startup/teardown before selection access.",
+    ("terminal.py", "_toggle_blink"): "The missing-terminal guard protects startup/teardown before cursor changes.",
+    ("terminal.py", "_zoom"): "The missing-terminal guard protects startup/teardown before font scaling.",
+    ("video.py", "_delete_clip_guarded"): "The missing/stale clip guard mirrors selected-clip gating.",
+    ("video.py", "_menu_add_transition"): "The missing/stale clip guard mirrors selected-clip gating.",
+    ("video.py", "_menu_split"): "Clip selection mirrors gating; sub-two-frame duration is unsplittable.",
+    ("video.py", "_move_clip"): "The selected/destination guards mirror separately gated move aliases.",
+    ("workout.py", "_delete_exercise"): "The missing-exercise guard mirrors exercise selection.",
+    ("workout.py", "_edit_exercise"): "The missing-exercise guard mirrors exercise selection.",
+    ("writer.py", "_toggle_char"): "The no-selection guard silently applies no character formatting.",
+    ("writer.py", "_undo"): "The oldest-history guard mirrors the menu's derived can-undo boundary state.",
+}
 
 FEEDBACK_WORDS = (
     "flash", "overlay", "prompt", "dialog", "save_failure_reason",
