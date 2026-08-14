@@ -906,6 +906,33 @@ for word in ("offline", "internet", "don't worry", "beautiful", "simply",
     bad = [text for text in _visible if word in text.lower()]
     check("no user-visible text says %r" % word, not bad, bad[:2])
 
+# Close a card, start typing — something must be listening. The prompt parks
+# focus on its safe button by design, and removing the layer takes that button
+# with it, so GTK is left with NO focus owner: typing and keyboard navigation
+# go nowhere until the person clicks back into the drawing. Measured on the real
+# window, because a grep for this put two apps on the list that turned out to
+# restore focus perfectly well.
+if os.environ.get("DISPLAY"):
+    _win = illustrator.Illustrator()
+    _win.show_all()
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    _before = _win.get_focus()
+    _win._overlay_prompt("Focus", "Body", [("OK", "ilpromptok", None)])
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    _win._close_saveprompt()
+    for _ in range(80):
+        if Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    _after = _win.get_focus()
+    check("focus returns to the invoker after a prompt closes",
+          _after is not None and _after is _before,
+          "before=%r after=%r" % (_before, _after))
+    _win.destroy()
+
 print("")
 print("%d checks, %d passed, %d FAILED"
       % (CHECKS[0], CHECKS[0] - len(FAILS), len(FAILS)))

@@ -3560,6 +3560,11 @@ class Illustrator(nbapp.AppWindow):
         the prompt is dismissed, and a None callback (e.g. Cancel) just closes
         it. `content` is an optional widget shown under the body line. Only one
         prompt shows at a time; Esc or a scrim click dismisses it."""
+        # Who gets the keyboard back when this card goes. Captured before
+        # the button below takes focus, and before the old card is torn
+        # down, so a second prompt does not record the first one's button.
+        if self._saveprompt_layer is None:
+            self._prompt_return_focus = self.get_focus()
         self._close_saveprompt()
         self._close_menu()
         self._close_about()
@@ -3653,11 +3658,23 @@ class Illustrator(nbapp.AppWindow):
     def _close_saveprompt(self):
         layer = self._saveprompt_layer
         if layer is not None:
+            return_focus = getattr(self, "_prompt_return_focus", None)
             try:
                 self._overlay.remove(layer)
             except Exception:
                 pass
             self._saveprompt_layer = None
+            self._prompt_return_focus = None
+            # The card deliberately parks focus on its safe button, and removing
+            # the layer takes that button with it — leaving GTK no focus owner
+            # at all, so typing and keyboard navigation go nowhere until the
+            # person clicks back into the drawing. Restore after the removal,
+            # and tolerate an invoker replaced while the card was open.
+            if return_focus is not None:
+                try:
+                    return_focus.grab_focus()
+                except Exception:
+                    pass
             return True
         return False
 
