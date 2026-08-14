@@ -190,6 +190,60 @@ def main():
     finally:
         ebook.GLib = real_glib
 
+    # ---- a PDF page that cannot be fetched must SAY so, not go blank.
+    # _pdf_relayout returns early when the page object is None and _pdf_draw
+    # then paints white, so pulling the USB stick a book was opened from and
+    # pressing Right showed an empty page with no explanation. Both sentences
+    # used here already ship with the app.
+    import os as _os
+    import tempfile as _tf
+    import nbstate as _nbstate
+
+    class _Doc:
+        def get_page(self, _n):
+            raise RuntimeError("the volume went away")
+
+    def _reader_with_missing_page(path):
+        w = cls.__new__(cls)
+        w._pdf_doc = _Doc()
+        w._page = 3
+        w._open_path = path
+        w._books = [{"path": path, "title": "Anna Karenina", "fmt": "PDF"}]
+        w._book_by_path = lambda p: w._books[0]
+        w._short_path = lambda p: "~/Books/anna.pdf"
+        w.said = []
+        w._show_message = lambda *a, **k: w.said.append(a)
+        w.relayouts = 0
+
+        def _relayout():
+            w.relayouts += 1
+        w._pdf_relayout = _relayout
+        # The blank path continues past the relayout to queue a scroll-to-top,
+        # so the stand-in has to carry those too. Without them the PRE-FIX code
+        # dies on AttributeError and this check reports a crash instead of the
+        # defect — a red proof that explodes is not a red proof, it just says
+        # the fixture was thin.
+        w._nav = _nbstate.Generation("reader-fixture")
+        w._pdf_scroll = FakeScroll()
+        w._scroll_top = lambda *_a: False
+        return w
+
+    gone = _os.path.join(_tf.mkdtemp(prefix="ebook-gone-"), "anna.pdf")
+    w = _reader_with_missing_page(gone)              # file does NOT exist
+    cls._pdf_show_page(w)
+    check("a page turn on a vanished PDF says so instead of going blank",
+          len(w.said) == 1 and "no longer at that location" in w.said[0][3])
+    check("...and does not fall through to the blank relayout",
+          w.relayouts == 0)
+
+    here = _tf.mkstemp(prefix="ebook-here-", suffix=".pdf")[1]
+    w2 = _reader_with_missing_page(here)             # file DOES exist
+    cls._pdf_show_page(w2)
+    check("a page that fails while the file is present blames the PDF, "
+          "not the storage",
+          len(w2.said) == 1 and "could not be opened for rendering"
+          in w2.said[0][3])
+
     print("RESULT: " + ("ALL PASS" if all(results) else "SOME FAILED"))
     sys.exit(0 if all(results) else 1)
 

@@ -1656,6 +1656,24 @@ class EbookReader(nbapp.AppWindow):
             self._pdf_page_obj = self._pdf_doc.get_page(self._page)
         except Exception:
             self._pdf_page_obj = None
+        if self._pdf_page_obj is None:
+            # A page that cannot be fetched used to become a BLANK WHITE
+            # SURFACE: _pdf_relayout returns early on a missing page and
+            # _pdf_draw then paints white, so pulling the USB stick a book
+            # was opened from and pressing Right showed an empty page and no
+            # explanation at all. The reader already knows how to say both of
+            # these things — it says the first one when a book is opened from
+            # a device that has gone — so say them here too.
+            book = (self._book_by_path(self._open_path)
+                    if self._open_path else None)
+            if book is not None:
+                gone = not os.path.isfile(book["path"])
+                self._show_message(
+                    book["fmt"], book["title"],
+                    self._short_path(book["path"]),
+                    "This file is no longer at that location." if gone
+                    else "This PDF could not be opened for rendering.")
+                return
         self._pdf_relayout()
         # a fresh page returns the reader to the top of the viewport
         GLib.idle_add(self._nav.guard(self._scroll_top), self._pdf_scroll)
