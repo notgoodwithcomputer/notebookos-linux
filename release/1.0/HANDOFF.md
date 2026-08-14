@@ -1960,3 +1960,42 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   picker, the scratch name must be mkdtemp/mkstemp, not the destination
   plus a suffix. If it came from the app's own config or cache directory, a
   derived name is fine and often clearer.
+
+- **2026-08-14 (apple-quality) · E-BOOK AUDIT: one fixed, four filed, one
+  needing the i18n lane.** Vanished-PDF blank page fixed (2f3cad9e).
+  The rest, with reasons:
+  (1) **NEEDS THE I18N LANE — a damaged ebook.json is not a read-only
+  session.** _load_state keeps empty defaults and the next page turn or Add
+  writes a fresh store; the old bytes survive only under a .damaged-* name
+  nobody will find, and the reader is never told. Novel, Music, Workout and
+  Animation all do the opposite (read-only + a notice), so the reader is
+  the outlier, not the rule — this is NOT the open preserve_damaged
+  contract question, it is ebook failing to do what its siblings already
+  do. Doing it properly needs ONE new key: the body sentence "They were
+  kept, and nothing changed here will be saved over them." already exists
+  in all 17 catalogs (Music uses it), so only a title is missing —
+  suggested "Your library could not be read", to sit beside Music's "Your
+  playlists could not be read". Landing the read-only refusal WITHOUT the
+  notice would be worse than today: a silent read-only session looks like
+  an app that has quietly stopped remembering anything.
+  (2) EPUB has no pre-decode ceiling: each spine document is ZipFile.read()
+  in full and every chapter's decoded text is retained, and images are
+  read+decoded whole before the width cap is applied — so the cap is a
+  DISPLAY cap, not a memory one. Same class media.py was fixed for; the
+  pattern to copy is media's _fit_budget/MAX_AREA and a loader that learns
+  dimensions from the size-prepared signal.
+  (3) PDF raster allocation is unbounded: page dimensions flow straight
+  into cairo.ImageSurface with no pixel-count check, so a poster-sized or
+  malformed page can exhaust memory on open. The 3x limit bounds
+  magnification, not the allocation.
+  (4) _short_path only shortens paths under NB_HOME, so an absolute USB or
+  system path reaches the screen on failure notices. Also: a DRM/password
+  PDF falls into the generic render failure, and a DRM EPUB is reported as
+  "No readable text was found in this EPUB" — blaming the content for
+  protection.
+  NOT A DEFECT, worth recording because it closes a question the OS-wide
+  bare-key sweep left open for this app: ebook has NO editable text widget
+  at all (no Entry, SearchEntry, TextView or SpinButton anywhere in the
+  file), so its window-level Left/Right cannot be stolen from a focused
+  field. That is the REASON it is safe, which the earlier sweep recorded
+  as a verdict without the reason.
