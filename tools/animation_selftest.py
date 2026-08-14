@@ -4424,8 +4424,84 @@ def missing_sound_family():
     shutil.rmtree(home, ignore_errors=True)
 
 
+def unbound_recovery_family():
+    """A film that was never saved, closed without a word.
+
+    2.2 decided Animation should match Comics here: an unbound film closes
+    silently and recovery brings it back, while a bound film still asks.
+    That is only a kindness if the coming-back part is real — otherwise it
+    is the quietest way this program could lose an afternoon."""
+    if not gtk_available():
+        skip("F39 unbound recovery", "no display")
+        return
+
+    kept = animation.STORE_FILE + ".unbound-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+
+    def session(module):
+        window = module.Animation()
+        window._flash = lambda *a, **k: None
+        return window
+
+    first = session(animation)
+    check("F39 a new film starts unbound", first.doc_path is None)
+    cel, _run = first.sheet.ensure_drawing(first.layer_i, 0)
+    animation.write_pixel(cel.decoded(0), 11, 7, "#C8341E")
+    cel.version += 1
+    first.doc.scenes[0]["layers"][0]["name"] = "Only copy"
+    first._commit_change()
+    made = first.doc.bytes()
+
+    asked = first._on_delete()
+    check("F39 closing an unbound film does not stop to ask",
+          asked is False and first._prompt_layer is None, asked)
+    first._close_prompt()
+    # the guard declining to stop the close is only half the sequence: GTK
+    # then destroys the window, and it is the destroy handler that writes
+    # the film down. A check that stops at the guard proves nothing about
+    # whether the work survived.
+    first._on_destroy()
+    check("F39 but the work is written where the next session will look",
+          os.path.exists(animation.STORE_FILE))
+
+    second = session(animation)
+    check("F39 and the next session reopens that film byte for byte",
+          second.doc.bytes() == made and second.doc_path is None,
+          (len(second.doc.cels),
+           second.doc.scenes[0]["layers"][0]["name"] if second.doc.scenes
+           else None))
+    second._alive = False
+    for window in (first, second):
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(window, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(window, timer, None)
+
+    graded, scratch = module_mutant(
+        "F39-forgets-on-the-way-back",
+        [("        elif os.path.exists(STORE_FILE):", "        elif False:")])
+    forgetful = graded.Animation()
+    forgetful._flash = lambda *a, **k: None
+    mutant("F39 a silent close whose film does not come back is caught",
+           forgetful.doc.bytes() != made, len(forgetful.doc.cels))
+    forgetful._alive = False
+    shutil.rmtree(scratch)
+
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+
 dialog_limits_family()
 drop_family()
+unbound_recovery_family()
 missing_sound_family()
 verbatim_family()
 remaining_paths_family()
