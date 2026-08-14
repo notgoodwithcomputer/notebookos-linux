@@ -1398,6 +1398,7 @@ class Animation(nbapp.AppWindow):
         # A glyph is not a name: GTK derives the accessible name from the
         # label, so '+' reads to a screen reader as "plus". Each of these
         # says what it DOES, in the tooltip and to assistive technology.
+        self._layer_buttons = {}
         for label, tip, callback in (('+', 'New Layer', self._add_layer),
                                      ('-', 'Delete Layer', self._delete_layer),
                                      ('↑', 'Move Layer Up', self._raise_layer),
@@ -1407,6 +1408,7 @@ class Animation(nbapp.AppWindow):
             button.get_accessible().set_name(_t(tip))
             button.connect('clicked', callback)
             layer_actions.pack_start(button, True, True, 0)
+            self._layer_buttons[tip] = button
         side.pack_start(layer_actions, False, False, 0)
         body.pack_start(side, False, False, 0)
         self.timeline = Gtk.DrawingArea()
@@ -2315,6 +2317,37 @@ class Animation(nbapp.AppWindow):
         self.layer_list.show_all()
         if active_row is not None:
             self.layer_list.select_row(active_row)
+        self._refresh_layer_buttons()
+
+    def _refresh_layer_buttons(self):
+        """The dock's four layer buttons say what the menu says.
+
+        The Layer menu greys these commands at their limits; the buttons
+        beside the list did not, so at six layers the + stayed lit, clicking
+        it did nothing and said nothing. The takes buttons above them were
+        already right, which is how the dock came to disagree with itself.
+        Spec: at every cap the creating control disables, with its reason in
+        the tooltip."""
+        buttons = getattr(self, '_layer_buttons', None)
+        if not buttons:
+            return
+        layers = self.doc.scenes[self.scene_i]['layers']
+        allowed = {
+            'New Layer': (len(layers) < LAYER_MAX,
+                          _t('This scene holds as many layers as it can.')),
+            'Delete Layer': (len(layers) > 1,
+                             _t('A scene keeps at least one layer.')),
+            'Move Layer Up': (self.layer_i < len(layers) - 1,
+                              _t('This layer is already at the top.')),
+            'Move Layer Down': (self.layer_i > 0,
+                                _t('This layer is already at the bottom.')),
+        }
+        for name, (usable, because) in allowed.items():
+            button = buttons.get(name)
+            if button is None:
+                continue
+            button.set_sensitive(usable)
+            button.set_tooltip_text(_t(name) if usable else because)
 
     def _layer_row_selected(self, _list, row):
         """Clicking a layer row makes it the drawing target — the selected

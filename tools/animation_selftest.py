@@ -5538,6 +5538,142 @@ def spec_law_family():
     shutil.rmtree(scratch)
 
 
+def more_spec_laws_family():
+    """Three more of the spec's promises, and the one that was not kept.
+
+    Frames ripple drawings and never move a sound; shape outlines and the
+    eraser are always solid whatever pattern is chosen; and at every cap the
+    creating control disables with its reason in the tooltip. The last was
+    true of the takes buttons and false of the layer buttons beside them."""
+    if not gtk_available():
+        skip("F49 more spec laws", "no display")
+        return
+    from gi.repository import Gtk
+
+    # 1. "Inserting or removing frames ripples drawings; it never moves a
+    #     sound" (spec §1)
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    scene = app.doc.scenes[0]
+    scene["length"] = 60
+    app.sheet = animation.Sheet(app.doc, 0)
+    cel, _run = app.sheet.ensure_drawing(0, 0)
+    app.sheet.clear(0, 0, 60)
+    app.sheet.stamp(0, animation.make_run(cel.id, 20, 6))
+    scene["sounds"][0] = {"path": "x.wav", "start": 30, "in_smp": 0,
+                          "out_smp": 0, "mute": False, "peaks": "",
+                          "duration_smp": 48000, "_peak_token": 0}
+    app.playhead = 10
+    app._insert_apply({"count": 5})
+    rippled = [(r["start"], r["len"]) for r in scene["layers"][0]["runs"]]
+    check("F49 inserting frames pushes the drawings along, and not the sound",
+          rippled == [(25, 6)] and scene["sounds"][0]["start"] == 30 and
+          scene["length"] == 65,
+          (rippled, scene["sounds"][0]["start"], scene["length"]))
+    app.playhead = 10
+    app._remove_apply({"count": 5})
+    check("F49 and removing them puts the drawings back, still not the sound",
+          [(r["start"], r["len"]) for r in scene["layers"][0]["runs"]] ==
+          [(20, 6)] and scene["sounds"][0]["start"] == 30 and
+          scene["length"] == 60,
+          (scene["sounds"][0]["start"], scene["length"]))
+
+    # 2. "Shape outlines and the Eraser are always Solid" (spec §4)
+    app.pattern = "sparse"
+    solid_for = {tool: (app.pattern if tool in ("pencil", "brush", "fill")
+                        else "solid")
+                 for tool in ("pencil", "brush", "fill", "line", "rect",
+                              "ellipse", "eraser")}
+    check("F49 a chosen pattern reaches the drawing tools and no others",
+          solid_for["pencil"] == "sparse" and
+          all(solid_for[tool] == "solid"
+              for tool in ("line", "rect", "ellipse", "eraser")),
+          solid_for)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    # 3. "At every cap the creating control disables with its reason in the
+    #     tooltip (disabled-never-absent)" (spec §2)
+    def named(root, name):
+        found = []
+        stack = [root]
+        while stack:
+            widget = stack.pop()
+            if isinstance(widget, Gtk.Button):
+                try:
+                    if (widget.get_accessible().get_name() or "") == name:
+                        found.append(widget)
+                except Exception:
+                    pass
+            if isinstance(widget, Gtk.Container):
+                stack.extend(widget.get_children())
+        return found
+
+    dock = animation.Animation()
+    dock._flash = lambda *a, **k: None
+    dock.doc = animation.AnimationDocument(canvas=(160, 120))
+    dock.scene_i = dock.layer_i = dock.playhead = 0
+    dock.sheet = animation.Sheet(dock.doc, 0)
+    dock._refresh_lists()
+    lone = {name: named(dock, name)[0] for name in
+            ("New Layer", "Delete Layer", "Move Layer Up", "Move Layer Down")
+            if named(dock, name)}
+    check("F49 with one layer, only adding one is offered",
+          lone["New Layer"].get_sensitive() and
+          not lone["Delete Layer"].get_sensitive() and
+          not lone["Move Layer Up"].get_sensitive() and
+          not lone["Move Layer Down"].get_sensitive(),
+          {n: b.get_sensitive() for n, b in lone.items()})
+    check("F49 and each one that is off says why, where a pointer will find it",
+          all(b.get_tooltip_text() and b.get_tooltip_text() != name
+              for name, b in lone.items() if not b.get_sensitive()),
+          {n: b.get_tooltip_text() for n, b in lone.items()})
+
+    layers = dock.doc.scenes[0]["layers"]
+    while len(layers) < animation.LAYER_MAX:
+        layers.append(animation.new_layer("L%d" % len(layers)))
+    dock._refresh_lists()
+    full = named(dock, "New Layer")[0]
+    check("F49 at the layer cap the button that makes one goes quiet",
+          not full.get_sensitive() and
+          full.get_tooltip_text() != _t_of("New Layer"),
+          (full.get_sensitive(), full.get_tooltip_text()))
+    dock._alive = False
+
+    graded, scratch = module_mutant(
+        "F49-buttons-ignore-the-cap",
+        [("            button.set_sensitive(usable)", "            pass")])
+    stubborn = graded.Animation()
+    stubborn._flash = lambda *a, **k: None
+    stubborn.doc = graded.AnimationDocument(canvas=(160, 120))
+    stubborn.scene_i = stubborn.layer_i = stubborn.playhead = 0
+    stubborn.sheet = graded.Sheet(stubborn.doc, 0)
+    other = stubborn.doc.scenes[0]["layers"]
+    while len(other) < graded.LAYER_MAX:
+        other.append(graded.new_layer("L%d" % len(other)))
+    stubborn._refresh_lists()
+    still_lit = named(stubborn, "New Layer")
+    mutant("F49 a button still lit at its cap is caught",
+           bool(still_lit) and still_lit[0].get_sensitive())
+    stubborn._alive = False
+    shutil.rmtree(scratch)
+
+
+def _t_of(text):
+    """What the running catalog makes of a chrome string."""
+    return animation._t(text)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5567,6 +5703,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        more_spec_laws_family,
         spec_law_family,
         frame_image_family,
         loudness_card_family,
