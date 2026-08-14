@@ -2,6 +2,7 @@
 """Headless-first contract checks for the Notebook OS Comics studio."""
 import json
 import os
+import collections
 import shutil
 import stat
 import subprocess
@@ -126,6 +127,19 @@ def bubble_family():
     allowed = {comics.CLEAR4, comics.px4("#FFFFFF"), comics.px4("#000000")}
     check("bubble raster no grey", values <= allowed,
           "%d unexpected pixel values" % len(values.difference(allowed)))
+    cjk = comics._bubble_defaults(80, 80)
+    cjk.update(w=180, h=72, size=40, text="漢字かな한글漢字かな한글", tail=None)
+    probe = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
+    layout, _x, _y, _tw, _th = comics._text_layout(cairo.Context(probe), cjk)
+    before_h = cjk["h"]
+    comics.grow_bubble(cjk)
+    grown_layout, _x, _y, _tw, text_h = comics._text_layout(
+        cairo.Context(probe), cjk)
+    check("bubble CJK fallback has no unknown glyphs",
+          layout.get_unknown_glyphs_count() == 0)
+    check("bubble CJK wraps and auto-height contains natural lines",
+          cjk["h"] > before_h and grown_layout.get_pixel_size()[1] <= text_h,
+          "layout=%d box=%.1f" % (grown_layout.get_pixel_size()[1], text_h))
 
 
 def auto_height_family():
@@ -156,6 +170,26 @@ def imposition_family():
     check("imposition padding before back cover", all_ok)
     check("imposition pinned booklet order", pinned)
     check("imposition cover-sheet colour set", covers)
+    filters_ok = blanks_ok = True
+    for n in range(comics.PAGE_MIN, comics.PAGE_MAX + 1):
+        order = comics._page_order(n)
+        pairs = comics._sheet_pairs(order)
+        for filt in ("all", "cover", "inside"):
+            wanted = []
+            for side, pair in enumerate(pairs):
+                sheet = side // 2 + 1
+                if filt == "cover" and sheet != 1: continue
+                if filt == "inside" and sheet == 1: continue
+                wanted.extend(x for x in pair if x is not None)
+            got = []
+            path = os.path.join(tempfile.gettempdir(), "comics-impose-audit.pdf")
+            comics._impose(path, order, filt, False,
+                           lambda _cr, page_no, _w, _h: got.append(page_no))
+            filters_ok &= got == wanted
+            blanks_ok &= None not in got and all(1 <= x <= n for x in got)
+            os.unlink(path)
+    check("imposition every count filters before flatten", filters_ok)
+    check("imposition padded slots never draw document content", blanks_ok)
     tmp = tempfile.mkdtemp(prefix="comic-pdf-")
     order = comics._page_order(9)
     for filt, wanted in (("all", len(order) // 2), ("cover", 2),
@@ -171,6 +205,11 @@ def imposition_family():
     check("imposition black-and-white interior", all(v[0] == v[1] == v[2] for v in pixels(mono)))
     check("imposition cover remains colour", comics.px4("#C8341E") in pixels(colour))
     check("imposition print scale 0.24 exact", comics.PRINT_SCALE == 0.24 and comics.PAGE_PX_W * comics.PRINT_SCALE == nbprint.HALF_W_PT and comics.PAGE_PX_H * comics.PRINT_SCALE == nbprint.HALF_H_PT)
+    cache = collections.OrderedDict()
+    pages = [comics.new_page(), comics.new_page(), comics.new_page()]
+    for index in range(3):
+        comics._cached_flatten(cache, pages, index)
+    check("imposition flatten cache retains one page", len(cache) == 1)
     shutil.rmtree(tmp)
 
 
@@ -401,8 +440,10 @@ def interaction_family():
     check("interaction palette click sets colour",app.color==comics.PALETTE[0])
     app=interaction_app(1); top=comics.Layer("Top",opacity=50,surface=comics._surface(False)); comics._write_pixel(top.decode(),3,4,"#FF0000"); app.doc.pages[0]["layers"].append(top); app.previous_tool="pencil"; app._set_tool=lambda tool:setattr(app,"tool",tool); app._pick_colour((3,4))
     check("interaction eyedropper blends one pixel without page composite",app.color=="#FF8080")
-    check("interaction placed 100ppi page scales full-bleed by integer three",
-          comics._place_scale(550,850)==3.0)
+    check("interaction small placed image stays native size",
+          comics._place_scale(550,850)==1.0)
+    check("interaction oversized placed image scales down to fit",
+          comics._place_scale(3300,2550)==0.5)
     app=interaction_app(); app.bw_inside=False; app.grid=False; app.page_guides=True; app.selection=None
     menu_ok=True
     try:
@@ -426,6 +467,86 @@ def interaction_family():
           (moved,resized,tailed,(bubble["x"],bubble["y"]),bubble["tail"]))
     app.selection=("bubble",0); x=bubble["x"]; app._nudge(1,0); app._finish_nudge()
     check("interaction selected object nudge",bubble["x"]==x+1)
+
+
+def place_image_family():
+    tmp = tempfile.mkdtemp(prefix="comic-place-")
+    path = os.path.join(tmp, "alpha.png")
+    image = cairo.ImageSurface(cairo.FORMAT_ARGB32, 11, 7)
+    cr = cairo.Context(image)
+    cr.set_source_rgba(1, 0, 0, .5); cr.paint(); image.write_to_png(path)
+    app = interaction_app(1)
+    layer = app.doc.pages[0]["layers"][0]
+    layer.surface = comics._surface(True)
+    old_picker = comics.nbpicker.open_file
+    flashes = []
+    app._flash = lambda text, saved=False: flashes.append(text)
+    try:
+        comics.nbpicker.open_file = lambda *_args, **_kwargs: path
+        app._place_image()
+    finally:
+        comics.nbpicker.open_file = old_picker
+    frame = app._undo_stack[-1] if app._undo_stack else None
+    cx, cy = comics.PAGE_PX_W // 2, comics.PAGE_PX_H // 2
+    pixel = pixels(layer.decode())[cy * comics.PAGE_PX_W + cx]
+    check("place image alpha composites over active layer",
+          pixel[2] > pixel[1] and pixel[2] == 255 and pixel[3] == 255,
+          pixel)
+    check("place image undo frame is the placed pixel rectangle",
+          frame is not None and frame[0] == "px" and frame[5:7] == (11, 7),
+          frame[:7] if frame else None)
+    layer.visible = False
+    try:
+        comics.nbpicker.open_file = lambda *_args, **_kwargs: path
+        app._place_image()
+    finally:
+        comics.nbpicker.open_file = old_picker
+    check("place image hidden layer gives feedback",
+          any("hidden layer" in text for text in flashes), flashes)
+    corrupt = os.path.join(tmp, "broken.png")
+    open(corrupt, "wb").close()
+    before = len(app._undo_stack)
+    try:
+        comics.nbpicker.open_file = lambda *_args, **_kwargs: corrupt
+        app._place_image()
+    finally:
+        comics.nbpicker.open_file = old_picker
+    check("place image corrupt PNG changes nothing",
+          len(app._undo_stack) == before)
+    shutil.rmtree(tmp)
+
+
+def worker_snapshot_family():
+    doc = comics.ComicDocument([comics.new_page() for _ in range(4)])
+    source = doc.pages[0]["layers"][0].decode()
+    comics._write_pixel(source, 9, 9, "#C8341E")
+    doc.pages[0]["layers"][0].touch()
+    snapshot, _updates = comics.autosave_snapshot(doc)
+    comics._write_pixel(source, 9, 9, "#000000")
+    rebuilt = comics._pages_from_snapshot(snapshot)
+    copy_pixel = pixels(rebuilt[0]["layers"][0].decode())[9 * comics.PAGE_PX_W + 9]
+    check("export and print snapshots isolate worker cairo surfaces",
+          copy_pixel == comics.px4("#C8341E"))
+    tmp = tempfile.mkdtemp(prefix="comic-export-atomic-")
+    destination = os.path.join(tmp, "book.pdf")
+    open(destination, "wb").write(b"previous-valid-pdf")
+    try:
+        comics._write_pdf_atomic(
+            destination,
+            lambda draft: (open(draft, "wb").write(b"partial"),
+                           (_ for _ in ()).throw(OSError("failed"))))
+    except OSError:
+        pass
+    leftovers = [name for name in os.listdir(tmp)
+                 if name.startswith(".comics-export-")]
+    check("export failure preserves replaced file and cleans draft",
+          open(destination, "rb").read() == b"previous-valid-pdf"
+          and not leftovers, leftovers)
+    comics._write_pdf_atomic(
+        destination, lambda draft: open(draft, "wb").write(b"complete"))
+    check("export success atomically replaces destination",
+          open(destination, "rb").read() == b"complete")
+    shutil.rmtree(tmp)
 
 
 def migration_family():
@@ -507,6 +628,18 @@ def zoom_tolerance_family():
     app.zoom=1; actual_part=app._selection_part((corner[0]+20,corner[1]+20))
     check("zoom tolerance fit zoom grabs handle twenty page pixels away",fit_part=="nw")
     check("zoom tolerance actual size rejects twenty-pixel miss",actual_part=="move")
+    small = dict(comics._bubble_defaults(100, 100), w=72, h=72,
+                 tail=[40, 220])
+    app.doc.pages[0]["bubbles"][0] = small
+    app.zoom = comics.ZOOM_MIN
+    parts = [app._selection_part((x, y))
+             for x, y, _name in comics._selection_positions(small)]
+    check("zoom minimum resolves all eight handles individually",
+          parts == ["nw", "n", "ne", "w", "e", "sw", "s", "se"], parts)
+    check("zoom minimum draws distinct visible handle size",
+          comics._selection_handle_size(small, app.zoom) == 3.0)
+    check("zoom minimum bubble tail remains individually clickable",
+          app._selection_part(tuple(small["tail"])) == "tail")
 
 
 def gtk_family():
@@ -518,7 +651,7 @@ def gtk_family():
         skip("dialog real bubble editor widgets", "DISPLAY is absent")
         skip("undo all window destructive operations", "DISPLAY is absent")
         return
-    from gi.repository import Gtk
+    from gi.repository import Gtk, Gdk
     if not Gtk.init_check(None)[0]:
         skip("dialog real Panel Layout overlay widgets", "GTK display unavailable")
         skip("dialog panel preset buttons drive all six states", "GTK display unavailable")
@@ -548,10 +681,40 @@ def gtk_family():
           mix_widgets["mix"]["rgb"]==[17,34,51] and app.color=="#112233" and app.colour_name.get_text()==comics.mix_name("#112233") and app._recent[0]=="#112233")
     app._close_prompt(run_cancel=False)
     app.doc.pages[0]["bubbles"].append(comics._bubble_defaults())
+    # Matches the real double-click-to-edit path (_on_press sets
+    # self.selection = hit BEFORE calling _bubble_editor): without this,
+    # _delete_selection() below is a no-op on a None selection regardless
+    # of the key guard, which would make that check pass for the wrong
+    # reason -- caught by an isolated red-proof run before landing.
+    app.selection = ("bubble", 0)
     app._bubble_editor(0)
     view = app._dialog_widgets["text"]
     view.get_buffer().set_text("Live preview")
     check("dialog real bubble editor widgets", app.doc.pages[0]["bubbles"][0]["text"] == "Live preview")
+    # The window's key-press-event handler runs BEFORE a focused child
+    # widget's own handling (GTK dispatches the toplevel first), so an
+    # unguarded bare-key branch here would eat every lowercase tool letter
+    # and Delete typed into the editor -- switching tools or destroying the
+    # very bubble being lettered instead of typing. _on_key must stay a
+    # no-op (falsy, no side effect) while _prompt_layer is set, and resume
+    # normally the moment it is not.
+    check("dialog bubble editor keeps focus while open", app.get_focus() is view)
+    tool_before = app.tool
+    bubbles_before = len(app.doc.pages[0]["bubbles"])
+    swallowed = app._on_key(app, Event(keyval=Gdk.KEY_e))
+    check("dialog bubble editor swallows no tool-shortcut letters",
+          not swallowed and app.tool == tool_before and app.get_focus() is view)
+    deleted = app._on_key(app, Event(keyval=Gdk.KEY_Delete))
+    check("dialog bubble editor survives a bare Delete",
+          not deleted and app.selection == ("bubble", 0) and
+          len(app.doc.pages[0]["bubbles"]) == bubbles_before)
+    closed = app._on_key(app, Event(keyval=Gdk.KEY_Escape))
+    check("dialog Escape still closes an open prompt",
+          closed and app._prompt_layer is None)
+    resumed = app._on_key(app, Event(keyval=Gdk.KEY_e))
+    check("dialog tool letters resume once no prompt is open",
+          resumed and app.tool == "eraser")
+    app.tool = tool_before
     app._close_prompt()
     # A destructive op through the real window must change the document and
     # undo must restore it byte-identically — asserted, not assumed (the
@@ -634,6 +797,8 @@ lazy_page_family()
 duplicate_page_family()
 limits_family()
 interaction_family()
+place_image_family()
+worker_snapshot_family()
 migration_family()
 fill_perf_family()
 autosave_family()

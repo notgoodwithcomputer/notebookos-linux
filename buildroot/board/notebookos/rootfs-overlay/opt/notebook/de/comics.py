@@ -904,32 +904,36 @@ def _impose(path, order, sheets_filter="all", fold_line=False, draw_page=None):
     """Mirror nbprint's sheet placement while permitting Comics' page remap."""
     pairs = _sheet_pairs(order)
     surf = cairo.PDFSurface(path, nbprint.SHEET_W_PT, nbprint.SHEET_H_PT)
-    cr = cairo.Context(surf)
     sheet_count = len(pairs) // 2
-    for side_no, pair in enumerate(pairs):
-        sheet = side_no // 2 + 1
-        if sheets_filter == "cover" and sheet != 1:
-            continue
-        if sheets_filter == "inside" and sheet == 1:
-            continue
-        cr.set_source_rgb(1, 1, 1)
-        cr.paint()
-        for slot, page_no in enumerate(pair):
-            if page_no is None:
+    try:
+        cr = cairo.Context(surf)
+        for side_no, pair in enumerate(pairs):
+            sheet = side_no // 2 + 1
+            if sheets_filter == "cover" and sheet != 1:
                 continue
-            cr.save()
-            cr.translate(slot * nbprint.HALF_W_PT, 0)
-            if draw_page:
-                draw_page(cr, page_no, nbprint.HALF_W_PT, nbprint.HALF_H_PT)
-            cr.restore()
-        if fold_line and sheet == 1 and side_no % 2 == 0:
-            cr.set_source_rgb(*nbprint.FOLD_LINE_INK)
-            cr.set_line_width(nbprint.FOLD_LINE_W)
-            cr.move_to(nbprint.HALF_W_PT, 0)
-            cr.line_to(nbprint.HALF_W_PT, nbprint.SHEET_H_PT)
-            cr.stroke()
-        surf.show_page()
-    surf.finish()
+            if sheets_filter == "inside" and sheet == 1:
+                continue
+            cr.set_source_rgb(1, 1, 1)
+            cr.paint()
+            for slot, page_no in enumerate(pair):
+                if page_no is None:
+                    continue
+                cr.save()
+                cr.translate(slot * nbprint.HALF_W_PT, 0)
+                cr.rectangle(0, 0, nbprint.HALF_W_PT, nbprint.HALF_H_PT)
+                cr.clip()
+                if draw_page:
+                    draw_page(cr, page_no, nbprint.HALF_W_PT, nbprint.HALF_H_PT)
+                cr.restore()
+            if fold_line and sheet == 1 and side_no % 2 == 0:
+                cr.set_source_rgb(*nbprint.FOLD_LINE_INK)
+                cr.set_line_width(nbprint.FOLD_LINE_W)
+                cr.move_to(nbprint.HALF_W_PT, 0)
+                cr.line_to(nbprint.HALF_W_PT, nbprint.SHEET_H_PT)
+                cr.stroke()
+            surf.show_page()
+    finally:
+        surf.finish()
     return sheet_count
 
 
@@ -948,16 +952,119 @@ def draw_flat_page(cr, surface, w=nbprint.HALF_W_PT, h=nbprint.HALF_H_PT):
 def _cached_flatten(cache, pages, index):
     surface = cache.pop(index, None)
     if surface is None:
+        # Every caller consumes pages in a single pass. Evict BEFORE making
+        # the next 16.8 MB surface so a run never briefly owns three pages;
+        # one cached colour flatten plus an optional B/W copy is the ceiling.
+        cache.clear()
         surface = flatten_page(pages[index])
     cache[index] = surface
-    while len(cache) > 2:
-        cache.popitem(last=False)
     return surface
 
 
 def _place_scale(width, height):
+    if width <= 0 or height <= 0:
+        raise ValueError("image size")
     fit = min(PAGE_PX_W / float(width), PAGE_PX_H / float(height))
-    return float(max(1, int(math.floor(fit)))) if fit >= 1 else fit
+    return min(1.0, fit)
+
+
+def _selection_positions(obj):
+    return ((obj["x"], obj["y"], "nw"),
+            (obj["x"] + obj["w"] / 2.0, obj["y"], "n"),
+            (obj["x"] + obj["w"], obj["y"], "ne"),
+            (obj["x"], obj["y"] + obj["h"] / 2.0, "w"),
+            (obj["x"] + obj["w"], obj["y"] + obj["h"] / 2.0, "e"),
+            (obj["x"], obj["y"] + obj["h"], "sw"),
+            (obj["x"] + obj["w"] / 2.0, obj["y"] + obj["h"], "s"),
+            (obj["x"] + obj["w"], obj["y"] + obj["h"], "se"))
+
+
+def _selection_handle_size(obj, zoom):
+    # Keep three distinct handle columns/rows visible even when a minimum
+    # 72 px object is only 9 screen pixels wide at ZOOM_MIN.
+    return max(3.0, min(7.0, obj["w"] * zoom / 3.0,
+                        obj["h"] * zoom / 3.0))
+
+
+def _pages_from_snapshot(snapshot):
+    """Rebuild worker-private pages from an autosave-style snapshot."""
+    rebuilt = []
+    for saved in snapshot["pages"]:
+        layers = []
+        for item in saved["layers"]:
+            surface = item.pop("_surface", None)
+            raw = item.pop("_png", None)
+            if item.pop("_blank", None):
+                raw = _blank_page_png()
+            layers.append(Layer(name=item.get("name", ""),
+                                visible=item.get("visible", True),
+                                opacity=item.get("opacity", 100),
+                                surface=surface, png=raw))
+        rebuilt.append({"layers": layers, "panels": saved["panels"],
+                        "bubbles": saved["bubbles"],
+                        "mask_gutters": saved.get("mask_gutters")})
+    return rebuilt
+
+
+def _pages_encoded_snapshot(doc):
+    """A worker-safe snapshot for a caller that must visit EVERY page
+    regardless of which are dirty -- Export and Zine Print, unlike
+    autosave_snapshot() (built for the debounced recovery save, which only
+    ever sees a page or two dirty at once and deliberately copies raw
+    SURFACES to keep that common case off the UI thread's CPU).
+
+    Export/Print have no such bound: opening an old FORMAT-1 document
+    marks every migrated page dirty at once (measured: a real 32-page
+    legacy book costs ~1 GB to open, because the upscale needs real pixel
+    access), and this OS's own autosave-on-open then copies every one of
+    those dirty surfaces before a single byte reaches disk -- ~485 MB on
+    top of the migration, whether or not the user ever prints. Encoding to
+    PNG bytes HERE instead keeps that bounded (this same document's 32
+    pages total under 1 MB of bytes) at the cost of a bounded bit of
+    synchronous PNG-encoding CPU for whichever few pages are genuinely
+    dirty -- the trade this OS's own target hardware wants, per the
+    Apple-quality mandate's memory/perf concerns. Layer.encode() also
+    warms the SAME cache autosave would have (cheap: an already-clean
+    layer returns instantly), so this never duplicates that work."""
+    pages = []
+    for page in doc.pages:
+        layers = [{"name": ly.name, "visible": ly.visible,
+                  "opacity": ly.opacity, "png": ly.encode()}
+                 for ly in page["layers"]]
+        pages.append({"layers": layers, "panels": page["panels"],
+                      "bubbles": page["bubbles"],
+                      "mask_gutters": page.get("mask_gutters")})
+    return pages
+
+
+def _pages_from_encoded_snapshot(pages_data):
+    """Decode a _pages_encoded_snapshot() into worker-private pages."""
+    rebuilt = []
+    for saved in pages_data:
+        layers = [Layer(name=item["name"], visible=item["visible"],
+                        opacity=item["opacity"], png=item["png"])
+                 for item in saved["layers"]]
+        rebuilt.append({"layers": layers, "panels": saved["panels"],
+                        "bubbles": saved["bubbles"],
+                        "mask_gutters": saved.get("mask_gutters")})
+    return rebuilt
+
+
+def _write_pdf_atomic(path, render, job=None):
+    """Render beside the destination, then replace it only when complete."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, draft = tempfile.mkstemp(prefix=".comics-export-", suffix=".pdf",
+                                 dir=directory)
+    os.close(fd)
+    try:
+        render(draft)
+        if job is not None:
+            job.checkpoint()
+        os.replace(draft, path)
+    finally:
+        if os.path.exists(draft):
+            os.unlink(draft)
 
 
 def load_store(path):
@@ -1922,12 +2029,22 @@ class Comics(nbapp.AppWindow):
     def _selection_part(self, point):
         if not self.selection:return "move"
         kind,index=self.selection; obj=self.doc.pages[self.doc.active]["bubbles" if kind=="bubble" else "panels"][index]; x,y=point
-        handle_tolerance = max(4, int(round(8 / self.zoom)))
-        tail_tolerance = max(6, int(round(10 / self.zoom)))
-        if kind=="bubble" and obj.get("tail") and abs(x-obj["tail"][0])<=tail_tolerance and abs(y-obj["tail"][1])<=tail_tolerance:return "tail"
-        positions=((obj["x"],obj["y"],"nw"),(obj["x"]+obj["w"]//2,obj["y"],"n"),(obj["x"]+obj["w"],obj["y"],"ne"),(obj["x"],obj["y"]+obj["h"]//2,"w"),(obj["x"]+obj["w"],obj["y"]+obj["h"]//2,"e"),(obj["x"],obj["y"]+obj["h"],"sw"),(obj["x"]+obj["w"]//2,obj["y"]+obj["h"],"s"),(obj["x"]+obj["w"],obj["y"]+obj["h"],"se"))
-        for hx,hy,name in positions:
-            if abs(x-hx)<=handle_tolerance and abs(y-hy)<=handle_tolerance:return name
+        # Resolve overlapping low-zoom hit regions by nearest screen-space
+        # centre. The former first-match walk made most of a 72x72 bubble at
+        # 1/8 zoom report "nw" because its 64-page-pixel tolerances overlap;
+        # the tail participates too, so it cannot steal a nearby corner.
+        candidates = []
+        for hx, hy, name in _selection_positions(obj):
+            dx, dy = (x - hx) * self.zoom, (y - hy) * self.zoom
+            if abs(dx) <= 8 and abs(dy) <= 8:
+                candidates.append((dx * dx + dy * dy, name))
+        if kind == "bubble" and obj.get("tail"):
+            dx = (x - obj["tail"][0]) * self.zoom
+            dy = (y - obj["tail"][1]) * self.zoom
+            if abs(dx) <= 10 and abs(dy) <= 10:
+                candidates.append((dx * dx + dy * dy, "tail"))
+        if candidates:
+            return min(candidates)[1]
         return "move"
 
     def _on_press(self, _widget, ev):
@@ -2094,7 +2211,7 @@ class Comics(nbapp.AppWindow):
         cr.set_source_rgb(*_rgb("#C8341E")); cr.set_line_width(1); cr.rectangle(x+.5, y+.5, w, h); cr.stroke()
         # Selection chrome is authored in screen pixels, so fit zoom does not
         # turn its handles and hairline into sub-pixel dust.
-        d = 7
+        d = _selection_handle_size(obj, z)
         for hx, hy in ((x,y),(x+w/2,y),(x+w,y),(x,y+h/2),(x+w,y+h/2),(x,y+h),(x+w/2,y+h),(x+w,y+h)):
             cr.rectangle(hx-d/2, hy-d/2, d, d); cr.fill()
         if kind == "bubble" and obj.get("tail"):
@@ -2569,17 +2686,28 @@ class Comics(nbapp.AppWindow):
         except Exception:
             self._flash(_t("The image could not be placed."), False)
             return
-        before = self._snapshot()
+        width, height = image.get_width(), image.get_height()
+        try:
+            scale = _place_scale(width, height)
+        except ValueError:
+            self._flash(_t("The image could not be placed."), False)
+            return
+        placed_w, placed_h = width * scale, height * scale
+        left = int(math.floor((PAGE_PX_W - placed_w) / 2.0))
+        top = int(math.floor((PAGE_PX_H - placed_h) / 2.0))
+        region = self._clamp_rect((left, top, int(math.ceil(placed_w)),
+                                   int(math.ceil(placed_h))))
+        self._begin_edit()
         target = self.doc.pages[self.doc.active]["layers"][self.active_layer].decode()
-        scale = _place_scale(image.get_width(), image.get_height())
         cr = cairo.Context(target); cr.set_antialias(cairo.ANTIALIAS_NONE)
-        cr.translate((PAGE_PX_W - image.get_width() * scale) // 2,
-                     (PAGE_PX_H - image.get_height() * scale) // 2)
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.translate(left, top)
         cr.scale(scale, scale)
         pat = cairo.SurfacePattern(image); pat.set_filter(cairo.FILTER_NEAREST)
         cr.set_source(pat); cr.paint()
-        self.doc.pages[self.doc.active]["layers"][self.active_layer].touch()
-        self._push(before, "Place Image")
+        if self._commit_edit(region, "Place Image") and not \
+                self.doc.pages[self.doc.active]["layers"][self.active_layer].visible:
+            self._flash(_t("The image was placed on a hidden layer."), False)
 
     def _export_prompt(self):
         state = {"name": os.path.splitext(os.path.basename(self.doc_path or "comic"))[0], "bw": False}
@@ -2603,35 +2731,23 @@ class Comics(nbapp.AppWindow):
         if getattr(self, "_exporting", False):
             self._flash(_t("An export is already running…"), False)
             return
-        # Capture on the UI thread the way autosave does — dirty layers as
-        # worker-private surface COPIES, the rest as their encoded bytes —
-        # then rebuild real pages on the worker and run the REAL flatten.
-        # Inline, a full book froze the window for the whole render (~10s
-        # on the shipped machine), stuck behind the just-dismissed card.
-        snapshot, _updates = autosave_snapshot(self.doc)
-        pages_data = snapshot["pages"]
+        # Capture on the UI thread as ENCODED BYTES (_pages_encoded_snapshot,
+        # not autosave's surface-copy snapshot -- export visits every page
+        # regardless of which are dirty, and a document with many dirty
+        # pages at once, e.g. one just migrated from the old page size,
+        # made autosave's copy-every-dirty-surface shape cost hundreds of
+        # MB here). Then rebuild real pages on the worker and run the REAL
+        # flatten. Inline, a full book froze the window for the whole
+        # render (~10s on the shipped machine), stuck behind the
+        # just-dismissed card.
+        pages_data = _pages_encoded_snapshot(self.doc)
         covers = {0, 1, len(pages_data) - 2, len(pages_data) - 1}
         bw = bool(state.get("bw"))
         self._exporting = True
         self._flash(_t("Exporting…"), True)
 
         def work(_job):
-            rebuilt = []
-            for saved in pages_data:
-                layers = []
-                for item in saved["layers"]:
-                    surface = item.pop("_surface", None)
-                    raw = item.pop("_png", None)
-                    if item.pop("_blank", None):
-                        raw = _blank_page_png()
-                    layers.append(Layer(name=item.get("name", ""),
-                                        visible=item.get("visible", True),
-                                        opacity=item.get("opacity", 100),
-                                        surface=surface, png=raw))
-                rebuilt.append({"layers": layers,
-                                "panels": saved["panels"],
-                                "bubbles": saved["bubbles"],
-                                "mask_gutters": saved.get("mask_gutters")})
+            rebuilt = _pages_from_encoded_snapshot(pages_data)
             cache = collections.OrderedDict()
 
             def draw(cr, number, _w, _h):
@@ -2640,9 +2756,10 @@ class Comics(nbapp.AppWindow):
                 if bw and idx not in covers:
                     flat = desaturate(flat)
                 draw_flat_page(cr, flat)
-            os.makedirs(DOCS_DIR, exist_ok=True)
-            nbprint.simple_pdf(path, len(rebuilt), draw,
-                               nbprint.HALF_W_PT, nbprint.HALF_H_PT)
+            _write_pdf_atomic(
+                path, lambda draft: nbprint.simple_pdf(
+                    draft, len(rebuilt), draw, nbprint.HALF_W_PT,
+                    nbprint.HALF_H_PT), _job)
             return name
 
         def done(_name):
@@ -2651,13 +2768,6 @@ class Comics(nbapp.AppWindow):
 
         def failed(_error):
             self._exporting = False
-            try:
-                # A half-written PDF plays as finished and sits in Documents
-                # looking real — worse than none (the Animation export law).
-                if os.path.exists(path):
-                    os.unlink(path)
-            except Exception:
-                pass
             self._flash(_t("The PDF could not be exported."), False)
 
         self.jobs.start("export", work, on_done=done, on_error=failed,
@@ -2684,11 +2794,17 @@ class Comics(nbapp.AppWindow):
 
     def _print(self, state):
         order = _page_order(len(self.doc.pages))
-        cache, colour = collections.OrderedDict(), cover_pages(order)
+        # See _export's comment: the encoded-bytes snapshot, not autosave's
+        # surface-copy one -- Zine Print visits every page regardless of
+        # which are dirty.
+        pages_data = _pages_encoded_snapshot(self.doc)
+        colour = cover_pages(order)
         def prepare(path):
+            pages = _pages_from_encoded_snapshot(pages_data)
+            cache = collections.OrderedDict()
             def draw(cr, page_no, _w, _h):
                 idx = page_no - 1
-                flat = _cached_flatten(cache, self.doc.pages, idx)
+                flat = _cached_flatten(cache, pages, idx)
                 if state["bw"] and page_no not in colour:
                     flat = desaturate(flat)
                 draw_flat_page(cr, flat)
@@ -2714,38 +2830,53 @@ class Comics(nbapp.AppWindow):
         if ev.keyval == Gdk.KEY_Escape and self._prompt_layer:
             self._close_prompt()
             return True
-        if ev.keyval == Gdk.KEY_Escape and self.selection:
-            self.selection=None; self.canvas.queue_draw(); return True
-        if ev.keyval == Gdk.KEY_Delete:
-            return bool(self._delete_selection())
-        if ev.keyval in (Gdk.KEY_Left,Gdk.KEY_Right,Gdk.KEY_Up,Gdk.KEY_Down) and self.selection:
-            dx=(-1 if ev.keyval==Gdk.KEY_Left else 1 if ev.keyval==Gdk.KEY_Right else 0)*(30 if shift else 1); dy=(-1 if ev.keyval==Gdk.KEY_Up else 1 if ev.keyval==Gdk.KEY_Down else 0)*(30 if shift else 1); self._nudge(dx,dy); return True
-        if ev.keyval == Gdk.KEY_Page_Down:
-            return self._switch_page(min(len(self.doc.pages) - 1, self.doc.active + 1))
-        if ev.keyval == Gdk.KEY_Page_Up:
-            return self._switch_page(max(0, self.doc.active - 1))
-        if ctrl and ev.keyval in (Gdk.KEY_s, Gdk.KEY_S):
-            self._save_as() if shift else self._save(); return True
-        if nbapp.undo_keys(self.history,ev): return True
-        if ctrl and ev.keyval in (Gdk.KEY_n,Gdk.KEY_N): self._new(); return True
-        if ctrl and ev.keyval in (Gdk.KEY_o,Gdk.KEY_O): self._open(); return True
-        if ctrl and ev.keyval in (Gdk.KEY_plus,Gdk.KEY_KP_Add): self._step_zoom(1); return True
-        if ctrl and ev.keyval in (Gdk.KEY_minus,Gdk.KEY_KP_Subtract): self._step_zoom(-1); return True
-        if ctrl and ev.keyval in (Gdk.KEY_0,Gdk.KEY_KP_0): self._set_zoom(1); return True
-        if ctrl and ev.keyval in (Gdk.KEY_9,Gdk.KEY_KP_9): self._zoom_fit(); return True
-        if not ctrl and ev.keyval==Gdk.KEY_bracketleft: self._set_size(self.size-1); return True
-        if not ctrl and ev.keyval==Gdk.KEY_bracketright: self._set_size(self.size+1); return True
-        if not ctrl and ev.keyval in (Gdk.KEY_plus,Gdk.KEY_KP_Add): self._step_zoom(1); return True
-        if not ctrl and ev.keyval in (Gdk.KEY_minus,Gdk.KEY_KP_Subtract): self._step_zoom(-1); return True
-        if not ctrl and ev.keyval in (Gdk.KEY_0,Gdk.KEY_KP_0): self._set_zoom(1); return True
-        keys = {Gdk.KEY_v: "select", Gdk.KEY_p: "pencil", Gdk.KEY_b: "brush",
-                Gdk.KEY_e: "eraser", Gdk.KEY_f: "fill", Gdk.KEY_l: "line",
-                Gdk.KEY_r: "rect", Gdk.KEY_o: "ellipse", Gdk.KEY_i: "picker",
-                Gdk.KEY_w: "bubble", Gdk.KEY_n: "panel"}
-        if not ctrl and ev.keyval in keys:
-            self._set_tool(keys[ev.keyval]); return True
+        # Every shortcut below is a BARE letter or a bare Delete/arrow/Page
+        # key, and this window's key-press handler runs BEFORE a focused
+        # child widget's own handling (GTK3 dispatches the toplevel first).
+        # The bubble editor's TextView lives inside _overlay_prompt, so
+        # without this guard typing ordinary dialogue hit the tool map on
+        # every letter that doubles as a shortcut (e/f/l/r/o/... switched
+        # tools instead of being typed) and bare Delete ran
+        # _delete_selection() -- destroying the very bubble being lettered,
+        # since the bubble being edited IS the current selection. Matches
+        # illustrator.py's `self._saveprompt_layer is None` gate on its own
+        # bare-key branch; Comics' equivalent modal-layer flag is
+        # `_prompt_layer`.
+        if self._prompt_layer is None:
+            if ev.keyval == Gdk.KEY_Escape and self.selection:
+                self.selection=None; self.canvas.queue_draw(); return True
+            if ev.keyval == Gdk.KEY_Delete:
+                return bool(self._delete_selection())
+            if ev.keyval in (Gdk.KEY_Left,Gdk.KEY_Right,Gdk.KEY_Up,Gdk.KEY_Down) and self.selection:
+                dx=(-1 if ev.keyval==Gdk.KEY_Left else 1 if ev.keyval==Gdk.KEY_Right else 0)*(30 if shift else 1); dy=(-1 if ev.keyval==Gdk.KEY_Up else 1 if ev.keyval==Gdk.KEY_Down else 0)*(30 if shift else 1); self._nudge(dx,dy); return True
+            if ev.keyval == Gdk.KEY_Page_Down:
+                return self._switch_page(min(len(self.doc.pages) - 1, self.doc.active + 1))
+            if ev.keyval == Gdk.KEY_Page_Up:
+                return self._switch_page(max(0, self.doc.active - 1))
+            if ctrl and ev.keyval in (Gdk.KEY_s, Gdk.KEY_S):
+                self._save_as() if shift else self._save(); return True
+            if nbapp.undo_keys(self.history,ev): return True
+            if ctrl and ev.keyval in (Gdk.KEY_n,Gdk.KEY_N): self._new(); return True
+            if ctrl and ev.keyval in (Gdk.KEY_o,Gdk.KEY_O): self._open(); return True
+            if ctrl and ev.keyval in (Gdk.KEY_plus,Gdk.KEY_KP_Add): self._step_zoom(1); return True
+            if ctrl and ev.keyval in (Gdk.KEY_minus,Gdk.KEY_KP_Subtract): self._step_zoom(-1); return True
+            if ctrl and ev.keyval in (Gdk.KEY_0,Gdk.KEY_KP_0): self._set_zoom(1); return True
+            if ctrl and ev.keyval in (Gdk.KEY_9,Gdk.KEY_KP_9): self._zoom_fit(); return True
+            if not ctrl and ev.keyval==Gdk.KEY_bracketleft: self._set_size(self.size-1); return True
+            if not ctrl and ev.keyval==Gdk.KEY_bracketright: self._set_size(self.size+1); return True
+            if not ctrl and ev.keyval in (Gdk.KEY_plus,Gdk.KEY_KP_Add): self._step_zoom(1); return True
+            if not ctrl and ev.keyval in (Gdk.KEY_minus,Gdk.KEY_KP_Subtract): self._step_zoom(-1); return True
+            if not ctrl and ev.keyval in (Gdk.KEY_0,Gdk.KEY_KP_0): self._set_zoom(1); return True
+            keys = {Gdk.KEY_v: "select", Gdk.KEY_p: "pencil", Gdk.KEY_b: "brush",
+                    Gdk.KEY_e: "eraser", Gdk.KEY_f: "fill", Gdk.KEY_l: "line",
+                    Gdk.KEY_r: "rect", Gdk.KEY_o: "ellipse", Gdk.KEY_i: "picker",
+                    Gdk.KEY_w: "bubble", Gdk.KEY_n: "panel"}
+            if not ctrl and ev.keyval in keys:
+                self._set_tool(keys[ev.keyval]); return True
         # The base ladder (Esc leaves, Ctrl+W/Q close) must stay reachable —
-        # returning False here killed every one of those keys in this app.
+        # returning False here killed every one of those keys in this app —
+        # and must stay OUTSIDE the guard above: Esc still needs to leave a
+        # prompt's own text field, which nbapp's ladder itself handles.
         return super()._on_key(_w, ev)
 
     def _nudge(self,dx,dy):
