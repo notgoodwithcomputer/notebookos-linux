@@ -6641,6 +6641,102 @@ def save_chip_family():
     shutil.rmtree(home, ignore_errors=True)
 
 
+def export_kind_family():
+    """A size that the chosen kind will not use goes quiet, and says why.
+
+    The export card offers a video size and a GIF size at once. Both stayed
+    live whichever kind was chosen, so picking GIF size 3x for a video
+    export did nothing and said nothing — the silent no-op class, in the one
+    card that produces the film somebody has been working towards.
+
+    Disabled, never absent: the row stays where it is so the card does not
+    change shape under the pointer, and it carries the reason."""
+    if not gtk_available():
+        skip("F60 the export card's sizes", "no display")
+        return
+    from gi.repository import Gtk
+
+    def opened(module):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(320, 240))
+        app.scene_i = app.layer_i = app.playhead = 0
+        app.sheet = module.Sheet(app.doc, 0)
+        cel, _run = app.sheet.ensure_drawing(0, 0)
+        module.write_pixel(cel.decoded(0), 5, 5, "#1A1916")
+        cel.version += 1
+        app._export()
+        return app
+
+    def named(app, text):
+        """The row a label belongs to, and whether it can be used."""
+        stack = [app]
+        while stack:
+            widget = stack.pop()
+            if isinstance(widget, Gtk.Label) and widget.get_text() == text:
+                return widget
+            if isinstance(widget, Gtk.Container):
+                stack.extend(widget.get_children())
+        return None
+
+    def choose(app, label):
+        stack = [app]
+        while stack:
+            widget = stack.pop()
+            if isinstance(widget, Gtk.RadioButton) and (widget.get_label() or "") == label:
+                widget.set_active(True)
+                return True
+            if isinstance(widget, Gtk.Container):
+                stack.extend(widget.get_children())
+        return False
+
+    app = opened(animation)
+    video_size = named(app, animation._t("Video size"))
+    gif_size = named(app, animation._t("GIF size"))
+    check("F60 the card offers both a video size and a GIF size",
+          video_size is not None and gif_size is not None)
+    check("F60 with Video chosen, only the video size can be used",
+          video_size.is_sensitive() and not gif_size.is_sensitive(),
+          (video_size.is_sensitive(), gif_size.is_sensitive()))
+    check("F60 and the one that cannot says why, where a pointer will find it",
+          bool(gif_size.get_parent().get_tooltip_text()),
+          gif_size.get_parent().get_tooltip_text())
+
+    choose(app, "GIF")
+    check("F60 choosing GIF turns it around",
+          gif_size.is_sensitive() and not video_size.is_sensitive(),
+          (video_size.is_sensitive(), gif_size.is_sensitive()))
+
+    choose(app, animation._t("PNG frames"))
+    check("F60 and PNG frames uses neither",
+          not video_size.is_sensitive() and not gif_size.is_sensitive(),
+          (video_size.is_sensitive(), gif_size.is_sensitive()))
+
+    choose(app, animation._t("Video"))
+    check("F60 the rows stay in the card throughout, never removed",
+          named(app, animation._t("GIF size")) is gif_size and
+          video_size.is_sensitive())
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant("F60-every-row-always-applies", [
+        ("            usable = state.get(other) in values", "            usable = True"),
+    ])
+    loose = opened(graded)
+    still = named(loose, graded._t("GIF size"))
+    mutant("F60 a card whose sizes both stay live is caught",
+           still is not None and still.is_sensitive(), still is not None)
+    loose._alive = False
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6679,6 +6775,7 @@ for _family in (
         raw_frame_family,
         mouth_loudness_cache_family,
         save_chip_family,
+        export_kind_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,

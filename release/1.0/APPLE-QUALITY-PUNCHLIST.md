@@ -15,6 +15,40 @@ with the commit that closes them.
 - Comics: Esc/Ctrl+W/Q dead — _on_key never fell through to nbapp's ladder;
   menu printed "Close Esc" beside a dead key (7acd2314). Guest-confirmed
   pre-fix, real-XTest verified post-fix.
+- Animation: the save chip claimed "Saved HH:MM" over a bound film the disk
+  had not seen — autosave writes the RECOVERY store, and the chip conflated
+  it with the film, so the status bar and the close guard contradicted each
+  other in one window. The store also never carried _doc_dirty, so a restart
+  came back under the film's own name with a clean chip over a stale file.
+  writer.py's words and shape ("Not saved to file", already x17). Closes the
+  OPEN chip-wording item (2f0e7d5d, F59).
+- Animation: opening a big film decoded every take to find damage — 2602ms
+  at the 768-drawing cap, of which the scan was 2594ms. A PNG says whether
+  it is whole from its own CRCs, 115x cheaper; the quick scan may only say
+  YES, and anything it doubts still goes to the real decoder, which stays
+  the only thing allowed to call a drawing damaged (2c2cc302, F52).
+- Animation: the library built a 44x33 picture for EVERY row on open, when
+  a dozen fit on screen — 1.12 of the 1.24s to open a 400-drawing film, and
+  resident memory climbed with the library (128MB at the cap, on a machine
+  built for two gigabytes). Rows paint when asked: 1962ms -> 157ms, memory
+  flat, pixel-identical (0fa821a6, F53).
+- Animation: tip, pattern, mirror and the project palette had NO menu entry
+  and sat below the dock's fold (887px of controls in a 406px column at the
+  design size). A Paint menu whose items press the dock's own buttons, so
+  the two cannot disagree. The two mirror controls were also the only dock
+  controls built without a label (c323ae3a, F54).
+- Animation: 'Solid' is the GBA SDK's key for a tile you cannot walk
+  through, so the fill pattern read as 通行不可 "impassable" in Japanese and
+  통과 불가 in Korean, and as the physics sense in de/ru/tr/nl. No gate can
+  see this: 17x100%, present, translated, wrong. This app now has its own
+  key (92d5bda9).
+- Animation: the drawings library rendered as ONE WHITE COLUMN — blank
+  paper is white, rows sat flush, nothing framed a thumbnail, in a list
+  whose purpose is navigating by picture (651cbe3a, F53).
+- Animation: wobble 306ms/take (1263ms at 640x480, x4 takes on the GTK
+  thread), recolour 621ms per take over every take, and the encoder's
+  per-frame RGB conversion 44.6ms — ~96s of a 2160-frame export. All three
+  byte-identical after (5e86c838, 46f85434, 8179a7b8, F55-F57).
 - Animation: close-guard Discard rendered as stray full-width button under
   the row (3b41f9a5).
 - Animation: closing an unbound recovery-backed film interrogated the user
@@ -76,15 +110,28 @@ with the commit that closes them.
   USER: /codex:cancel it. All its items were completed in-session.
 
 ## OPEN — apps
-- Animation: guest playhead/clock chip wording pass — "Saved HH:MM" chip
-  meaning (recovery) vs document staleness; consider naming the store.
-  Low-priority now the unbound close is silent.
 - Comics: Zine Print, Export PDF, Place Image, low-zoom selection handles
   and CJK lettering all audited this round (Codex static pass + host-side
   real-handler suite, see FIXED above, 5683fb77) — the bugs found there are
   fixed and covered by 103 real-app checks. STILL OWED: an actual on-target
-  drive-through (booted guest, real speed/resolution) of Export/Zine Print
-  at genuine multi-page scale — nothing this round exercised the guest.
+  drive-through of Export/Zine Print itself at genuine multi-page scale —
+  see the FIXED entry below for what WAS on-target verified this round
+  (the _on_key guard, not Export/Zine Print's own render path).
+- FIXED, on-target confirmed (not just host-side): the _on_key prompt-guard
+  fix (5683fb77). Rebuilt the rootfs from a clean tree (buildroot/output;
+  verified the fix landed via grep against output/target before booting),
+  booted a private isolated guest (NB_WORK=/tmp/nb-comics-verify, NB_GL=0 —
+  see [[qemu-guest-harness-isolation]] for two harness traps this hit),
+  and drove it for real: opened the bubble editor, typed "eraser test"
+  starting with the exact letter that switches to the Eraser tool — it
+  landed as literal text, tool stayed on Bubble, dialog stayed open;
+  pressed Delete — bubble and dialog both survived; Apply committed a real
+  "ERASER TEST" speech bubble on the page. Screenshots taken at every step.
+  A first attempt read as still-broken (typed text DID switch tools) but
+  turned out to be a test-methodology bug, not a code bug — a second,
+  premature click landed on the dialog's scrim once a QUEUED first click
+  finally opened it, closing the very dialog under test; a clean redo with
+  no overlapping input confirmed the fix is correct.
 - FIXED 52672195: breadcrumb folds whole pills behind a leading "…"
   (navigates to the deepest hidden ancestor, tooltip carries the path);
   the mid-letter "e" sliver class is dead. Verified by synchronous draw
@@ -93,8 +140,40 @@ with the commit that closes them.
   content tile's hexpand bubbled into the grid; pinned hexpand=False;
   board_selftest 101/101, its first full pass) + Journal day-zero shows
   the gentle empty state instead of the red cross.
-- Comics: export/zine run synchronously on the UI thread (~10s guest);
-  give them the animation-style worker card. Lower priority than it was.
+- FIXED: Comics Export/Zine Print now show a persistent progress overlay
+  (real per-page meter via the existing draw() callback + GLib.idle_add,
+  matching animation.py's shape) instead of closing to a bare toast.
+  Export is honestly cancellable (nbjobs' existing checkpoint/cancel
+  machinery, already used elsewhere — not new plumbing); Zine Print's
+  overlay is deliberately non-dismissible/no-Cancel during render since
+  nbprint.print_booklet owns its own cancellable dialog already and a
+  second, different-acting Cancel would be a lie. Dispatched to Codex
+  (task-mssfdknj-pftytu); the process died silently ~9 min in with no
+  crash trace (codex-companion's own status tracking kept reporting
+  "running" for 24+ more minutes after the PID was confirmed gone —
+  ANOTHER Codex zombie, same pattern as task-msrvz3qu-v6gmg3 earlier this
+  campaign). The landed diff was sound: py_compile clean, both new
+  self-verifying checks logically correct, only broken by one missed
+  local import (comics_selftest.py's gtk_family() used GLib in a helper
+  without importing it) — the process died before it ever got to run its
+  own verification loop. Fixed the import, deleted 5 genuinely-dead
+  __init__ fields left from an abandoned first approach
+  (_render_generation/_progress_bar/_progress_words/_progress_cancel/
+  _progress_cancelling — grepped zero other references). Full gate
+  battery green (105/105 selftest, ascii_css, menu_conformance,
+  button_contrast, construct_all, icon_uniqueness, minsize). ON-TARGET
+  CONFIRMED: rebuilt rootfs, isolated guest, drove the real File > Export
+  to PDF menu item on an 8-page book — screenshotted "Rendering pages… /
+  Working - 12%" with a real filling meter and Cancel button mid-render,
+  then the overlay closing and "Exported HH:MM" landing in the status
+  bar on completion. Zine Print's own overlay could NOT be reached the
+  same way on this harness: nbprint.print_booklet's pre-flight printer
+  check fires first and this guest has no printer configured ("No
+  printer found... File > Export to PDF saves this document as a file
+  instead" — correct, expected behavior, not a bug). That path's
+  coverage stays at the host-side fake-harness level (105/105), matching
+  how this codebase already tests real printing via its own separate
+  chroot-cupsd harness rather than the QEMU click-through path.
 - sequencer/settings/writer toy-font rows: writer with fonts session;
   sequencer/settings are reasoned keeps (digits / fixed-English test page).
 - packages[el]: tightest minsize in OS (13px/35px slack) — preventive.

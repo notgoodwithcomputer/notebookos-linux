@@ -3579,7 +3579,7 @@ class Animation(nbapp.AppWindow):
         """
         if self._prompt_layer is not None:
             return
-        state = {key: initial for key, _label, initial, _kind in rows}
+        state = {spec[0]: spec[2] for spec in rows}
         self._prompt_previews = []
         allocation = self._overlay.get_allocation()
         screen_width, screen_height = nbapp.screen_size()
@@ -3598,7 +3598,14 @@ class Animation(nbapp.AppWindow):
         # New Animation card has two rows of choices and they started at
         # different places, which is the first card anyone opens.
         names = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        for key, label, initial, kind in rows:
+        # A row may say when it applies: ('other key', (values,), why not).
+        # The export card offers a video size and a GIF size at once, and
+        # both stayed live whichever kind was chosen — so picking GIF size
+        # 3x for a video export did nothing and said nothing.
+        self._prompt_when = []
+        for spec in rows:
+            key, label, initial, kind = spec[:4]
+            when = spec[4] if len(spec) > 4 else None
             row = Gtk.Box(spacing=8)
             # a row whose control wants width gets it: the name of the
             # control does not need to grow, and splitting the row evenly
@@ -3777,6 +3784,9 @@ class Animation(nbapp.AppWindow):
                                lambda item, k=key: state.__setitem__(k, item.get_text()))
             row.pack_start(widget, expand, expand, 0)
             card.pack_start(row, False, False, 0)
+            if when:
+                self._prompt_when.append((row, when))
+        self._apply_prompt_when(state)
         self._prompt_note = None
         if note:
             quiet = Gtk.Label(label=_t(note), xalign=0)
@@ -3819,6 +3829,19 @@ class Animation(nbapp.AppWindow):
     def _prompt_choice(self, button, state, key, value):
         if button.get_active():
             state[key] = value
+            self._apply_prompt_when(state)
+
+    def _apply_prompt_when(self, state):
+        """Rows that do not apply go quiet, and say why.
+
+        Disabled, never absent: the row stays where it was so the card does
+        not change shape under the pointer, and it carries the reason rather
+        than simply refusing to respond.
+        """
+        for row, (other, values, because) in getattr(self, '_prompt_when', ()):
+            usable = state.get(other) in values
+            row.set_sensitive(usable)
+            row.set_tooltip_text(None if usable else _t(because))
 
     def _prompt_float_changed(self, widget, state, key):
         state[key] = widget.get_value()
@@ -5751,9 +5774,11 @@ class Animation(nbapp.AppWindow):
                                             ('gif', 'GIF'),
                                             ('png', _t('PNG frames'))))),
                               ('size', 'Video size', (1920, 1080),
-                               ('choices', sizes)),
+                               ('choices', sizes),
+                               ('kind', ('video',), 'This export is not a video.')),
                               ('gif_scale', 'GIF size', 1,
-                               ('choices', ((1, '1×'), (2, '2×'), (3, '3×')))),
+                               ('choices', ((1, '1×'), (2, '2×'), (3, '3×'))),
+                               ('kind', ('gif',), 'This export is not a GIF.')),
                               ('native', 'Keep the native frame rate', False, 'check')],
                              'Export', self._export_apply,
                              'Each drawing shows %d frames.' % repeats)
