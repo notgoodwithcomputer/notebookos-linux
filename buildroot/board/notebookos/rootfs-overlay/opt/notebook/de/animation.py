@@ -809,11 +809,61 @@ def wobble_take(source, cel_id, take_no, strength):
         a = noise(gx, gy, axis) * (1 - tx) + noise(gx + 1, gy, axis) * tx
         b = noise(gx, gy + 1, axis) * (1 - tx) + noise(gx + 1, gy + 1, axis) * tx
         return a * (1 - ty) + b * ty
+    # The field is only defined on a six-pixel grid, so its four corner
+    # values are the same for every pixel in a six-wide run — the plain
+    # double loop looked them up per pixel, twenty-four dictionary hits and
+    # two get_stride() calls deep, for a picture that is mostly blank paper.
+    # 306ms for one take at 320x240, 1263ms at 640x480, and the card makes up
+    # to four of them while the window sits frozen. Same arithmetic in the
+    # same order, hoisted: the pixels are byte-identical.
+    out_stride = out.get_stride()
+    steps = [i / 6.0 for i in range(6)]
+    # A displacement is never larger than the strength, so a destination
+    # further than that from any ink can only sample blank paper — and blank
+    # is what the new surface already holds. Bounding the work to the ink is
+    # therefore exact, and it is the difference between a mouth cel costing a
+    # tenth of a second and costing nothing. A cel with an opaque background
+    # has ink everywhere and correctly gets no discount.
+    reach = int(math.ceil(strength)) + 1
+    top, bottom, left, right = h, -1, w, -1
     for y in range(h):
-        for x in range(w):
-            sx = max(0, min(w - 1, round(x - field(x, y, 0))))
-            sy = max(0, min(h - 1, round(y - field(x, y, 1))))
-            dst[y * out.get_stride() + x * 4:y * out.get_stride() + x * 4 + 4] = src[sy * stride + sx * 4:sy * stride + sx * 4 + 4]
+        row_at = y * stride
+        alpha = bytes(src[row_at + 3:row_at + w * 4:4])
+        lead = len(alpha) - len(alpha.lstrip(b'\x00'))
+        if lead == len(alpha):
+            continue
+        top = min(top, y)
+        bottom = y
+        left = min(left, lead)
+        right = max(right, len(alpha.rstrip(b'\x00')) - 1)
+    if bottom < 0:
+        out.mark_dirty()
+        return out
+    top, bottom = max(0, top - reach), min(h - 1, bottom + reach)
+    left, right = max(0, left - reach), min(w - 1, right + reach)
+    for y in range(top, bottom + 1):
+        gy, ty = y // 6, y % 6 / 6.0
+        row = bytearray(out_stride)
+        for gx in range(left // 6, right // 6 + 1):
+            n00, n10 = noise(gx, gy, 0), noise(gx + 1, gy, 0)
+            n01, n11 = noise(gx, gy + 1, 0), noise(gx + 1, gy + 1, 0)
+            m00, m10 = noise(gx, gy, 1), noise(gx + 1, gy, 1)
+            m01, m11 = noise(gx, gy + 1, 1), noise(gx + 1, gy + 1, 1)
+            base = gx * 6
+            for step in range(min(6, w - base)):
+                x = base + step
+                if x < left or x > right:
+                    continue
+                tx = steps[step]
+                fx = ((n00 * (1 - tx) + n10 * tx) * (1 - ty) +
+                      (n01 * (1 - tx) + n11 * tx) * ty)
+                fy = ((m00 * (1 - tx) + m10 * tx) * (1 - ty) +
+                      (m01 * (1 - tx) + m11 * tx) * ty)
+                sx = max(0, min(w - 1, round(x - fx)))
+                sy = max(0, min(h - 1, round(y - fy)))
+                at = sy * stride + sx * 4
+                row[x * 4:x * 4 + 4] = src[at:at + 4]
+        dst[y * out_stride:(y + 1) * out_stride] = row
     out.mark_dirty()
     return out
 

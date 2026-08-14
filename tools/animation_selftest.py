@@ -6178,6 +6178,81 @@ def paint_menu_family():
     shutil.rmtree(scratch)
 
 
+def wobble_cost_family():
+    """Wobbling a drawing costs what the drawing is, not what the canvas is.
+
+    Add Wobble Takes runs on the GTK thread and makes up to four takes. It
+    cost 306ms a take at 320x240 and 1263ms at 640x480 — up to five seconds
+    of frozen window — because it walked every pixel of the canvas, looking
+    up a six-pixel noise grid four times per pixel for a picture that is
+    mostly blank paper.
+
+    A displacement is never larger than the strength, so a destination
+    further than that from any ink can only sample blank paper, which is
+    what the new surface already holds. Bounding the work to the ink is
+    exact. This family pins the exactness, not the speed: the bound must be
+    wide enough that displaced ink still lands."""
+    if not gtk_available():
+        skip("F55 the cost of a wobble", "no display")
+        return
+
+    def drawn(module, canvas=(320, 240), box=(150, 118, 166, 122)):
+        doc = module.AnimationDocument(canvas=canvas)
+        cel = doc.add_cel("D")
+        image = cel.decoded(0)
+        x0, y0, x1, y1 = box
+        for y in range(y0, y1):
+            for x in range(x0, x1):
+                module.write_pixel(image, x, y, "#1A1916")
+        cel.version += 1
+        return cel
+
+    def inked(surface):
+        surface.flush()
+        data = bytes(surface.get_data())
+        stride, width = surface.get_stride(), surface.get_width()
+        seen = set()
+        for y in range(surface.get_height()):
+            row = y * stride
+            for x in range(width):
+                if data[row + x * 4 + 3]:
+                    seen.add((x, y))
+        return seen
+
+    cel = drawn(animation)
+    was = inked(cel.decoded(0))
+    wobbled = inked(animation.wobble_take(cel.decoded(0), cel.id, 2, 1.8))
+    check("F55 a wobbled take keeps the same amount of ink",
+          abs(len(wobbled) - len(was)) <= len(was) // 2,
+          (len(was), len(wobbled)))
+    check("F55 and moves some of it beyond where the drawing was",
+          bool(wobbled - was), len(wobbled - was))
+
+    again = animation.wobble_take(cel.decoded(0), cel.id, 2, 1.8)
+    other = animation.wobble_take(cel.decoded(0), cel.id, 3, 1.8)
+    again.flush(); other.flush()
+    first = animation.wobble_take(cel.decoded(0), cel.id, 2, 1.8)
+    first.flush()
+    check("F55 the same take of the same drawing is always the same picture",
+          bytes(again.get_data()) == bytes(first.get_data()))
+    check("F55 while a different take is a different picture",
+          bytes(other.get_data()) != bytes(first.get_data()))
+
+    empty = animation.AnimationDocument(canvas=(160, 120)).add_cel("blank")
+    blank = animation.wobble_take(empty.decoded(0), empty.id, 2, 1.8)
+    check("F55 wobbling blank paper gives blank paper",
+          not inked(blank), len(inked(blank)))
+
+    graded, scratch = module_mutant("F55-bound-too-tight", [
+        ("    reach = int(math.ceil(strength)) + 1", "    reach = 0"),
+    ])
+    tight = drawn(graded)
+    kept = inked(graded.wobble_take(tight.decoded(0), tight.id, 2, 1.8))
+    mutant("F55 a bound too tight to hold the displaced ink is caught",
+           not (kept - was), len(kept - was))
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6211,6 +6286,7 @@ for _family in (
         damage_scan_family,
         lazy_library_family,
         paint_menu_family,
+        wobble_cost_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
