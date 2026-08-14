@@ -90,6 +90,13 @@ CHECK_GATES = [
     # page reports it as done. 32 settings apply AND persist; 3 reach
     # the mixer through amixer and are ledgered with what they do.
     "setting_scope_check",
+    # Static: a destructive action must ask first or be undoable, and a
+    # snapshot taken AFTER the mutation only looks like protection.
+    "destructive_action_check",
+    # Static: destructive mutations count only when they reach an attribute a
+    # module saves (one serializer helper deep) or a path under the user's
+    # home. The checker reports the transient/filesystem mutations it ignores.
+    "destructive_action_check",
     "frame_pacing_check", "grid_check",
     # §E4 check 5 (no diagonal travel). Separate from grid_check because that
     # one owns the STATIC constants and is edited whenever a sidebar
