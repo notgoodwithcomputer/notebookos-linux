@@ -1463,6 +1463,12 @@ def control_range_family():
         return
     from gi.repository import Gtk
     app = animation.Animation()
+    # Animation() restores the store, so this family's answers depended on
+    # whichever family ran before it — it failed once and passed the next
+    # run unchanged. A fixture that measures widget ranges must own its film.
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    app.sheet = animation.Sheet(app.doc, 0)
 
     def scales():
         found = []
@@ -4629,38 +4635,189 @@ def card_drag_family():
     shutil.rmtree(scratch)
 
 
-dialog_limits_family()
-drop_family()
-card_drag_family()
-unbound_recovery_family()
-missing_sound_family()
-verbatim_family()
-remaining_paths_family()
-hover_and_preview_family()
-history_restore_family()
-serial_freshness_family()
-stamping_family()
-slide_and_onion_family()
-library_and_palette_family()
-ordering_family()
-card_effect_family()
-selection_family()
-dock_controls_family()
-export_outcome_family()
-close_guard_family()
-accelerator_family()
-destructive_family()
-workflow_family()
-first_run_family()
-dock_reach_family()
-scene_strip_family()
-library_family()
-sheet_paint_family()
-thumbnail_family()
-control_range_family()
-recording_family()
-message_truth_family()
-ellipsis_promise_family()
+def at_the_cap_family():
+    """A film holding as many drawings as it can, and someone still drawing.
+
+    Layers and scenes were already gated at their caps. Drawings were not:
+    the pencil left no ink and said nothing, the New Drawing command left an
+    undo step that undid nothing, and both commands stayed lit."""
+    if not gtk_available():
+        skip("F41 at the drawing cap", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+    import nbapp as _nbapp
+
+    kept = animation.STORE_FILE + ".cap-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+    app = animation.Animation()
+    said = []
+    spoken = app._flash
+    app._flash = lambda text, *a, **k: said.append(text)
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    app.doc.scenes[0]["length"] = 900
+    app.sheet = animation.Sheet(app.doc, 0)
+    app.tool = "pencil"
+    while len(app.doc.cels) < animation.CEL_MAX:
+        app.doc.add_cel("Drawing %d" % len(app.doc.cels))
+    app._refresh_lists()
+    child = app.get_child()
+    app.remove(child)
+    stage = Gtk.OffscreenWindow()
+    stage.set_size_request(1024, 722)
+    stage.add(child)
+    stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    allocation = app.canvas.get_allocation()
+    middle = (allocation.width / 2, allocation.height / 2)
+
+    del said[:]
+    depth = len(app._undo)
+    press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    press.x, press.y, press.button = middle[0], middle[1], 1
+    app._canvas_press(app.canvas, press)
+    release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+    release.x, release.y, release.button = middle[0], middle[1], 1
+    app._canvas_release(app.canvas, release)
+    check("F41 a stroke that cannot make a drawing says so",
+          len(said) == 1 and "drawings" in said[0].lower(), said)
+    check("F41 and leaves no undo step behind for the nothing it did",
+          len(app._undo) == depth, len(app._undo) - depth)
+
+    del said[:]
+    depth = len(app._undo)
+    app._new_drawing()
+    app._duplicate_drawing()
+    check("F41 the drawing commands refuse without a snapshot",
+          len(said) == 2 and len(app._undo) == depth and
+          len(app.doc.cels) == animation.CEL_MAX,
+          (said, len(app._undo) - depth, len(app.doc.cels)))
+
+    offered = {item[0]: item[1] for item in app.menu_items("Timeline")
+               if item and item is not _nbapp.SEP and isinstance(item, tuple)}
+    lit = {label: action is not None for label, action in offered.items()
+           if "Drawing" in label}
+    check("F41 and they are greyed out, the way New Layer already is",
+          lit and not any(lit.values()), lit)
+    app._flash = spoken
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F41-silent-at-the-cap",
+        [("            self._flash(_t('This film holds as many drawings as it can.'))\n"
+          "            return True",
+          "            return True")])
+    mute = graded.Animation()
+    heard = []
+    mute._flash = lambda text, *a, **k: heard.append(text)
+    mute.doc = graded.AnimationDocument(canvas=(160, 120))
+    mute.scene_i = mute.layer_i = mute.playhead = 0
+    mute.sheet = graded.Sheet(mute.doc, 0)
+    mute.tool = "pencil"
+    while len(mute.doc.cels) < graded.CEL_MAX:
+        mute.doc.add_cel("Drawing %d" % len(mute.doc.cels))
+    mute._refresh_lists()
+    mute_child = mute.get_child()
+    mute.remove(mute_child)
+    mute_stage = Gtk.OffscreenWindow()
+    mute_stage.set_size_request(1024, 722)
+    mute_stage.add(mute_child)
+    mute_stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    mute_alloc = mute.canvas.get_allocation()
+    mute_press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+    mute_press.x = mute_alloc.width / 2
+    mute_press.y = mute_alloc.height / 2
+    mute_press.button = 1
+    mute._canvas_press(mute.canvas, mute_press)
+    mutant("F41 a pencil that leaves no ink and no word is caught", not heard)
+    mute._alive = False
+    shutil.rmtree(scratch)
+
+
+
+def _isolated(family):
+    """Run one family with the recovery store moved aside.
+
+    Animation() with no path RESUMES the last film from the store, so a
+    family that leaves one behind decides what the NEXT family opens. That
+    coupling has now bitten four times — a drop test rewrote a loudness
+    test's active layer, two render comparisons inherited a scroll
+    position, and a family that fills the library to its cap left the next
+    one unable to make a drawing at all. It also hid: the same suite failed
+    once and passed unchanged on the next run.
+
+    Isolating here rather than in each family means a family written next
+    year gets it for free.
+    """
+    aside = animation.STORE_FILE + ".between-families"
+    had = os.path.exists(animation.STORE_FILE)
+    if had:
+        os.replace(animation.STORE_FILE, aside)
+    try:
+        family()
+    finally:
+        if os.path.exists(animation.STORE_FILE):
+            os.unlink(animation.STORE_FILE)
+        if had:
+            os.replace(aside, animation.STORE_FILE)
+
+
+for _family in (
+        dialog_limits_family,
+        drop_family,
+        at_the_cap_family,
+        card_drag_family,
+        unbound_recovery_family,
+        missing_sound_family,
+        verbatim_family,
+        remaining_paths_family,
+        hover_and_preview_family,
+        history_restore_family,
+        serial_freshness_family,
+        stamping_family,
+        slide_and_onion_family,
+        library_and_palette_family,
+        ordering_family,
+        card_effect_family,
+        selection_family,
+        dock_controls_family,
+        export_outcome_family,
+        close_guard_family,
+        accelerator_family,
+        destructive_family,
+        workflow_family,
+        first_run_family,
+        dock_reach_family,
+        scene_strip_family,
+        library_family,
+        sheet_paint_family,
+        thumbnail_family,
+        control_range_family,
+        recording_family,
+        message_truth_family,
+        ellipsis_promise_family
+):
+    _isolated(_family)
 
 total = len(PASSES) + len(FAILS) + len(SKIPS) + len(MUTANTS) + len(UNCAUGHT_MUTANTS)
 print("TALLY total=%d passed=%d failed=%d skipped=%d mutants-caught=%d mutants-uncaught=%d" %

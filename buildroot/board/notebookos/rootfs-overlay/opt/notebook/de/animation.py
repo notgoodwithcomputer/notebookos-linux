@@ -2410,8 +2410,11 @@ class Animation(nbapp.AppWindow):
             ]
         if name == 'Timeline':
             return [
-                ('New Drawing    N', self._new_drawing),
-                ('Duplicate Drawing    D', self._duplicate_drawing),
+                ('New Drawing    N',
+                 self._new_drawing if len(self.doc.cels) < CEL_MAX else None),
+                ('Duplicate Drawing    D',
+                 self._duplicate_drawing
+                 if len(self.doc.cels) < CEL_MAX else None),
                 nbapp.SEP,
                 ('Extend Hold    =', self._extend_hold),
                 ('Shorten Hold    -', self._shorten_hold),
@@ -2721,7 +2724,10 @@ class Animation(nbapp.AppWindow):
         self._snapshot(_t('Draw'))
         cel, run = self.sheet.ensure_drawing(self.layer_i, self.playhead)
         if cel is None:
+            # The library is full, so this frame cannot have a drawing.
+            # Saying nothing here is a pencil that leaves no ink.
             self._undo.pop()
+            self._flash(_t('This film holds as many drawings as it can.'))
             return True
         self._edit_cel = cel
         self._edit_take = self.active_take.get(cel.id, 0)
@@ -3216,12 +3222,18 @@ class Animation(nbapp.AppWindow):
         self._playhead_x = current_x
 
     def _new_drawing(self, *_):
+        if len(self.doc.cels) >= CEL_MAX:
+            self._flash(_t('This film holds as many drawings as it can.'))
+            return
         self._snapshot(_t('New Drawing'))
         self.sheet.ensure_drawing(self.layer_i, self.playhead,
                                   duplicate=False, force_new=True)
         self._commit_change()
 
     def _duplicate_drawing(self, *_):
+        if len(self.doc.cels) >= CEL_MAX:
+            self._flash(_t('This film holds as many drawings as it can.'))
+            return
         self._snapshot(_t('Duplicate Drawing'))
         self.sheet.ensure_drawing(self.layer_i, self.playhead, True)
         self._commit_change()
