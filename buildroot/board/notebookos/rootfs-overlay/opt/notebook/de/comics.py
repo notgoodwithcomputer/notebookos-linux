@@ -2539,7 +2539,7 @@ class Comics(nbapp.AppWindow):
         self._dialog_widgets = {"text": view}
 
     def _overlay_prompt(self, title, body, buttons, content=None, cancel=None,
-                        focus=None):
+                        focus=None, persistent=False):
         """Modal in-window prompt, Illustrator's idiom: a Fixed layer holding
         a scrim sized to the LIVE window and a card moved to its measured
         centre. The inner-Overlay version this replaces let the scrim's size
@@ -2555,6 +2555,7 @@ class Comics(nbapp.AppWindow):
         H = alloc.height if alloc.height > 1 else sh
         layer = Gtk.Fixed()
         layer._cancel = cancel
+        layer._persistent = persistent
         scrim = Gtk.EventBox()
         scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         scrim.set_size_request(W, H)
@@ -2580,7 +2581,10 @@ class Comics(nbapp.AppWindow):
             btn = Gtk.Button(label=_t(label))
             btn.set_relief(Gtk.ReliefStyle.NONE)
             btn.get_style_context().add_class({"primary":"comics-promptok","destructive":"comics-promptdestructive"}.get(role,"comics-promptcancel"))
-            btn.connect("clicked", lambda _w, cb=callback: (self._close_prompt(run_cancel=False), cb and cb())[1])
+            keep_open = len(item) > 3 and item[3]
+            btn.connect("clicked", lambda _w, cb=callback, keep=keep_open:
+                        ((not keep and self._close_prompt(run_cancel=False)),
+                         cb and cb())[1])
             row.pack_start(btn, False, False, 0)
             # keyboard focus rests on the safe first button (Cancel), so a
             # stray Return can never fire the committing action by default
@@ -2606,13 +2610,41 @@ class Comics(nbapp.AppWindow):
             focus_btn.grab_focus()
         self.pos_lbl.set_text("")
 
-    def _close_prompt(self, run_cancel=True):
-        layer, self._prompt_layer = self._prompt_layer, None
+    def _close_prompt(self, run_cancel=True, force=False):
+        layer = self._prompt_layer
+        if layer and getattr(layer, "_persistent", False) and not force:
+            cancel = getattr(layer, "_cancel", None)
+            if run_cancel and cancel:
+                cancel()
+            return
+        self._prompt_layer = None
         if layer:
             cancel = getattr(layer, "_cancel", None)
             self._prompt_host.remove(layer)
             if run_cancel and cancel:
                 cancel()
+
+    def _progress_overlay(self, title, body, on_cancel=None):
+        """A persistent meter card that stays up while a render runs.
+
+        With on_cancel, EVERY way out of the prompt asks the work to
+        stop: the Cancel button runs it, and _overlay_prompt's other
+        exits (scrim click and Escape both go through _close_prompt with
+        run_cancel=True) reach it via the layer's cancel hook. Without
+        one there is no Cancel row at all -- Zine Print's render runs on
+        nbprint's own dialog-owned worker and Comics holds no job handle
+        that could stop it, so offering the word would be a lie.
+        Returns (layer, meter); a terminal callback compares the layer
+        against self._prompt_layer so it only ever closes ITS OWN card,
+        never a prompt the user has since opened."""
+        meter = Gtk.ProgressBar()
+        meter.set_fraction(0.0)
+        meter.set_size_request(280, -1)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.pack_start(meter, False, False, 0)
+        buttons = [("Cancel", on_cancel, "cancel")] if on_cancel else []
+        self._overlay_prompt(title, body, buttons, box, cancel=on_cancel)
+        return self._prompt_layer, meter
 
     def _open_path(self, path):
         try:
@@ -2720,6 +2752,45 @@ class Comics(nbapp.AppWindow):
         self._overlay_prompt("Export to PDF", "Export sequential comic pages.",
                              [("Cancel", None), ("Export", lambda: self._export(state))], box)
 
+    def _render_progress_start(self, title, cancellable=False):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        label = Gtk.Label(label=_t("Preparing…"), xalign=0)
+        meter = Gtk.ProgressBar(); meter.set_fraction(0.0)
+        box.pack_start(label, False, False, 0)
+        box.pack_start(meter, False, False, 0)
+        buttons = []
+        cancel = None
+        if cancellable:
+            cancel = self._cancel_export
+            buttons = [("Cancel", cancel, "cancel", True)]
+        else:
+            note = Gtk.Label(label=_t("Use Cancel in the Print window to stop printing."),
+                             xalign=0)
+            note.set_line_wrap(True); box.pack_start(note, False, False, 0)
+        self._overlay_prompt(title, "Rendering pages…", buttons, box,
+                             cancel=cancel, persistent=True)
+        self._render_meter = meter
+        self._render_progress_label = label
+
+    def _render_progress(self, value):
+        value = max(0.0, min(1.0, float(value)))
+        if getattr(self, "_render_meter", None) is not None:
+            self._render_meter.set_fraction(value)
+        if getattr(self, "_render_progress_label", None) is not None:
+            self._render_progress_label.set_text(
+                _t("Working - %d%%") % round(value * 100))
+        return False
+
+    def _render_progress_finished(self):
+        self._close_prompt(run_cancel=False, force=True)
+        self._render_meter = None
+        self._render_progress_label = None
+
+    def _cancel_export(self):
+        if self.jobs.cancel("export") and \
+                getattr(self, "_render_progress_label", None) is not None:
+            self._render_progress_label.set_text(_t("Cancelling…"))
+
     def _export(self, state):
         name = os.path.basename(state["name"].strip() or "comic") + ".pdf"
         path = os.path.join(DOCS_DIR, name)
@@ -2744,18 +2815,21 @@ class Comics(nbapp.AppWindow):
         covers = {0, 1, len(pages_data) - 2, len(pages_data) - 1}
         bw = bool(state.get("bw"))
         self._exporting = True
-        self._flash(_t("Exporting…"), True)
+        self._render_progress_start("Export to PDF", cancellable=True)
 
         def work(_job):
             rebuilt = _pages_from_encoded_snapshot(pages_data)
             cache = collections.OrderedDict()
 
             def draw(cr, number, _w, _h):
+                _job.checkpoint()
                 idx = number - 1
                 flat = _cached_flatten(cache, rebuilt, idx)
                 if bw and idx not in covers:
                     flat = desaturate(flat)
                 draw_flat_page(cr, flat)
+                GLib.idle_add(self._render_progress,
+                              number / float(max(1, len(rebuilt))))
             _write_pdf_atomic(
                 path, lambda draft: nbprint.simple_pdf(
                     draft, len(rebuilt), draw, nbprint.HALF_W_PT,
@@ -2764,13 +2838,21 @@ class Comics(nbapp.AppWindow):
 
         def done(_name):
             self._exporting = False
+            self._render_progress_finished()
             self._flash(_t("Exported %s") % time.strftime("%H:%M"), True)
 
         def failed(_error):
             self._exporting = False
+            self._render_progress_finished()
             self._flash(_t("The PDF could not be exported."), False)
 
+        def cancelled():
+            self._exporting = False
+            self._render_progress_finished()
+            self._flash(_t("Export stopped."), False)
+
         self.jobs.start("export", work, on_done=done, on_error=failed,
+                        on_cancel=cancelled,
                         policy=nbjobs.REJECT)
 
     def _print_prompt(self):
@@ -2800,15 +2882,25 @@ class Comics(nbapp.AppWindow):
         pages_data = _pages_encoded_snapshot(self.doc)
         colour = cover_pages(order)
         def prepare(path):
+            GLib.idle_add(self._render_progress_start, "Zine Print", False)
             pages = _pages_from_encoded_snapshot(pages_data)
             cache = collections.OrderedDict()
+            total = sum(x is not None for pair in _sheet_pairs(order)
+                        for x in pair)
+            drawn = [0]
             def draw(cr, page_no, _w, _h):
                 idx = page_no - 1
                 flat = _cached_flatten(cache, pages, idx)
                 if state["bw"] and page_no not in colour:
                     flat = desaturate(flat)
                 draw_flat_page(cr, flat)
-            _impose(path, order, ("all", "cover", "inside")[state["sheets"]], True, draw)
+                drawn[0] += 1
+                GLib.idle_add(self._render_progress,
+                              drawn[0] / float(max(1, total)))
+            try:
+                _impose(path, order, ("all", "cover", "inside")[state["sheets"]], True, draw)
+            finally:
+                GLib.idle_add(self._render_progress_finished)
         nbprint.print_booklet(self, prepare, "Comics")
 
     def _flash(self, text, saved=False):

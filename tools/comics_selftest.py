@@ -650,8 +650,10 @@ def gtk_family():
         skip("dialog initial tool selected after construct", "DISPLAY is absent")
         skip("dialog real bubble editor widgets", "DISPLAY is absent")
         skip("undo all window destructive operations", "DISPLAY is absent")
+        skip("export real progress overlay and cancellation", "DISPLAY is absent")
+        skip("print real progress overlay is honestly non-cancellable", "DISPLAY is absent")
         return
-    from gi.repository import Gtk, Gdk
+    from gi.repository import Gtk, Gdk, GLib
     if not Gtk.init_check(None)[0]:
         skip("dialog real Panel Layout overlay widgets", "GTK display unavailable")
         skip("dialog panel preset buttons drive all six states", "GTK display unavailable")
@@ -659,6 +661,8 @@ def gtk_family():
         skip("dialog initial tool selected after construct", "GTK display unavailable")
         skip("dialog real bubble editor widgets", "GTK display unavailable")
         skip("undo all window destructive operations", "GTK display unavailable")
+        skip("export real progress overlay and cancellation", "GTK display unavailable")
+        skip("print real progress overlay is honestly non-cancellable", "GTK display unavailable")
         return
     app = comics.Comics()
     check("dialog initial tool selected after construct",
@@ -725,6 +729,86 @@ def gtk_family():
     app._undo()
     check("undo all window destructive operations",
           mutated and app.doc.bytes() == b0)
+
+    # Drive the real entry points while replacing only the expensive raster/PDF
+    # plumbing. This leaves the actual prompt widgets, callbacks and job
+    # boundaries under test and makes the check affordable on CI.
+    originals = (app.jobs, comics._pages_from_encoded_snapshot,
+                 comics._cached_flatten, comics.draw_flat_page,
+                 comics._write_pdf_atomic, nbprint.print_booklet,
+                 comics._impose)
+    class TestJob:
+        def __init__(self): self.cancelled = False; self.checks = 0
+        def checkpoint(self):
+            self.checks += 1
+            if self.cancelled: raise nbjobs.Cancelled()
+    class TestOwner:
+        def __init__(self): self.args = None; self.job = TestJob()
+        def start(self, key, work, **kwargs):
+            self.args = (key, work, kwargs); return self.job
+        def cancel(self, key):
+            if not self.args or self.args[0] != key: return False
+            self.job.cancelled = True; return True
+    def pump():
+        while Gtk.events_pending(): Gtk.main_iteration_do(False)
+        while GLib.MainContext.default().pending():
+            GLib.MainContext.default().iteration(False)
+    try:
+        owner = TestOwner(); app.jobs = owner
+        comics._pages_from_encoded_snapshot = lambda _data: [None, None, None]
+        comics._cached_flatten = lambda *_args: None
+        comics.draw_flat_page = lambda *_args: None
+        export_values = []
+        def fake_atomic(_path, render, job=None): render("draft")
+        def fake_simple(_path, count, draw, w, h):
+            for number in range(1, count + 1):
+                draw(None, number, w, h); pump()
+                export_values.append(app._render_meter.get_fraction())
+        comics._write_pdf_atomic = fake_atomic
+        old_simple = nbprint.simple_pdf; nbprint.simple_pdf = fake_simple
+        try:
+            app._export({"name":"comics-progress-selftest","bw":False,
+                         "replace":True})
+            export_open = app._prompt_layer is not None and \
+                          app._render_meter is not None
+            owner.args[1](owner.job)
+            export_still_open = app._prompt_layer is not None
+            app._cancel_export()
+            interrupted = False
+            try: owner.job.checkpoint()
+            except nbjobs.Cancelled: interrupted = True
+            owner.args[2]["on_cancel"]()
+            check("export real progress overlay and cancellation",
+                  export_open and len(set(export_values)) >= 2 and
+                  export_still_open and interrupted and
+                  app._prompt_layer is None,
+                  export_values)
+        finally:
+            nbprint.simple_pdf = old_simple
+
+        print_values = []; print_observed = []
+        def fake_impose(_path, _order, _which, _marks, draw):
+            for number in (1, 2, 3):
+                draw(None, number, 1, 1); pump()
+                print_values.append(app._render_meter.get_fraction())
+                print_observed.append(app._prompt_layer is not None)
+        def fake_print(_parent, prepare, _name):
+            prepare("print-draft")
+        comics._impose = fake_impose
+        nbprint.print_booklet = fake_print
+        app._print({"sheets":0, "bw":False})
+        pump()
+        print_buttons = [] if app._prompt_layer is None else [w for w in
+                        app._prompt_layer.get_children() if isinstance(w, Gtk.Button)]
+        check("print real progress overlay is honestly non-cancellable",
+              len(set(print_values)) >= 2 and all(print_observed) and
+              app._prompt_layer is None and not print_buttons,
+              print_values)
+    finally:
+        (app.jobs, comics._pages_from_encoded_snapshot,
+         comics._cached_flatten, comics.draw_flat_page,
+         comics._write_pdf_atomic, nbprint.print_booklet,
+         comics._impose) = originals
     app.destroy()
 
 
