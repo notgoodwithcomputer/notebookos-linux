@@ -483,3 +483,30 @@ default geometry passes even when the restore path is broken, because the
 this campaign keeps catching. Also worth carrying generally:
 maximize()/unmaximize() are NO-OPS on this image (matchbox 1.2 has no
 _NET_WM_STATE_MAXIMIZED atom); set geometry directly.
+
+## ON-TARGET, 2.3-audit (Aug 14 ~16:40) — the ⤢ box, verified at last
+USER-REPORTED BUG CLOSED ON REAL HARDWARE. Booted release/notebookos-2.3-
+audit.iso under TCG and drove the real UI over QMP:
+- Clicking ⤢ on a Finder window FILLS THE WORK AREA under the panel
+  (1280 wide, from y=46 to the bottom). Before 0da06a2b it did nothing at
+  all, because Gtk maximize() sets _NET_WM_STATE_MAXIMIZED_* and matchbox
+  1.2 has no such atom.
+- Clicking it again RESTORES: the screenshot is pixel-identical to the
+  pre-zoom one except the clock and a hover tooltip.
+WHAT THIS RUN COULD NOT TEST, stated rather than glossed: the window could
+not be MOVED or RESIZED first, so "previous geometry" was also the default
+geometry and this run cannot distinguish "restores what you had" from
+"restores the default". That distinction IS covered host-side —
+finder_lifecycle_selftest asserts a restore to an explicit non-default
+(800x600 at 120,90) and is red-proved. So: the suite covers the arithmetic,
+the guest covers the part the suite cannot (that matchbox honours a
+dialog's own configure requests at all).
+WHY THE WINDOW WOULD NOT MOVE, measured, NOT a defect: both the title-bar
+move (finder.py:1490) and the resize grip (:1516) are gated on
+NB_ACCEL=="1", and the grip is only ADDED when accelerated (:971) — so on a
+software-rendered machine there is no move, no resize, and correctly NO
+VISIBLE AFFORDANCE for either. Coherent and deliberate (the comment says
+the compositor is what makes the drag repaint cheaply). Worth knowing: on
+exactly that hardware profile — which is what real machines boot with, per
+the simpledrm note — ⤢ and Collapse are the ONLY ways to change a window's
+size, which makes the fix above matter more than it first appeared.
