@@ -608,3 +608,29 @@ the screen shows.
   design: it marks the session and leaves the damaged bytes untouched,
   both pass. So the image is not broken, only older. The current
   keep-saving behaviour needs the next respin.
+
+### Focus after an in-window prompt (Aug 14, late)
+
+FIXED 266ccb9c in comics.py: GTK leaves no focus owner when the widget
+holding focus is removed, and an overlay prompt removes its whole layer.
+Measured on the real window — focus was a Button in, None out — so after
+dismissing any card the keyboard belonged to nothing until the person
+clicked back into the page. Novel's capture/restore idiom applied; red-
+proved; comics 106/106.
+
+UNMEASURED, NOT FINDINGS — animation.py, illustrator.py, sequencer.py.
+A grep for the restore put all three on a list with comics, but it only
+knew identifier names and cannot tell a real restore from an absent one;
+comics was confirmed only by driving the window. Each needs the same
+three-line probe before anyone touches it:
+
+    win = App(); win.show_all(); pump()
+    before = win.get_focus()
+    win.<its own prompt>(...); pump(); win.<its own close>(); pump()
+    after = win.get_focus()          # after is before, and not None
+
+NOTE THE IMPACT IS NARROWER THAN IT LOOKS, which is why this is worth
+measuring rather than fixing on sight: these apps put their shortcuts on
+the WINDOW's key-press-event, so Escape, Ctrl+S and the tool letters keep
+working with no focus owner. What breaks is text entry and keyboard
+navigation — the person types and nothing appears.
