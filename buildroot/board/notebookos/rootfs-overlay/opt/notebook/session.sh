@@ -328,6 +328,22 @@ if command -v amixer >/dev/null 2>&1; then
 				done
 			done
 		fi
+		# Whatever the person last chose in Settings, applied last so it
+		# wins over the defaults above. Nothing on this machine restores a
+		# mixer at boot — there is no alsactl restore in any init script —
+		# so without this the volume, microphone level and mute set in
+		# Settings came back to these defaults after every reboot while the
+		# page had reported them as set.
+		_snd="${NB_HOME:-/root}/.config/notebook/settings.json"
+		if [ -r "$_snd" ]; then
+			_v=$(sed -n 's/.*"sound\.volume"[[:space:]]*:[[:space:]]*\([0-9]\{1,3\}\).*/\1/p' "$_snd" | head -1)
+			_c=$(sed -n 's/.*"sound\.capture"[[:space:]]*:[[:space:]]*\([0-9]\{1,3\}\).*/\1/p' "$_snd" | head -1)
+			_m=$(sed -n 's/.*"sound\.muted"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$_snd" | head -1)
+			[ -n "$_v" ] && amixer -q -M sset Master "$_v%" 2>/dev/null
+			[ -n "$_c" ] && amixer -q -M sset Capture "$_c%" 2>/dev/null
+			[ "$_m" = "true" ] && amixer -q sset Master mute 2>/dev/null
+			[ "$_m" = "false" ] && amixer -q sset Master unmute 2>/dev/null
+		fi
 		alsactl store 2>/dev/null || true
 	) &
 fi

@@ -1054,7 +1054,9 @@ class Settings(nbapp.AppWindow):
         modes = getattr(self, "_res_modes", [])
         mode = modes[i] if 0 <= i < len(modes) else None
         if mode and out:
-            run(["xrandr", "--output", out, "--mode", mode])
+            nbprefs.apply_resolution(mode, out)
+            self._settings["display_resolution"] = mode
+            self._save_settings()
 
     def _on_scale(self, combo, out):
         i = combo.get_active()
@@ -1183,15 +1185,30 @@ class Settings(nbapp.AppWindow):
         m = re.search(r"\[(on|off)\]", o)
         return m.group(1) == "off" if m else False
 
+    # These three reach the mixer and nothing else, and NOTHING on this
+    # machine restores a mixer at boot: there is no alsactl restore in any
+    # init script, and session.sh re-applies its own levels every session.
+    # So a volume, a microphone level and a mute chosen here were being lost
+    # on every reboot while the page reported them as set — the exact class
+    # this OS has already shipped twice. Written down as well as applied;
+    # session.sh reads them back before it falls back to its defaults.
     def _on_vol(self, scale):
-        run(["amixer", "sset", "Master", "%d%%" % int(scale.get_value())])
+        level = int(scale.get_value())
+        run(["amixer", "sset", "Master", "%d%%" % level])
+        self._settings["sound.volume"] = level
+        self._save_settings()
 
     def _on_capvol(self, scale):
+        level = int(scale.get_value())
         run(self._amixer(nbaudio.capture_card())
-            + ["sset", "Capture", "%d%%" % int(scale.get_value())])
+            + ["sset", "Capture", "%d%%" % level])
+        self._settings["sound.capture"] = level
+        self._save_settings()
 
     def _on_mute(self, _sw, state):
         run(["amixer", "sset", "Master", "mute" if state else "unmute"])
+        self._settings["sound.muted"] = bool(state)
+        self._save_settings()
         return False
 
     def _on_audio_out(self, combo):

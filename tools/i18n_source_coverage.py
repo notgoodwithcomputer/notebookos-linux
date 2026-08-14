@@ -45,7 +45,7 @@ DEBT = {
     "music.py": 1,
     "novel.py": 3,
     "screenplay.py": 2,
-    "sequencer.py": 66,
+    "sequencer.py": 65,
     "settings.py": 6,
     "shell.py": 1,
     "tasks.py": 3,

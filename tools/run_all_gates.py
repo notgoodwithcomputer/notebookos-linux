@@ -86,6 +86,10 @@ CHECK_GATES = [
     # Static, both directions: a shortcut printed that nothing answers,
     # and a key bound that no menu shows. Analyses 35 of 36 handlers.
     "accelerator_promise_check",
+    # Static: a preference applied to the app's own process while the
+    # page reports it as done. 32 settings apply AND persist; 3 reach
+    # the mixer through amixer and are ledgered with what they do.
+    "setting_scope_check",
     "frame_pacing_check", "grid_check",
     # §E4 check 5 (no diagonal travel). Separate from grid_check because that
     # one owns the STATIC constants and is edited whenever a sidebar
