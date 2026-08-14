@@ -18,6 +18,7 @@ DEFAULT_MODULE_DIR = ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/noteb
 DEFAULT_VENDOR = ROOT / "vendor/lucide"
 SIZES = (16, 24, 48)
 APP_ICONS = {
+    "animation", "burner",
     "writer", "novel", "comics", "academic", "journal", "screenplay",
     "tasks", "calendar", "workout", "cookbook", "mealplanner", "ebook",
     "calculator", "accounting", "bills", "contacts", "messages", "g2048",

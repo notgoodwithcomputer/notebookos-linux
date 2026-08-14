@@ -27,7 +27,8 @@ APPS = ["writer", "novel", "journal", "academics", "screenplay", "ebook",
         "illustrator", "sequencer", "video", "media", "g2048", "packages",
         "settings", "sysmon", "calculator", "terminal", "tasks", "language",
         "maps", "finder", "gbasdk", "gbaemu", "widgets", "animation",
-        "comics"]
+        "comics", "bills", "burner", "composer", "installer",
+        "mealplanner", "usbwriter", "workout"]
 
 CHILD = r'''
 import os, sys, time, resource, importlib, inspect

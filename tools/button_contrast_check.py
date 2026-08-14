@@ -189,11 +189,12 @@ def check_app(mod_name):
     return bad
 
 
-APPS = ["academics", "accounting", "bills", "calculator", "calendar", "comics",
+APPS = ["academics", "accounting", "animation", "bills", "calculator", "calendar", "comics",
         "contacts", "cookbook", "ebook", "g2048", "gbaemu", "gbasdk", "illustrator",
         "installer", "journal", "language", "maps", "mealplanner", "media",
         "music", "novel", "packages", "screenplay", "sequencer", "settings",
-        "sysmon", "tasks", "terminal", "usbwriter", "video", "workout",
+        "burner", "composer", "sysmon", "tasks", "terminal", "usbwriter",
+        "video", "workout",
         "writer", "finder"]
 
 
