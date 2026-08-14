@@ -5953,6 +5953,91 @@ def damage_scan_family():
     shutil.rmtree(scratch)
 
 
+def lazy_library_family():
+    """The library makes a picture for a row when the row can be seen.
+
+    Building each row's picture as the row was built cost one PNG decode and
+    one ink-bounds scan per drawing, for pictures nobody had scrolled to:
+    1.12 of the 1.24 seconds it took to open a 400-drawing film, and 128 MB
+    resident at the cap on a machine built for two gigabytes. GTK only draws
+    what is visible.
+
+    Counted, not timed: a construction that renders no thumbnails has an
+    empty thumbnail cache, and a list that has been drawn does not."""
+    if not gtk_available():
+        skip("F53 the library's pictures", "no display")
+        return
+    from gi.repository import Gtk
+
+    def with_a_library(module, drawings=40):
+        home = tempfile.mkdtemp(prefix="animation-lazy-")
+        doc = module.AnimationDocument(canvas=(160, 120))
+        for index in range(drawings):
+            cel = doc.add_cel("D%d" % index)
+            module.write_pixel(cel.decoded(0), 4 + index % 40, 5, "#1A1916")
+            cel.version += 1
+        store = Path(home) / "animation.json"
+        store.write_text(json.dumps(doc.serial()), encoding="utf-8")
+        was = module.STORE_FILE
+        module.STORE_FILE = str(store)
+        try:
+            app = module.Animation()
+        finally:
+            module.STORE_FILE = was
+        app._flash = lambda *a, **k: None
+        shutil.rmtree(home, ignore_errors=True)
+        return app
+
+    app = with_a_library(animation)
+    rows = app.cel_list.get_children()
+    made_at_build = len(app._cel_thumbs)
+    check("F53 forty drawings make forty rows",
+          len(rows) == 40, len(rows))
+    check("F53 and opening the film draws none of their pictures",
+          made_at_build == 0, made_at_build)
+
+    # and the picture appears the moment the row is asked to paint
+    area = None
+    stack = [rows[0]]
+    while stack and area is None:
+        widget = stack.pop()
+        if isinstance(widget, Gtk.DrawingArea):
+            area = widget
+        elif isinstance(widget, Gtk.Container):
+            stack.extend(widget.get_children())
+    drawn = None
+    if area is not None:
+        picture = cairo.ImageSurface(cairo.FORMAT_ARGB32, 44, 33)
+        area.emit("draw", cairo.Context(picture))
+        picture.flush()
+        drawn = any(bytes(picture.get_data()))
+    check("F53 a row asked to paint does paint, and keeps what it made",
+          area is not None and drawn and len(app._cel_thumbs) == 1,
+          (area is not None, drawn, len(app._cel_thumbs)))
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant("F53-pictures-built-with-the-rows", [
+        ("        picture = Gtk.DrawingArea()\n"
+         "        picture.set_size_request(THUMB_W, THUMB_H)\n"
+         "        picture.connect('draw', self._draw_cel_thumb, cel.id)",
+         "        picture = Gtk.Image.new_from_surface(self._cel_thumb_surface(cel))"),
+    ])
+    eager = with_a_library(graded)
+    mutant("F53 a library that draws every picture up front is caught",
+           len(eager._cel_thumbs) >= 40, len(eager._cel_thumbs))
+    eager._alive = False
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5984,6 +6069,7 @@ for _family in (
         dialog_limits_family,
         streaming_family,
         damage_scan_family,
+        lazy_library_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
