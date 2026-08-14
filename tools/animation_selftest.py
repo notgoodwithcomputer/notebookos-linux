@@ -6737,6 +6737,105 @@ def export_kind_family():
     shutil.rmtree(scratch)
 
 
+def palette_agreement_family():
+    """The dock's palette buttons and the Paint menu say the same thing.
+
+    Both dock buttons stayed lit whatever the palette held: on an empty
+    palette Remove did nothing and said nothing, and with the current colour
+    already in the palette — or sixteen already in it — so did Add. The menu
+    gated all three conditions, so the two surfaces for the same command
+    disagreed. The layer buttons had this exact fault one sweep earlier; it
+    lives wherever a control's state is set once at build time.
+
+    So the check is not "is the button right" but "do the two agree", which
+    is the property that was actually broken."""
+    if not gtk_available():
+        skip("F61 the palette's two buttons", "no display")
+        return
+    from gi.repository import Gtk
+
+    def opened(module):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc.palette = []
+        app._refresh_project_palette()
+        return app
+
+    def dock_buttons(module, app):
+        wanted = {module._t("Add current colour"), module._t("Remove")}
+        found, stack = {}, [app]
+        while stack:
+            widget = stack.pop()
+            if (isinstance(widget, Gtk.Button)
+                    and not isinstance(widget, (Gtk.ToggleButton, Gtk.CheckButton))
+                    and (widget.get_label() or "") in wanted):
+                found[widget.get_label()] = widget
+            if isinstance(widget, Gtk.Container):
+                stack.extend(widget.get_children())
+        return found
+
+    def menu_offers(module, app, name):
+        for label, callback in app.menu_items("Paint"):
+            if label.replace("\u2713", "").strip() == module._t(name):
+                return callback is not None
+        return None
+
+    def agreement(module, app):
+        buttons = dock_buttons(module, app)
+        return {
+            "add": (buttons[module._t("Add current colour")].get_sensitive(),
+                    menu_offers(module, app, "Add Palette Colour")),
+            "remove": (buttons[module._t("Remove")].get_sensitive(),
+                       menu_offers(module, app, "Remove Palette Colour")),
+        }
+
+    app = opened(animation)
+    empty = agreement(animation, app)
+    check("F61 with an empty palette, nothing offers to remove from it",
+          empty["remove"] == (False, False) and empty["add"] == (True, True),
+          empty)
+
+    app._palette_add()
+    holding = agreement(animation, app)
+    check("F61 once a colour is in it, that colour cannot be added twice",
+          holding["add"] == (False, False) and holding["remove"] == (True, True),
+          holding)
+
+    app.doc.palette = ["#%06X" % (index * 1000) for index in range(16)]
+    app._refresh_project_palette()
+    full = agreement(animation, app)
+    check("F61 and at the cap nothing offers to add another",
+          full["add"] == (False, False), full)
+
+    buttons = dock_buttons(animation, app)
+    quiet = buttons[animation._t("Add current colour")]
+    check("F61 a button that is off says why, not merely its own name",
+          bool(quiet.get_tooltip_text()) and
+          quiet.get_tooltip_text() != animation._t("Add current colour"),
+          quiet.get_tooltip_text())
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant("F61-dock-that-ignores-the-palette", [
+        ("        add.set_sensitive(add_why is None)", "        pass"),
+    ])
+    stubborn = opened(graded)
+    stubborn._palette_add()
+    split = agreement(graded, stubborn)
+    mutant("F61 a dock that disagrees with its own menu is caught",
+           split["add"][0] != split["add"][1], split)
+    stubborn._alive = False
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6776,6 +6875,7 @@ for _family in (
         mouth_loudness_cache_family,
         save_chip_family,
         export_kind_family,
+        palette_agreement_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,

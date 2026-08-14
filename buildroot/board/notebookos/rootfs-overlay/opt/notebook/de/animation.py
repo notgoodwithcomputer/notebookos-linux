@@ -1947,6 +1947,7 @@ class Animation(nbapp.AppWindow):
         remove = Gtk.Button(label=_t('Remove'))
         remove.connect('clicked', self._palette_remove)
         remove.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+        self._palette_add_button, self._palette_remove_button = add, remove
         dock.pack_start(add, False, False, 0)
         dock.pack_start(remove, False, False, 0)
         lock = Gtk.CheckButton(label=_t('Draw with palette only'))
@@ -1954,6 +1955,33 @@ class Animation(nbapp.AppWindow):
         lock.connect('toggled', self._palette_lock)
         dock.pack_start(lock, False, False, 0)
         self._palette_lock_check = lock
+
+    def _refresh_palette_buttons(self):
+        """The palette's two buttons say what the Paint menu says.
+
+        Both stayed lit whatever the palette held: on an empty palette
+        Remove did nothing and said nothing, and with the current colour
+        already in the palette — or sixteen already in it — so did Add. The
+        menu gates all three conditions, so the dock and the menu disagreed
+        about the same two commands. The layer buttons had this exact fault
+        one sweep ago; it lives wherever a control's state is set once at
+        build time.
+        """
+        add = getattr(self, '_palette_add_button', None)
+        remove = getattr(self, '_palette_remove_button', None)
+        if add is None or remove is None:
+            return
+        if len(self.doc.palette) >= 16:
+            add_why = _t('This palette holds as many colours as it can.')
+        elif self.color in self.doc.palette:
+            add_why = _t('This colour is already in the palette.')
+        else:
+            add_why = None
+        add.set_sensitive(add_why is None)
+        add.set_tooltip_text(add_why or _t('Add current colour'))
+        remove.set_sensitive(bool(self.doc.palette))
+        remove.set_tooltip_text(_t('Remove') if self.doc.palette
+                                else _t('This palette is empty.'))
 
     def _palette_name(self, index):
         if index < 80:
@@ -2054,6 +2082,8 @@ class Animation(nbapp.AppWindow):
         self.color = self._snap_colour(colour)
         self.colour_name.set_text(self._colour_label(self.color))
         self.colour_chip.queue_draw()
+        # whether this colour can be added depends on which colour it is
+        self._refresh_palette_buttons()
 
     def _palette_add(self, *_):
         if self.color in self.doc.palette or len(self.doc.palette) >= 16:
@@ -2086,6 +2116,7 @@ class Animation(nbapp.AppWindow):
             button.connect('clicked', self._choose_colour, colour)
             self.project_palette_box.pack_start(button, False, False, 0)
         self.project_palette_box.show_all()
+        self._refresh_palette_buttons()
 
     def _thumb_frame(self, cel):
         """The part of a cel worth showing at thumbnail size.
