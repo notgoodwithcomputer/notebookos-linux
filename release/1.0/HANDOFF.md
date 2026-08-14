@@ -2223,3 +2223,30 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   three need file setup on the guest, so they need this route working or
   a fixture written into the rootfs image before boot (debugfs -w can do
   that without root; not attempted).
+
+- **2026-08-14 · THE THREE OWED ON-TARGET ROWS ARE BLOCKED ON GUEST FILE
+  ACCESS, and every route I have is closed. Stating it so the next session
+  does not re-derive it.** The rows — video's export cancel (needs an
+  existing film at the destination), the damaged-store notices for
+  music/workout/novel (need a wrong-shape store planted), the decode
+  ceilings (need an oversized image) — all require writing a file INTO the
+  guest before the app opens. Routes tried:
+    * gsh over the debug serial: works, but only reproduced once in three
+      boots (see the amendment above). Not dependable enough to build a
+      verification matrix on.
+    * chunked base64 down that same serial line: wedges the tty. Mine.
+    * debugfs -w into the rootfs image: **debugfs is not installed on this
+      host**, so the no-root route into an ext4 image is unavailable.
+    * mounting the image: needs root, which this session does not have and
+      should not acquire for a test fixture.
+  WHAT WOULD ACTUALLY UNBLOCK IT, cheapest first: (a) add the fixtures to
+  the rootfs OVERLAY behind a flag the app ignores in production, so a
+  normal rebuild carries them; (b) install e2fsprogs' debugfs on the host;
+  (c) make the app itself able to open a store from a path given on the
+  command line, which several already do for documents and none do for
+  their config store. (a) is the smallest and needs no host change.
+  NOT A BLOCKER FOR THE FIXES THEMSELVES: all three are covered by
+  red-proved suites driving the real widget trees and real stores, and the
+  code paths are pure Python/GTK with no guest-specific behaviour. What is
+  missing is the belt-and-braces confirmation on the image, which this
+  campaign has repeatedly shown to be worth having.
