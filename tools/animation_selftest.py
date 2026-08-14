@@ -5674,6 +5674,95 @@ def _t_of(text):
     return animation._t(text)
 
 
+def chrome_never_ships_family():
+    """Onion skin is chrome: the screen shows it, the film never carries it.
+
+    Red and green ghosts of the neighbouring drawings are how anyone
+    animates, and finding them in a delivered film would be a catastrophe
+    of a particular kind — silent, and only visible once it is somebody
+    else's problem. The spec says chrome-only, never exported. Also here:
+    a run pinned to one take must hold still, because a photographed
+    background must not wobble."""
+    if not gtk_available():
+        skip("F50 chrome never ships", "no display")
+        return
+    from gi.repository import Gtk
+
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(40, 30))
+    app.scene_i = app.layer_i = app.view_origin = 0
+    scene = app.doc.scenes[0]
+    scene["length"] = 3
+    app.sheet = animation.Sheet(app.doc, 0)
+    left = app.doc.add_cel("left")
+    animation.write_pixel(left.decoded(0), 5, 5, "#1A1916")
+    left.version += 1
+    right = app.doc.add_cel("right")
+    animation.write_pixel(right.decoded(0), 30, 5, "#1A1916")
+    right.version += 1
+    app.sheet.stamp(0, animation.make_run(left.id, 0, 1))
+    app.sheet.stamp(0, animation.make_run(right.id, 1, 1))
+    app.onion = 2
+    app.playhead = 1
+
+    def colours(surface):
+        surface.flush()
+        data = surface.get_data()
+        stride = surface.get_stride()
+        seen = set()
+        for y in range(surface.get_height()):
+            for x in range(surface.get_width()):
+                offset = y * stride + x * 4
+                alpha = data[offset + 3]
+                if alpha:
+                    seen.add((data[offset + 2], data[offset + 1], data[offset]))
+        return seen
+
+    previous = animation._rgb255("#C8341E")
+    following = animation._rgb255("#7FA98C")
+    in_film = set()
+    for frame in range(scene["length"]):
+        in_film |= colours(animation.composite(app.doc, scene, frame))
+    check("F50 with onion on, the film itself carries no ghosts",
+          previous not in in_film and following not in in_film,
+          sorted(in_film))
+
+    skin = app._onion_surface(scene, 0, "#C8341E")
+    check("F50 while the onion the screen draws does carry its tint",
+          previous in colours(skin))
+
+    # a pinned take holds still; an unpinned one cycles
+    boiling = animation.make_run(left.id, 0, 12)
+    pinned = animation.make_run(left.id, 0, 12, take=2)
+    cycled = {animation.take_index(boiling, f, 3, 2) for f in range(12)}
+    held = {animation.take_index(pinned, f, 3, 2) for f in range(12)}
+    check("F50 a run left to boil cycles its takes",
+          len(cycled) > 1, sorted(cycled))
+    check("F50 and a run pinned to a take holds that take on every frame",
+          held == {1}, sorted(held))
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant(
+        "F50-pinned-take-still-boils",
+        [("    if run.get('take', 0) > 0:\n"
+          "        return min(ntakes - 1, run['take'] - 1)",
+          "    if False:\n        return min(ntakes - 1, run['take'] - 1)")])
+    still_moving = {graded.take_index(pinned, f, 3, 2) for f in range(12)}
+    mutant("F50 a pinned take that goes on wobbling is caught",
+           still_moving != {1}, sorted(still_moving))
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5703,6 +5792,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
         frame_image_family,
