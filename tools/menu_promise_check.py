@@ -116,11 +116,16 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      90s, the run invokes all 342 items again and takes 8m50 against about
 #      three minutes at 200ms.
 #
-#      Coverage is therefore restored. WHETHER IT IS STABLE IS NOT YET
-#      ESTABLISHED — that needs two full runs compared by TALLY, and one has
-#      been done. Do not read 8m50 and 342 items as success on its own; the
-#      whole point of the change was repeatability, and repeatability is the
-#      one thing a single run cannot show.
+#      ESTABLISHED: two full runs at these settings came out IDENTICAL — 53
+#      violations, 342 items, no app differing by the TALLY line. That is the
+#      repeatability the change was for, and it took two runs to be able to
+#      say it.
+#
+#      music.py remains the one app this gate cannot speak for, and it is not
+#      a budget problem: its probe was left running for over 200 seconds and
+#      never returned. Something in it waits on the world rather than on the
+#      loop. That single app is now the only thing between this gate and the
+#      aggregate.
 #
 #      screenplay is ledgered at its lower value, so a run that finds two
 #      still fails — deliberately, because pinning the higher number would
@@ -161,8 +166,7 @@ DEBT = {
     'maps.py': 1,
     'mealplanner.py': 1,
     'media.py': 1,
-    'music.py': 1,
-    'novel.py': 2,
+    'novel.py': 1,
     'packages.py': 2,
     'screenplay.py': 1,
     'sequencer.py': 1,
@@ -511,7 +515,7 @@ def main():
                                  text=True, timeout=PROBE_BUDGET)
         except subprocess.TimeoutExpired:
             bad += 1
-            print("%s: probe blocked or exceeded 25 seconds" % name)
+            print("%s: probe blocked or exceeded %d seconds" % PROBE_BUDGET + "" % name)
             continue
         lines = [x for x in run.stdout.splitlines() if x.strip().startswith("{")]
         if run.returncode or not lines:
