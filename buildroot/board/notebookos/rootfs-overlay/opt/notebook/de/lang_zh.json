@@ -3234,7 +3234,7 @@
   "The write stopped before it finished.": "写入在完成前已停止。",
   "The write stopped before it finished. The stick may have been unplugged.": "写入在完成前已停止。U 盘可能已被拔出。",
   "The write was stopped": "写入已停止",
-  "There are no other images in this folder.": "There are no other images in this folder.",
+  "There are no other images in this folder.": "此文件夹中没有其他图像。",
   "There is already something called “%s”.": "已经有叫“%s”的东西了。",
   "There is no answer to that": "这个算式没有答案",
   "There is no clip here to cut": "这里没有可切的片段",

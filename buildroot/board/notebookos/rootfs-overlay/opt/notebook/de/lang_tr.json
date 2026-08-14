@@ -3234,7 +3234,7 @@
   "The write stopped before it finished.": "Yazma bitmeden durdu.",
   "The write stopped before it finished. The stick may have been unplugged.": "Yazma bitmeden durdu. USB bellek çıkarılmış olabilir.",
   "The write was stopped": "Yazma durduruldu",
-  "There are no other images in this folder.": "There are no other images in this folder.",
+  "There are no other images in this folder.": "Bu klasörde başka resim yok.",
   "There is already something called “%s”.": "“%s” adında bir şey zaten var.",
   "There is no answer to that": "Bunun bir yanıtı yok",
   "There is no clip here to cut": "Burada kesilecek bir klip yok",

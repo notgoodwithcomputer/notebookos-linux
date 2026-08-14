@@ -3234,7 +3234,7 @@
   "The write stopped before it finished.": "Der Schreibvorgang wurde vor dem Ende angehalten.",
   "The write stopped before it finished. The stick may have been unplugged.": "Der Schreibvorgang wurde vor dem Ende angehalten. Möglicherweise wurde der Stick abgezogen.",
   "The write was stopped": "Der Schreibvorgang wurde angehalten",
-  "There are no other images in this folder.": "There are no other images in this folder.",
+  "There are no other images in this folder.": "In diesem Ordner gibt es keine weiteren Bilder.",
   "There is already something called “%s”.": "Es gibt schon etwas mit dem Namen „%s“.",
   "There is no answer to that": "Darauf gibt es keine Antwort",
   "There is no clip here to cut": "Hier ist kein Clip zum Zerteilen",

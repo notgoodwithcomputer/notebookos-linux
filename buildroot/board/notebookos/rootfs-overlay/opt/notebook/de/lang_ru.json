@@ -3234,7 +3234,7 @@
   "The write stopped before it finished.": "Запись остановилась, не завершившись.",
   "The write stopped before it finished. The stick may have been unplugged.": "Запись остановилась, не завершившись. Возможно, накопитель извлекли.",
   "The write was stopped": "Запись остановлена",
-  "There are no other images in this folder.": "There are no other images in this folder.",
+  "There are no other images in this folder.": "В этой папке нет других изображений.",
   "There is already something called “%s”.": "Что-то с именем «%s» уже есть.",
   "There is no answer to that": "У этого нет ответа",
   "There is no clip here to cut": "Здесь нет клипа, который можно разрезать",

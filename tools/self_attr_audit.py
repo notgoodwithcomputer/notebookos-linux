@@ -329,7 +329,11 @@ def resolve_setattr_params(classes, methods_of):
                 info.opaque_names = info.opaque_values = True
                 continue
             sites = 0
-            for caller in classes.values():
+            # A self-call resolves against the helper owned by this class, not
+            # an unrelated same-named method.  Mixing classes here let Comics'
+            # dynamic _cancel_source(key) poison Illustrator and Installer's
+            # independently constant _cancel_source(attr) call sites.
+            for caller in (info,):
                 for name, args in caller.calls:
                     if name != method:
                         continue

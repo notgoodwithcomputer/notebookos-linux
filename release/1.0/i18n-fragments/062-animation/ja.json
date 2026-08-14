@@ -49,7 +49,7 @@
  "Duplicate Drawing": "絵を複製",
  "Duplicate Drawing    D": "絵を複製    D",
  "Duplicate Scene": "シーンを複製",
- "Every sound row in this scene is full. The recording is in Music as “%s”.": "このシーンの音の行はすべて埋まっています。録音は音楽に「%s」として入っています。",
+ "Every sound row in this scene is full. The recording is in Music as “%s”.": "このシーンの音の行はすべて埋まっています。録音はミュージックに「%s」として入っています。",
  "Every take in turn": "違いを順番に",
  "Every take in turn keeps the drawing moving. A fixed take holds it still.": "違いを順番に見せると絵が動き続けます。違いを固定すると止まります。",
  "Everything": "すべて",
