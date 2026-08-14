@@ -1,15 +1,15 @@
-- **2026-08-12 (govorimo) · BUILD-TRAIN REQUEST — next ISO spin carries
-  Govorimo automatically; two notes for whoever runs it:** (1) run
-  `make -C buildroot ffmpeg-dirclean` first (the standing x264 note from
-  2026-08-12), then the usual rm-images + mkrelease; (2) post-build.sh now
-  REQUIRES `vendor/govorimo/govorimod` (static musl, present in tree;
-  rebuild with `tools/build_govorimod.sh`) and FAILS the build without it —
-  deliberate, so the OS can never ship the app without its daemon. After
-  boot: `pgrep govorimod` + the app's rail says "No radio attached" on a
-  dongle-less guest (honest state); an on-guest two-daemon wire demo is
-  `GOVORIMO_SOCKET=/tmp/b.sock govorimod --state-dir /tmp/b --radio
-  wire:demo &` + a second app instance pointed at it. Antenna-day runbook:
-  docs/GOVORIMO.md.
+- **2026-08-13 (govorimo-removal) · BUILD-TRAIN NOTE — Govorimo is REMOVED
+  (user directive; a from-scratch rebuild will follow as its own lane), so
+  the 2026-08-12 BUILD-TRAIN REQUEST it filed here is VOID.** post-build.sh
+  no longer requires or installs any vendored daemon (the hard-fail on
+  vendor/govorimo/govorimod is gone — the next spin does NOT need that
+  binary and the vendor dir no longer exists). App, daemon supervisor,
+  suites, docs/GOVORIMO.md, catalogs x17 and output/target were all
+  scrubbed (overlay deletes hand-propagated to target per the rebuild
+  gotcha). Still standing for the next spin: `make -C buildroot
+  ffmpeg-dirclean` first (the x264 note from 2026-08-12), then the usual
+  rm-images + mkrelease. LoRa/E22 hardware support is UNTOUCHED: kernel
+  modules, /dev/lora udev contract, lora_guest_check, docs/LORA-DONGLE.md.
 - **2026-08-12 (govorimo) · tasks.py View menu ships ENGLISH in 16
   languages** (pre-existing, tasks-lane file): its `mk()` prefixes labels
   with "•  "/"    ", and nbi18n's _lookup has suffix/upper/format
@@ -17,8 +17,7 @@
   falls back to English (measured under NB_LANG=de: '•  Today' comes back
   verbatim while 'Today' -> 'Heute'). Every marked-active menu item in any
   app using this pattern is untranslated. Fix is either a prefix transform
-  in nbi18n (campaign) or dropping the mark (what Govorimo's View menu does
-  — the rail already shows the active surface).
+  in nbi18n (campaign) or dropping the mark.
 # Cross-lane handoffs — newest on top. Format: date · from → to · item.
 
 - **2026-08-10 · batch-0810 → motion · self_attr_audit: 4 findings in your

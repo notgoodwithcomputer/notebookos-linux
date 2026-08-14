@@ -54,6 +54,7 @@ secureboot/MOK.key
 /vendor-dl/
 
 # --- VM / boot harness (scripts kept, disk images dropped) ---
+/boot-work-lora/
 /boot-work/*
 !/boot-work/*.py
 !/boot-work/*.sh

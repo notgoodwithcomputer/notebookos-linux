@@ -6,7 +6,6 @@ TARGET="$1"
 
 # executable bits (overlays lose them)
 chmod 0755 "$TARGET/etc/init.d/S35fontcache" 2>/dev/null || true
-chmod 0755 "$TARGET/etc/init.d/S39btfirmware" 2>/dev/null || true
 chmod 0755 "$TARGET/etc/init.d/S99notebookos" 2>/dev/null || true
 chmod 0755 "$TARGET/opt/notebook/session.sh" 2>/dev/null || true
 chmod 0755 "$TARGET/opt/notebook/de/"*.py 2>/dev/null || true
@@ -64,6 +63,11 @@ unset _OV
 # dead weight the target can never load (2.2 MB of it was shipping), so wipe the
 # directory here rather than depending on anyone remembering to clean it.
 rm -rf "$TARGET/opt/notebook/de/__pycache__"
+# The same host-python litter appears beside the .app stubs and then LISTS in
+# the Finder's Applications view as a folder named __pycache__ — the first row
+# a person sees. Wipe every pycache under the notebook trees, not one path.
+find "$TARGET/opt/notebook" "$TARGET/root" -name '__pycache__' -type d \
+    -exec rm -rf {} + 2>/dev/null || true
 
 HOSTPY="$(dirname "$0")/../../output/host/bin/python3"
 if [ -x "$HOSTPY" ]; then
@@ -98,45 +102,30 @@ rm -f "$TARGET/etc/init.d/S40xorg"
 # X and D-Bus use unix sockets — so drop the failing init.
 rm -f "$TARGET/etc/init.d/S40network"
 
-# BLUETOOTH LE — SHIPPED ON PURPOSE (was: purged).
+# BLUETOOTH — REMOVED (2026-08, see docs/SECURITY-MODEL.md).
 #
-# This block used to delete the entire bluez stack. That was correct when the
-# kernel had no CONFIG_BT and the packages were deselected: Buildroot never
-# removes files a now-deselected package installed on an earlier build, so a
-# stale bluetoothd kept shipping and S40bluetoothd failed noisily every boot.
-#
-# That premise no longer holds. The kernel now builds CONFIG_BT + CONFIG_BT_LE
-# so the OS can speak BLE mesh. This does NOT reopen a network path:
-# net/bluetooth/bnep was removed outright by the no-internet strip, so
-# IP-over-Bluetooth is structurally impossible rather than merely disabled, and
-# CONFIG_BT_RFCOMM stays off so there is no serial-over-BT to run PPP over.
-#
-# Keep bluetoothd, bluetoothctl, btmon/btmgmt/btvirt and libbluetooth. Note
-# etc/dbus-1/system.d/bluetooth.conf MUST stay: without that policy file
-# bluetoothd cannot own its D-Bus name and every BLE operation fails.
-#
-# Still purge what we deliberately do not ship: the Bluetooth *audio* (bluealsa)
-# module and the hid2hci rule for switching classic HID dongles into HCI mode.
+# The kernel no longer builds CONFIG_BT (tools/desktop.config, tools/phase1.config),
+# bluez5_utils is deselected, and nothing on the machine speaks Bluetooth. But
+# Buildroot does not delete files a now-deselected package left on an earlier
+# build, so a stale bluetoothd would keep shipping and fail noisily every boot.
+# Purge the whole stack — the daemon, its tools, its library, its D-Bus policy,
+# its init scripts, and the BT-audio / classic-HID glue — so an incremental
+# build over an old tree cannot resurrect any of it. (The controller firmware
+# blobs are left in place: with no btusb driver nothing requests them, so they
+# are inert; trimming them belongs to the linux-firmware selection, not here.)
+for _f in \
+    "$TARGET"/usr/bin/bluetoothctl "$TARGET"/usr/bin/btmon \
+    "$TARGET"/usr/bin/btmgmt "$TARGET"/usr/bin/btvirt \
+    "$TARGET"/usr/bin/hciconfig "$TARGET"/usr/bin/hcitool \
+    "$TARGET"/usr/libexec/bluetooth/bluetoothd \
+    "$TARGET"/etc/init.d/S40bluetoothd "$TARGET"/etc/init.d/S39btfirmware \
+    "$TARGET"/etc/dbus-1/system.d/bluetooth.conf ; do
+    rm -f "$_f"
+done
+rm -rf "$TARGET"/usr/libexec/bluetooth "$TARGET"/usr/lib/bluetooth 2>/dev/null || true
+rm -f  "$TARGET"/usr/lib/libbluetooth.so* 2>/dev/null || true
 rm -f  "$TARGET"/usr/lib/alsa-lib/libasound_module_*bluealsa* 2>/dev/null || true
-rm -f  "$TARGET/lib/udev/rules.d/97-hid2hci.rules"
-
-# btvirt and btmgmt are noinst_PROGRAMS in bluez's Makefile.tools: they get
-# compiled but `make install` deliberately skips them, so Buildroot never lands
-# them on the target. We want both. btvirt provides a virtual HCI controller,
-# which is the only way to exercise the BLE stack on a machine with no Bluetooth
-# radio (the build host has none), and btmgmt drives power/advertising from a
-# shell. BUILD_DIR is exported by Buildroot for post-build scripts.
-if [ -n "${BUILD_DIR:-}" ]; then
-    for _b in btvirt btmgmt; do
-        _src=$(find "$BUILD_DIR" -maxdepth 3 -path "*bluez5_utils*" \
-                    -name "$_b" -type f -perm -u+x 2>/dev/null | head -1)
-        if [ -n "$_src" ]; then
-            install -m 0755 "$_src" "$TARGET/usr/bin/$_b"
-        else
-            echo "post-build: WARNING: $_b not found under $BUILD_DIR" >&2
-        fi
-    done
-fi
+rm -f  "$TARGET"/lib/udev/rules.d/97-hid2hci.rules 2>/dev/null || true
 
 # PRINTING. Three fixes to the stock Buildroot CUPS install:
 #

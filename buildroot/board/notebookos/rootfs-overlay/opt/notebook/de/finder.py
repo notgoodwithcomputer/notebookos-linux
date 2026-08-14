@@ -153,7 +153,6 @@ APP_MODULES = {
     "Meal Planner": "mealplanner", "E-book Reader": "ebook",
     "Calculator": "calculator", "Accounting": "accounting",
     "Bill Tracker": "bills", "Contacts": "contacts",
-    "Govorimo": "govorimo",
     "Illustrator": "illustrator", "Comics": "comics", "Animation": "animation", "Sequencer": "sequencer",
     "Composer": "composer",
     "Video Editor": "video", "Media Viewer": "media", "Music": "music",
@@ -246,8 +245,6 @@ APP_KIND = {
     # to do it. Same Kind because that is where a person looks for either.
     "Accounting": "Finance", "Bill Tracker": "Finance",
     "Contacts": "Utility",
-    # Chat over LoRa radio; "Messaging" is where a person looks for talk.
-    "Govorimo": "Messaging",
     "Illustrator": "Graphics", "Comics": "Cartooning", "Animation": "Cartooning",
     "Sequencer": "Audio", "Composer": "Audio", "Video Editor": "Video",
     "Media Viewer": "Media", "Music": "Music", "Packages": "System",
