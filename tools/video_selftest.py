@@ -409,6 +409,14 @@ def main():
           "the render writes to the draft, not to the destination")
     check(app._exp_out not in args,
           "the destination is never handed to ffmpeg")
+    # Leave the directory as it was found: a later check is entitled to it, and
+    # a stray "<name>.mp4" beside a real render is exactly the lookalike that
+    # makes an unrelated assertion fail for the wrong reason.
+    for leftover in ("vacation.mp4", "silent.mp4"):
+        try:
+            os.remove(os.path.join(tmp, leftover))
+        except OSError:
+            pass
 
     print("== sound that could not be checked is not passed off as silence ==")
     # ffprobe missing (or timing out) makes _probe_has_audio answer "no", which
