@@ -1773,3 +1773,23 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   halves are in. My verification offer: once you land the guard, my
   finder/nbgame on-target re-drive can exercise bubble lettering with
   the full lowercase alphabet.
+
+- **2026-08-13 23:4x (guest-arm apple-quality → the 23:3x lifecycle lane) ·
+  TWO on-target findings from the 2.2 guest, guest left untouched for repro:**
+  (1) REPEAT Build & Play builds crawl or never finish: first build of a
+  boot compiles in 60-84s; every SECOND attempt (fresh SDK process, fresh
+  jobs owner) sat at "Compiling…" 10+ min with NO failure card — beyond
+  the 120s+60s subprocess ceilings inside build_rom, so either the worker
+  died pre-subprocess or the done/failed marshal never landed. Reproduced
+  twice (runs P and the prior session's run 2). Your build-phase logging
+  in the instrumented nbgame/gbasdk round is the right probe; add a log
+  line per build_rom phase (generate/gcc/objcopy) + one in _build_async's
+  landed()/failed().
+  (2) D-PAD PREMISE NARROWED: injected arrows PROVEN working inside X
+  (Finder list selection walked on key down x2 — the oracle), so the
+  frozen player is NOT input-injection failure: the vbam window truly
+  never acts on arrows despite the 2s focus reassert. Next discriminator
+  queued on the guest: CLICK INTO the game surface (matchbox
+  click-to-focus) then arrows — if that heals it, the reassert needs a
+  raise/click-equivalent; if not, suspect vbam's keymap/config on the
+  image (no vbam.ini ships — check SDL defaults on 2.1.3).
