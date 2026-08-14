@@ -22,6 +22,7 @@ from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
 import os
 import json
 import re
+import tempfile
 import time
 import cairo
 
@@ -1559,10 +1560,31 @@ class Cookbook(nbapp.AppWindow):
     def _write_export_pdf(self, name, r):
         """Render recipe `r` to Documents/`name`. Split from _export_pdf so the
         replace-an-existing-file question can be answered before anything is
-        written."""
+        written.
+
+        Rendered BESIDE the destination and moved into place only once it is
+        complete. Writing straight onto the path meant a render that failed
+        part-way had already truncated whatever was there — and the common
+        reason to export twice is that the recipe changed, so the file being
+        destroyed was the user's previous good PDF, immediately after they
+        answered "Replace". Comics and Journal write their PDFs the same way;
+        the three could share one helper (noted for a later pass — three
+        sessions are landing in this tree hourly and this belongs in the file
+        that has the bug)."""
         try:
             os.makedirs(DOCUMENTS, exist_ok=True)
-            self._render_pdf(os.path.join(DOCUMENTS, name), r)
+            dest = os.path.join(DOCUMENTS, name)
+            fd, draft = tempfile.mkstemp(prefix=".cookbook-export-",
+                                         suffix=".pdf", dir=DOCUMENTS)
+            os.close(fd)
+            try:
+                self._render_pdf(draft, r)
+                os.replace(draft, dest)
+            finally:
+                # A failed render leaves the draft behind; the destination is
+                # untouched either way.
+                if os.path.exists(draft):
+                    os.unlink(draft)
         except Exception:
             self._flash_status("Export failed")
             return

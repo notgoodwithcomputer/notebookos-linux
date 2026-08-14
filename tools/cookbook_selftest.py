@@ -125,6 +125,50 @@ def main():
               not cookbook._holds_records(EMPTY_LIB))
         check("_holds_records: not a cookbook at all",
               not cookbook._holds_records({"tracks": ["a", "b"], "vol": 7}))
+
+        # Exporting must not destroy the PDF already sitting there.
+        #
+        # The export rendered straight onto Documents/<name>. The usual reason
+        # to export a second time is that the recipe changed, so the file being
+        # overwritten is the user's previous good PDF — and a render that threw
+        # part-way had already truncated it, right after they answered
+        # "Replace". Same class as the one fixed in Comics: render beside the
+        # destination, move it into place only when complete.
+        print("export")
+        docs = cookbook.DOCUMENTS
+        os.makedirs(docs, exist_ok=True)
+        dest_name = "Existing.pdf"
+        dest = os.path.join(docs, dest_name)
+        with open(dest, "wb") as fh:
+            fh.write(b"%PDF-1.4 the good one the user already had")
+        good = open(dest, "rb").read()
+
+        app = cookbook.Cookbook.__new__(cookbook.Cookbook)
+        app._flash_status = lambda *a, **k: None
+
+        def _render_then_fail(path, _r):
+            # A real cairo failure leaves a partly-written file behind, so
+            # write before raising: a check that only ever sees an untouched
+            # zero-byte draft would pass against the broken code too.
+            with open(path, "wb") as fh:
+                fh.write(b"%PDF-1.4 half a render")
+            raise RuntimeError("render failed part-way")
+
+        app._render_pdf = _render_then_fail
+        app._write_export_pdf(dest_name, {"name": "R", "ing": "", "steps": ""})
+        check("a failed export leaves the existing PDF untouched",
+              open(dest, "rb").read() == good,
+              "%r" % open(dest, "rb").read()[:40])
+        leftovers = [n for n in os.listdir(docs)
+                     if n.startswith(".cookbook-export-")]
+        check("a failed export leaves no draft behind", not leftovers,
+              repr(leftovers))
+
+        # ...and the successful path still lands the real bytes.
+        app._render_pdf = lambda path, _r: open(path, "wb").write(b"%PDF new")
+        app._write_export_pdf(dest_name, {"name": "R", "ing": "", "steps": ""})
+        check("a successful export replaces the file",
+              open(dest, "rb").read() == b"%PDF new")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
