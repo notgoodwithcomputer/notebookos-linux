@@ -1,0 +1,7 @@
+{
+ "Apps to install": "Εφαρμογές προς εγκατάσταση",
+ "Installed %(name)s. Open it from Applications.": "Το %(name)s εγκαταστάθηκε. Ανοίξτε το από τις Εφαρμογές.",
+ "Not installed — %s": "Δεν εγκαταστάθηκε — %s",
+ "This package can't be trusted and won't install.": "Αυτό το πακέτο δεν είναι αξιόπιστο και δεν θα εγκατασταθεί.",
+ "Verified — ready to install": "Επαληθεύτηκε — έτοιμο για εγκατάσταση"
+}

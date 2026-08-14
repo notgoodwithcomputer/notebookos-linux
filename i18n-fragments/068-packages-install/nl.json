@@ -1,0 +1,7 @@
+{
+ "Apps to install": "Apps om te installeren",
+ "Installed %(name)s. Open it from Applications.": "%(name)s geïnstalleerd. Te openen via Programma’s.",
+ "Not installed — %s": "Niet geïnstalleerd — %s",
+ "This package can't be trusted and won't install.": "Dit pakket is niet te vertrouwen en wordt niet geïnstalleerd.",
+ "Verified — ready to install": "Gecontroleerd — klaar om te installeren"
+}

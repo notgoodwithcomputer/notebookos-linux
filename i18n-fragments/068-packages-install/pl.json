@@ -1,0 +1,7 @@
+{
+ "Apps to install": "Aplikacje do zainstalowania",
+ "Installed %(name)s. Open it from Applications.": "Zainstalowano %(name)s. Otwórz z Aplikacji.",
+ "Not installed — %s": "Nie zainstalowano — %s",
+ "This package can't be trusted and won't install.": "Temu pakietowi nie można ufać i nie zostanie zainstalowany.",
+ "Verified — ready to install": "Sprawdzone — gotowe do instalacji"
+}

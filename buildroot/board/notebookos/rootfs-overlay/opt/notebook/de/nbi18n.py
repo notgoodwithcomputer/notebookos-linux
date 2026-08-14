@@ -392,13 +392,22 @@ def _split_spec(s):
         import re
         _SPEC = re.compile(r"(%[-#0-9.+ ]*[a-zA-Z%])")
     out = []
-    for p in _SPEC.split(s):
-        if p == "%%":
-            out.append(("lit", "%"))
-        elif p.startswith("%") and len(p) > 1:
-            out.append(("spec", p))
-        elif p:
-            out.append(("lit", p))
+    # WHICH PIECES ARE SPECS IS DECIDED BY POSITION, NOT BY CONTENT.
+    # re.split with a capturing group returns the matched specs at the ODD
+    # indices and the literal text around them at the even ones. Asking
+    # instead whether a piece "starts with %" gets the same answer for all
+    # but one case, and that case ships: a string beginning with a per cent
+    # this regex does NOT match — `%(name)s ...`, which it deliberately does
+    # not (see the note in tools/i18n_placeholder_check.py) — produces a
+    # single unmatched piece that is entirely literal and begins with "%",
+    # so the whole sentence was classified as one giant spec. Mid-string the
+    # same text was correctly literal, so it depended on word order: a
+    # translation that fronts the name broke where the English did not.
+    for index, piece in enumerate(_SPEC.split(s)):
+        if index % 2:
+            out.append(("lit", "%") if piece == "%%" else ("spec", piece))
+        elif piece:
+            out.append(("lit", piece))
     return out
 
 

@@ -1,0 +1,7 @@
+{
+ "Apps to install": "설치할 앱",
+ "Installed %(name)s. Open it from Applications.": "%(name)s을(를) 설치했습니다. 응용 프로그램에서 열 수 있습니다.",
+ "Not installed — %s": "설치되지 않음 — %s",
+ "This package can't be trusted and won't install.": "이 패키지는 신뢰할 수 없어 설치하지 않습니다.",
+ "Verified — ready to install": "확인됨 — 설치할 수 있습니다"
+}

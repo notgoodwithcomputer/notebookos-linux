@@ -1,0 +1,7 @@
+{
+ "Apps to install": "インストールするアプリ",
+ "Installed %(name)s. Open it from Applications.": "%(name)s をインストールしました。アプリケーションから開けます。",
+ "Not installed — %s": "インストールされていません — %s",
+ "This package can't be trusted and won't install.": "このパッケージは信頼できないため、インストールしません。",
+ "Verified — ready to install": "確認済み — インストールできます"
+}

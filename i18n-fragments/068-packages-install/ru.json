@@ -1,0 +1,7 @@
+{
+ "Apps to install": "Приложения для установки",
+ "Installed %(name)s. Open it from Applications.": "%(name)s установлено. Откройте из «Программ».",
+ "Not installed — %s": "Не установлено — %s",
+ "This package can't be trusted and won't install.": "Этому пакету нельзя доверять, он не будет установлен.",
+ "Verified — ready to install": "Проверено — можно устанавливать"
+}

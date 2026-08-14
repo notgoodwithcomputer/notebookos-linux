@@ -1,0 +1,7 @@
+{
+ "Apps to install": "Aplikacije za instaliranje",
+ "Installed %(name)s. Open it from Applications.": "%(name)s je instalirana. Otvorite je iz Aplikacija.",
+ "Not installed — %s": "Nije instalirana — %s",
+ "This package can't be trusted and won't install.": "Ovom paketu se ne može verovati i neće biti instaliran.",
+ "Verified — ready to install": "Provereno — spremno za instaliranje"
+}

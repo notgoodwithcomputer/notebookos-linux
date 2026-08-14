@@ -1,0 +1,7 @@
+{
+ "Apps to install": "इंस्टॉल करने के लिए ऐप",
+ "Installed %(name)s. Open it from Applications.": "%(name)s इंस्टॉल हो गया। इसे एप्लिकेशन से खोलें।",
+ "Not installed — %s": "इंस्टॉल नहीं हुआ — %s",
+ "This package can't be trusted and won't install.": "इस पैकेज पर भरोसा नहीं किया जा सकता और यह इंस्टॉल नहीं होगा।",
+ "Verified — ready to install": "सत्यापित — इंस्टॉल के लिए तैयार"
+}

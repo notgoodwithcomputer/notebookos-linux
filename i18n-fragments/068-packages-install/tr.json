@@ -1,0 +1,7 @@
+{
+ "Apps to install": "Kurulacak uygulamalar",
+ "Installed %(name)s. Open it from Applications.": "%(name)s kuruldu. Uygulamalar’dan açabilirsiniz.",
+ "Not installed — %s": "Kurulmadı — %s",
+ "This package can't be trusted and won't install.": "Bu pakete güvenilemez, kurulmayacak.",
+ "Verified — ready to install": "Doğrulandı — kuruluma hazır"
+}

@@ -1,0 +1,7 @@
+{
+ "Apps to install": "要安装的应用",
+ "Installed %(name)s. Open it from Applications.": "已安装 %(name)s。可从“应用程序”打开。",
+ "Not installed — %s": "未安装 — %s",
+ "This package can't be trusted and won't install.": "此软件包不可信，不会安装。",
+ "Verified — ready to install": "已验证 — 可以安装"
+}
