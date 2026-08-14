@@ -121,11 +121,15 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      repeatability the change was for, and it took two runs to be able to
 #      say it.
 #
-#      music.py remains the one app this gate cannot speak for, and it is not
-#      a budget problem: its probe was left running for over 200 seconds and
-#      never returned. Something in it waits on the world rather than on the
-#      loop. That single app is now the only thing between this gate and the
-#      aggregate.
+#      music.py remains the one app this gate cannot speak for, and the shape
+#      of it is now clear even though the cause is not. Probed ALONE it
+#      finishes in 12 seconds. Probed as part of the sweep it exceeds 90.
+#      Each app runs in its own subprocess, so this is not state inside the
+#      interpreter — it is something a previous probe leaves held that a
+#      music player then waits for, an audio device being the obvious
+#      candidate. Run the sweep with music FIRST and see whether it still
+#      hangs; that separates "music is slow" from "music waits for what
+#      someone else left open".
 #
 #      screenplay is ledgered at its lower value, so a run that finds two
 #      still fails — deliberately, because pinning the higher number would
@@ -515,7 +519,7 @@ def main():
                                  text=True, timeout=PROBE_BUDGET)
         except subprocess.TimeoutExpired:
             bad += 1
-            print("%s: probe blocked or exceeded %d seconds" % PROBE_BUDGET + "" % name)
+            print("%s: probe blocked or exceeded %d seconds" % (name, PROBE_BUDGET))
             continue
         lines = [x for x in run.stdout.splitlines() if x.strip().startswith("{")]
         if run.returncode or not lines:
