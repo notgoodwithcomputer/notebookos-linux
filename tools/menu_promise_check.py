@@ -46,7 +46,35 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 
 # App -> number of currently known behavioral promise violations.
 # Numbers only ever come down.  Filled from the first complete sweep.
+#
+# NOT WIRED INTO run_all_gates YET, and this is why: 16 of the 33 apps never
+# finish their probe (academics, calculator, calendar, composer, gbaemu, gbasdk, illustrator, language, music, novel, screenplay, sequencer, terminal, video, workout, writer).  An app whose probe blocks is
+# not an app that passed — it is an app this gate cannot speak for, and the
+# verdict counts it as a failure, correctly.  The cause is the same one the
+# animation suite hit: pressing Play builds a real GStreamer pipeline that
+# blocks on a host with no working sink, and pressing an item that wants a
+# file picker waits forever.  HANDOFF and AUDIO_WORDS below catch some of
+# them and not enough.  Until every app can be probed, wiring this into the
+# aggregate would make the aggregate permanently red, which is the same as
+# having no gate at all.
 DEBT = {
+    'accounting.py': 3,
+    'bills.py': 1,
+    'contacts.py': 3,
+    'cookbook.py': 2,
+    'ebook.py': 1,
+    'g2048.py': 2,
+    'installer.py': 1,
+    'journal.py': 2,
+    'maps.py': 2,
+    'mealplanner.py': 2,
+    'media.py': 2,
+    'packages.py': 3,
+    'settings.py': 9,
+    'sysmon.py': 2,
+    'tasks.py': 4,
+    'usbwriter.py': 2,
+    'widgetsettings.py': 2,
 }
 
 HANDOFF = {

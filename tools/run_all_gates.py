@@ -72,6 +72,7 @@ CHECK_GATES = [
     "anchored_term_check", "ascii_css_check", "button_contrast_check",
     "catalog_dialect_check", "catalog_script_check", "css_parse_check",
     "data_stress_sweep", "dead_setting_check", "ellipsis_sweep",
+    "disabled_reason_check",
     "frame_pacing_check", "grid_check",
     # §E4 check 5 (no diagonal travel). Separate from grid_check because that
     # one owns the STATIC constants and is edited whenever a sidebar
