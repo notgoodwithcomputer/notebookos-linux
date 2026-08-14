@@ -25,7 +25,7 @@ import sys
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gtk, GLib  # noqa: E402
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DE = os.path.join(os.path.dirname(_HERE), "buildroot", "board", "notebookos",
@@ -131,6 +131,31 @@ def check_app(mod_name):
     if cls is None:
         return []
     win = cls()
+    # A style context is resolved lazily: read straight off a freshly
+    # constructed widget and a CSS class applied during __init__ (every
+    # app's initial-tool/initial-state selection) can still be reporting
+    # its PRE-cascade colour -- e.g. comics.py's Pencil tool button, whose
+    # .sel class turns its background red, measured #FCFBF8-on-#FCFBF8
+    # (1.00:1, INVISIBLE) at zero main-loop iterations. Papertone animates
+    # that with a real 90ms transition (gtk.css, spring easing) driven by
+    # the GDK frame clock's OWN timer, so draining only whatever events
+    # are ALREADY queued does not advance it -- a construction-adjacent
+    # sample can land anywhere along the curve depending on how much
+    # incidental wall-clock time the app's own import/construction
+    # happened to burn (observed: settled #C8341E 5.12:1 checking Comics
+    # alone, caught mid-flight at #F2D6D0 1.32:1 in the full-OS sweep). No
+    # real user ever sees a frame this early -- GTK does not map/expose a
+    # window without pumping the loop -- so block on real time past the
+    # transition's far side before sampling: a plain main_iteration_do(True)
+    # loop would work but has no source of its own once the transition's
+    # timer has fired, and can hang forever on an app with nothing else
+    # scheduled (there is no real user here to generate the next X11
+    # event), so an explicit timeout guarantees the wakeup instead. Same
+    # failure mode _effective_bg's own docstring above already guards
+    # against for a different node: a probe must not report a verdict it
+    # did not earn.
+    GLib.timeout_add(300, Gtk.main_quit)          # >> the 90ms transition
+    Gtk.main()
     bad = []
     for btn in _buttons(win, []):
         lab = _label_of(btn)
@@ -164,8 +189,8 @@ def check_app(mod_name):
     return bad
 
 
-APPS = ["academics", "accounting", "bills", "calculator", "calendar", "contacts",
-        "cookbook", "ebook", "g2048", "gbaemu", "gbasdk", "illustrator",
+APPS = ["academics", "accounting", "bills", "calculator", "calendar", "comics",
+        "contacts", "cookbook", "ebook", "g2048", "gbaemu", "gbasdk", "illustrator",
         "installer", "journal", "language", "maps", "mealplanner", "media",
         "music", "novel", "packages", "screenplay", "sequencer", "settings",
         "sysmon", "tasks", "terminal", "usbwriter", "video", "workout",
