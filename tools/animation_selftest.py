@@ -4755,6 +4755,150 @@ def at_the_cap_family():
 
 
 
+def sound_row_family():
+    """The sound row's own gestures: select, move, trim, mute.
+
+    The snapshot for a sound drag is taken on PRESS, before anyone knows
+    whether a drag is coming — so a click that only selected a sound left a
+    "Move Sound" step that undid nothing and a film marked unsaved over an
+    edit that never happened. The card drag beside it already got this
+    right."""
+    if not gtk_available():
+        skip("F42 the sound row", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+
+    home = tempfile.mkdtemp(prefix="animation-soundrow-")
+    tone = os.path.join(home, "d.wav")
+    with wave.open(tone, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        handle.writeframes(array.array("h", [800] * 48000).tobytes())
+
+    def staged():
+        app = animation.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = animation.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+        scene = app.doc.scenes[0]
+        scene["length"] = 120
+        stat = os.stat(tone)
+        scene["sounds"][0] = {"path": tone, "start": 4, "in_smp": 0,
+                              "out_smp": 0, "mute": False, "peaks": "",
+                              "sig": [stat.st_size, int(stat.st_mtime)],
+                              "duration_smp": stat.st_size // 2,
+                              "_peak_token": 0}
+        app.sheet = animation.Sheet(app.doc, 0)
+        app._refresh_lists()
+        app._update_playhead()
+        child = app.get_child()
+        app.remove(child)
+        stage = Gtk.OffscreenWindow()
+        stage.set_size_request(1024, 722)
+        stage.add(child)
+        stage.show_all()
+        for _ in range(40):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+        area = app.timeline.get_allocation()
+        paper = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                   max(1, area.width), max(1, area.height))
+        app._draw_timeline(app.timeline, cairo.Context(paper))
+        app._doc_dirty = False
+        app._undo = []
+        return app, stage
+
+    row_y = (animation.TL_ROWS_TOP +
+             animation.LAYER_MAX * animation.TL_ROW_H + 6)
+
+    def gesture(app, from_frame, to_frame):
+        press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+        press.x, press.y, press.button = app._frame_to_x(from_frame), row_y, 1
+        app._timeline_press(app.timeline, press)
+        if to_frame != from_frame:
+            motion = Gdk.Event.new(Gdk.EventType.MOTION_NOTIFY)
+            motion.x, motion.y = app._frame_to_x(to_frame), row_y
+            app._timeline_motion(app.timeline, motion)
+        release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+        release.x, release.y, release.button = app._frame_to_x(to_frame), row_y, 1
+        app._timeline_release(app.timeline, release)
+
+    app, _stage = staged()
+    before = app.doc.bytes()
+    gesture(app, 12, 12)
+    check("F42 clicking a sound selects it and leaves the film alone",
+          app._selected_sound is not None and app.doc.bytes() == before and
+          not app._doc_dirty and not app._undo,
+          (app._doc_dirty, [entry[0] for entry in app._undo]))
+
+    moved, _stage_b = staged()
+    was = moved.doc.scenes[0]["sounds"][0]["start"]
+    start_bytes = moved.doc.bytes()
+    gesture(moved, 12, 30)
+    now = moved.doc.scenes[0]["sounds"][0]["start"]
+    check("F42 dragging a sound moves it, and that IS a change",
+          now != was and moved.doc.bytes() != start_bytes and
+          moved._doc_dirty and len(moved._undo) == 1,
+          (was, now, moved._doc_dirty, len(moved._undo)))
+    moved.history.undo()
+    check("F42 and one undo puts the sound back where it was",
+          moved.doc.scenes[0]["sounds"][0]["start"] == was,
+          moved.doc.scenes[0]["sounds"][0]["start"])
+
+    for window in (app, moved):
+        window._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(window, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(window, timer, None)
+
+    graded, scratch = module_mutant(
+        "F42-click-counts-as-an-edit",
+        [("            if now == before:", "            if False:")])
+    sloppy = graded.Animation()
+    sloppy._flash = lambda *a, **k: None
+    sloppy.doc = graded.AnimationDocument(canvas=(160, 120))
+    sloppy.scene_i = sloppy.layer_i = sloppy.playhead = sloppy.view_origin = 0
+    other = sloppy.doc.scenes[0]
+    other["length"] = 120
+    stat = os.stat(tone)
+    other["sounds"][0] = {"path": tone, "start": 4, "in_smp": 0, "out_smp": 0,
+                          "mute": False, "peaks": "",
+                          "sig": [stat.st_size, int(stat.st_mtime)],
+                          "duration_smp": stat.st_size // 2, "_peak_token": 0}
+    sloppy.sheet = graded.Sheet(sloppy.doc, 0)
+    sloppy._refresh_lists()
+    sloppy._update_playhead()
+    sloppy_child = sloppy.get_child()
+    sloppy.remove(sloppy_child)
+    sloppy_stage = Gtk.OffscreenWindow()
+    sloppy_stage.set_size_request(1024, 722)
+    sloppy_stage.add(sloppy_child)
+    sloppy_stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    sloppy_area = sloppy.timeline.get_allocation()
+    sloppy_paper = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                      max(1, sloppy_area.width),
+                                      max(1, sloppy_area.height))
+    sloppy._draw_timeline(sloppy.timeline, cairo.Context(sloppy_paper))
+    sloppy._doc_dirty = False
+    sloppy._undo = []
+    gesture(sloppy, 12, 12)
+    mutant("F42 a click counted as an edit is caught",
+           sloppy._doc_dirty or bool(sloppy._undo),
+           (sloppy._doc_dirty, len(sloppy._undo)))
+    sloppy._alive = False
+    shutil.rmtree(scratch)
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -4784,6 +4928,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        sound_row_family,
         drop_family,
         at_the_cap_family,
         card_drag_family,

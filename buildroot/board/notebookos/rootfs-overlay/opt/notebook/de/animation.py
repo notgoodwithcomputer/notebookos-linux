@@ -3119,8 +3119,19 @@ class Animation(nbapp.AppWindow):
             self._run_drag = None
             handled = True
         if hasattr(self, '_sound_drag'):
+            row, _mode, _anchor, before = self._sound_drag
             del self._sound_drag
-            self._mark_dirty()
+            now = self.doc.scenes[self.scene_i]['sounds'][row]
+            if now == before:
+                # Only a click, to select the sound. The snapshot was taken
+                # on press before anyone knew that, and keeping it left a
+                # "Move Sound" step that undoes nothing and a film marked
+                # unsaved over an edit that never happened — so the close
+                # guard asked about it and the first Ctrl+Z did nothing.
+                if self._undo:
+                    self._undo.pop()
+            else:
+                self._mark_dirty()
             handled = True
         return handled
 
