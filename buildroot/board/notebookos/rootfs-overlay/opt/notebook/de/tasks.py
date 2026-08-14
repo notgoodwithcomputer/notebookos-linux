@@ -203,10 +203,13 @@ class Tasks(nbapp.AppWindow):
         # store (nothing is seeded).
         self._save_tasks()
         if getattr(self, "_meta_damaged", False):
-            try:
-                self._open_damaged_notice()
-            except Exception:
-                pass
+            # ONE IDLE LATER, not here. Every other card in this app is opened
+            # by a user action, so the window is allocated and _surface_size
+            # measures something real. This one opens during construction,
+            # where the overlay is still 1x1 and the centring falls back to a
+            # screen size that is not the window — which put the card off the
+            # right-hand edge with its button past the bottom.
+            self._notice_idle = GLib.idle_add(self._show_damaged_notice_once)
         # Land the caret in the quick-add so a task can be typed the instant the
         # window appears — no click needed to start.
         try:
@@ -684,6 +687,13 @@ class Tasks(nbapp.AppWindow):
             except Exception:
                 pass
         self._cancel_flash_timer()
+        nid = getattr(self, "_notice_idle", None)
+        self._notice_idle = None
+        if nid:
+            try:
+                GLib.source_remove(nid)
+            except Exception:
+                pass
         self._save_tasks()
         return False
 
@@ -1104,18 +1114,29 @@ class Tasks(nbapp.AppWindow):
         deliberately narrow — the flat file still holds every title, so
         nothing named "your tasks" is gone, and a card claiming otherwise
         would frighten somebody about work sitting on their screen."""
-        W, H = self._surface_size()
-        layer = Gtk.Fixed()
+        # NO Gtk.Fixed and no measured coordinates. The other cards here are
+        # opened by a user action, so the overlay is allocated and centring
+        # against its size works; this one opens on launch, where the
+        # allocation is still 1x1 even an idle later, so the fallback screen
+        # size put the card off the right-hand edge with its button past the
+        # bottom. Handing GTK halign/valign CENTER asks the toolkit to centre
+        # it whenever it IS laid out, which needs no measurement at all.
         scrim = Gtk.EventBox()
         scrim.get_style_context().add_class("scrim")
         scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        scrim.set_size_request(W, H)
         scrim.connect("button-press-event",
                       lambda *a: (self._close_damaged_notice(), True)[1])
-        layer.put(scrim, 0, 0)
 
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         card.get_style_context().add_class("nlcard")
+        # An explicit width, because EVERY label on this card wraps. A wrapping
+        # label's natural width collapses to its longest word, and with nothing
+        # else to anchor it the card rendered one word per line, off centre,
+        # with the button clipped off the bottom. The other cards here are held
+        # open by something that does not wrap — New List by its entry's
+        # width_chars, Remove List by its own longer line — and this one had
+        # nothing.
+        card.set_size_request(360, -1)
         title = Gtk.Label(
             label=_t("Your task dates and lists could not be read"), xalign=0)
         title.get_style_context().add_class("nltitle")
@@ -1138,19 +1159,32 @@ class Tasks(nbapp.AppWindow):
 
         holder = Gtk.EventBox()
         holder.add(card)
-        layer.put(holder, 0, 0)
-        self._overlay.add_overlay(layer)
-        layer.show_all()
-        self._centre_card(layer, holder, W, H)
-        self._damaged_layer = layer
+        holder.set_halign(Gtk.Align.CENTER)
+        holder.set_valign(Gtk.Align.CENTER)
+        self._overlay.add_overlay(scrim)
+        self._overlay.add_overlay(holder)
+        scrim.show_all()
+        holder.show_all()
+        self._damaged_layer = (scrim, holder)
+
+    def _show_damaged_notice_once(self):
+        self._notice_idle = None
+        if getattr(self, "_closed", False):
+            return False
+        try:
+            self._open_damaged_notice()
+        except Exception:
+            pass
+        return False
 
     def _close_damaged_notice(self):
-        layer = getattr(self, "_damaged_layer", None)
-        if layer is not None:
-            try:
-                self._overlay.remove(layer)
-            except Exception:
-                pass
+        parts = getattr(self, "_damaged_layer", None)
+        if parts:
+            for w in parts:
+                try:
+                    self._overlay.remove(w)
+                except Exception:
+                    pass
             self._damaged_layer = None
             return True
         return False
