@@ -243,10 +243,61 @@ def sequencer_store_and_failure(root):
           "destructive, no undo" not in inspect.getsource(sequencer.Sequencer))
 
 
+def writer_decode_ceiling(root):
+    """A picture is bounded WHILE it decodes, not after.
+
+    IMG_MAX_W is a PAGE cap: it decides how wide a picture prints, and it runs
+    on a pixbuf that already exists. So it bounds the document and not the
+    machine — inserting a photo off a camera or a stick held every one of its
+    pixels first, and opening a .writer decoded every picture stored inside it
+    at whatever size the camera produced.
+
+    WHAT IS MEASURED IS THE PEAK, NOT THE RESULT. Checking the returned
+    pixbuf's size would pass with the ceiling removed, because the page cap
+    shrinks it either way — that exact check was written, and passed, in the
+    reader before the mistake was caught. So the budget being applied to the
+    SOURCE dimensions is what is observed."""
+    import base64
+    from gi.repository import GdkPixbuf
+
+    big = os.path.join(root, "camera.png")
+    GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, 7000, 5000).savev(
+        big, "png", [], [])
+
+    asked = []
+    real = writer.nbapp.decode_budget
+    writer.nbapp.decode_budget = lambda w, h: (asked.append((w, h))
+                                               or real(w, h))
+    try:
+        pb = writer._bounded_pixbuf(big)
+        with open(big, "rb") as fh:
+            embedded = base64.b64encode(fh.read()).decode("ascii")
+        pb2 = writer._pixbuf_from_b64(embedded)
+    finally:
+        writer.nbapp.decode_budget = real
+
+    check("a picture inserted from a file decodes", pb is not None)
+    check("...bounded at its source size, before any pixels exist",
+          (7000, 5000) in asked, repr(asked))
+    check("a picture stored inside a document decodes", pb2 is not None)
+    check("...bounded the same way on the document path",
+          asked.count((7000, 5000)) >= 2, repr(asked))
+    check("the decode was actually REDUCED, not merely consulted",
+          pb is not None and pb.get_width() < 7000,
+          "%d wide" % pb.get_width() if pb else "none")
+    check("the decoded picture is inside the shared budget",
+          pb is not None
+          and pb.get_width() * pb.get_height() <= writer.nbapp.DECODE_MAX_AREA,
+          "%dx%d" % (pb.get_width(), pb.get_height()) if pb else "none")
+    check("MUTANT: the unbounded decode DOES exceed the budget",
+          7000 * 5000 > writer.nbapp.DECODE_MAX_AREA)
+
+
 def main():
     root = tempfile.mkdtemp(prefix="writer-sequencer-adversarial-", dir="/tmp")
     try:
         writer_document_damage(root)
+        writer_decode_ceiling(root)
         sequencer_store_and_failure(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)

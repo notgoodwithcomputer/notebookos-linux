@@ -1650,6 +1650,14 @@ class Music(nbapp.AppWindow):
         keeping it would only cost space and be retried as a decode failure on
         every launch."""
         ldr = GdkPixbuf.PixbufLoader()
+        # COVER_MAX below is a cache cap applied after the fact; a track can
+        # carry artwork at any size at all, and this runs for every track a
+        # discovery pass finds.
+        def _bound(loader, width, height):
+            want = nbapp.decode_budget(width, height)
+            if want != (width, height):
+                loader.set_size(want[0], want[1])
+        ldr.connect("size-prepared", _bound)
         ldr.write(data)
         ldr.close()
         pb = ldr.get_pixbuf()

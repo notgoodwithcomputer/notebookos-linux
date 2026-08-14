@@ -355,6 +355,37 @@ def _b64_of(raw):
         return ""
 
 
+def _bounded_pixbuf(path):
+    """A picture from `path`, decoded inside the shared ceiling.
+
+    IMG_MAX_W below decides how WIDE a picture is PRINTED. It is applied to a
+    pixbuf that already exists, so on its own it bounds the document and not
+    the machine: inserting a photo straight off a camera or a USB stick held
+    every one of its pixels first, just to be shrunk to the text column. The
+    loader is told the target before any pixels are allocated instead."""
+    loader = GdkPixbuf.PixbufLoader()
+
+    def _bound(ldr, width, height):
+        want = nbapp.decode_budget(width, height)
+        if want != (width, height):
+            ldr.set_size(want[0], want[1])
+
+    loader.connect("size-prepared", _bound)
+    try:
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(1 << 16)
+                if not chunk:
+                    break
+                loader.write(chunk)
+    finally:
+        loader.close()
+    pb = loader.get_pixbuf()
+    if pb is None:
+        raise ValueError("no image data in %s" % path)
+    return pb
+
+
 def _pixbuf_from_b64(b64):
     """Decode an embedded picture. None (never an exception) if the data is
     missing or damaged, so one bad image can never fail a whole document."""
@@ -363,6 +394,14 @@ def _pixbuf_from_b64(b64):
     try:
         raw = base64.b64decode(b64)
         loader = GdkPixbuf.PixbufLoader()
+        # Bounded while decoding. Pictures live INSIDE a .writer document, so
+        # opening one decodes every image it carries — at whatever size the
+        # camera produced, before anything asks how wide the page is.
+        def _bound(ldr, width, height):
+            want = nbapp.decode_budget(width, height)
+            if want != (width, height):
+                ldr.set_size(want[0], want[1])
+        loader.connect("size-prepared", _bound)
         loader.write(raw)
         loader.close()
         return loader.get_pixbuf()
@@ -1989,7 +2028,10 @@ class Writer(nbapp.AppWindow):
         try:
             with open(path, "rb") as fh:
                 raw = fh.read()
-            pb = GdkPixbuf.Pixbuf.new_from_file(path)
+            # IMG_MAX_W below is a PAGE cap and runs after the decode, so a
+            # photo straight off a camera was held at full size first just to
+            # be shrunk to the text column.
+            pb = _bounded_pixbuf(path)
         except Exception:
             self._flash("Couldn't load that image.")
             return
@@ -2361,7 +2403,7 @@ class Writer(nbapp.AppWindow):
             try:
                 with open(img["path"], "rb") as fh:
                     raw = fh.read()
-                pb = GdkPixbuf.Pixbuf.new_from_file(img["path"])
+                pb = _bounded_pixbuf(img["path"])
                 b64 = _b64_of(raw)     # embed it from now on
             except Exception:
                 pb = None
