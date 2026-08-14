@@ -510,3 +510,34 @@ the compositor is what makes the drag repaint cheaply). Worth knowing: on
 exactly that hardware profile — which is what real machines boot with, per
 the simpledrm note — ⤢ and Collapse are the ONLY ways to change a window's
 size, which makes the fix above matter more than it first appeared.
+
+### Cleared by measurement, not fixed (Aug 14, late)
+
+**The subprocess-cancel sweep: one defect in four candidates.** Burner was
+real and is fixed (0b51114c). The other three are correct as they stand:
+USB Writer does the image write ITSELF in a Python loop with job
+checkpoints — cancel already works, and its only subprocesses are umount
+and sync, neither of which spawns anything. Sequencer escalates
+terminate → SIGKILL and its child is arecord, which has no children.
+The Installer deliberately BLOCKS the window close while the destructive
+worker runs, so there is no mid-install cancel to be unresponsive to —
+a half-installed disk is worse than an uninterruptible one.
+
+**Text drawn on a canvas, an i18n path nothing else watches.** Text
+painted with cairo/Pango never passes through a GTK setter, so neither
+nbi18n's setter wrappers nor its construction-time tree walk can reach
+it. Swept every drawing call whose literal is a catalog key: TWO hits,
+both in the printer test page, both correct. "Notebook OS" is identical
+in all seventeen catalogs (a product name). "Printer Test Page" IS
+translated everywhere — but the page is drawn deliberately in guaranteed
+Latin glyphs only, recorded in the toyfont_check KEEP ledger with its
+reason and restated in the function's own comment: a test page is the one
+artifact that must render identically on any machine in any locale, and
+cr.show_text() renders empty boxes for Greek, CJK and Devanagari anyway.
+Wrapping it in _t() would have replaced English with blank boxes for
+exactly the users it was meant to help. NO GATE ADDED: the class is
+empty, and toyfont_check already watches those same call sites for the
+related glyph-coverage reason.
+
+**Regression state:** all sixteen suites covering today's 110 changed
+files are green, 42/42 apps construct.
