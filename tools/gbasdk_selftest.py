@@ -2098,6 +2098,37 @@ check("the format marker does not leak into the project", "_bundle" not in _got)
 
 _ws_app._bundle_write(_bundle)
 check("overwriting leaves one bundle", len(os.listdir(_bundle)) == len(P) + 1)
+
+# THE AUTHOR'S OWN BACKUP. The scratch names were dirpath + ".part" and
+# dirpath + ".old", each opened with an unconditional shutil.rmtree — and
+# dirpath comes from the Save As picker in the projects folder. "Game.old" is
+# exactly what a person names a copy before a risky change, so saving deleted
+# it, recursively, without a word. Both scratch paths must now be names
+# nobody else can be holding.
+_mine = _bundle + ".old"
+os.makedirs(_mine, exist_ok=True)
+with open(os.path.join(_mine, "keep.txt"), "w") as _fh:
+    _fh.write("the author's hand-made backup")
+_mine_part = _bundle + ".part"
+os.makedirs(_mine_part, exist_ok=True)
+with open(os.path.join(_mine_part, "keep.txt"), "w") as _fh:
+    _fh.write("and a directory that merely looks like scratch")
+
+_ws_app._bundle_write(_bundle)
+check("saving does not delete a directory the author named <project>.old",
+      os.path.exists(os.path.join(_mine, "keep.txt")))
+check("...nor one named <project>.part",
+      os.path.exists(os.path.join(_mine_part, "keep.txt")))
+check("...and the project itself still saved",
+      _ws_app._bundle_read(_bundle) == _ws_app.proj)
+check("...leaving no staging directory behind",
+      not [x for x in os.listdir(_bd) if x.startswith(".nbgba-save-")],
+      repr(os.listdir(_bd)))
+# Take the bystanders away again: a later check in this file asserts that no
+# ".part" directory sits beside a bundle, and it is entitled to a clean
+# directory rather than one this test decorated.
+shutil.rmtree(_mine, ignore_errors=True)
+shutil.rmtree(_mine_part, ignore_errors=True)
 check("...and it still reads back whole",
       _ws_app._bundle_read(_bundle) == _ws_app.proj)
 

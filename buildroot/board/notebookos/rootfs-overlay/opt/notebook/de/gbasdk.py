@@ -7496,10 +7496,27 @@ class GbaSdk(nbapp.AppWindow):
         six files are not six atomic writes: a failure part-way through a
         direct write leaves a project whose settings and assets disagree, which
         is worse than a failed save."""
-        part = dirpath.rstrip(os.sep) + ".part"
-        old = dirpath.rstrip(os.sep) + ".old"
-        shutil.rmtree(part, ignore_errors=True)
-        os.makedirs(part, exist_ok=True)
+        # NEITHER SCRATCH NAME MAY BE ONE THE AUTHOR COULD ALREADY OWN. These
+        # were `dirpath + ".part"` and `dirpath + ".old"`, each opened with an
+        # unconditional shutil.rmtree — and dirpath comes from the Save As
+        # picker in the projects folder. "MyGame.old" is precisely what a
+        # person names a hand-made backup before a risky change, so saving
+        # MyGame deleted their backup, recursively and without a word.
+        #
+        # The staging directory is now a mkdtemp sibling: same filesystem, so
+        # the rename below is still atomic, and a name nobody else can hold.
+        # The set-aside copy keeps a name a human can FIND — that was the good
+        # reason for ".old" and the failure path below depends on it — but it
+        # is chosen to not exist yet rather than cleared out of the way.
+        base = dirpath.rstrip(os.sep)
+        parent = os.path.dirname(base) or "."
+        os.makedirs(parent, exist_ok=True)
+        part = tempfile.mkdtemp(prefix=".nbgba-save-", dir=parent)
+        old = base + ".old"
+        n = 2
+        while os.path.exists(old):
+            old = "%s.old-%d" % (base, n)
+            n += 1
         try:
             head = {k: v for k, v in self.proj.items()
                     if k not in self.BUNDLE_PARTS}
@@ -7516,7 +7533,6 @@ class GbaSdk(nbapp.AppWindow):
             shutil.rmtree(part, ignore_errors=True)
             raise
 
-        shutil.rmtree(old, ignore_errors=True)
         moved = False
         try:
             if os.path.isdir(dirpath):
