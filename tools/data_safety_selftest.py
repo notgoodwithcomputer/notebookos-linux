@@ -326,7 +326,12 @@ _ALLOWED = [
     ("music.py", 'pb.savev(tmp', "extracted cover art cache, regenerable"),
     # The flattened export goes to "<path>.new" and is moved into place, so a
     # failed export never replaces the previous PNG with a partial one.
-    ("illustrator.py", "write_to_png(tmp)", "temp + os.replace of the export"),
+    # Was "write_to_png(tmp)", where tmp was `path + ".new"` — atomic for the
+    # destination, but a draft name a person can already own: saving
+    # drawing.png destroyed a real drawing.png.new beside it, and a failed
+    # save deleted it. Now drafts under nbapp.atomic_write_via's unguessable
+    # temp, so the only file at risk is the one being saved.
+    ("illustrator.py", "write_to_png(draft)", "draft of nbapp.atomic_write_via"),
     # Animation's PNG-frames export: each frame lands in a mkstemp file in the
     # destination folder and is os.replace()d into its numbered name, so a
     # cancelled or failed export never leaves a truncated frame. The frames are

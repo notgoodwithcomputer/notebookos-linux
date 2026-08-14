@@ -63,6 +63,47 @@ check(win._file_save_as() is False, "cancel reports no save")
 check(win.attempted is None and win._path == old,
       "cancel neither writes nor changes the document binding")
 
+# The draft name. _write_png used to render to `path + ".new"` and os.replace
+# it — atomic for the destination, but the draft's name is one a person can
+# already own. Saving "drawing.png" silently overwrote a real
+# "drawing.png.new" beside it, and a FAILED save then deleted it: a file this
+# app never opened and the user never named. The draft has to be unguessable.
+import tempfile                                                # noqa: E402
+import cairo                                                   # noqa: E402
+
+tmpdir = tempfile.mkdtemp(prefix="illu-draft-")
+dest = os.path.join(tmpdir, "drawing.png")
+bystander = dest + ".new"
+with open(bystander, "wb") as fh:
+    fh.write(b"a real file that happens to be named like a draft")
+keep = open(bystander, "rb").read()
+
+real = illustrator.Illustrator.__new__(illustrator.Illustrator)
+real._flatten_surface = lambda: cairo.ImageSurface(cairo.FORMAT_ARGB32, 4, 4)
+ok = illustrator.Illustrator._write_png(real, dest)
+check(ok is True, "the save itself still succeeds")
+check(os.path.exists(bystander) and open(bystander, "rb").read() == keep,
+      "a bystander file named like the draft survives a save")
+check(os.path.exists(dest) and os.path.getsize(dest) > 0,
+      "...and the drawing was actually written")
+
+# ...and it is still atomic for the destination: a render that throws leaves
+# the previous drawing whole.
+before = open(dest, "rb").read()
+
+
+def _boom():
+    raise RuntimeError("flatten failed part-way")
+
+
+real._flatten_surface = _boom
+check(illustrator.Illustrator._write_png(real, dest) is False,
+      "a failed save reports failure")
+check(open(dest, "rb").read() == before,
+      "a failed save leaves the previous drawing untouched")
+check(not [n for n in os.listdir(tmpdir) if n.startswith(".nbw-")],
+      "a failed save leaves no draft behind")
+
 print()
 if failures:
     print("ILLUSTRATOR SAVE AS SELFTEST: %d checks, %d FAILED" %

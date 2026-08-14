@@ -3098,24 +3098,24 @@ class Illustrator(nbapp.AppWindow):
         """Flatten the visible layers and write the PNG to `path`. Returns True
         on success; never raises so a bad path can't crash the app.
 
-        Written to a temp file in the same directory and moved into place, so
-        an export that fails part-way (disk full, power loss) leaves the
-        previous PNG at `path` untouched instead of replacing it with a
-        half-written one. Re-exporting over an earlier export is the normal way
-        to use this, and that earlier file can be the only copy."""
-        tmp = ""
+        Written beside the destination and moved into place, so a save that
+        fails part-way (disk full, power loss) leaves the previous PNG at
+        `path` untouched instead of replacing it with a half-written one.
+        Re-saving over an earlier drawing is the normal way to use this, and
+        that earlier file can be the only copy.
+
+        The draft used to be `path + ".new"` — a name that can already belong
+        to somebody. Saving "drawing.png" silently overwrote any real
+        "drawing.png.new" sitting beside it, and a failed save then DELETED
+        it: a file this app never opened and the person never named. The
+        shared writer drafts under a unique temp name instead, so the only
+        file at risk is the one being saved."""
         try:
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            tmp = path + ".new"
-            self._flatten_surface().write_to_png(tmp)
-            os.replace(tmp, path)
+            nbapp.atomic_write_via(
+                path,
+                lambda draft: self._flatten_surface().write_to_png(draft))
             return True
         except Exception:
-            if tmp:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
             return False
 
     def _file_new(self):
