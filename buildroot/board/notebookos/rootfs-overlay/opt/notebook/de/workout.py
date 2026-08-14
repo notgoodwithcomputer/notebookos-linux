@@ -259,13 +259,34 @@ class Workout(nbapp.AppWindow):
         the app empty instead of stopping it from opening at all.
         """
         blank = {"exercises": [], "log": {}, "goals": {}, "show_widget": False}
+        self._load_error = ""
         try:
             import json
             with open(STORE, "r", encoding="utf-8") as fh:
                 raw = json.load(fh)
         except (OSError, ValueError):
+            # THE BYTES GO ASIDE BEFORE THE BLANK CAN REPLACE THEM. Opening on
+            # `blank` is right; leaving the unreadable file where it is was not,
+            # because the very next _save writes this blank over it — and _save
+            # runs on ordinary use, not just on a deliberate edit. Months of
+            # sets, goals and streaks were destroyed by launching the app, with
+            # no action from the person at all. That is the worst outcome this
+            # OS has produced before, and this was the last store with no
+            # protection against it.
+            self._damaged_path = nbapp.preserve_damaged(STORE)
+            if self._damaged_path:
+                self._load_error = _t(
+                    "Your workout history could not be read. "
+                    "The records were kept.")
             return blank
         if not isinstance(raw, dict):
+            # Valid JSON of a shape this app does not recognise parses fine, so
+            # preserve_damaged cannot see it — only the app knows its own shape.
+            self._damaged_path = nbapp.quarantine_unrecognized(STORE)
+            if self._damaged_path:
+                self._load_error = _t(
+                    "Your workout history could not be read. "
+                    "The records were kept.")
             return blank
 
         out = {"exercises": [], "log": {}, "goals": {}, "show_widget": bool(
@@ -797,6 +818,12 @@ class Workout(nbapp.AppWindow):
         # A save that did not happen outranks anything else this strip says.
         if getattr(self, "_save_error", ""):
             self.status.set_text(self._save_error)
+            return
+        # Then why the app opened empty. Ranked under a failed save because
+        # that one is about right now, but above everything else: an empty
+        # history with no explanation reads as the app having forgotten.
+        if getattr(self, "_load_error", ""):
+            self.status.set_text(self._load_error)
             return
         if not self.data["exercises"]:
             self.status.set_text(_t("No exercises"))

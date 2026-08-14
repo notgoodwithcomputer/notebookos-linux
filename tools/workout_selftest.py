@@ -421,6 +421,46 @@ for label, blob in [("not-a-dict", "[1,2,3]"),
     shutil.rmtree(home, ignore_errors=True)
 
 
+# THE STORE MUST SURVIVE BEING OPENED. workout.json holds months of sets,
+# goals and streaks and had NO protection at all: an unreadable file opened the
+# app on blank, and the next _save — which runs on ordinary use, not only on a
+# deliberate edit — wrote that blank straight over it. Launching the app was
+# enough to destroy a training history, with no action from the person. This is
+# the defect this OS records as its worst, and workout was the last store
+# without a guard against it.
+for label, blob in (("truncated", b'{"exercises": [{"name": "Press"'),
+                    ("wrong-shape", b'["Press", "Squat"]')):
+    home = fresh_home()
+    with open(store(home), "wb") as fh:
+        fh.write(blob)
+    wo, app = new_app(home)
+    check("a %s store opens the app empty rather than refusing" % label,
+          app.data["exercises"] == [], repr(app.data)[:60])
+    cfg = os.path.dirname(store(home))
+    aside = [f for f in os.listdir(cfg)
+             if f.startswith("workout.json.damaged-")]
+    kept = any(open(os.path.join(cfg, f), "rb").read() == blob for f in aside)
+    check("a %s store's bytes are moved aside, not left to be overwritten"
+          % label, kept, "asides: %r" % aside)
+    check("...and the app says why it is empty", bool(app._load_error),
+          repr(getattr(app, "_load_error", None)))
+    # The save that used to destroy it now lands on a file nothing is under.
+    app._save()
+    kept_after = any(
+        open(os.path.join(cfg, f), "rb").read() == blob
+        for f in os.listdir(cfg) if f.startswith("workout.json.damaged-"))
+    check("a %s store still exists after the app saves over its own file"
+          % label, kept_after, "the damaged bytes were destroyed by _save")
+    app.destroy()
+
+# A first run has nothing to preserve and must say nothing.
+home = fresh_home()
+wo, fresh = new_app(home)
+check("a first run reports no damage", not fresh._load_error,
+      repr(fresh._load_error))
+fresh.destroy()
+
+
 print("\n%d checks, %d passed, %d failed"
       % (len(RESULTS), sum(RESULTS), len(RESULTS) - sum(RESULTS)))
 print("RESULT: " + ("ALL PASS" if all(RESULTS) else "SOME FAILED"))
