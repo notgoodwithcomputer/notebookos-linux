@@ -583,3 +583,28 @@ its print-test poll repeats for up to 90 seconds, which reads as a leak until
 you follow the process lifetime. It is not one. If this OS ever grows a
 second window inside one process, this class stops being empty — that is the
 condition to re-check, not the code.
+
+## ON-TARGET, third pass (Aug 14 ~17:50) — the shell rows, now that they run
+tools/run-iso.sh --debug-shell (f9bfb357) unblocked these. Driven by
+running the SHIPPED modules on the guest against real files, which is the
+right verification for data-path fixes — where the bytes end up, not what
+the screen shows.
+- GBASDK: a directory named <project>.old beside a saved project SURVIVES
+  a save, the project still saves, and no staging directory is left
+  behind. That is 5197c92e — the worst data-loss bug found this week,
+  where saving recursively deleted the author's hand-made backup —
+  confirmed fixed on the real image.
+- MEDIA: a photo trashed from the viewer records its origin sidecar, so
+  the Finder's Put Back knows where to return it, and the bytes are in
+  the Trash. That is 3e00c26f on the real image.
+- EBOOK: NOT VERIFIABLE ON 2.3-audit, and my first attempt was my own
+  error rather than a defect. The image predates 8771d9e0, so it ships the
+  superseded read-only behaviour (_state_read_only, no _store_damaged) —
+  which I had already established from the squashfs and WARNED the peer
+  about, then wrote a row against current-tree behaviour anyway. The
+  failure was a JSONDecodeError escaping my own final json.load, because
+  the shipped read-only version correctly refuses to save and leaves the
+  damaged bytes in place. Re-checked against the shipped version's OWN
+  design: it marks the session and leaves the damaged bytes untouched,
+  both pass. So the image is not broken, only older. The current
+  keep-saving behaviour needs the next respin.
