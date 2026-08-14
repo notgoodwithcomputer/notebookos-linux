@@ -1983,6 +1983,36 @@ class AppWindow(Gtk.Window):
             self._date.set_text(dat)
         return True
 
+    # -- the menu bar's notification centre --
+    def notify(self, title, body=""):
+        """Leave a message in the notification centre, from this app.
+
+        WHAT BELONGS HERE, AND WHAT DOES NOT. Only something that finishes
+        while the person is somewhere ELSE: a stick written, a disc burned, a
+        film exported. One app owns the screen at a time here, so a long job's
+        result has nowhere to land once its window is behind another one — that
+        gap is the whole reason this exists.
+
+        Everything else stays where the person is already looking. Feedback
+        about what they just did belongs in the app's own status line
+        (Article IV §1), and a notification is the heavier form: it outlives the
+        app, it marks the menu bar, and it has to be cleared. An app that posts
+        one for an ordinary save has spent a shared surface on something that
+        was already on screen.
+
+        Keep the title to a headline and the body to a line: the tray shows one
+        line of title and up to two of body, then ellipsizes.
+
+        Never raises, and never blocks: a notification is a courtesy, so an app
+        whose disk is full still finishes reporting the job it was doing.
+        """
+        try:
+            import nbnotify
+            return nbnotify.post(title, body, app=_app_module_name(self),
+                                 app_name=self.app_name)
+        except Exception:                                         # noqa: BLE001
+            return ""
+
     # -- dropdown menus --
     def _on_menu_click(self, button, name):
         if self._menu_open == name:

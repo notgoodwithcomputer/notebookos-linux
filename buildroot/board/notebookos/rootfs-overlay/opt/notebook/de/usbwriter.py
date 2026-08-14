@@ -847,17 +847,28 @@ class UsbWriter(nbapp.AppWindow):
         self.stop_btn.hide()
         self.pick_btn.set_sensitive(True)
         self.rescan_btn.set_sensitive(True)
+        # A write runs for minutes and nobody watches a progress bar for
+        # minutes, so its outcome also goes to the menu bar's notification
+        # centre — which outlives this window and is on screen whatever the
+        # person moved on to. The status line below still says the same thing
+        # for anyone who did stay.
+        wrote = os.path.basename((self.image or {}).get("path") or "")
         if how == "done":
             self.prog.set_fraction(1.0)
             self._say(_t("Finished. The stick can be unplugged."))
             self.warn.set_text("")
+            self.notify(_t("Finished writing the stick"), wrote)
         elif how == "stopped":
             self.prog.hide()
             self._say(_t("Stopped. The stick is not usable until it is "
                          "written again."))
+            self.notify(_t("The write was stopped"),
+                        _t("The stick is not usable until it is written "
+                           "again."))
         else:
             self.prog.hide()
             self._say(message or _t("The write did not finish."))
+            self.notify(_t("The write did not finish."), message or "")
         self._rescan()
         return False
 

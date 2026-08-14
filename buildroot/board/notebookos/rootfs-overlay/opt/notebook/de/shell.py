@@ -32,6 +32,8 @@ VIDEO_FULL_FLAG = "/tmp/nb-video-fullscreen"
 
 import xshape
 import nbapp  # for nudge_paint (swrast scanout flush) + version/pretty name
+import nbicons        # the bell mark and the per-app glyph on a notification
+import nbnotify       # the notification spool every app posts to
 from nbi18n import _t  # panel menu labels (Finder/File/Edit/View/Label) translate
 # The panel is MOTION-EXEMPT: the menu bar stays static across the OS, and its
 # dropdowns appear and leave at rest (design owner's direction, 2026-08-10 —
@@ -39,6 +41,17 @@ from nbi18n import _t  # panel menu labels (Finder/File/Edit/View/Label) transla
 # system.panel-menu-open/close). Nothing here animates, so no nbmotion.
 
 PANEL_H = 46
+# The right cluster's margin — and therefore the vertical line the clock, date
+# and battery all end on. A dropdown falling out of that cluster rests its right
+# edge here rather than on the bare screen edge, so it lands against structure
+# that is already visible (Paper Physics §E2). Named once because the margin and
+# the alignment must never be able to disagree.
+RIGHT_MARGIN = 20
+# The bell mark, in logical px. 17 rather than the toolbar-usual 16 so Lucide's
+# unread spot (r=3 on a 24 grid) rasterises as a 4px disc instead of a 3px one:
+# below that it stops reading as a deliberate mark and starts reading as a
+# stray pixel, which is the one thing an unread signal cannot afford.
+BELL_PX = 17
 # The dropdown card's corner radius — must match .sysmenu's border-radius in
 # the CSS below. The X shape mask is built of rectangles only, so the rounded
 # corners are cut as one-pixel rows (menu_shape_rects): everything the arc
@@ -73,6 +86,11 @@ def menu_shape_rects(rect, radius):
 # hanging. Pointer movement over the menu restarts the timer (_menu_activity),
 # so a menu never vanishes from under someone who is still reading it.
 MENU_IDLE_TIMEOUT_S = 15
+# ...but the notification centre is a surface somebody READS, not a list they
+# pick from, and fifteen seconds is not long enough to read a full tray. The
+# safety net is still a net at forty-five; a card that vanishes mid-sentence is
+# a defect, not a safeguard.
+NOTIFY_IDLE_TIMEOUT_S = 45
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # session state (the Finder Label choice) survives close/reboot under
@@ -130,6 +148,60 @@ def read_first_line(path, default=""):
             return fh.readline().strip()
     except OSError:
         return default
+
+
+# The bell's two states, cached: rendering is a pure function of (unread, px,
+# panel scale) and the tick asks for one of them every time the tray changes.
+_BELL_CACHE = {}
+
+
+def bell_surface(unread, px=BELL_PX):
+    """The menu-bar bell, quiet or carrying its unread spot. None if it cannot
+    be drawn, so the caller can fall back to a plain icon rather than to a hole.
+
+    Two carriers for one state, per Constitution Article VII §3: the glyph goes
+    from the muted register the date and battery sit in up to full ink, AND the
+    signage-red spot appears. Neither is colour alone, so the change survives
+    both a colour-blind reader and a monochrome panel.
+
+    Built as a cairo surface the way nbicons.surface does it, rather than as a
+    Gtk.DrawingArea: a DrawingArea's draw handler needs gi's cairo bridge, whose
+    absence once blanked every custom-drawn widget in this OS. This path only
+    uses pycairo plus Gtk.Image.new_from_surface, which is what nbicons already
+    proves works on the shipped image.
+    """
+    key = (bool(unread), px, nbicons.scale_factor())
+    hit = _BELL_CACHE.get(key)
+    if hit is not None:
+        return hit
+    try:
+        import cairo
+        import math
+        scale = nbicons.scale_factor()
+        dev = max(1, int(round(px * scale)))
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, dev, dev)
+        ctx = cairo.Context(surf)
+        if unread:
+            # Fill the notch bell-dot leaves at (18,5) r=3 on the 24 grid, then
+            # stroke the glyph over it: the ink outline lands exactly on the
+            # fill's edge, so the spot is registered into the drawing instead of
+            # sitting on top of it.
+            ctx.save()
+            ctx.scale(dev / 24.0, dev / 24.0)
+            ctx.set_source_rgb(0xC8 / 255.0, 0x34 / 255.0, 0x1E / 255.0)
+            ctx.arc(18, 5, 3, 0, math.tau)
+            ctx.fill()
+            ctx.restore()
+        # Drawn at the DEVICE size so the 1.6px stroke stays 1.6 LOGICAL px on
+        # a 2x panel — the same reasoning as nbicons.surface.
+        nbicons.draw(ctx, "belldot" if unread else "bell", dev,
+                     "#1A1916" if unread else "#6E695E")
+        surf.flush()
+        surf.set_device_scale(scale, scale)
+    except Exception:                                             # noqa: BLE001
+        return None
+    _BELL_CACHE[key] = surf
+    return surf
 
 
 class Panel(Gtk.Window):
@@ -246,9 +318,9 @@ class Panel(Gtk.Window):
             b.connect("clicked", menu_handlers[label])
             left.pack_start(b, False, False, 0)
 
-        # --- right cluster: clock, date, battery ---
+        # --- right cluster: notifications, clock, date, battery ---
         right = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
-        right.set_margin_end(20)
+        right.set_margin_end(RIGHT_MARGIN)
         root.pack_end(right, False, False, 0)
 
         # Battery % sits after the date (rightmost). pack_end stacks right-first,
@@ -275,11 +347,35 @@ class Panel(Gtk.Window):
         self.clocklbl.get_style_context().add_class("clock")
         right.pack_end(self.clocklbl, False, False, 0)
 
+        # The notification centre, immediately left of the clock: what the
+        # machine has to say sits beside when it said it. Packed LAST of the
+        # right cluster, which — this box being packed end-first — puts it
+        # leftmost, and means nothing to its right ever moves.
+        #
+        # It is a menu title like File or View, not an indicator: it takes the
+        # same .menuitem chrome, hovers with the same selection swatch, and
+        # opens a dropdown drawn inside this window like every other one.
+        self.bell = Gtk.Button()
+        self.bell.set_relief(Gtk.ReliefStyle.NONE)
+        self.bell.get_style_context().add_class("menuitem")
+        self.bell.get_style_context().add_class("bell")
+        self.bellimg = Gtk.Image()
+        self.bell.add(self.bellimg)
+        self.bell.connect("clicked", self._notify_menu)
+        right.pack_end(self.bell, False, False, 0)
+
         # last-shown strings, so the per-second tick only repaints a label when
         # its text actually changed (see _tick) — every repaint is CPU-drawn
         # pixels on this GPU-less software-rendered stack.
         self._last_clock = self._last_tip = self._last_date = None
         self._last_bat = None
+        # Notification state, cached the same way and for the same reason. The
+        # spool's key is a stat rather than a read (nbnotify.state_key), so the
+        # tick only opens a record on the seconds when something changed.
+        self._notify_state = None
+        self._bell_unread = None      # what the mark currently SHOWS
+        self._bell_count = None       # ...and what its tooltip currently says
+        self._paint_bell(nbnotify.unread_count())
         self._pin_widths()
         self._tick()
         GLib.timeout_add_seconds(1, self._tick)
@@ -445,16 +541,30 @@ class Panel(Gtk.Window):
     # under matchbox, an override-redirect POPUP never maps, and a managed
     # popup lost the stack to the focused Finder. Drawing in the already-painted
     # panel and focusing it is what works.
-    def _popup(self, items, button):
+    def _toggle_or_replace(self, button):
+        """The shared front half of every dropdown in this bar.
+
+        Returns True when the click merely CLOSED the menu that was already
+        open, in which case the caller builds nothing at all — which is why
+        this is a separate step rather than something _present could do: the
+        notification card costs a directory read to build, and a second click
+        on the bell must not pay for it.
+        """
         self._cancel_nudges()
         if self._menu is not None:
             same = self._menu_for is button
             if same:                       # click the same button = toggle shut
                 self._menu_close()         # retracts to its title (G1)
-                return
+                return True
             # Switching titles is a REPLACEMENT, not a journey: the old menu
             # goes instantly and the new one drops from its own title.
             self._menu_remove()
+        return False
+
+    def _popup(self, items, button):
+        """A dropdown of (label, callback[, markup[, trailing]]) rows."""
+        if self._toggle_or_replace(button):
+            return
         inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         inner.get_style_context().add_class("sysmenu")
         for item in items:
@@ -491,6 +601,25 @@ class Panel(Gtk.Window):
                 it.set_sensitive(False)
             inner.pack_start(it, False, False, 0)
 
+        self._present(inner, button)
+
+    def _present(self, inner, button, right_edge=None,
+                 idle_s=MENU_IDLE_TIMEOUT_S):
+        """Put a built dropdown on screen under `button`.
+
+        The whole back half of _popup, split out so a dropdown that is not a
+        list of menu rows — the notification centre — gets the identical
+        treatment: the same screen-height scroll cap, the same EventBox host,
+        the same shape mask, paint nudge and idle timeout. A second copy of
+        this is how two dropdowns in one bar start behaving differently.
+
+        `right_edge`, when given, is an x the card's RIGHT side rests on
+        instead of its left side starting at the button. The bar's right
+        cluster is aligned to a margin, not to the bare screen edge, and a card
+        dropping out of that cluster comes to rest against the line the clock,
+        date and battery already end on (Paper Physics §E2).
+        """
+        self._cancel_nudges()
         inner.show_all()
         _imin, inat = inner.get_preferred_size()
         avail_h = max(160, self.screen_h - PANEL_H)
@@ -515,6 +644,8 @@ class Panel(Gtk.Window):
         menu.show_all()
         self.fixed.put(menu, bx, PANEL_H)
         _min, nat = menu.get_preferred_size()
+        if right_edge is not None:
+            bx = right_edge - nat.width
         bx = max(0, min(bx, self.screen_w - nat.width))
         self.fixed.move(menu, bx, PANEL_H)
         self._menu, self._menu_for = menu, button
@@ -541,8 +672,8 @@ class Panel(Gtk.Window):
             self._nudge_sources.append(GLib.timeout_add(300, self._nudge_once))
         menu.connect("size-allocate", self._menu_allocated)
         self._menu_active_at = GLib.get_monotonic_time()
-        self._menu_timeout = GLib.timeout_add_seconds(
-            MENU_IDLE_TIMEOUT_S, self._menu_idle)
+        self._menu_idle_s = idle_s
+        self._menu_timeout = GLib.timeout_add_seconds(idle_s, self._menu_idle)
 
         # The menu appears AT REST — no arrival animation. The drop-from-the-
         # title settle that lived here was retired 2026-08-10 on the design
@@ -567,12 +698,12 @@ class Panel(Gtk.Window):
 
     def _menu_idle(self):
         # The single idle-timeout source for an open menu. Close only once the
-        # menu has really gone MENU_IDLE_TIMEOUT_S without interaction; if
+        # menu has really gone its own idle span without interaction; if
         # _menu_activity stamped it more recently, re-arm for the time that is
         # actually left, so the close still lands within a second of the
         # deadline (what the old per-event restart bought, at one timer instead
         # of hundreds).
-        left = MENU_IDLE_TIMEOUT_S - (
+        left = getattr(self, "_menu_idle_s", MENU_IDLE_TIMEOUT_S) - (
             GLib.get_monotonic_time() - self._menu_active_at) / 1000000.0
         if left > 0.5:
             self._menu_timeout = GLib.timeout_add_seconds(
@@ -616,6 +747,292 @@ class Panel(Gtk.Window):
             self._menu_rect = None
             self._apply_shape()
         return False
+
+    # ---- the notification centre ----
+    #
+    # WHY IT EXISTS. One app, one process, fullscreen: while somebody is reading
+    # in the Ebook, the USB Writer finishing its stick has nowhere to say so —
+    # its own status line is behind another window and its process may already
+    # be gone. The menu bar is the only surface always on screen, so anything
+    # the machine finishes while the user is elsewhere is left here.
+    #
+    # THERE IS DELIBERATELY NO BANNER. Nothing in this OS appears over what
+    # somebody is doing in order to announce itself. The spot on the bell IS the
+    # arrival, and it waits: calm, and never a reason to lose a sentence you
+    # were in the middle of. That is also why nothing here makes a sound.
+    #
+    # The card is a dropdown like every other title in this bar — drawn inside
+    # the panel window for the reason _popup explains, and resting its right
+    # edge on the line the rest of the cluster ends on.
+    def _notify_menu(self, button):
+        if self._toggle_or_replace(button):
+            return
+        items = nbnotify.load()
+        # Opening the tray IS reading it. The mark goes to now, so everything
+        # on screen stops counting as new; anything that lands WHILE it is open
+        # is later than the mark and is still new when it closes. That is the
+        # honest alternative to rebuilding the list under the pointer, which
+        # would reset the scroll of the thing being read (Article III §2).
+        nbnotify.mark_seen()
+        self._present(self._notify_card(items), button,
+                      right_edge=self.screen_w - RIGHT_MARGIN,
+                      idle_s=NOTIFY_IDLE_TIMEOUT_S)
+        self._notify_state = nbnotify.state_key()
+        self._paint_bell(0)
+
+    def _notify_rebuild(self):
+        """Redraw the open tray in place, after the user changed what is in it.
+
+        Only ever reached from a click inside the card (dismiss, Clear All), so
+        it is a response to an action rather than a background refresh — the
+        rule against rebuilding under the pointer is about periodic reloads
+        moving things nobody touched.
+        """
+        button = self._menu_for
+        if button is None:
+            return
+        self._menu_remove()
+        self._present(self._notify_card(nbnotify.load()), button,
+                      right_edge=self.screen_w - RIGHT_MARGIN,
+                      idle_s=NOTIFY_IDLE_TIMEOUT_S)
+        self._notify_state = nbnotify.state_key()
+
+    def _notify_card(self, items):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        card.get_style_context().add_class("sysmenu")
+        card.get_style_context().add_class("nbn")
+
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        head.get_style_context().add_class("nbn-head")
+        title = Gtk.Label(label=_t("Notifications"), xalign=0)
+        title.get_style_context().add_class("nbn-head-title")
+        head.pack_start(title, True, True, 0)
+        if items:
+            # Offered only when there is something to clear: an always-present
+            # Clear All would be a permanently dead control on an empty tray,
+            # and this bar has none of those.
+            clear = Gtk.Button(label=_t("Clear All"))
+            clear.set_relief(Gtk.ReliefStyle.NONE)
+            clear.get_style_context().add_class("nbn-clear")
+            clear.connect("clicked", self._notify_clear)
+            head.pack_end(clear, False, False, 0)
+        card.pack_start(head, False, False, 0)
+        card.pack_start(self._notify_rule(), False, False, 0)
+
+        if not items:
+            # An empty state says what the surface is and what fills it, in
+            # sentence case (Article IV §4). "No notifications" alone would say
+            # only the first half.
+            empty = Gtk.Label(
+                label=_t("No notifications. Apps leave a message here when a "
+                         "job finishes."), xalign=0)
+            empty.get_style_context().add_class("nbn-empty")
+            empty.set_line_wrap(True)
+            empty.set_max_width_chars(40)
+            card.pack_start(empty, False, False, 0)
+            return card
+
+        for n, rec in enumerate(items):
+            if n:
+                # A hairline between messages, not a gap: the seam is what says
+                # where one message ends, and revealed structure is the design
+                # (Paper Physics §E1).
+                card.pack_start(self._notify_rule(inset=True), False, False, 0)
+            card.pack_start(self._notify_row(rec), False, False, 0)
+        return card
+
+    @staticmethod
+    def _notify_rule(inset=False):
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        sep.get_style_context().add_class(
+            "nbn-seam" if inset else "nbn-rule")
+        return sep
+
+    def _notify_row(self, rec):
+        """One message: who it is from and when, then what happened.
+
+        The row is the button — clicking anywhere on it opens the app that
+        posted it and takes the message away, which is the action a person
+        actually wants and the only one that needs no explanation. The dismiss
+        cross is a second, smaller button inside it for the messages you have
+        read by reading them.
+        """
+        row = Gtk.Button()
+        row.set_relief(Gtk.ReliefStyle.NONE)
+        row.get_style_context().add_class("nbn-row")
+        line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+
+        icon = nbicons.image(
+            rec.get("icon") or nbicons.glyph_for(rec.get("app") or ""),
+            16, "#6E695E")
+        icon.set_valign(Gtk.Align.START)
+        icon.set_margin_top(3)
+        line.pack_start(icon, False, False, 0)
+
+        # Top-aligned, both of them: every row's first line then sits the same
+        # distance below its seam whether the message has one line or three,
+        # which is the rhythm you actually read down a list. Centring a short
+        # row instead would put its baselines somewhere between two others'.
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        col.set_valign(Gtk.Align.START)
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        who = Gtk.Label(label=rec.get("app_name") or "", xalign=0)
+        who.get_style_context().add_class("nbn-who")
+        who.set_ellipsize(Pango.EllipsizeMode.END)
+        top.pack_start(who, True, True, 0)
+        when = Gtk.Label(label=self._notify_when(rec.get("at", 0)), xalign=1)
+        when.get_style_context().add_class("nbn-when")
+        top.pack_end(when, False, False, 0)
+        col.pack_start(top, False, False, 0)
+
+        # The title is a HEADLINE: one line, ellipsized. The body may take a
+        # second line and is then ellipsized too.
+        #
+        # Bounding them is what makes this a list somebody can scan rather than
+        # a column of paragraphs of different lengths — and it is also the only
+        # language-safe way to keep the rows on a rhythm. The alternative,
+        # pinning each text line to an exact multiple of the 4px unit, would
+        # clip Devanagari and CJK, whose line boxes are taller than Latin's:
+        # a grid bought with cut-off Chinese is not a grid, it is a bug in
+        # eleven languages. So the ROW carries the rhythm (min-height, on the
+        # open ladder) and the text is free to be as tall as its script needs.
+        title = Gtk.Label(label=rec.get("title") or "", xalign=0)
+        title.get_style_context().add_class("nbn-msg")
+        title.set_ellipsize(Pango.EllipsizeMode.END)
+        title.set_max_width_chars(34)
+        col.pack_start(title, False, False, 0)
+
+        if rec.get("body"):
+            body = Gtk.Label(label=rec["body"], xalign=0)
+            body.get_style_context().add_class("nbn-body")
+            body.set_line_wrap(True)
+            body.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            body.set_lines(2)
+            body.set_ellipsize(Pango.EllipsizeMode.END)
+            body.set_max_width_chars(34)
+            col.pack_start(body, False, False, 0)
+        line.pack_start(col, True, True, 0)
+
+        x = Gtk.Button()
+        x.set_relief(Gtk.ReliefStyle.NONE)
+        x.get_style_context().add_class("nbn-x")
+        x.set_valign(Gtk.Align.START)
+        x.add(nbicons.image("wclose", 12, "#6E695E"))
+        x.set_tooltip_text(_t("Dismiss"))
+        x.connect("clicked", self._notify_dismiss, rec)
+        line.pack_end(x, False, False, 0)
+
+        row.add(line)
+        # The row's promise, said out loud rather than left to be guessed —
+        # and the accessible name too, since every tooltip in this OS becomes
+        # one (nbapp._name_hook).
+        opens = self._notify_opens(rec)
+        row.set_tooltip_text(_t("Open %s") % opens if opens
+                             else _t("Dismiss"))
+        row.connect("clicked", self._notify_open, rec)
+        return row
+
+    def _notify_opens(self, rec):
+        """The app name a click on this row would open, or "" when there is
+        nothing to open — a notification from the desktop itself, or from an
+        app that is no longer installed. The row still dismisses, and its
+        tooltip says so instead of promising a window that never appears."""
+        mod = rec.get("app") or ""
+        if mod and os.path.exists(os.path.join(DE_DIR, mod + ".py")):
+            return rec.get("app_name") or mod
+        return ""
+
+    def _notify_open(self, _btn, rec):
+        self._menu_close()
+        if self._notify_opens(rec):
+            launch(rec.get("app"))
+        nbnotify.dismiss(rec.get("id"))
+        self._notify_state = None       # the tick re-reads and clears the mark
+
+    def _notify_dismiss(self, _btn, rec):
+        nbnotify.dismiss(rec.get("id"))
+        self._notify_rebuild()
+
+    def _notify_clear(self, _btn):
+        nbnotify.clear_all()
+        self._notify_rebuild()          # the tray stays open, on its empty state
+
+    def _notify_when(self, at):
+        """When a message arrived, at the resolution that is still useful.
+
+        Minutes while that is what somebody is watching, then the clock time —
+        in the format the View menu chose, because two clocks in one bar
+        disagreeing about 12 or 24 hours would be this OS contradicting itself.
+        Then Yesterday, then a date.
+        """
+        try:
+            at = float(at)
+        except (TypeError, ValueError):
+            return ""
+        now = time.time()
+        gap = now - at
+        if gap < 60:
+            # Includes a message from the near future: a clock correction can
+            # leave one stamped ahead, and "in 3 hours" is a worse answer than
+            # "just now" for something that has already happened.
+            return _t("Just now")
+        if gap < 3600:
+            return _t("%d min ago") % int(gap // 60)
+        local = time.localtime(at)
+        days = self._days_between(local, time.localtime(now))
+        if days == 0:
+            fmt = "%H:%M" if self._clock_24h else "%-I:%M %p"
+            try:
+                return time.strftime(fmt, local)
+            except ValueError:
+                return time.strftime("%H:%M", local)
+        if days == 1:
+            return _t("Yesterday")
+        try:
+            return time.strftime("%-d %b", local)
+        except ValueError:
+            # %-d (no-pad) is a glibc extension; musl/uClibc raise instead.
+            return time.strftime("%d %b", local)
+
+    @staticmethod
+    def _days_between(then, now):
+        """Whole calendar days from `then` to `now`, both struct_time.
+
+        Through nbapp.day_ordinal — the house days-from-civil arithmetic —
+        rather than dividing a difference in seconds by 86400, which skips or
+        repeats a day across a daylight-saving change, twice a year. And never
+        time.strptime, which imports the stdlib calendar module that
+        de/calendar.py shadows.
+        """
+        a = nbapp.day_ordinal(time.strftime("%Y-%m-%d", then))
+        b = nbapp.day_ordinal(time.strftime("%Y-%m-%d", now))
+        return (b - a) if (a is not None and b is not None) else 0
+
+    def _paint_bell(self, n):
+        """Show `n` unread on the menu-bar mark.
+
+        Two things change and they change on different schedules: the SPOT is
+        on or off, so it is only redrawn when that flips (a repaint here is
+        CPU-drawn pixels), while the tooltip carries the exact number and
+        follows every change.
+        """
+        unread = n > 0
+        if unread != self._bell_unread:
+            self._bell_unread = unread
+            surf = bell_surface(unread)
+            if surf is not None:
+                self.bellimg.set_from_surface(surf)
+            else:                       # no cairo surface: the glyph alone
+                nbicons.set_image(self.bellimg, "belldot" if unread else "bell",
+                                  BELL_PX, "#1A1916" if unread else "#6E695E")
+        if n != self._bell_count:
+            self._bell_count = n
+            # The count lives here rather than on the bar, so the mark never
+            # changes width and the cluster beside it never moves — and a
+            # screen reader gets the exact number, which a spot cannot give.
+            self.bell.set_tooltip_text(
+                _t("Notifications") if not n
+                else _t("%d new notification%s") % (n, "" if n == 1 else "s"))
 
     def _logo_menu(self, button):
         self._popup([
@@ -1186,6 +1603,14 @@ class Panel(Gtk.Window):
         # tick that already fires every second (no new wakeup); only relabel when
         # the reading changes, so the software-rendered bar isn't repainted for
         # 59 of every 60 identical ticks.
+        # The notification spool. state_key() is two stats and a listdir — it
+        # never opens a record — so the 59 ticks in a minute where nothing was
+        # posted cost nothing and touch no widget (Constitution B8). Only a
+        # changed key pays for reading the tray.
+        state = nbnotify.state_key()
+        if state != self._notify_state:
+            self._notify_state = state
+            self._paint_bell(nbnotify.unread_count())
         bat, bat_tip = self._battery_pct()
         if bat != self._last_bat:
             self._last_bat = bat
@@ -1274,6 +1699,10 @@ CSS = b"""
 .menuitem:hover, .menuitem.open { background: #EAE3D2; color: #1A1916; }
 .menuitem .bold { font-weight: 700; }
 .menuitem.logo { padding: 3px 8px; }
+/* The notification mark. Tighter than a text title because its glyph is
+   already inset inside its own 17px box, so the usual 8px would read as a
+   wider gap than the 18px the rest of the cluster is spaced on. */
+.menuitem.bell { padding: 4px 6px; }
 .clock { font-weight: 600; font-size: 14px; }
 .date  { font-size: 14px; color: #6E695E; }
 
@@ -1315,6 +1744,67 @@ menuitem.sysmenu-item:selected { background: #EAE3D2; }
   min-width: 8px; min-height: 30px;
 }
 .sysmenu-scroll scrollbar slider:hover { background: #9A9484; }
+
+/* ------------------------------------------------------------------------
+   The notification centre.
+
+   Same card as the menus above -- .nbn is added ALONGSIDE .sysmenu, so the
+   paper, the border, the radius and the shadow are the menu's and cannot
+   drift from it. What this adds is the inside of the card: a heading row, a
+   full-bleed rule under it, and message rows separated by inset seams.
+
+   Nothing here is a new colour: ink for the message, muted for who sent it and
+   when, the seam tones the rest of the OS already uses for a rule inside a
+   panel (#D7D2C5) and between surfaces (#C9C4B6), and the same darker-beige
+   #EAE3D2 the menus light a row with.
+   ------------------------------------------------------------------------ */
+/* ONE width, whether the tray is full or empty: the notification centre is a
+   fixed surface in this bar, not a box that shrinks to whatever is in it. The
+   value is measured, not guessed: it is what puts the card's RENDERED width
+   (this interior plus the 1px border pair) on the 4px unit. */
+.nbn { min-width: 358px; padding: 0; }
+/* Heading row and message rows both state their interior height, so the
+   card's rhythm is declared rather than left to whatever the text
+   measured out at: 32 and 48 are 8u and 12u, and each renders 16px taller
+   than its interior for the 8px padding pair (48 and 64, both on the open
+   ladder). Floors, not fixed heights: a second line of body, or a script
+   with taller line boxes, grows the row instead of being clipped. */
+.nbn-head { padding: 8px 10px 8px 14px; min-height: 32px; }
+/* The card's own name, in the quiet register section labels use across the OS
+   -- it is a heading, not a control, and must not compete with the messages. */
+.nbn-head-title { font-size: 13px; color: #6E695E; letter-spacing: 0.06em; }
+.nbn-clear { padding: 2px 8px; margin: 0; min-height: 24px; font-size: 13px;
+             color: #6E695E; background: transparent; background-image: none;
+             border: 1px solid transparent; border-radius: 6px;
+             box-shadow: none; }
+.nbn-clear label { color: #6E695E; }
+.nbn-clear:hover { background: #EAE3D2; }
+.nbn-clear:hover label { color: #1A1916; }
+/* The rule under the heading runs the full width of the card (it separates two
+   PARTS of it); the seams between messages are inset to the text column, the
+   way a rule between entries in a list is. */
+.nbn-rule { background: #C9C4B6; min-height: 1px; margin: 0; }
+.nbn-seam { background: #D7D2C5; min-height: 1px; margin: 0 12px; }
+.nbn-row { padding: 8px 10px 8px 14px; margin: 0; border: none;
+           border-radius: 0; background: transparent; background-image: none;
+           box-shadow: none; min-height: 48px; }
+.nbn-row:hover { background: #EAE3D2; }
+/* Sender and time are one tier of information and share one tone. The quieter
+   @muted-3 was tried for the time and measured 2.87:1 against the row's hover
+   swatch, under the 3:1 floor for an 11px string somebody is meant to read;
+   the hierarchy is carried by SIZE here, and does not need a second colour to
+   buy it at the cost of legibility. */
+.nbn-who { font-size: 11px; color: #6E695E; letter-spacing: 0.04em; }
+.nbn-when { font-size: 11px; color: #6E695E; }
+.nbn-msg { font-size: 14px; color: #1A1916; }
+.nbn-body { font-size: 13px; color: #6E695E; }
+/* The dismiss cross. 24px square is the hard floor for anything actionable
+   (Article VII 4); it stays quiet until the pointer is on the row. */
+.nbn-x { padding: 0; margin: 0; min-width: 24px; min-height: 24px;
+         border: 1px solid transparent; border-radius: 6px;
+         background: transparent; background-image: none; box-shadow: none; }
+.nbn-x:hover { background: #DED4C2; }
+.nbn-empty { padding: 16px 14px; font-size: 13px; color: #6E695E; }
 
 /* The desktop shell's dialog card: same paper, rule and type as every app's
    confirm, so a system question does not look like a window from another

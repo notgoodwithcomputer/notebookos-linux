@@ -4118,6 +4118,11 @@ class VideoEditor(nbapp.AppWindow):
                     msg + "\n" + _t("Missing file: %s") % ", ".join(gone),
                     error=False)
             self._exp_done = True
+            # A render is the longest job in this app — minutes for a short
+            # film — so where it ended up also goes to the menu bar's
+            # notification centre, which is still on screen after this dialog,
+            # and after this app, is gone.
+            self.notify(_t("Export finished"), rel)
             try:
                 self._exp_go.set_label(_t("Show in Finder"))
                 self._exp_go.set_sensitive(True)
@@ -4125,7 +4130,9 @@ class VideoEditor(nbapp.AppWindow):
             except Exception:
                 pass
         else:
-            self._exp_show_status(self._exp_failure_reason(), error=True)
+            reason = self._exp_failure_reason()
+            self._exp_show_status(reason, error=True)
+            self.notify(_t("The export did not finish."), reason)
             # a half-written .mp4 in the Videos folder is worse than nothing:
             # it looks like a saved film and plays as a broken one
             self._discard_partial_export()
