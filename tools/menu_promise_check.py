@@ -47,8 +47,15 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 # App -> number of currently known behavioral promise violations.
 # Numbers only ever come down.  Filled from the first complete sweep.
 #
-# NOT WIRED INTO run_all_gates YET, and this is why: 16 of the 33 apps never
-# finish their probe (academics, calculator, calendar, composer, gbaemu, gbasdk, illustrator, language, music, novel, screenplay, sequencer, terminal, video, workout, writer).  An app whose probe blocks is
+# NOT WIRED INTO run_all_gates YET, and this is why: 11 of the 33 apps still
+# never finish their probe (academics, calculator, calendar, composer,
+# gbaemu, gbasdk, language, music, terminal, workout, writer).
+#
+# That is down from 16: stubbing the audio pump and the file pickers inside
+# the probe — the way tools/animation_selftest.py already does — took the
+# items actually invoked from 104 to 203, and freed five apps.
+#
+# An app whose probe blocks is
 # not an app that passed — it is an app this gate cannot speak for, and the
 # verdict counts it as a failure, correctly.  The cause is the same one the
 # animation suite hit: pressing Play builds a real GStreamer pipeline that
@@ -57,6 +64,10 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 # them and not enough.  Until every app can be probed, wiring this into the
 # aggregate would make the aggregate permanently red, which is the same as
 # having no gate at all.
+#
+# The child probe now replaces both dependencies before invoking menu items.
+# A complete 33-app sweep on display-equipped hardware is still required to
+# replace this historical count, populate DEBT, and wire the aggregate gate.
 DEBT = {
     'accounting.py': 0,  # Ledger Summary — reveals a dismiss-only report, no input or choice.
     'contacts.py': 0,
@@ -239,6 +250,36 @@ def probe(name):
         print(json.dumps({"error": "no Gtk.Window app class"}))
         return 0
     app = cls()
+
+    class Silent:
+        """Stand in for audio output so a callback never opens a real sink."""
+        available = False
+
+        def stop(self, *args, **kwargs):
+            pass
+
+        def position_samples(self, *args, **kwargs):
+            return 0
+
+        def start(self, *args, **kwargs):
+            pass
+
+        def play_once(self, *args, **kwargs):
+            pass
+
+        def push(self, *args, **kwargs):
+            pass
+
+    # Construction may create the real output object, but no driven callback
+    # may reach it.  Apps without audio simply gain an unused stand-in.
+    app.audio = Silent()
+
+    # Picker callbacks must return without opening a window: a picker window
+    # would itself look like evidence that the menu item asked a question.
+    import nbpicker
+    picker_path = os.path.join(os.environ["NB_HOME"], "menu-promise-probe")
+    nbpicker.open_file = lambda *args, **kwargs: picker_path
+    nbpicker.save_file = lambda *args, **kwargs: picker_path
     flashes = []
     # Refusals are deliberately neutral: they neither ask nor act.  Apps use
     # several names/signatures for their transient status method.
