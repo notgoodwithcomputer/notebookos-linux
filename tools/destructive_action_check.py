@@ -20,11 +20,13 @@ Run:
 # something the module SAVES, which took the findings from a dozen pieces of
 # UI state to three, each ledgered with its own reason.
 #
-# The original of that pass was written by Codex and destroyed by me, with an
-# over-greedy regex aimed at the ledger beside it; Persistence,
-# persistence_for, _mentions_home, self_attribute and loaded_self_attributes
-# below are my reconstruction to the same contract. Said here because the
-# next person deserves to know which parts have been through two hands.
+# One correction to an earlier note in this file: I said the persistence pass
+# had been destroyed by an over-greedy regex of mine and rebuilt by hand. The
+# regex did damage the file — it took out parse_module's header, which was
+# restored from the committed version — but the persistence pass itself
+# SURVIVED, further down. My reconstruction of it sat above the originals,
+# shadowed by them and doing nothing, until I noticed the duplicate
+# definitions and removed it. Everything below is the original.
 #
 # What it was, before all that:
 #
@@ -75,114 +77,10 @@ SNAPSHOT_CALLS = {"_push", "_begin_edit", "_remember", "_structure"}
 CONFIRM_WORDS = ("confirm", "prompt", "are_you_sure", "ask_delete",
                  "ask_remove", "question_dialog")
 
-@dataclasses.dataclass(frozen=True)
-class Method:
-    module: str
-    qualname: str
-    name: str
-    line: int
-    end_line: int
-    mutation_lines: tuple[int, ...]
-    mutation_kinds: tuple[str, ...]
-    snapshot_lines: tuple[int, ...]
-    confirm_lines: tuple[int, ...]
-    helper_calls: tuple[tuple[str, int], ...]
-    escape_lines: tuple[int, ...]
-
-
-@dataclasses.dataclass(frozen=True)
-class Result:
-    method: Method
-    status: str
-    detail: str
-
-
-SAVE_CALLS = {"json.dump", "json.dumps", "atomic_write_json",
-              "atomic_write_text", "write_to_png", "writeframes"}
-
-
-@dataclasses.dataclass(frozen=True)
-class Persistence:
-    """What this module KEEPS: the state its save path writes out.
-
-    Rewritten by hand after I destroyed the original with an over-greedy
-    regex while editing the ledger beside it. The contract is the one the
-    surrounding code already expects: a set of self.<name> attributes that
-    the module's own save/serialise path reads, and a set of names that
-    stand for a file or directory belonging to the person.
-    """
-    attributes: frozenset
-    path_names: frozenset
-
-
-def self_attribute(node):
-    """`self.foo` (or self.foo[...] / self.foo.bar) -> 'foo', else None."""
-    while isinstance(node, (ast.Subscript, ast.Attribute)):
-        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
-                and node.value.id == "self"):
-            return node.attr
-        node = node.value if not isinstance(node, ast.Subscript) else node.value
-    return None
-
-
-def loaded_self_attributes(node):
-    """Every self.<name> READ anywhere under this node."""
-    out = set()
-    for child in ast.walk(node):
-        if (isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name)
-                and child.value.id == "self"):
-            out.add(child.attr)
-    return out
-
-
-def _mentions_home(node, path_names):
-    """Does this path expression stand for something under the user's home?"""
-    for child in ast.walk(node):
-        if isinstance(child, ast.Name) and child.id in path_names:
-            return True
-        if isinstance(child, ast.Attribute) and child.attr in path_names:
-            return True
-        if isinstance(child, ast.Constant) and isinstance(child.value, str):
-            text = child.value
-            if "NB_HOME" in text or "/Documents" in text or ".config" in text:
-                return True
-    return False
-
-
-def persistence_for(tree):
-    """The attributes the module's save path writes, and its user paths.
-
-    A destructive mutation only matters when it destroys something the app
-    KEEPS. Without this the gate reported Writer clearing its find-highlight
-    and the tablet daemon writing a flag file — neither of which is anybody's
-    work.
-    """
-    attributes, path_names = set(), set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            name = call_name(node)
-            if name in SAVE_CALLS or name.endswith((".atomic_write_json",
-                                                    ".atomic_write_text")):
-                for argument in node.args:
-                    attributes |= loaded_self_attributes(argument)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            lowered = node.name.lower()
-            if "save" in lowered or "serial" in lowered or "store" in lowered:
-                for child in ast.walk(node):
-                    if isinstance(child, ast.Call):
-                        name = call_name(child)
-                        if name in SAVE_CALLS or name.endswith(
-                                (".atomic_write_json", ".atomic_write_text")):
-                            attributes |= loaded_self_attributes(node)
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            text = ast.unparse(node.value)
-            if "NB_HOME" in text or ".config" in text or "Documents" in text:
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        path_names.add(target.id)
-    return Persistence(frozenset(attributes), frozenset(path_names))
-
-
+# NOTE: the dataclasses and the persistence helpers live BELOW the
+# ledger, in their original typed form. A reconstruction of them was
+# briefly duplicated here after I damaged the file; the duplicate was
+# shadowed by the originals and has been removed.
 # Exact two-way ledger.  Every accepted entry has its own reason; a new or
 # stale entry makes the gate fail.
 DEBT: dict[tuple[str, str, str], str] = {
