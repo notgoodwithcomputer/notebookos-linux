@@ -47,50 +47,57 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 # App -> number of currently known behavioral promise violations.
 # Numbers only ever come down.  Filled from the first complete sweep.
 #
-# NOT WIRED INTO run_all_gates YET, and this is why: 11 of the 33 apps still
-# never finish their probe (academics, calculator, calendar, composer,
-# gbaemu, gbasdk, language, music, terminal, workout, writer).
+# NOT WIRED INTO run_all_gates YET, and there are now exactly two reasons,
+# both small and both named:
 #
-# That is down from 16: stubbing the audio pump and the file pickers inside
-# the probe — the way tools/animation_selftest.py already does — took the
-# items actually invoked from 104 to 203, and freed five apps.
+#   1. music.py is the last app whose probe never finishes. Every other one
+#      of the 33 completes.
+#   2. The violation count oscillates between 54 and 55 across consecutive
+#      runs of an unchanged tree. A gate that answers differently to the same
+#      question cannot go into the aggregate: it would fail on nobody's
+#      change. Find the timing-dependent item before wiring this.
 #
-# An app whose probe blocks is
-# not an app that passed — it is an app this gate cannot speak for, and the
-# verdict counts it as a failure, correctly.  The cause is the same one the
-# animation suite hit: pressing Play builds a real GStreamer pipeline that
-# blocks on a host with no working sink, and pressing an item that wants a
-# file picker waits forever.  HANDOFF and AUDIO_WORDS below catch some of
-# them and not enough.  Until every app can be probed, wiring this into the
-# aggregate would make the aggregate permanently red, which is the same as
-# having no gate at all.
+# How it got here, for whoever picks it up. Stubbing the audio pump and the
+# file pickers took invoked items 104 -> 203 and blocked probes 16 -> 11.
+# Then a stack dump — not a guess — showed calculator.py:_store_dialog
+# sitting inside Gtk.Dialog.run(), a legacy modal loop that waits for a
+# person. Stubbing run() to return CANCEL took items 203 -> 342 and blocked
+# probes 11 -> 1. The dialog is still CONSTRUCTED and still registers as a
+# new toplevel, so the verdict this gate makes — did the item ask? — is
+# untouched; only the waiting is gone.
+#
+# Reaching 342 items instead of 104 is why the ledger now holds 55
+# violations rather than 20. They were always there; nothing had invoked
+# them.
 #
 # The child probe now replaces both dependencies before invoking menu items.
 # A complete 33-app sweep on display-equipped hardware is still required to
 # replace this historical count, populate DEBT, and wire the aggregate gate.
 DEBT = {
-    'accounting.py': 0,  # Ledger Summary — reveals a dismiss-only report, no input or choice.
-    'contacts.py': 0,
-    # New Recipe appends a recipe, selects it and opens the editor on it. It
-    # asks nothing — New Category… beside it does, so the app already drew
-    # the line — but the editor arrives as an overlay full of fields, which
-    # this gate cannot tell from a question. Carried as a known exemption
-    # rather than labelled with a promise the item does not keep.
+    'academics.py': 3,
+    'calculator.py': 4,
+    'calendar.py': 2,
+    'composer.py': 2,
     'cookbook.py': 1,
-    'g2048.py': 1,  # New Game — resets the board immediately, with no prompt.
+    'g2048.py': 1,
+    'gbaemu.py': 1,
+    'gbasdk.py': 8,
+    'illustrator.py': 1,
     'installer.py': 1,
-    'journal.py': 0,
-    'maps.py': 1,  # Zoom In — adjusts the map view immediately, no dialog.
-    'mealplanner.py': 1,  # Cut — moves selected text to the clipboard immediately, no dialog.
-    'media.py': 1,  # Show Info Panel — reveals the existing panel immediately, no input.
+    'language.py': 3,
+    'maps.py': 1,
+    'mealplanner.py': 1,
+    'media.py': 1,
+    'novel.py': 2,
     'packages.py': 2,
-    # System, Sound, Power, Keyboard, Date & Time, Region & Language, Backup,
-    # Default Apps — each switches pages immediately; page controls are not a prompt.
+    'screenplay.py': 2,
+    'sequencer.py': 1,
     'settings.py': 2,
-    'sysmon.py': 1,  # Refresh Now — resamples processes immediately, no dialog.
-    'tasks.py': 0,
-    'usbwriter.py': 1,  # Look for Drives Again — rescans and redraws immediately, no dialog.
-    'widgetsettings.py': 1,  # Hide All from the Desktop — disables all tiles and saves immediately.
+    'sysmon.py': 1,
+    'usbwriter.py': 1,
+    'video.py': 7,
+    'widgetsettings.py': 1,
+    'writer.py': 5,
 }
 
 HANDOFF = {
@@ -280,6 +287,14 @@ def probe(name):
     picker_path = os.path.join(os.environ["NB_HOME"], "menu-promise-probe")
     nbpicker.open_file = lambda *args, **kwargs: picker_path
     nbpicker.save_file = lambda *args, **kwargs: picker_path
+    # A legacy Gtk.Dialog.run() spins its own modal loop until a person
+    # dismisses it, so the probe hung there for ever. Diagnosed by stack, not
+    # guessed: calculator.py:_store_dialog was sitting in Gtk.py run().
+    #
+    # The dialog is still CONSTRUCTED and still registers as a new toplevel,
+    # so the verdict this gate exists to make — did the item ask? — is
+    # unchanged. Only the waiting is removed.
+    Gtk.Dialog.run = lambda self, *args, **kwargs: Gtk.ResponseType.CANCEL
     flashes = []
     # Refusals are deliberately neutral: they neither ask nor act.  Apps use
     # several names/signatures for their transient status method.
