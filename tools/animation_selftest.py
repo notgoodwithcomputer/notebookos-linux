@@ -6098,7 +6098,7 @@ def paint_menu_family():
              app._pattern_buttons, animation.PATTERNS[1]),
             ("Sparse", animation.PATTERNS[2], lambda: app.pattern,
              app._pattern_buttons, animation.PATTERNS[2]),
-            ("Solid", animation.PATTERNS[0], lambda: app.pattern,
+            ("Solid Colour", animation.PATTERNS[0], lambda: app.pattern,
              app._pattern_buttons, animation.PATTERNS[0])):
         invoke(name)
         reached[name] = (get() == wanted and buttons[key].get_active() and

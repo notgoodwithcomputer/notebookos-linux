@@ -1838,7 +1838,12 @@ class Animation(nbapp.AppWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         first = None
         self._pattern_buttons = {}
-        for pattern, label in zip(PATTERNS, ('Solid', 'Checker', 'Sparse')):
+        # 'Solid' belongs to the GBA SDK, where it means a tile you cannot
+        # walk through — so Japanese read the fill pattern as 'impassable'
+        # and Korean as 'cannot pass'. A shared catalog is keyed on the
+        # English word, not on the sense, so this app needs its own.
+        for pattern, label in zip(PATTERNS,
+                                  ('Solid colour', 'Checker', 'Sparse')):
             button = self._mark_btn('pattern-' + pattern, label,
                                     self._set_pattern, label=label,
                                     callback_arg=pattern, group=first,
@@ -2622,7 +2627,7 @@ class Animation(nbapp.AppWindow):
                 (self._ticked(self.shape == 'round', _t('Round Tip')),
                  press(tip['round'], True) if 'round' in tip else None),
                 nbapp.SEP,
-                (self._ticked(self.pattern == PATTERNS[0], _t('Solid')),
+                (self._ticked(self.pattern == PATTERNS[0], _t('Solid Colour')),
                  press(fill[PATTERNS[0]], True) if PATTERNS[0] in fill else None),
                 (self._ticked(self.pattern == PATTERNS[1], _t('Checker')),
                  press(fill[PATTERNS[1]], True) if PATTERNS[1] in fill else None),
