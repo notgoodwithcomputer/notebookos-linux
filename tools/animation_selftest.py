@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import array
+import ast
 import base64
 import copy
 import importlib
+import io
 import json
 import math
 import os
@@ -5388,6 +5390,154 @@ def frame_image_family():
     shutil.rmtree(scratch)
 
 
+def spec_law_family():
+    """Three promises the spec makes that nothing had checked.
+
+    They are identity promises rather than niceties: a private import list,
+    a keyboard that steps in frames and seconds, and an export that scales
+    by a whole number with nearest-neighbour and then pads. The last is
+    what makes the pictures pixel art instead of a blur."""
+    if not gtk_available():
+        skip("F48 spec laws", "no display")
+        return
+
+    # 1. "de/animation.py must not import illustrator, sequencer or video;
+    #     the shared code it may import is the nb* family" (spec §0)
+    tree = ast.parse(MODULE_SOURCE.read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(node.module.split(".")[0])
+    forbidden = imported & {"illustrator", "sequencer", "video", "comics"}
+    siblings = {name for name in imported
+                if (DE / (name + ".py")).exists() and not name.startswith("nb")}
+    check("F48 the app keeps to its own company and the nb family",
+          not forbidden and not siblings, sorted(forbidden | siblings))
+
+    # 2. ", " and "." step one frame; with Shift they step one second
+    from gi.repository import Gdk
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.view_origin = 0
+    app.doc.scenes[0]["length"] = 200
+    app.sheet = animation.Sheet(app.doc, 0)
+
+    def press(keyval, shift=False):
+        event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        event.keyval = keyval
+        event.state = Gdk.ModifierType.SHIFT_MASK if shift else 0
+        app._on_key(app, event)
+
+    app.playhead = 100
+    press(Gdk.KEY_period)
+    one_on = app.playhead
+    press(Gdk.KEY_comma)
+    back = app.playhead
+    press(Gdk.KEY_period, shift=True)
+    second_on = app.playhead
+    check("F48 a comma and a period step exactly one frame",
+          one_on == 101 and back == 100, (one_on, back))
+    check("F48 and with Shift they step exactly one second",
+          second_on == 100 + app.doc.fps, (second_on, app.doc.fps))
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    # 3. "Integer scale, then pad; never fractional, never blurred"
+    captured = []
+
+    class Recorder:
+        def __init__(self, args, **kwargs):
+            captured.append(list(args))
+            self.stdin = io.BytesIO()
+            self.returncode = 0
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def communicate(self, *a, **k):
+            return (b"", b"")
+
+    home = tempfile.mkdtemp(prefix="animation-spec-")
+    document = animation.AnimationDocument(canvas=(320, 240))
+    document.scenes[0]["length"] = 2
+    real_popen = animation.subprocess.Popen
+    real_which = animation.shutil.which
+    animation.subprocess.Popen = Recorder
+    animation.shutil.which = lambda name: "/usr/bin/" + name
+    filters = {}
+    try:
+        for size in ((640, 480), (1920, 1080)):
+            del captured[:]
+            try:
+                animation.export_video(document, [(document.scenes[0], 0)],
+                                       os.path.join(home, "out.mp4"),
+                                       size[0], size[1])
+            except Exception:
+                pass
+            for args in captured:
+                if "-vf" in args:
+                    filters[size] = args[args.index("-vf") + 1]
+    finally:
+        animation.subprocess.Popen = real_popen
+        animation.shutil.which = real_which
+        shutil.rmtree(home, ignore_errors=True)
+
+    check("F48 the export scales by a whole number, sharp, and pads the rest",
+          filters.get((640, 480), "").startswith("scale=iw*2:ih*2:flags=neighbor") and
+          filters.get((1920, 1080), "").startswith("scale=iw*4:ih*4:flags=neighbor") and
+          all("pad=" in value for value in filters.values()),
+          filters)
+    check("F48 and never asks for a fractional scale",
+          filters and not any("." in value.split(",")[0] for value in filters.values()),
+          filters)
+
+    # run the sabotaged build rather than reading it: a mutant that only
+    # inspects text proves the edit landed, not that the check can fail
+    graded, scratch = module_mutant(
+        "F48-blurred-export",
+        [("flags=neighbor", "flags=bilinear")])
+    blurred = {}
+    spoiled_home = tempfile.mkdtemp(prefix="animation-spec-mutant-")
+    other = graded.AnimationDocument(canvas=(320, 240))
+    other.scenes[0]["length"] = 2
+    graded_popen = graded.subprocess.Popen
+    graded_which = graded.shutil.which
+    graded.subprocess.Popen = Recorder
+    graded.shutil.which = lambda name: "/usr/bin/" + name
+    try:
+        del captured[:]
+        try:
+            graded.export_video(other, [(other.scenes[0], 0)],
+                                os.path.join(spoiled_home, "out.mp4"), 640, 480)
+        except Exception:
+            pass
+        for args in captured:
+            if "-vf" in args:
+                blurred["filter"] = args[args.index("-vf") + 1]
+    finally:
+        graded.subprocess.Popen = graded_popen
+        graded.shutil.which = graded_which
+        shutil.rmtree(spoiled_home, ignore_errors=True)
+    mutant("F48 an export that blurs the pictures is caught",
+           not blurred.get("filter", "").startswith(
+               "scale=iw*2:ih*2:flags=neighbor"), blurred)
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5417,6 +5567,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        spec_law_family,
         frame_image_family,
         loudness_card_family,
         audio_pump_family,
