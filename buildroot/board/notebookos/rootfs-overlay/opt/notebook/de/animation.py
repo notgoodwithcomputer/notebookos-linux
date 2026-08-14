@@ -1235,7 +1235,8 @@ class StackHistory:
 class Animation(nbapp.AppWindow):
     """GTK shell; the document engine above remains the output authority."""
     app_name = 'Animation'
-    menus = ('File', 'Edit', 'View', 'Timeline', 'Scene', 'Drawing', 'Layer', 'Sound')
+    menus = ('File', 'Edit', 'View', 'Paint', 'Timeline', 'Scene', 'Drawing',
+             'Layer', 'Sound')
 
     def __init__(self, path=None):
         super().__init__()
@@ -1745,6 +1746,7 @@ class Animation(nbapp.AppWindow):
         # by the reader.
         shapes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         first = None
+        self._shape_buttons = {}
         for shape, label in (('square', 'Square tip'), ('round', 'Round tip')):
             button = self._mark_btn('tip-' + shape, label, self._set_shape,
                                     label=label, callback_arg=shape,
@@ -1753,23 +1755,30 @@ class Animation(nbapp.AppWindow):
                 first = button
             button.set_active(shape == self.shape)
             shapes.pack_start(button, True, True, 0)
+            self._shape_buttons[shape] = button
         dock.pack_start(shapes, False, False, 0)
 
     def _build_mirror_group(self, dock):
         self._group_title(dock, 'Mirror')
         row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        # Named, like every other control in the dock. These two were the
+        # only ones left as a bare glyph, so the one pair of settings a
+        # person could not read was also the pair furthest below the fold.
+        self._mirror_buttons = {}
         for attr, tip in (('symx', 'Mirror left and right'),
                           ('symy', 'Mirror top and bottom')):
             button = self._mark_btn(attr, tip, self._set_boolean,
-                                    toggle=True, callback_arg=attr)
+                                    label=tip, toggle=True, callback_arg=attr)
             button.set_active(getattr(self, attr))
             row.pack_start(button, True, True, 0)
+            self._mirror_buttons[attr] = button
         dock.pack_start(row, False, False, 0)
 
     def _build_pattern_group(self, dock):
         self._group_title(dock, 'Pattern')
         row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         first = None
+        self._pattern_buttons = {}
         for pattern, label in zip(PATTERNS, ('Solid', 'Checker', 'Sparse')):
             button = self._mark_btn('pattern-' + pattern, label,
                                     self._set_pattern, label=label,
@@ -1779,6 +1788,7 @@ class Animation(nbapp.AppWindow):
                 first = button
             button.set_active(pattern == self.pattern)
             row.pack_start(button, True, True, 0)
+            self._pattern_buttons[pattern] = button
         dock.pack_start(row, False, False, 0)
 
     def _build_colour_group(self, dock):
@@ -1874,6 +1884,7 @@ class Animation(nbapp.AppWindow):
         lock.set_active(self.doc.palette_only)
         lock.connect('toggled', self._palette_lock)
         dock.pack_start(lock, False, False, 0)
+        self._palette_lock_check = lock
 
     def _palette_name(self, index):
         if index < 80:
@@ -1902,6 +1913,26 @@ class Animation(nbapp.AppWindow):
 
     def _set_size(self, _button, size):
         self.size = size
+
+    def _ticked(self, on, text):
+        """A menu item that carries its own state.
+
+        The OS convention, which Illustrator already follows: a tick when the
+        setting is on, and the same width of space when it is off, so the
+        words stay in one column. nbapp pins the tick to a face that has the
+        glyph — the shipped Nimbus Sans does not.
+
+        Takes text already translated, so every string still reaches _t() as
+        a literal where i18n_source_coverage can see it. Hidden behind this
+        helper, six menu items would have been missing from the catalogs with
+        every gate green.
+
+        Two spaces, not four: four spaces are how this OS writes the gap
+        before an accelerator, so an unticked item padded with four read as a
+        nameless command bound to a key called 'Round Tip'. F23 caught it.
+        Illustrator pads with four and has the same latent fault.
+        """
+        return ('\u2713 ' if on else '  ') + text
 
     def _set_shape(self, button, shape):
         if button.get_active():
@@ -2504,11 +2535,54 @@ class Animation(nbapp.AppWindow):
                      'Onion Skin: Two Drawings')[self.onion]
             return [
                 (onion + '    Ctrl+E', self._cycle_onion),
-                ('Pixel Grid    G', self._toggle_grid),
+                (self._ticked(self.grid, _t('Pixel Grid    G')),
+                 self._toggle_grid),
                 nbapp.SEP,
                 ('Zoom In    Ctrl+Plus', lambda: self._zoom_step(1)),
                 ('Zoom Out    Ctrl+Minus', lambda: self._zoom_step(-1)),
                 ('Fit    Ctrl+0', self._fit_canvas),
+            ]
+        if name == 'Paint':
+            # The dock is 887px of controls in a 406px column at the design
+            # size, and 284px at 1024x600 — so tip, pattern, mirror and the
+            # project palette all sat below the fold with no other way to
+            # reach them. Every other thing this app can do has a menu.
+            # Menus set the dock's own controls rather than the state behind
+            # them, so the two can never come to disagree.
+            def press(button, wanted=None):
+                return lambda: button.set_active(
+                    (not button.get_active()) if wanted is None else wanted)
+
+            tip = getattr(self, '_shape_buttons', {})
+            fill = getattr(self, '_pattern_buttons', {})
+            flip = getattr(self, '_mirror_buttons', {})
+            lock = getattr(self, '_palette_lock_check', None)
+            return [
+                (self._ticked(self.shape == 'square', _t('Square Tip')),
+                 press(tip['square'], True) if 'square' in tip else None),
+                (self._ticked(self.shape == 'round', _t('Round Tip')),
+                 press(tip['round'], True) if 'round' in tip else None),
+                nbapp.SEP,
+                (self._ticked(self.pattern == PATTERNS[0], _t('Solid')),
+                 press(fill[PATTERNS[0]], True) if PATTERNS[0] in fill else None),
+                (self._ticked(self.pattern == PATTERNS[1], _t('Checker')),
+                 press(fill[PATTERNS[1]], True) if PATTERNS[1] in fill else None),
+                (self._ticked(self.pattern == PATTERNS[2], _t('Sparse')),
+                 press(fill[PATTERNS[2]], True) if PATTERNS[2] in fill else None),
+                nbapp.SEP,
+                (self._ticked(self.symx, _t('Mirror Left and Right')),
+                 press(flip['symx']) if 'symx' in flip else None),
+                (self._ticked(self.symy, _t('Mirror Top and Bottom')),
+                 press(flip['symy']) if 'symy' in flip else None),
+                nbapp.SEP,
+                ('  ' + _t('Add Palette Colour'),
+                 self._palette_add
+                 if (self.color not in self.doc.palette
+                     and len(self.doc.palette) < 16) else None),
+                ('  ' + _t('Remove Palette Colour'),
+                 self._palette_remove if self.doc.palette else None),
+                (self._ticked(self.doc.palette_only, _t('Draw with Palette Only')),
+                 press(lock) if lock is not None else None),
             ]
         if name == 'Timeline':
             return [
@@ -2534,7 +2608,7 @@ class Animation(nbapp.AppWindow):
                 nbapp.SEP,
                 (('Stop    Space' if self._playing else 'Play    Space'),
                  self._toggle_playback),
-                ('Loop', self._toggle_loop),
+                (self._ticked(self.loop, _t('Loop')), self._toggle_loop),
                 ('Stamp Mouths', self._toggle_stamp_mouths),
                 nbapp.SEP,
                 ('Previous Frame    ,', self._step_back),

@@ -6038,6 +6038,146 @@ def lazy_library_family():
     shutil.rmtree(scratch)
 
 
+def paint_menu_family():
+    """Tip, pattern, mirror and the palette have a way in from the menus.
+
+    Measured before this existed: the dock is 887px of controls in a 406px
+    column at 1024x722, and 284px at 1024x600. Everything from Pattern down
+    sat below the fold, and unlike every other thing the app can do, these
+    four groups had no menu entry — so at the design size they were reachable
+    only by dragging a scrollbar nobody had reason to drag. The conventions
+    put it plainly: a shortcut nobody can discover is not a feature.
+
+    The menu presses the dock's own control rather than setting the state
+    behind it, so the two cannot come to disagree — which is the defect this
+    family exists to keep out."""
+    if not gtk_available():
+        skip("F54 the Paint menu", "no display")
+        return
+    from gi.repository import Gtk
+
+    def bare(label):
+        return label.replace("\u2713", "").strip()
+
+    def opened(module):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        return app
+
+    app = opened(animation)
+    check("F54 the app offers a Paint menu, after View",
+          "Paint" in animation.Animation.menus and
+          list(animation.Animation.menus).index("Paint") ==
+          list(animation.Animation.menus).index("View") + 1,
+          animation.Animation.menus)
+
+    def items():
+        return [(bare(label), cb) for label, cb in app.menu_items("Paint")
+                if label != "-"]
+
+    def ticked():
+        return {bare(label) for label, _cb in app.menu_items("Paint")
+                if label.startswith("\u2713")}
+
+    def invoke(name):
+        for label, cb in items():
+            if label == name:
+                assert cb is not None, name
+                cb()
+                return True
+        return False
+
+    # every control in the three registries is reached by pressing its own
+    # dock button, so the menu can never say one thing while the dock shows
+    # another
+    reached = {}
+    for name, wanted, get, buttons, key in (
+            ("Round Tip", "round", lambda: app.shape, app._shape_buttons, "round"),
+            ("Square Tip", "square", lambda: app.shape, app._shape_buttons, "square"),
+            ("Checker", animation.PATTERNS[1], lambda: app.pattern,
+             app._pattern_buttons, animation.PATTERNS[1]),
+            ("Sparse", animation.PATTERNS[2], lambda: app.pattern,
+             app._pattern_buttons, animation.PATTERNS[2]),
+            ("Solid", animation.PATTERNS[0], lambda: app.pattern,
+             app._pattern_buttons, animation.PATTERNS[0])):
+        invoke(name)
+        reached[name] = (get() == wanted and buttons[key].get_active() and
+                         name in ticked())
+    check("F54 choosing a tip or a pattern moves the model, the dock and the tick",
+          all(reached.values()),
+          sorted(n for n, ok in reached.items() if not ok))
+
+    flips = {}
+    for name, attr in (("Mirror Left and Right", "symx"),
+                       ("Mirror Top and Bottom", "symy")):
+        was = getattr(app, attr)
+        invoke(name)
+        flips[name] = (getattr(app, attr) != was and
+                       app._mirror_buttons[attr].get_active() == (not was) and
+                       (name in ticked()) == (not was))
+        invoke(name)
+        flips[name] = flips[name] and getattr(app, attr) == was
+    check("F54 and each mirror turns on and off again from the menu", 
+          all(flips.values()),
+          sorted(n for n, ok in flips.items() if not ok))
+
+    invoke("Draw with Palette Only")
+    locked = (app.doc.palette_only and app._palette_lock_check.get_active()
+              and "Draw with Palette Only" in ticked())
+    invoke("Draw with Palette Only")
+    check("F54 the palette lock is a menu item that shows whether it is on",
+          locked and not app.doc.palette_only, (locked, app.doc.palette_only))
+
+    held = list(app.doc.palette)
+    invoke("Add Palette Colour")
+    grew = len(app.doc.palette) == len(held) + 1
+    barred = dict(items()).get("Add Palette Colour")
+    invoke("Remove Palette Colour")
+    check("F54 the project palette is worked from the menu, and refuses when it must",
+          grew and list(app.doc.palette) == held and barred is None,
+          (grew, len(app.doc.palette), barred is None))
+
+    # the two controls that were a bare glyph now say what they do
+    def words_in(button):
+        found, stack = "", [button]
+        while stack and not found:
+            widget = stack.pop(0)
+            if isinstance(widget, Gtk.Label):
+                found = widget.get_text()
+            elif isinstance(widget, Gtk.Container):
+                stack.extend(widget.get_children())
+        return found
+
+    named = {attr: words_in(button) for attr, button
+             in app._mirror_buttons.items()}
+    check("F54 the mirror buttons carry words, like every other dock control",
+          all(bool(text) and len(text) > 3 for text in named.values()), named)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant("F54-menu-that-reaches-nothing", [
+        ("                return lambda: button.set_active(\n"
+         "                    (not button.get_active()) if wanted is None else wanted)",
+         "                return lambda: None"),
+    ])
+    other = opened(graded)
+    for label, cb in other.menu_items("Paint"):
+        if bare(label) == "Round Tip" and cb:
+            cb()
+    mutant("F54 a Paint menu whose items reach nothing is caught",
+           other.shape != "round", other.shape)
+    other._alive = False
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6070,6 +6210,7 @@ for _family in (
         streaming_family,
         damage_scan_family,
         lazy_library_family,
+        paint_menu_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
