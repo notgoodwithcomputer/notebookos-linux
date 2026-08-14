@@ -255,6 +255,18 @@ class Novel(nbapp.AppWindow):
             # First run: persist the seed so the "Saved" state is truthful and
             # the empty manuscript reopens instead of being silently re-seeded.
             self._save_state()
+        elif self._store_read_only:
+            # THE BLANK BOOK NEEDS EXPLAINING. A manuscript that could not be
+            # read leaves this window showing a seeded Chapter 1 — which looks
+            # exactly like a new book, and is the most alarming thing this app
+            # can show someone who had a book here yesterday. The bytes were
+            # kept and the session refuses to write over them, but neither of
+            # those facts is visible: the only signal was "Not saved" appearing
+            # after the first sentence they typed.
+            #
+            # Deferred to idle because __init__ is still building the window
+            # the card has to sit inside.
+            GLib.idle_add(self._say_store_unreadable)
         # Compute the initial page total AFTER the window is up, so paginating a
         # restored manuscript never delays first paint (launch-perf sensitive).
         # Deliberately on the same debounce the typing path uses rather than an
@@ -1469,6 +1481,19 @@ class Novel(nbapp.AppWindow):
             _t("Close Without Saving"), self._discard_and_close)
         self._closeprompt = getattr(self, "_prompt_layer", None)
         return True
+
+    def _say_store_unreadable(self):
+        """Tell the writer why the book is blank, once, at open.
+
+        Says what was kept and what this session will not do, and nothing
+        else: the quarantine path is a dated name they cannot act on, and an
+        errno is not a fact about their manuscript."""
+        self._confirm(
+            _t("This manuscript could not be read"),
+            _t("Your writing was kept, and nothing typed here will be saved "
+               "over it."),
+            _t("Continue"), lambda: None)
+        return False
 
     def _discard_and_close(self):
         """The user accepted the loss. Destroy directly: destroy does not emit

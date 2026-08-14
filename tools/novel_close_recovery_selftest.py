@@ -94,6 +94,74 @@ check(win._discarded and win.destroyed,
       "Close Without Saving records consent before destruction")
 check(win._closeprompt is None, "discard clears the close-card lifecycle token")
 
+# A manuscript that could not be read leaves a seeded Chapter 1 on screen —
+# indistinguishable from a new book, and the most alarming thing this app can
+# show someone who had a book here yesterday. It used to say nothing at all;
+# the only signal was "Not saved" appearing after the first sentence typed.
+def unreadable_notice_fixture(read_only):
+    win = novel.Novel.__new__(novel.Novel)
+    win._store_read_only = read_only
+    said = []
+    win._confirm = lambda title, body, ok, cb: said.append((title, body, ok))
+    return win, said
+
+
+win, said = unreadable_notice_fixture(True)
+win._say_store_unreadable()
+check(len(said) == 1, "an unreadable manuscript is explained, not left blank")
+check(bool(said) and "could not be read" in said[0][0],
+      "the card says the manuscript could not be read")
+check(bool(said) and "kept" in said[0][1],
+      "...and that the writing was kept")
+check(bool(said) and "saved over" in said[0][1],
+      "...and that nothing typed here will overwrite it")
+# No path, no errno: a dated quarantine name is not something a writer can act
+# on, and an error number is not a fact about their manuscript.
+check(bool(said) and ".damaged-" not in said[0][1] and "rrno" not in said[0][1],
+      "the card names no path and no error number")
+
+# THE NOTICE BELONGS TO THE DAMAGED CASE ONLY, and the card cannot enforce
+# that itself — it is the CALL that must be gated, so that is what is checked.
+# Structurally, not by grep: "the word _store_read_only appears nearby" would
+# pass on a comment mentioning it.
+import ast
+
+tree = ast.parse(open(os.path.join(DE, "novel.py"), encoding="utf-8").read())
+
+
+def mentions(node, name):
+    return any(isinstance(n, ast.Attribute) and n.attr == name
+               for n in ast.walk(node))
+
+
+call_sites = []
+for node in ast.walk(tree):
+    if not isinstance(node, ast.If):
+        continue
+    for branch, guarded in (("body", True), ("orelse", False)):
+        for stmt in getattr(node, branch):
+            # An `elif` is an If nested in the outer If's orelse, so a nested
+            # branch would otherwise count the same call twice — once
+            # unguarded (as the outer's orelse) and once guarded.
+            if isinstance(stmt, (ast.If, ast.For, ast.While, ast.Try)):
+                continue
+            if mentions(stmt, "_say_store_unreadable"):
+                call_sites.append((guarded and mentions(node.test,
+                                                        "_store_read_only"),
+                                   ast.dump(node.test)[:60]))
+check(len(call_sites) == 1,
+      "the notice has exactly one call site")
+check(bool(call_sites) and call_sites[0][0],
+      "...and it is reached only when the store could not be read")
+
+deferred = any(isinstance(n, ast.Attribute) and n.attr == "idle_add"
+               for site in [t for t in ast.walk(tree)
+                            if isinstance(t, ast.If)
+                            and mentions(t, "_say_store_unreadable")]
+               for n in ast.walk(site))
+check(deferred,
+      "the notice is deferred to idle, after the window it sits in exists")
+
 print()
 if failures:
     print("NOVEL CLOSE RECOVERY SELFTEST: %d checks, %d FAILED" %
