@@ -419,3 +419,27 @@ day-zero empty state to "Written ✓ Friday 14 August". Also fixed a real
 gap in the harness itself: tools/guestdrive.py could not send a modifier
 combo at all, so every Ctrl+key ever sent to a guest landed as a bare
 letter.
+
+### The class swept closed, and one warning for the on-target matrix
+
+A peer session verified the nine-app fix independently rather than taking
+it on report (`save_failure_reason =` now has ZERO occurrences in app
+code; the only surviving match in de/ is the explanatory comment in
+nbapp.py, and ten files call note_save_failure), then swept the GENERAL
+class — "assigning to a shared module's attribute believing it is a
+channel" — across every de/*.py: no `nbapp.X = …`, no equivalent on
+nbprefs/nbicons/nbcommands/nbmotion/nbtransitions/nbi18n/nbjobs/nbnotify/
+nbpicker/nbprint/nbstate/nbaudio/nbgame/nbvideo/nbkeyboard, and no
+setattr() form on any of them. Run without an indent anchor so it would
+catch module-level rebinds too. So the CLASS is closed, not just its nine
+instances — there is no second one of these sitting under a different
+attribute name.
+
+WARNING FOR WHOEVER WRITES THE ON-TARGET MATRIX (from the same peer, on
+the ⤢ maximize fix, 0da06a2b): the zoom check must be run on a Finder
+window that has been MOVED AND RESIZED first. Zoom-then-restore against
+default geometry passes even when the restore path is broken, because the
+"previous" size IS the default size — a vacuous pass of exactly the kind
+this campaign keeps catching. Also worth carrying generally:
+maximize()/unmaximize() are NO-OPS on this image (matchbox 1.2 has no
+_NET_WM_STATE_MAXIMIZED atom); set geometry directly.
