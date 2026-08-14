@@ -1521,7 +1521,7 @@ class VideoEditor(nbapp.AppWindow):
                                                  else 36000))
                 self._prop_trim.set_value(float(clip.get("start", 0.0) or 0.0))
                 self._prop_trim_hint.set_text(
-                    ("of %s" % self._fmt_hms(srcdur)) if srcdur else "")
+                    (_t("of %s") % self._fmt_hms(srcdur)) if srcdur else "")
                 self._prop_dur.set_value(self._clip_dur(clip))
                 sp = float(clip.get("speed", 1.0))
                 for v, b in self._prop_speed_btns.items():

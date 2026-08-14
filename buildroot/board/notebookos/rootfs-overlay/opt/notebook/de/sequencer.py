@@ -4008,8 +4008,8 @@ class Sequencer(nbapp.AppWindow):
             g = c.get("gain", 1.0)
             self.cgain_lbl.set_text(
                 "−∞" if g <= 0.001
-                else ("0 dB" if abs(g - 1.0) < 0.005
-                      else "%+d dB" % int(round(20 * math.log10(g)))))
+                else (_t("0 dB") if abs(g - 1.0) < 0.005
+                      else _t("%+d dB") % int(round(20 * math.log10(g)))))
             self.fin_btn.set_label(_fmt_fade(c.get("fin", 0.0)))
             self.fout_btn.set_label(_fmt_fade(c.get("fout", 0.0)))
             self._show_editor("wave")
@@ -5997,7 +5997,7 @@ class Sequencer(nbapp.AppWindow):
             else:
                 dbi = int(round(20 * math.log10(mv / 100.0)))
                 db_txt = "0" if dbi == 0 else "%+d" % dbi
-                self.master_lbl.set_text("%d%% · %s dB" % (mv, db_txt))
+                self.master_lbl.set_text(_t("%d%% · %s dB") % (mv, db_txt))
         # Master VU: the peak of the block the sound card is being handed, so
         # the meter reads the mix that is actually leaving the machine.
         pl, pr = (self.engine.peaks() if playing and self.engine.available
@@ -6031,7 +6031,8 @@ class Sequencer(nbapp.AppWindow):
                 tw["gainlbl"].set_text("−∞")
             else:
                 gdb = int(round(20 * math.log10(g / float(GAIN_UNITY))))
-                tw["gainlbl"].set_text("0 dB" if gdb == 0 else "%+d dB" % gdb)
+                tw["gainlbl"].set_text(
+                    _t("0 dB") if gdb == 0 else _t("%+d dB") % gdb)
             lvl = self._vu_level(tk, i)
             tw["vu"].set_level(lvl)
             st["vu"].set_level(lvl)

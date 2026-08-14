@@ -1819,7 +1819,7 @@ class MediaViewer(nbapp.AppWindow):
             if okw and okh and w > 0 and h > 0:
                 val = self._info_vals.get("Dimensions")
                 if val is not None:
-                    val.set_text("%d × %d px" % (w, h))
+                    val.set_text(_t("%d × %d px") % (w, h))
                 self._v_dims_set = True
         except Exception:
             pass
