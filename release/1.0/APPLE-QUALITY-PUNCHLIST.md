@@ -265,6 +265,46 @@ today. Contacts shows a milder version of the cookbook doubling (terse
 as-is, noted, since the list label is short and Finder/Music use the
 same shape.
 
+## EXPORT-ATOMICITY CLASS (Aug 14) — 7 apps, 4 fixed here
+An export that renders straight onto its destination destroys the file it
+is replacing when the render fails part-way, and the usual reason to
+export twice is that the document CHANGED, so the casualty is the user's
+previous good copy. Fixed already: Comics, Journal (peers), Cookbook
+(62dd0215). Fixed in 19f18ed5 via a new shared primitive
+nbapp.atomic_write_via: Writer (worst — the destination is a path the
+user navigated to in the save dialog), Accounting PDF + CSV, Contacts.
+Cookbook migrated off its private copy onto the shared one.
+STILL OPEN — VIDEO, and it is the worst of the seven (Codex audit):
+ffmpeg is given the final destination with -y (video.py:3570, 3764), and
+on failure OR CANCEL the destination is then DELETED (4174-4179). So
+cancelling a re-export does not just truncate the old movie, it removes
+it. video_selftest:367-377 pins that deletion as correct behaviour but
+never starts with a valuable file at the destination — a suite
+certifying the defect, the fourth instance of that shape this week.
+Fix shape: encode to a temp name in VIDEOS_DIR, verify success and
+non-empty, then os.replace; cancel/fail deletes only the temp.
+ALSO OPEN, from the same audit (verified reads, not yet fixed):
+- Missing ffprobe is treated as "this clip has no audio" (3345-3369 ->
+  3623), so on an image without ffprobe a video with sound exports
+  SILENT and still reports "Saved". Probe state needs a third value:
+  present / absent / could-not-check, and could-not-check must refuse.
+- Export ffmpeg is Popen'd with no new session (3970) and cancel only
+  terminate()s the direct child (4216-4225) — the same process-group
+  defect that wedged the GBA build. No stall timeout either.
+- A clip whose source vanished is silently replaced with generated
+  colour at export (3586-3588, 3635-3638) and the movie is called
+  saved, with "Missing file: %s" appended after the fact.
+- "Delete Clip…" advertises a confirm that does not exist (undo is real
+  and correct); nearby comments describe a no-undo model that is false.
+
+## GATE FINDING: the write-path check cannot see a PDF export at all
+See HANDOFF 2026-08-14 for the full write-up, including the obvious fix
+that turns out VACUOUS (every export renderer is also the print
+renderer, so exempting the print path blinds the check to the export
+path — proved by reverting Contacts to the real bug and watching the
+improved gate go 126/126 green). Not landed; the honest fix checks the
+CALL SITE rather than the renderer.
+
 ## OPEN — OS-wide sweeps not yet run at the new bar
 - Remaining ~38 apps: real-use drive-through each (task #6). Order by
   consumer surface: media, music, video, writer*, illustrator*, maps,

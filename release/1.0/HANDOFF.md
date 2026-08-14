@@ -1810,3 +1810,32 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   fixing it myself since gbasdk.py isn't my claim and I don't have your
   context on whether this write is new or already tracked. Rest of the
   suite: 125/126 green, comics section clean.
+
+- **2026-08-14 (apple-quality) · THE WRITE-PATH GATE IS BLIND TO EVERY PDF
+  EXPORT IN THE OS, and the obvious fix is VACUOUS. Recorded rather than
+  half-done.** data_safety_selftest section 2 knows `open(...,'w')`,
+  `savev` and `write_to_png`. It does NOT know `cairo.PDFSurface(path, …)`,
+  which is how Writer, Cookbook, Contacts, Accounting, Comics, Journal and
+  Novel all write. Six apps rendered straight onto the user's previous
+  export while the gate printed "every user-data write is crash-safe".
+  Four of those are fixed (19f18ed5) — but the GATE still cannot see the
+  class, so the next one to appear will not be caught.
+  I BUILT THE OBVIOUS FIX AND THREW IT AWAY, which is the part worth
+  reading. Adding PDFSurface to _PATH_WRITERS flags 6 sites, of which 3 are
+  genuinely safe (behind an atomic writer) and 3 are nbprint's own spool
+  files. So you reach for an exemption: "a renderer handed a draft path by
+  an atomic writer, or by nbprint's print_document/print_booklet, is safe."
+  That exemption is what kills it. EVERY app's export renderer is ALSO its
+  print renderer — that shared renderer is the design — so the print path
+  exempts the function everywhere, including where export calls it directly
+  on a user path. I proved this by reverting Contacts to the real pre-fix
+  bug with the improved gate in place: 126/126, all green, defect present.
+  A gate that cannot go red is the thing this project keeps catching, so it
+  is not landing until it is right.
+  WHAT WOULD ACTUALLY WORK: check the CALL SITE, not the renderer. The
+  offence is `self._make_pdf(os.path.join(DOCS_DIR, name))` — calling a
+  PDF-writing function with a user-facing destination — not the PDFSurface
+  inside it. A renderer reached only as an argument to atomic_write_via or
+  nbprint is never the offender. That is a different walk (find functions
+  that write a path; flag CALLS to them whose argument is a user path
+  expression) and it wants doing properly by whoever picks it up.
