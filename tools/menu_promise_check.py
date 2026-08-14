@@ -79,12 +79,23 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      what was plugged in at that second. The probe is now told there are no
 #      drives — a real state the app must handle, and the same one every run.
 #
-#      Then screenplay.py appeared, 2 then 1. That is the FOURTH app the
-#      tally has named, and the honest reading is that this sweep has a
-#      general late-surface problem rather than three special cases: the
-#      200ms settle is enough for most items and not for all. Raising it
-#      trades wall-clock for stability and would need measuring, not
-#      guessing. It is ledgered at its lower value, so a run that finds two
+#      Then screenplay.py appeared, 2 then 1 — the fourth app the tally has
+#      named. I assumed a general late-surface problem and was about to raise
+#      the settle window. MEASURED INSTEAD, and the assumption was wrong:
+#      instrumenting which settle round each surface first appears in gives
+#      worst=1 for both screenplay.py and gbasdk.py. Every surface that
+#      appears at all appears within the first ten milliseconds. A longer
+#      window would buy nothing.
+#
+#      So the remaining variation is NOT about waiting. An item is sometimes
+#      opening a surface and sometimes not opening one at all, which points
+#      at state carried between items — the probe invokes many items against
+#      one live app, and what an earlier item leaves behind can decide
+#      whether a later one has anything to ask about. That is where to look
+#      next: invoke the varying item FIRST in its own probe and see whether
+#      it still varies.
+#
+#      screenplay is ledgered at its lower value, so a run that finds two
 #      still fails — deliberately, because pinning the higher number would
 #      hide the instability instead of showing it.
 #
@@ -349,6 +360,7 @@ def probe(name):
             except Exception:
                 pass
     findings = []
+    settle_rounds = []
     invoked = skipped = 0
     for menu in tuple(getattr(app, "menus", ())) + (getattr(app, "app_name", ""),):
         try:
@@ -384,10 +396,23 @@ def probe(name):
             # whole of this gate's 52-to-56 wobble — the TALLY line named
             # gbaemu.py (2 then 1) and gbasdk.py (9 then 8), both of which
             # build their surface a beat late.
-            for _ in range(SETTLE_ROUNDS):
+            first_seen = None
+            for _round in range(SETTLE_ROUNDS):
                 while Gtk.events_pending():
                     Gtk.main_iteration_do(False)
                 time.sleep(SETTLE_TICK)
+                # When did this item's surface FIRST become visible? Choosing
+                # the settle window by guess is what left four apps answering
+                # differently on different runs; this records the answer so
+                # the window can be set from the distribution instead.
+                if first_seen is None:
+                    showing = ([x for x in Gtk.Window.list_toplevels()
+                                if id(x) not in before_windows] +
+                               _new_overlay_widgets(app, before_overlay))
+                    if showing:
+                        first_seen = _round + 1
+            if first_seen is not None:
+                settle_rounds.append((name, label.strip()[:28], first_seen))
             appeared = ([x for x in Gtk.Window.list_toplevels()
                          if id(x) not in before_windows] +
                         _new_overlay_widgets(app, before_overlay))
@@ -430,6 +455,11 @@ def probe(name):
         app.destroy()
     except Exception:
         pass
+    if settle_rounds:
+        worst = max(r for _n, _l, r in settle_rounds)
+        late = [(l, r) for _n, l, r in settle_rounds if r > 3]
+        print("SETTLE %s worst=%d late=%s" % (name, worst, late[:4]),
+              file=sys.stderr)
     print(json.dumps({"findings": findings, "invoked": invoked,
                       "skipped": skipped}))
     return 0
