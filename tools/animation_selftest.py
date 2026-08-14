@@ -5063,6 +5063,112 @@ def zoom_family():
     shutil.rmtree(scratch)
 
 
+def audio_pump_family():
+    """What the speaker is handed, and the small callbacks around it.
+
+    Coverage said none of these had run: the pump that mixes a scene's
+    sound for playback, the meter a recording moves, the export's progress
+    and cancel, and the hint that goes back to naming the tool once a
+    message has had its moment. None of them need a device to be checked —
+    they only needed driving."""
+    if not gtk_available():
+        skip("F45 the audio pump and its neighbours", "no display")
+        return
+    # inside, not at the top: animation.py requires Gtk 3.0 at import, and a
+    # module-level import here loads 4.0 first and makes that impossible
+    from gi.repository import Gtk
+
+    # the mixer: two clips, one offset, and the clamp at full scale
+    quiet = array.array("h", [1000] * 100)
+    late = array.array("h", [2000] * 100)
+    both = animation.mix_s16([(quiet, 0), (late, 50)], 0, 120)
+    check("F45 the mixer lays each clip at its own offset and adds them",
+          both[0] == 1000 and both[60] == 3000 and both[110] == 2000,
+          (both[0], both[60], both[110]))
+    loud = array.array("h", [30000] * 10)
+    clipped = animation.mix_s16([(loud, 0), (loud, 0), (loud, 0)], 0, 4)
+    check("F45 and never lets the sum wrap round past full scale",
+          all(value == 32767 for value in clipped), list(clipped))
+    silence = animation.mix_s16([], 0, 8)
+    check("F45 no sound at all is silence, not an empty block",
+          len(silence) == 8 and not any(silence), list(silence))
+
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = 0
+    app.doc.scenes[0]["length"] = 4
+    app.sheet = animation.Sheet(app.doc, 0)
+    app._audio_clips = [(array.array("h", [500] * 100000), 0)]
+    app._audio_position = 0
+    first = app._audio_pull(1024)
+    check("F45 the pump hands the speaker what it asked for, and advances",
+          len(first) == 1024 and app._audio_position == 1024, len(first))
+    app._audio_position = app.doc.scenes[0]["length"] * animation.SPF[app.doc.fps]
+    check("F45 and stops at the end of the scene rather than playing on",
+          len(app._audio_pull(1024)) == 0)
+
+    # the recording meter, the export's progress and its cancel
+    app._record_meter = Gtk.ProgressBar()
+    app._record_level(0.5)
+    check("F45 the recording meter follows the level it is given",
+          abs(app._record_meter.get_fraction() - 0.5) < 1e-6,
+          app._record_meter.get_fraction())
+    app._record_level(9.0)
+    check("F45 and a level past the top stays at the top",
+          app._record_meter.get_fraction() == 1.0,
+          app._record_meter.get_fraction())
+
+    app._export_meter = None
+    app._worker_generation = 7
+    app._export_progress(7, 0.42)
+    said = app.hint.get_text()
+    app._export_progress(3, 0.99)          # a stale worker from a past export
+    check("F45 progress from the export in hand is shown, and a stale one ignored",
+          "42" in said and app.hint.get_text() == said, (said, app.hint.get_text()))
+
+    app._cancel.clear()
+    app._cancel_export()
+    check("F45 cancelling an export asks the worker to stop, and says so",
+          app._cancel.is_set() and bool(app.hint.get_text()), app.hint.get_text())
+
+    # and the hint goes back to naming the tool
+    app.tool = "pencil"
+    app._flash = animation.Animation._flash.__get__(app)
+    app._flash("Something happened.")
+    interrupted = app.hint.get_text()
+    app._flash_done()
+    check("F45 a message has its moment, then the tool has its name back",
+          interrupted == "Something happened." and
+          app.hint.get_text() != interrupted and bool(app.hint.get_text()),
+          (interrupted, app.hint.get_text()))
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant(
+        "F45-mixer-wraps",
+        [("                out[i] = max(-32768, min(32767, out[i] + samples[j]))",
+          "                out[i] = out[i] + samples[j]")])
+    # Without the clamp the sum either wraps or will not fit in a signed
+    # short at all — array('h') raises. Both are the clamp being gone.
+    try:
+        wrapped = list(graded.mix_s16([(loud, 0), (loud, 0), (loud, 0)], 0, 4))
+        broke = any(value != 32767 for value in wrapped)
+    except OverflowError:
+        wrapped, broke = "OverflowError", True
+    mutant("F45 a mixer that lets loud sound past full scale is caught",
+           broke, wrapped)
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5092,6 +5198,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        audio_pump_family,
         zoom_family,
         compaction_family,
         sound_row_family,
