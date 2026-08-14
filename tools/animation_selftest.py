@@ -3953,22 +3953,25 @@ def hover_and_preview_family():
             Gtk.main_iteration_do(False)
         if previews and previews[0].get_allocation().width > 1:
             break
-    if previews and previews[0].get_allocation().width <= 1:
-        # the offscreen stage never laid the card out; give the preview the
-        # size it asks for so the drawing under test has somewhere to land
-        wanted = previews[0].get_preferred_size()[1]
-        previews[0].size_allocate(
-            Gdk.Rectangle(0, 0, max(2, wanted.width), max(2, wanted.height)))
     shots = []
     for strength in (0.8, 1.7):
         app._prompt_state["strength"] = strength
         app._refresh_wobble_preview(app._prompt_state)
         for widget in previews:
-            allocation = widget.get_allocation()
-            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
-                                         max(1, allocation.width),
-                                         max(1, allocation.height))
-            app._draw_wobble_preview(widget, cairo.Context(surface))
+            # a real size, not whatever the stage managed: an unallocated
+            # preview paints the same smudge at every strength, and
+            # size_allocate does not stick on an unrealised widget
+            class Wide:
+                _wobble_surface = widget._wobble_surface
+
+                def get_allocated_width(self):
+                    return 160
+
+                def get_allocated_height(self):
+                    return 120
+
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 160, 120)
+            app._draw_wobble_preview(Wide(), cairo.Context(surface))
             surface.flush()
             shots.append(bytes(surface.get_data()))
     check("F35 the wobble preview is drawn, and moves when the slider does",
@@ -5238,10 +5241,17 @@ def loudness_card_family():
             Gtk.main_iteration_do(False)
         if lanes and lanes[0].get_allocation().width > 1:
             break
-    if lanes and lanes[0].get_allocation().width <= 1:
-        wanted = lanes[0].get_preferred_size()[1]
-        lanes[0].size_allocate(
-            Gdk.Rectangle(0, 0, max(64, wanted.width), max(8, wanted.height)))
+    # The draw asks its widget for exactly one thing — a width — and
+    # size_allocate does not stick on an unrealised one, so the lane kept
+    # painting into a single pixel where every threshold looks alike. Hand
+    # it a width directly and the check stops depending on whether the
+    # offscreen stage felt like laying the card out this run.
+    class Wide:
+        def get_allocated_width(self):
+            return 320
+
+        def get_allocated_height(self):
+            return 24
     scales = []
     _find_widgets(app._prompt_layer,
                   lambda w: isinstance(w, Gtk.Scale), scales)
@@ -5249,12 +5259,8 @@ def loudness_card_family():
           opened and lanes and len(scales) == 2, (opened, len(lanes), len(scales)))
 
     def lane_bytes(state):
-        widget = lanes[0]
-        allocation = widget.get_allocation()
-        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
-                                     max(2, allocation.width),
-                                     max(2, allocation.height))
-        app._draw_mouth_preview(widget, cairo.Context(surface), state)
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 320, 24)
+        app._draw_mouth_preview(Wide(), cairo.Context(surface), state)
         surface.flush()
         return bytes(surface.get_data())
 
