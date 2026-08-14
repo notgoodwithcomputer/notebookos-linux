@@ -1839,3 +1839,25 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   nbprint is never the offender. That is a different walk (find functions
   that write a path; flag CALLS to them whose argument is a user path
   expression) and it wants doing properly by whoever picks it up.
+
+- **2026-08-14 (apple-quality) · TWO NOVEL FINDINGS RECORDED RATHER THAN
+  TAKEN, both needing an owner's call.**
+  (1) DAMAGED-STORE RELOCATION vs the house rule. A Codex audit reads
+  `nbapp.preserve_damaged()` moving a damaged store to a `.damaged-<ts>`
+  sibling as breaking "a parse failure means a read-only session, original
+  bytes stay at the original path". The bytes ARE preserved and the session
+  DOES go read-only, so nothing is lost — but the canonical path is empty
+  afterwards, and the app says nothing about where the manuscript went.
+  This is a SHARED primitive: every app's damaged-store handling and
+  tools/nbapp_datasafety_selftest are built on the move. Changing it is an
+  OS-wide contract decision, so it is filed, not taken.
+  (2) THE SILENT BLANK MANUSCRIPT, which is the user-visible half and is
+  worth fixing whichever way (1) goes: on a damaged store Novel opens a
+  blank Chapter 1 with NO message that the manuscript failed to load, that
+  the session is read-only, or that the original was kept. A writer sees an
+  empty book and no explanation. Editing then reports only "Not saved".
+  Needs a new string, so it wants an i18n fragment across 17 catalogs —
+  which is why it is filed rather than half-done here. Suggested shape,
+  matching the messaging-honesty axis: "This manuscript could not be read.
+  It has not been changed, and this session is read-only." No path, no
+  errno.
