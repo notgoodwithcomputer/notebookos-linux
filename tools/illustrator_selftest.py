@@ -877,11 +877,33 @@ check("the dock scrolls rather than clipping",
 # ============================================================ 11. text rule
 print("--- 11. wording -----------------------------------------------")
 
+# The text a person reads, taken as STRING LITERALS rather than as source
+# lines. Line-grepping flagged `_t("Delete layer") if self.active != 0 else`
+# for saying "!", because != contains one — a tooltip that correctly swaps
+# for its disabled state, convicted for the operator that chooses it.
+import ast as _ast
+
+_visible = []
+for _node in _ast.walk(_ast.parse(src)):
+    if isinstance(_node, _ast.Call):
+        _named = getattr(_node.func, "id", "") or getattr(_node.func, "attr", "")
+        if _named == "_t" or "tooltip" in _named.lower():
+            for _arg in _node.args:
+                if isinstance(_arg, _ast.Constant) and isinstance(_arg.value, str):
+                    _visible.append(_arg.value)
+        for _kw in _node.keywords:
+            if _kw.arg in ("label", "text", "title", "tooltip_text") and \
+                    isinstance(_kw.value, _ast.Constant) and \
+                    isinstance(_kw.value.value, str):
+                _visible.append(_kw.value.value)
+
+# A sweep that reads nothing passes everything, so state the floor. 69 is
+# what the AST finds today; the guard is there to fail loudly if a future
+# refactor moves the app's wording somewhere this cannot see.
+check("the wording sweep found text to read", len(_visible) >= 60, len(_visible))
 for word in ("offline", "internet", "don't worry", "beautiful", "simply",
              "just ", "enjoy", "!"):
-    bad = [ln.strip() for ln in src.splitlines()
-           if word in ln.lower() and ("_t(" in ln or "label=" in ln
-                                      or "tooltip" in ln)]
+    bad = [text for text in _visible if word in text.lower()]
     check("no user-visible text says %r" % word, not bad, bad[:2])
 
 print("")
