@@ -4499,8 +4499,139 @@ def unbound_recovery_family():
         os.replace(kept, animation.STORE_FILE)
 
 
+def card_drag_family():
+    """Dragging a scene card along the strip to reorder a film.
+
+    Three cases of index bookkeeping hide in here — the scene you are
+    standing in moving, another scene crossing you from the left, and
+    another crossing from the right — and getting one wrong drops you into
+    a different scene than the one you were working on, silently."""
+    if not gtk_available():
+        skip("F40 dragging scene cards", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+
+    kept = animation.STORE_FILE + ".carddrag-check"
+    had_store = os.path.exists(animation.STORE_FILE)
+    if had_store:
+        os.rename(animation.STORE_FILE, kept)
+
+    def staged(module, standing_on=0):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+        while len(app.doc.scenes) < 5:
+            app.doc.scenes.append(
+                module.new_scene("Scene %d" % (len(app.doc.scenes) + 1)))
+        app.scene_i = standing_on
+        app.sheet = module.Sheet(app.doc, standing_on)
+        app._refresh_lists()
+        app._update_playhead()
+        child = app.get_child()
+        app.remove(child)
+        stage = Gtk.OffscreenWindow()
+        stage.set_size_request(1024, 722)
+        stage.add(child)
+        stage.show_all()
+        for _ in range(40):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+        area = app.timeline.get_allocation()
+        paper = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                   max(1, area.width), max(1, area.height))
+        app._draw_timeline(app.timeline, cairo.Context(paper))
+        return app, stage
+
+    def card_x(app, index):
+        for left, right, at in getattr(app, "_scene_cards", []):
+            if at == index:
+                return (left + right) / 2
+        return None
+
+    def drag(app, source, target, steps=6):
+        start, end = card_x(app, source), card_x(app, target)
+        if start is None or end is None:
+            return False
+        press = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+        press.x, press.y, press.button = start, 12, 1
+        app._timeline_press(app.timeline, press)
+        for step in range(1, steps + 1):
+            motion = Gdk.Event.new(Gdk.EventType.MOTION_NOTIFY)
+            motion.x = start + (end - start) * step / steps
+            motion.y = 12
+            app._timeline_motion(app.timeline, motion)
+        release = Gdk.Event.new(Gdk.EventType.BUTTON_RELEASE)
+        release.x, release.y, release.button = end, 12, 1
+        app._timeline_release(app.timeline, release)
+        return True
+
+    names = lambda app: [scene["name"] for scene in app.doc.scenes]
+
+    # the scene you are standing in, moved along
+    app, _stage = staged(animation, standing_on=0)
+    depth = len(app._undo)
+    moved = drag(app, 0, 2)
+    check("F40 dragging a scene card reorders the film",
+          moved and names(app) == ["Scene 2", "Scene 3", "Scene 1",
+                                   "Scene 4", "Scene 5"], names(app))
+    check("F40 and you go with the scene you were standing in",
+          app.doc.scenes[app.scene_i]["name"] == "Scene 1", app.scene_i)
+    check("F40 a whole drag is one undo step, not one per twitch",
+          len(app._undo) - depth == 1, len(app._undo) - depth)
+
+    # another scene crossing you
+    across, _stage_b = staged(animation, standing_on=2)
+    here = across.doc.scenes[2]["name"]
+    shown = sorted(at for _l, _r, at in across._scene_cards if at != "add")
+    drag(across, shown[0], shown[-1])
+    check("F40 a scene dragged past you leaves you on your own scene",
+          across.doc.scenes[across.scene_i]["name"] == here,
+          (here, across.doc.scenes[across.scene_i]["name"]))
+
+    # a press that never moves must leave no trace
+    still, _stage_c = staged(animation, standing_on=1)
+    order = names(still)
+    depth = len(still._undo)
+    drag(still, 2, 2)
+    check("F40 pressing a card without moving it changes nothing at all",
+          names(still) == order and len(still._undo) == depth,
+          (names(still), len(still._undo) - depth))
+
+    for window in (app, across, still):
+        window._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(window, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(window, timer, None)
+    if os.path.exists(animation.STORE_FILE):
+        os.unlink(animation.STORE_FILE)
+    if had_store:
+        os.replace(kept, animation.STORE_FILE)
+
+    graded, scratch = module_mutant(
+        "F40-loses-your-place",
+        [("                elif card_drag['index'] < self.scene_i <= target:\n"
+          "                    self.scene_i -= 1",
+          "                elif False:\n                    self.scene_i -= 1")])
+    adrift, _stage_d = staged(graded, standing_on=2)
+    was = adrift.doc.scenes[2]["name"]
+    visible = sorted(at for _l, _r, at in adrift._scene_cards if at != "add")
+    drag(adrift, visible[0], visible[-1])
+    mutant("F40 a drag that drops you into another scene is caught",
+           adrift.doc.scenes[adrift.scene_i]["name"] != was,
+           adrift.doc.scenes[adrift.scene_i]["name"])
+    adrift._alive = False
+    shutil.rmtree(scratch)
+
+
 dialog_limits_family()
 drop_family()
+card_drag_family()
 unbound_recovery_family()
 missing_sound_family()
 verbatim_family()
