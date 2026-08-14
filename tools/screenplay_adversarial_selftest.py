@@ -102,9 +102,73 @@ def title_page_check():
           len(title) > 50)
 
 
+def close_guard_check():
+    """Until the writer picks a file, the recovery store IS the script. A close
+    that cannot write it has to stop and say so — Novel has carried this guard
+    for the same reason and this app had the same exposure with no guard."""
+    app = bare()
+    app._recovery_store_writable = True
+    app._recovery_dirty = False
+    app._save_error = None
+    asked = []
+    app._confirm = lambda title, body, ok: (asked.append((title, body, ok))
+                                            or False)
+
+    # Nothing outstanding: closing must be silent.
+    check("a durable script closes without a word",
+          app._on_delete() is False and asked == [], repr(asked))
+
+    # An edit is outstanding and the write works on the retry: still silent.
+    app._recovery_dirty = True
+    app._collect_doc = lambda: {"body": "INT. HOME - DAY", "body_tags": [],
+                                "title": "T", "subtitle": "", "path": None}
+    check("a close that can still save does not interrogate anyone",
+          app._on_delete() is False and asked == [], repr(asked))
+
+    # The disk refuses. The close must be VETOED and the reason named.
+    real_write = screenplay.nbapp.atomic_write_json
+    screenplay.nbapp.atomic_write_json = lambda *a, **k: (_ for _ in ()).throw(
+        OSError(28, "No space left on device"))
+    try:
+        app._recovery_dirty = True
+        vetoed = app._on_delete()
+    finally:
+        screenplay.nbapp.atomic_write_json = real_write
+    check("a close that would lose the script is stopped",
+          vetoed is True, repr(vetoed))
+    check("...and the card says the disk is full, not just 'not saved'",
+          asked and "disk is full" in asked[-1][1], repr(asked[-1:] ))
+    check("...and offers to close anyway rather than trapping the window",
+          asked and asked[-1][2] == "Close Without Saving", repr(asked[-1:]))
+
+    # Accepting the loss must let the window go.
+    app._confirm = lambda title, body, ok: True
+    screenplay.nbapp.atomic_write_json = lambda *a, **k: (_ for _ in ()).throw(
+        OSError(28, "No space left on device"))
+    try:
+        app._recovery_dirty = True
+        proceeds = app._on_delete()
+    finally:
+        screenplay.nbapp.atomic_write_json = real_write
+    check("choosing to close anyway is not overridden by the guard",
+          proceeds is False, repr(proceeds))
+
+    # A store held read-only because its bytes were not ours is NOT an I/O
+    # failure, and a card about making room would be about the wrong problem.
+    app._recovery_store_writable = False
+    app._recovery_dirty = True
+    app._save_error = None
+    before = len(asked)
+    app._confirm = lambda title, body, ok: (asked.append((title, body, ok))
+                                            or False)
+    check("an unwritable-by-law store does not raise a disk-full card",
+          app._on_delete() is False and len(asked) == before, repr(asked[before:]))
+
+
 try:
     damaged_store_check()
     title_page_check()
+    close_guard_check()
     print("\n%d/%d checks passed" % (passed, passed + failed))
 finally:
     shutil.rmtree(HOME, ignore_errors=True)

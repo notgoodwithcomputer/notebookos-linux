@@ -4,8 +4,6 @@
 ebook.py	EPUB
 installer.py	Details: a %d MiB FAT32 EFI system partition, %san ext4 root filesystem labelled "%s" with PARTUUID %s, and the GRUB loader written to /EFI/BOOT/BOOTX64.EFI.
 media.py	Rotate right (not saved to the file)
-novel.py	Close Without Saving
-novel.py	Closing now loses the writing since the last save. Make room and close again to try once more.
 novel.py	Your last changes are not saved
 sequencer.py	%d track set to Mic
 sequencer.py	%d tracks set to Mic

@@ -429,6 +429,9 @@ class Screenplay(nbapp.AppWindow):
         # unsaved script's only copy — are reversible too. See nbapp.UndoHistory.
         self.undo = nbapp.UndoHistory(self._undo_snapshot, self._undo_restore)
         self.undo.reset()
+        self._recovery_dirty = False
+        self._save_error = None
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", self._on_destroy)
 
         # Finder launches Screenplay with a script path as argv[1]
@@ -764,6 +767,9 @@ class Screenplay(nbapp.AppWindow):
             return
         self._prepare_recovery_write()
         self._file_dirty = True
+        # From here until a write returns, the script exists only in this
+        # window. See _on_delete.
+        self._recovery_dirty = True
         # One undo step per burst of typing; _touch is the single entry point
         # for every content change, element retag included. Only re-arms a
         # timer, so it adds nothing measurable per keystroke.
@@ -786,6 +792,15 @@ class Screenplay(nbapp.AppWindow):
         self._save_timer = None
         if self._save_doc():
             self._set_saved()
+        else:
+            # The chip used to stay on "Saving…" forever here. Not a false
+            # claim, but not a signal either — and this app had nothing else
+            # anywhere that mentioned a failed write.
+            try:
+                self.saved.set_markup(
+                    '<span foreground="#C8341E">● </span>' + _t("Not saved"))
+            except Exception:
+                pass
         return False
 
     def _set_saved(self):
@@ -932,14 +947,52 @@ class Screenplay(nbapp.AppWindow):
         self.body.grab_focus()
 
     def _save_doc(self):
-        """Write the script to disk. Returns True on success (crash-safe)."""
+        """Write the script to disk. Returns True on success (crash-safe).
+
+        The failure is RECORDED as well as returned. Until the writer picks a
+        file this store is the script — there is no other copy — so a write
+        that did not land has to survive the moment it happened and reach the
+        close guard, which is the last point anyone can be told.""" 
         if not getattr(self, "_recovery_store_writable", True):
+            # Not an I/O failure: the bytes on disk were not ours to replace.
+            # Deliberately leaves _save_error alone, so the close guard can
+            # tell the two apart.
             return False
         try:
             nbapp.atomic_write_json(DOC_FILE, self._collect_doc())
-            return True
-        except Exception:
+        except Exception as exc:                                  # noqa: BLE001
+            self._save_error = exc
+            self._recovery_dirty = True
             return False
+        self._save_error = None
+        self._recovery_dirty = False
+        return True
+
+    def _on_delete(self, *_a):
+        """Veto a close that would lose the script.
+
+        Until the writer chooses a file, the recovery store IS the document.
+        The case that matters is a full or read-only disk: every autosave since
+        the last good write has been refused, and only this window still holds
+        the afternoon's work. Novel has carried this guard for the same reason;
+        this app had the same exposure and no guard at all.
+
+        True keeps the window (and the work) on screen; False lets it close."""
+        if not getattr(self, "_recovery_dirty", False):
+            return False              # already durable: close, no questions
+        if self._save_doc():          # one retry, silent when it works
+            return False
+        if getattr(self, "_save_error", None) is None:
+            # The store is held read-only because its bytes were not ours to
+            # replace, not because the disk refused us. A card offering to
+            # "make room" would be about the wrong problem.
+            return False
+        return not self._confirm(
+            _t("Not saved"),
+            _t(nbapp.save_failure_reason(self._save_error, DOC_FILE))
+            + " " + _t("Closing now loses the writing since the last save. "
+                       "Make room and close again to try once more."),
+            _t("Close Without Saving"))
 
     def _on_destroy(self, *_):
         """Flush a final synchronous save on close so the last edit survives."""

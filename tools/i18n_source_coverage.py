@@ -43,7 +43,7 @@ DEBT = {
     "language.py": 3,
     "mealplanner.py": 2,
     "music.py": 1,
-    "novel.py": 3,
+    "novel.py": 1,
     "screenplay.py": 2,
     "sequencer.py": 65,
     "settings.py": 6,
