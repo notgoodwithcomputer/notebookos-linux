@@ -23,6 +23,7 @@ except Exception:                       # so they are translated like any other
 import re
 import json
 import shutil
+import signal
 import subprocess
 
 # Where the runtime + toolchain live on the guest.
@@ -2419,12 +2420,51 @@ def find_gcc(toolchain_dir=TOOLCHAIN_DIR):
 MULTIBOOT_MAX = 256 * 1024
 
 
+def _run_capped(cmd, timeout):
+    """Run a compiler step with a hard ceiling that actually lands.
+
+    subprocess.run(capture_output=True, timeout=...) kills only the DIRECT
+    child on timeout and then goes back to draining its pipes — which gcc's
+    own children (cc1, as, ld) still hold open, so the drain blocks forever
+    and a capped compile became an eternal "Compiling…" instead of a failure
+    (the on-target repeat-build wedge). Start the step in its own session and
+    on timeout kill the whole process group, then drain what is left."""
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, start_new_session=True)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except Exception:
+            pass
+        try:
+            out, err = p.communicate(timeout=10)
+        except Exception:
+            pass
+        raise
+    return p.returncode, (out or "") + (err or "")
+
+
 def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DIR,
-              multiboot=False):
+              multiboot=False, trace=None):
     """Compile `model` into <outdir>/game.gba. Returns (ok, gba_path, log).
 
     multiboot=True builds game.mb instead: the same program linked to run from
-    EWRAM, for sending over the link cable to a console with no cartridge."""
+    EWRAM, for sending over the link cable to a console with no cartridge.
+
+    `trace`, when given, is called with a short phase name as each stage
+    begins — so a build that wedges leaves the NAME of the stage it died in,
+    instead of ten silent minutes (the on-target repeat-build wedge sat past
+    both subprocess ceilings, which proves nothing without knowing whether
+    the worker ever reached them)."""
+    def _phase(m):
+        if trace is not None:
+            try:
+                trace(m)
+            except Exception:
+                pass
+    _phase("find_gcc")
     gcc = find_gcc(toolchain_dir)
     if not gcc:
         # ENGLISH, deliberately, and not through _t(): the build log is
@@ -2441,6 +2481,7 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
     # working files could not be written" — a disk problem they would go and
     # look for and never find.
     try:
+        _phase("generate")
         gen = _Gen(model)
         source = gen.generate()
         problems = list(gen.problems)
@@ -2449,6 +2490,7 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
         return False, None, ("Could not turn this project into code: %s: %s"
                              % (type(e).__name__, e))
     try:
+        _phase("write source")
         os.makedirs(outdir, exist_ok=True)
         with open(os.path.join(outdir, "game_data.c"), "w") as fh:
             fh.write(source)
@@ -2486,21 +2528,27 @@ def build_rom(model, outdir, runtime_dir=RUNTIME_DIR, toolchain_dir=TOOLCHAIN_DI
     ]
     log = head + " ".join(cmd) + "\n"
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        log += r.stdout + r.stderr
-        if r.returncode != 0:
+        _phase("gcc starting (120s ceiling)")
+        rc, output = _run_capped(cmd, 120)
+        _phase("gcc done rc=%d" % rc)
+        log += output
+        if rc != 0:
             return False, None, log
     except Exception as e:
+        _phase("gcc raised: %s" % type(e).__name__)
         return False, None, log + "\ncompile failed: %s" % e
     try:
-        r = subprocess.run([objcopy, "-O", "binary", elf, gba],
-                           capture_output=True, text=True, timeout=60)
-        log += r.stdout + r.stderr
-        if r.returncode != 0:
+        _phase("objcopy starting (60s ceiling)")
+        rc, output = _run_capped([objcopy, "-O", "binary", elf, gba], 60)
+        _phase("objcopy done rc=%d" % rc)
+        log += output
+        if rc != 0:
             return False, None, log
         _gbafix(gba, model.get("name") or "")
     except Exception as e:
+        _phase("objcopy/gbafix raised: %s" % type(e).__name__)
         return False, None, log + "\nlink/fix failed: %s" % e
+    _phase("built %s" % os.path.basename(gba))
     size = os.path.getsize(gba)
     if multiboot and size > MULTIBOOT_MAX:
         # Refused rather than shipped: an oversized image links, writes a file

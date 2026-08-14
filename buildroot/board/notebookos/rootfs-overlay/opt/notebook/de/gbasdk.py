@@ -45,6 +45,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import time
 
 import nbapp
 import nbjobs
@@ -4168,6 +4169,21 @@ class GbaSdk(nbapp.AppWindow):
 
         self._build_async(copy.deepcopy(self.proj), outdir, done)
 
+    def _build_log(self, msg):
+        """One timestamped line per build phase, appended to a file the
+        machine keeps. A wedged build's last line names the phase it died
+        in — on-target a repeat Build & Play sat at "Compiling…" for 10+
+        minutes past every subprocess ceiling, which no in-window state
+        could explain after the fact."""
+        try:
+            home = os.environ.get("NB_HOME", os.path.expanduser("~"))
+            d = os.path.join(home, ".config", "notebook")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "gbasdk-build.log"), "a") as fh:
+                fh.write("%s %s\n" % (time.strftime("%H:%M:%S"), msg))
+        except Exception:                                   # noqa: BLE001
+            pass
+
     def _build_async(self, proj, outdir, on_done, multiboot=False):
         """Run gbabuild.build_rom on a worker thread and land the result on
         the main loop. Inline, the compiler froze this window for 45-85
@@ -4175,15 +4191,23 @@ class GbaSdk(nbapp.AppWindow):
         every menu dead (audit #9). One build at a time; the flash says a
         second request was turned away rather than silently dropping it."""
         if getattr(self, "_building", False):
+            self._build_log("request refused: _building already set")
             self._flash(_t("A build is already running…"))
             return
         self._building = True
         self._flash(_t("Compiling…"))
+        self._build_log("build requested (multiboot=%r)" % multiboot)
 
-        def work(_job):
-            return gbabuild.build_rom(proj, outdir, multiboot=multiboot)
+        def work(job):
+            self._build_log("worker entered")
+            result = gbabuild.build_rom(
+                proj, outdir, multiboot=multiboot,
+                trace=lambda m: self._build_log("rom: " + m))
+            self._build_log("worker returning ok=%r" % (result[0],))
+            return result
 
         def landed(result):
+            self._build_log("landed on the main loop")
             self._building = False
             try:
                 ok, rom, log = result
@@ -4192,11 +4216,24 @@ class GbaSdk(nbapp.AppWindow):
             on_done(ok, rom, log)
 
         def failed(error):
+            self._build_log("failed on the main loop: %s" % (error,))
             self._building = False
             on_done(False, None, str(error))
 
-        self.jobs.start("build", work, on_done=landed, on_error=failed,
-                        policy=nbjobs.REJECT)
+        job = self.jobs.start("build", work, on_done=landed, on_error=failed,
+                              policy=nbjobs.REJECT)
+        if job is None:
+            # The owner turned the start away (a previous build job is still
+            # registered). Leaving _building set here showed "Compiling…"
+            # forever with NO worker running and no card ever coming — the
+            # wedge a repeat Build & Play hit on target. Say the truth and
+            # stay usable.
+            self._building = False
+            self._build_log("OWNER REJECTED THE START: a previous build job "
+                            "is still registered unfinished — no worker ran")
+            self._flash(_t("A build is already running…"))
+            return
+        self._build_log("job accepted")
 
     def _launch_emulator(self, rom):
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)),

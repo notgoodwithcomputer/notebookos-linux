@@ -127,6 +127,35 @@ def editing_checks():
     check("MUTANT: mapping Esc to Delete WOULD violate the leave law",
           composer.Gdk.KEY_Escape != composer.Gdk.KEY_Delete)
 
+    # Typing owns the keys. The Tempo box is a Gtk.SpinButton — an Editable
+    # in the same toplevel — and the window handler used to fire first:
+    # Delete deleted the SELECTED NOTES under a tempo edit, arrows moved
+    # the selection instead of the caret, Space played the piece instead
+    # of typing. With an editable focused, each must fall through.
+    entry = composer.Gtk.Entry()
+    fake2 = Fake(); fake2.editor = editor; fake2.staff = Staff(); fake2.snap = 120
+    fake2.get_focus = lambda: entry
+    deleted, played = [], []
+    fake2._delete = lambda: deleted.append(1)
+    fake2._play = lambda: played.append(1)
+    fake2.changed = lambda: None    # the unguarded arrow branch calls it
+    editor.selection = {0}
+    ev = lambda kv: type("Event", (), {"keyval": kv, "state": 0})()
+    before = editor.snapshot()
+    r1 = composer.Composer._key(fake2, None, ev(composer.Gdk.KEY_Delete))
+    r2 = composer.Composer._key(fake2, None, ev(composer.Gdk.KEY_Left))
+    r3 = composer.Composer._key(fake2, None, ev(composer.Gdk.KEY_space))
+    check("Delete while editing a number stays in the field (notes survive)",
+          r1 is False and not deleted and editor.song == before)
+    check("arrows while editing move the caret, not the selection",
+          r2 is False and editor.song == before)
+    check("Space while editing types a space, not playback",
+          r3 is False and not played)
+    fake2.get_focus = lambda: None
+    r4 = composer.Composer._key(fake2, None, ev(composer.Gdk.KEY_Delete))
+    check("Delete with no field focused still deletes the selection",
+          r4 is True and bool(deleted))
+
 
 def notation_checks():
     check("treble pitch maps C4 below and E4 onto bottom line",

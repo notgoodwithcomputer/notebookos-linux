@@ -1886,6 +1886,16 @@ class Calculator(nbapp.AppWindow):
             if getattr(self, "current_view", "home") != "home":
                 self._switch_view("home"); return True
             return False
+        # Typing belongs to a focused text field. The graph view's Y1-Y4
+        # expression boxes are real entries in this same toplevel, and this
+        # handler runs before they see a single key — without this guard
+        # every digit, letter and operator drove the keypad, Return
+        # evaluated, BackSpace edited the EXPRESSION and Delete fired AC
+        # while the user was correcting a typo in a formula box. Ctrl
+        # chords and Escape stay above: their meanings are window-wide
+        # (copy result, switch view, leave).
+        if isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView)):
+            return False
         table = {
             "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
             "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",

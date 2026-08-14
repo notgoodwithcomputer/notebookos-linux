@@ -3424,6 +3424,71 @@ for _leftover in (nbapp._APP_FLAG,
     except OSError:
         pass
 
+# ---- a rejected build start never wedges "Compiling…" ---------------------
+# On target a REPEAT Build & Play sat at "Compiling…" for 10+ minutes with no
+# failure card: jobs.start under REJECT returns None when a previous build
+# job is still registered, and the None was ignored — _building stayed True
+# and no worker ever ran. The handler must clear the flag and say the truth.
+section("build start rejection")
+_bj_app = app()
+pump()
+_bj_said = []
+_bj_app._flash = lambda m: _bj_said.append(m)
+_real_start = _bj_app.jobs.start
+_bj_app.jobs.start = lambda *a, **k: None          # the owner turns it away
+_bj_app._build_async({}, tempfile.mkdtemp(prefix="gbasdk-bj-"),
+                     lambda *a: None)
+_bj_app.jobs.start = _real_start
+check("a rejected build start clears the building flag",
+      getattr(_bj_app, "_building", None) is False)
+check("...and says a build is already running instead of Compiling… forever",
+      len(_bj_said) >= 2 and "already running" in _bj_said[-1],
+      str(_bj_said[-2:]))
+_bl_path = os.path.join(HOME, ".config", "notebook", "gbasdk-build.log")
+check("...and the phase log names the rejected start",
+      os.path.exists(_bl_path) and "REJECTED" in open(_bl_path).read())
+_bj_app.destroy()
+pump()
+
+# build_rom's trace hook: a wedged build must leave the phase it died in.
+_tr = []
+try:
+    gbabuild.build_rom({}, tempfile.mkdtemp(prefix="gbasdk-tr-"),
+                       toolchain_dir=os.path.join(HOME, "no-toolchain"),
+                       trace=_tr.append)
+except TypeError:
+    pass
+check("build_rom reports its phases through trace",
+      bool(_tr) and _tr[0] == "find_gcc", repr(_tr))
+
+# A timed-out compiler step dies as a GROUP. subprocess.run kills only the
+# direct child and then blocks draining pipes its grandchildren (cc1/as/ld)
+# still hold — work() never returned, the job never retired, and the repeat
+# build wedged at "Compiling…" forever. The capped runner must come back
+# promptly and leave no survivors; the watchdog thread turns "still
+# blocked" into a named failure instead of a hung suite.
+import threading as _threading
+import subprocess as _sp_capped
+_rcap = {}
+
+
+def _rcap_call():
+    try:
+        gbabuild._run_capped(
+            ["/bin/sh", "-c", "sleep 300 & exec sleep 300"], 1)
+        _rcap["r"] = "returned"
+    except _sp_capped.TimeoutExpired:
+        _rcap["r"] = "timeout"
+    except Exception as _e:                                 # noqa: BLE001
+        _rcap["r"] = "raised %s" % type(_e).__name__
+
+
+_rcap_t = _threading.Thread(target=_rcap_call, daemon=True)
+_rcap_t.start()
+_rcap_t.join(12)
+check("a timed-out compiler step fails fast instead of blocking on orphans",
+      not _rcap_t.is_alive() and _rcap.get("r") == "timeout", repr(_rcap))
+
 print("\n%d/%d checks passed" % (sum(RESULTS), len(RESULTS)))
 if FAILED:
     print("\nFAILED:")

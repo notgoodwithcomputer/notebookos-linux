@@ -4693,20 +4693,22 @@ class Sequencer(nbapp.AppWindow):
 
         Suppressed while a track name is being TYPED, or 'c' in the middle of
         "Chorus 2" would arm the knife instead of appearing in the box. A
-        focused Gtk.Entry gets every plain key to itself; the ones with a
-        modifier, and the transport's own Space, keep working."""
+        focused text field gets EVERY plain key to itself — including Space,
+        or the space in "Chorus 2" would toggle playback instead of landing
+        in the name (the transport's Space works from anywhere else). Keys
+        with a modifier keep working."""
         if self._busy_overlay():
             return False
         kv = ev.keyval
         mods = ev.state & (Gdk.ModifierType.CONTROL_MASK
                            | Gdk.ModifierType.MOD1_MASK)
         shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
-        typing = isinstance(self.get_focus(), Gtk.Entry)
-        if kv == Gdk.KEY_space and not mods:
-            self._toggle_play()
-            return True
+        typing = isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView))
         if typing or mods:
             return False
+        if kv == Gdk.KEY_space:
+            self._toggle_play()
+            return True
         if kv in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
             self._zoom_step(ZOOM_STEP)
             return True

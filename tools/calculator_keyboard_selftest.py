@@ -274,6 +274,51 @@ def main():
     check("the Edit menu offers Copy Result",
           any("copy" in k.lower() for k in items), repr(sorted(items)))
 
+    # ---- typing in a graph formula box stays in the box -------------------
+    # The Y1-Y4 fields are real entries in this same toplevel, and the
+    # window handler runs before they see a single key. Without the guard
+    # every digit and letter drove the keypad, Return evaluated, BackSpace
+    # edited the EXPRESSION and Delete fired AC while the user corrected a
+    # typo in a formula. With a text field focused the handler must decline
+    # every typing key (Ctrl chords and Escape keep their window meaning).
+    graph_checks = (
+        "a digit in a formula box is left to the box",
+        "a letter in a formula box is left to the box",
+        "BackSpace in a formula box never edits the expression",
+        "Delete in a formula box never fires AC",
+        "Return in a formula box never evaluates",
+        "the keypad works again once the box loses focus")
+    app._switch_view("graph")
+    pump()
+    ys = getattr(app, "y_entries", None)
+    press_key(app, "Delete")
+    type_it(app, "12")
+    if not ys:
+        not_reached("no graph Y entries on this build", *graph_checks)
+    else:
+        app.set_focus(ys[0])
+        pump()
+        if app.get_focus() is not ys[0]:
+            not_reached("could not focus a graph entry", *graph_checks)
+        else:
+            check(graph_checks[0], press_key(app, "5") is False)
+            check(graph_checks[1], press_key(app, "x") is False)
+            check(graph_checks[2],
+                  press_key(app, "BackSpace") is False
+                  and shown(app).strip() == "12", repr(shown(app)))
+            check(graph_checks[3],
+                  press_key(app, "Delete") is False
+                  and shown(app).strip() == "12", repr(shown(app)))
+            check(graph_checks[4],
+                  press_key(app, "Return") is False
+                  and shown(app).strip() == "12", repr(shown(app)))
+            app.set_focus(None)
+            pump()
+            check(graph_checks[5],
+                  press_key(app, "3") is True
+                  and shown(app).strip() == "123", repr(shown(app)))
+    press_key(app, "Delete")
+
     try:
         app.destroy()
     except Exception:

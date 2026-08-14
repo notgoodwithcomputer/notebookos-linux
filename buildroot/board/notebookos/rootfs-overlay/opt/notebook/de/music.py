@@ -2919,12 +2919,13 @@ class Music(nbapp.AppWindow):
                     pass
                 return True
         # Space plays/pauses, as it does in every music player — but only when
-        # the user is not typing into the search field, where it is a space.
+        # the user is not typing into a text field, where it is a space.
         elif (ev.keyval == Gdk.KEY_space
                 and self._menu_open is None
                 and getattr(self, "_dialog_layer", None) is None
                 and getattr(self, "_about_layer", None) is None
-                and not isinstance(self.get_focus(), Gtk.Entry)):
+                and not isinstance(self.get_focus(),
+                                   (Gtk.Editable, Gtk.TextView))):
             if self._engine_ok():
                 self._toggle_play()
             return True

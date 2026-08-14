@@ -4387,7 +4387,7 @@ class Finder(Gtk.Window):
                 self._begin_rename()
                 return True
             return False
-        if isinstance(self.get_focus(), Gtk.Entry):
+        if isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView)):
             return False               # typing in a field: leave every key alone
         if ctrl and keyval in (Gdk.KEY_c, Gdk.KEY_C):
             self._copy_selected(); return True

@@ -882,6 +882,15 @@ class Composer(nbapp.AppWindow):
     def _key(self, _w, e):
         ctrl = bool(e.state & Gdk.ModifierType.CONTROL_MASK); shift = bool(e.state & Gdk.ModifierType.SHIFT_MASK)
         if e.keyval == Gdk.KEY_Escape: self.editor.selection.clear(); self.staff.queue_draw(); return True
+        # Typing belongs to a focused text control. The Tempo box is a
+        # Gtk.SpinButton — an Editable — in this same toplevel: without this
+        # guard, Delete deleted the SELECTED NOTES while the user was editing
+        # a tempo digit, the arrows moved the selection instead of the caret,
+        # and Space played the piece instead of typing. Ctrl chords (save,
+        # undo) stay window-wide; Escape above keeps its leave meaning.
+        if not ctrl and isinstance(self.get_focus(),
+                                   (Gtk.Editable, Gtk.TextView)):
+            return False
         if e.keyval == Gdk.KEY_Delete: self._delete(); return True
         if e.keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
             dt = -self.snap if e.keyval == Gdk.KEY_Left else self.snap if e.keyval == Gdk.KEY_Right else 0; dp = 1 if e.keyval == Gdk.KEY_Up else -1 if e.keyval == Gdk.KEY_Down else 0; self.editor.move_selected(dt, dp) and self.changed(); return True

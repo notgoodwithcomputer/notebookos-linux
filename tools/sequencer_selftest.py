@@ -1109,6 +1109,68 @@ def recorder_tests():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _find_entry(w):
+    from gi.repository import Gtk
+    if isinstance(w, Gtk.Entry):
+        return w
+    if hasattr(w, "get_children"):
+        for c in w.get_children():
+            r = _find_entry(c)
+            if r is not None:
+                return r
+    return None
+
+
+def keyboard_tests():
+    # Typed keys stay in a focused name box. The Space branch used to sit
+    # ABOVE the typing guard, so the space in "Chorus 2" toggled playback
+    # instead of landing in the track name — a two-word name was untypeable.
+    print("sequencer — typing in a name box owns every plain key")
+    import sequencer as Q
+    from gi.repository import Gdk
+    app = Q.Sequencer()
+    entry = _find_entry(app)
+    if entry is None:
+        check("Space while naming a track stays in the box",
+              False, "[not reached: no Entry in the widget tree]")
+        app.destroy()
+        return
+
+    def ev(keyval):
+        e = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+        e.keyval = keyval
+        e.state = Gdk.ModifierType(0)
+        e.string = ""
+        e.window = app.get_window()
+        return e
+
+    toggles = []
+    real_toggle = app._toggle_play
+    app._toggle_play = lambda: toggles.append(1)
+    try:
+        app.set_focus(entry)
+        if app.get_focus() is not entry:
+            check("Space while naming a track stays in the box",
+                  False, "[not reached: could not focus the name box]")
+            return
+        took = app._on_space(app, ev(Gdk.KEY_space))
+        check("Space while naming a track stays in the box (no transport)",
+              took is False and not toggles,
+              "took=%r toggles=%r" % (took, toggles))
+        check("'c' while naming never arms the knife",
+              app._on_space(app, ev(Gdk.KEY_c)) is False)
+        check("Delete while naming never deletes a clip",
+              app._on_space(app, ev(Gdk.KEY_Delete)) is False)
+        app.set_focus(None)
+        took = app._on_space(app, ev(Gdk.KEY_space))
+        check("Space with no field focused still drives the transport",
+              took is True and len(toggles) == 1,
+              "took=%r toggles=%r" % (took, toggles))
+    finally:
+        app._toggle_play = real_toggle
+        app.destroy()
+
+
 def main():
     home = tempfile.mkdtemp(prefix="nbseq-selftest-")
     os.environ["NB_HOME"] = home
@@ -1116,6 +1178,7 @@ def main():
         synth_tests()
         app_tests()
         recorder_tests()
+        keyboard_tests()
     finally:
         shutil.rmtree(home, ignore_errors=True)
     print("\n%d checks passed, %d failed" % (PASS[0], len(FAIL)))

@@ -77,6 +77,35 @@ with the commit that closes them.
   document_safety/performance_ux stop pinning single spellings; packages
   suites drive the real prefs writer (getattr-hardened app-side).
 
+## SHORTCUT-LADDER CLASS (Codex audits R2+R3, Aug 13 late — full reports:
+## .codex-scratch/shortcut-ladder-audit.md + R3 in session log)
+Class: window-level key handlers firing while an editable text widget has
+focus. 57/75 + 54/54 modules covered. FIXED this session (each red-proved):
+- Calculator: whole keypad ladder (digits/letters/operators/=/BackSpace/
+  Delete/Return/Up/Down) stole every key from the Y1-Y4 graph fields —
+  formulas were untypeable. Guard after the Escape branch.
+- Sequencer: Space toggled playback while typing a track name (the space
+  in "Chorus 2"); Space hoisted below the typing guard, guard widened to
+  (Editable|TextView).
+- Composer (R3, DESTRUCTIVE): bare Delete deleted the SELECTED NOTES and
+  arrows moved them while the Tempo SpinButton (an Editable) had focus;
+  Space played the piece mid-edit. Bare-keys guard added; Ctrl chords and
+  Escape keep window meaning.
+- Finder + Music: Entry-only guards widened to (Editable|TextView),
+  defensive (no current TextView in either tree).
+- Comics: peer's lane; their _prompt_layer gate confirmed landed by R3.
+REPEAT-BUILD WEDGE (guest-arm peer finding, root-caused jointly): gcc
+exceeding build_rom's 120s cap left subprocess.run blocked forever
+draining pipes held by orphaned cc1/as/ld → work() never returned → job
+never retired → "Compiling…" forever, no card; later attempts got a
+silent REJECT-None. FIXED: _run_capped (own session + killpg on timeout,
+both compiler steps), REJECT-None now clears _building + says so, and
+the whole path is phase-logged to ~/.config/notebook/gbasdk-build.log
+(gbasdk requested/accepted/rejected/worker/landed + build_rom find_gcc/
+generate/write/gcc/objcopy phases). Suite: gbasdk 581/581 incl. a
+watchdog check that a timed-out step dies as a group (sabotage-proved).
+ON-TARGET RE-DRIVE OWED: repeat Build & Play x3, wedge log inspection.
+
 ## OPEN — OS-wide sweeps not yet run at the new bar
 - Remaining ~38 apps: real-use drive-through each (task #6). Order by
   consumer surface: media, music, video, writer*, illustrator*, maps,
