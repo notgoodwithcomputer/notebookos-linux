@@ -77,6 +77,9 @@ CHECK_GATES = [
     # nothing. Its ledger carries 96 UNVERIFIED guards — read the note
     # there before trusting a green result to mean the class is closed.
     "silent_refusal_check",
+    # Static: a slider that offers values its own apply will refuse.
+    # Connects only 2 of 46 ranged controls — read its coverage note.
+    "offered_range_check",
     "frame_pacing_check", "grid_check",
     # §E4 check 5 (no diagonal travel). Separate from grid_check because that
     # one owns the STATIC constants and is edited whenever a sidebar
