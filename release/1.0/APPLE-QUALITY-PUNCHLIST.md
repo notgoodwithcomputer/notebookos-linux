@@ -666,3 +666,22 @@ so it goes to the i18n lane rather than half-landing here. Suggested shape:
 a title naming the tasks, plus a body that CARRIES ITS OWN NOUN — the
 lesson from the ebook pair, where borrowing music's body would have shipped
 wrong gender agreement in six languages.
+
+**Focus-after-prompt, measured and closed (Aug 14).** Comics 266ccb9c and
+Illustrator ee2c69dc. The other two on the grep's list — animation and
+sequencer — RESTORE FOCUS CORRECTLY and were never broken. Driving each
+real window through its real prompt is the only thing that separated them;
+half the list was wrong.
+
+**Construct count moved 42 -> 41 for an EXTERNAL reason, not a
+regression.** tools/construct_all_host.py derives its app list from
+finder.APP_MODULES, and finder.py currently carries somebody's in-flight
+change: an app-signing gate (`import nbtrust`, fail-closed on a missing
+module, per a docs/APP-TRUST.md that is not in the tree yet) and the
+REMOVAL of Terminal from both APP_MODULES and APP_KIND. So the launcher
+lists one app fewer and construct honestly reports 41. Nothing crashed.
+Recorded because "42/42" has been this session's baseline all day and the
+next person to see 41 will reasonably suspect a break. Whoever owns that
+change should say whether dropping Terminal from the Applications list is
+intended for release — it is a product decision sitting uncommitted, like
+the four files already filed above.
