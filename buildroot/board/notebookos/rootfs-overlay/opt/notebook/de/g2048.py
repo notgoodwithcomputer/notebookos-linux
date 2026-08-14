@@ -360,7 +360,7 @@ class Game2048(nbapp.AppWindow):
             state["_extra"] = getattr(self, "_extra", {})
             nbapp.atomic_write_json(STATE_FILE, state)
         except Exception as exc:
-            nbapp.save_failure_reason = str(exc)
+            nbapp.note_save_failure(self, exc, STATE_FILE)
 
     def _queue_save(self):
         """Persist shortly after a move. Debounced, so mashing the arrow keys

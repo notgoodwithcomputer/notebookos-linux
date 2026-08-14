@@ -1332,7 +1332,7 @@ class Finder(Gtk.Window):
                                            "_extra": getattr(
                                                self, "_prefs_extra", {})})
         except (OSError, TypeError, ValueError) as exc:
-            nbapp.save_failure_reason = str(exc)
+            nbapp.note_save_failure(self, exc, path, app_name=_t("Finder"))
 
     # ---- removed applications (hidden from the Applications listing) ----
     # The user can hide an app from the Applications view ("Remove from

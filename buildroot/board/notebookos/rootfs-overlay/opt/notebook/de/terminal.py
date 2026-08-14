@@ -654,7 +654,7 @@ class Terminal(nbapp.AppWindow):
                             "_extra": getattr(self, "_extra", {})})
             nbapp.atomic_write_json(STATE_FILE, payload)
         except Exception as exc:
-            nbapp.save_failure_reason = str(exc)
+            nbapp.note_save_failure(self, exc, STATE_FILE)
 
     # -- destructive-action confirmation --
     def _confirm(self, title, body, ok_label):

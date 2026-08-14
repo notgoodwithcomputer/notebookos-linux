@@ -103,19 +103,31 @@ try:
     check("LANG-STORE-QUARANTINE damaged bytes are retained", len(damaged) == 1)
     check("LANG-STORE-VERIFY replacement is a dict", isinstance(saved, dict))
 
-    # Failed saves surface a reason on nbapp, and the write is still attempted.
+    # A failed save has to reach the person. Course progress is real work — a
+    # write that does not land loses the lesson just finished — and this check
+    # used to delete nbapp.save_failure_reason and assert the app had replaced
+    # that FUNCTION with a string, which told nobody and left the shared
+    # sentence producer unusable for the rest of the process.
+    import nbnotify
+    expect = language.nbapp.save_failure_reason(OSError("disk full"))
     w = bare({"xp": 7})
     calls = []
+    posted = []
     def fail_write(*args):
         calls.append(args)
         raise OSError("disk full")
-    if hasattr(language.nbapp, "save_failure_reason"):
-        delattr(language.nbapp, "save_failure_reason")
-    with mock.patch.object(language.nbapp, "atomic_write_json", fail_write):
+    with mock.patch.object(language.nbapp, "atomic_write_json", fail_write), \
+            mock.patch.object(nbnotify, "post",
+                              lambda t, b="", **k: posted.append((t, b))):
         w._save_progress()
     check("LANG-STORE-WRITE failed save was attempted", len(calls) == 1)
-    check("LANG-STORE-FAILURE failed save exposes save_failure_reason",
-          "disk full" in getattr(language.nbapp, "save_failure_reason", ""))
+    check("LANG-STORE-FAILURE failed save records the reason on the window",
+          getattr(w, "_save_error", "") == expect,
+          repr(getattr(w, "_save_error", "")))
+    check("LANG-STORE-FAILURE failed save reaches the notification centre",
+          len(posted) == 1 and posted[0][1] == expect, repr(posted))
+    check("LANG-STORE-FAILURE the shared reason producer survives the failure",
+          callable(language.nbapp.save_failure_reason))
 
     # Sabotage the content sanitizer: the named row check must turn red.
     mutant = doc

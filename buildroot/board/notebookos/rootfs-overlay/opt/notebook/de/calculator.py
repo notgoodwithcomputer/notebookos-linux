@@ -1857,7 +1857,7 @@ class Calculator(nbapp.AppWindow):
                 "trace_x": self.trace_x, "_extra": getattr(self, "_extra", {})})
             nbapp.atomic_write_json(STATE_FILE, payload)
         except Exception as exc:
-            nbapp.save_failure_reason = str(exc)
+            nbapp.note_save_failure(self, exc, STATE_FILE)
 
     def _on_destroy(self, *_):
         self._save_prefs()

@@ -80,7 +80,8 @@ def main():
             time.sleep(0.12)
     elif op == "key":
         for qc in sys.argv[2:]:
-            q.cmd("send-key", keys=[{"type": "qcode", "data": qc}])
+            combo = [{"type": "qcode", "data": part} for part in qc.split("+")]
+            q.cmd("send-key", keys=combo)
             time.sleep(0.15)
     elif op == "watch":
         prefix, n, dt = sys.argv[2], int(sys.argv[3]), float(sys.argv[4])

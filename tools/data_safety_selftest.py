@@ -264,6 +264,18 @@ _ALLOWED = [
     ("burner.py", '"dvdauthor.xml"', "generated input in its own scratch dir"),
     ("burner.py", "open(menu_sub,", "muxed menu stream in its own scratch dir"),
     ("settings.py", "/etc/hostname", "system config, not user work"),
+    # The per-phase build log the SDK appends to while a ROM compiles. Append
+    # mode truncates nothing, and the file is a diagnostic record of what the
+    # toolchain just did — the project it was built from is the user's work and
+    # is written elsewhere, atomically.
+    ("gbasdk.py", "gbasdk-build.log", "append-only build log, not user work"),
+    # Installing a package writes every payload to a ".nbpkg-tmp" sibling and
+    # os.replace()s it into place, then registers the app the same way, LAST, so
+    # a half-written install is never registered. This is the atomic pattern the
+    # rest of this check exists to require, not an exception to it.
+    ("nbpkg_install.py", 'open(tmp, "wb")', "temp + os.replace of a payload"),
+    ("nbpkg_install.py", 'open(tmp, "w", encoding="utf-8")',
+     "temp + os.replace of the app register"),
     ("finder.py", "origins", "trash put-back sidecar, rebuilt on next trash"),
     ("finder.py", "nbapp.APP_FLAG", "runtime flag in /tmp"),
     # gbasdk hands off to the emulator the same way the Finder hands off to

@@ -464,6 +464,51 @@ def save_failure_reason(exc, path=None):
     return _t("This could not be saved.")
 
 
+def note_save_failure(owner, exc, path=None, app_name=""):
+    """Record an autosave that did not happen, and say so once. Returns the
+    sentence, and never raises: a save that failed must not also take the app
+    down on its way past.
+
+    THE CASE THIS EXISTS FOR is the save with no dialog-owning call site. A
+    preference write fires on a timer and again from the destroy handler, so by
+    the time it fails the window may already be going away and the app's own
+    status line (Article IV §1) is going with it. That is the one shape
+    notify() is for: a result that lands while the person is somewhere else.
+
+    IT IS ALSO THE FIX FOR A REAL DEFECT, recorded here so the next author does
+    not reinvent it. Nine apps used to write `nbapp.save_failure_reason =
+    str(exc)` in that except branch, believing a module attribute was a channel
+    to publish through. It is a FUNCTION: the assignment told nobody -- nothing
+    ever read that name as a value -- and replaced the shared sentence producer
+    for the rest of the process, so the next app in that process to ask for a
+    reason got a TypeError instead. Three suites then certified the mistake,
+    checking that the attribute had become a string under names that claimed the
+    app "surfaces reason" to a person. Nothing was surfaced to anyone.
+
+    ONCE PER OWNER, NOT ONCE PER WRITE. A full disk fails every autosave, and a
+    tray filling with one repeated sentence is the single failure a notification
+    centre cannot survive. The reason stays on the owner as `_save_error` for
+    any status line that is still on screen to show."""
+    try:
+        reason = save_failure_reason(exc, path)
+    except Exception:                                             # noqa: BLE001
+        reason = _t("This could not be saved.")
+    try:
+        owner._save_error = reason
+    except Exception:                                             # noqa: BLE001
+        pass
+    try:
+        if not getattr(owner, "_save_failure_told", False):
+            owner._save_failure_told = True
+            import nbnotify
+            nbnotify.post(_t("Not saved"), reason,
+                          app=_app_module_name(owner),
+                          app_name=app_name or getattr(owner, "app_name", ""))
+    except Exception:                                             # noqa: BLE001
+        pass
+    return reason
+
+
 def atomic_write_json(path, obj, indent=None, ensure_ascii=True):
     """Serialise `obj` as JSON to `path` crash-safely, shared by every app that
     auto-persists user data.

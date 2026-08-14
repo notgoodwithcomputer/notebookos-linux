@@ -143,43 +143,87 @@ check("illustrator minimum canvas size remains selectable",
 mutant("illustrator prompt verifier rejects callback widget reads",
        'raw = {k: fields[k].get_text()' not in canvas_src)
 
-# Failed store writes must publish a reason through the shared nbapp module.
+# A failed store write has to reach the PERSON, and these four apps are the
+# ones where it could not: each assigned its reason to nbapp.save_failure_reason
+# — a FUNCTION, so the assignment told nobody and left the shared sentence
+# producer replaced by a string for the rest of the process. The checks that
+# stood here read that attribute back and reported it as the app "surfacing" a
+# reason, which is how the defect survived nine apps. What a person can reach is
+# checked instead: the sentence recorded on the app for its status line, one
+# message in the notification centre for the save that failed while the window
+# was already going away, and the producer still callable afterwards.
+import nbnotify
 original_atomic = nbapp.atomic_write_json
 original_reason = nbapp.save_failure_reason
+original_post = nbnotify.post
+posted = []
 def fail_write(*_args, **_kwargs):
     raise OSError(errno.ENOSPC, "audit disk full")
+def capture_post(title, body="", app="", app_name="", icon=""):
+    posted.append((title, body, app))
+    return "captured"
 nbapp.atomic_write_json = fail_write
+nbnotify.post = capture_post
+DISK_FULL = original_reason(OSError(errno.ENOSPC, "audit disk full"))
+
+
+def told(win, label, save):
+    """One failed save, asserted the way the person meets it."""
+    before = len(posted)
+    save()
+    check(label + " records the reason for its status line",
+          getattr(win, "_save_error", "") == DISK_FULL,
+          repr(getattr(win, "_save_error", "")))
+    mine = posted[before:]
+    check(label + " leaves the reason in the notification centre",
+          len(mine) == 1 and mine[0][1] == DISK_FULL, repr(mine))
+    check(label + " keeps nbapp.save_failure_reason callable",
+          callable(nbapp.save_failure_reason))
+    # A full disk fails every autosave; the tray must not fill with one
+    # repeated sentence, which is the failure a notification centre cannot
+    # survive.
+    again = len(posted)
+    save()
+    check(label + " says it once, not once per write",
+          len(posted) == again, repr(posted[again:]))
+
+
 try:
     calc._store_readable = True
     state = calculator.sanitize_state({})
     for key, value in state.items():
         if key != "_extra": setattr(calc, key, value)
     calc._extra = state["_extra"]
-    calc._save_prefs()
-    check("calculator failed save surfaces reason", "audit disk full" in str(nbapp.save_failure_reason))
-    nbapp.save_failure_reason = original_reason
+    told(calc, "calculator failed save", calc._save_prefs)
 
     game.best, game.board, game.score, game.status, game._extra = 4, [[2, 0, 0, 0]] + [[0]*4 for _ in range(3)], 0, "play", {}
-    game._save_best()
-    check("g2048 failed save surfaces reason", "audit disk full" in str(nbapp.save_failure_reason))
-    nbapp.save_failure_reason = original_reason
+    told(game, "g2048 failed save", game._save_best)
 
     t.term.get_font_scale = lambda: 1.0
     t.term.get_cursor_blink_mode = lambda: terminal.Vte.CursorBlinkMode.ON
     t._extra = {}
-    t._save_prefs()
-    check("terminal failed save surfaces reason", "audit disk full" in str(nbapp.save_failure_reason))
-    nbapp.save_failure_reason = original_reason
+    told(t, "terminal failed save", t._save_prefs)
 
+    # Packages is the one of the four where a person is looking straight at the
+    # result, so the inspector has to say it too — and the listing must not go
+    # on showing an application as removed when nothing recorded that it was.
     pkg.sel = next(i for i, row in enumerate(packages.PACKAGES)
                    if row[packages.KIND] == "Application")
+    removed_name = packages.PACKAGES[pkg.sel][packages.NAME]
     pkg._load_removed_apps = lambda: set()
     pkg._rebuild_detail = lambda: None
-    pkg._set_app_removed(True)
-    check("packages failed save surfaces reason", "audit disk full" in str(nbapp.save_failure_reason))
+    flashes = []
+    pkg._flash = lambda text, err=False: flashes.append((text, err))
+    told(pkg, "packages failed save", lambda: pkg._set_app_removed(True))
+    check("packages says a failed removal in the inspector",
+          flashes and flashes[0][0] == DISK_FULL and flashes[0][1],
+          repr(flashes))
+    check("packages does not show an application as removed after a failed write",
+          removed_name not in pkg._removed_apps, repr(pkg._removed_apps))
 finally:
     nbapp.atomic_write_json = original_atomic
     nbapp.save_failure_reason = original_reason
+    nbnotify.post = original_post
 
 print("RESULT: %d failed" % failed)
 raise SystemExit(1 if failed else 0)

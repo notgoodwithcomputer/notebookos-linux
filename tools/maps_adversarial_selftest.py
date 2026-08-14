@@ -96,18 +96,31 @@ try:
           saved.get("_extra") == {"future_route": {"colour": "violet"},
                                   "future_zoom": 17}, saved)
 
+    # A failed view-state write has to reach the person. This check used to
+    # delete nbapp.save_failure_reason and then assert the app had replaced that
+    # FUNCTION with a string — which told nobody, and left the shared sentence
+    # producer unusable for the rest of the process. What is asserted now is
+    # what a person can reach: the sentence on the window, and a message in the
+    # notification centre for a save that fails with no dialog to carry it.
+    import nbnotify
+    expect = maps.nbapp.save_failure_reason(OSError("injected maps disk full"))
     calls = []
+    posted = []
     def fail(*args, **kwargs):
         calls.append((args, kwargs))
         raise OSError("injected maps disk full")
-    if hasattr(maps.nbapp, "save_failure_reason"):
-        delattr(maps.nbapp, "save_failure_reason")
-    with mock.patch.object(maps.nbapp, "atomic_write_json", fail):
+    with mock.patch.object(maps.nbapp, "atomic_write_json", fail), \
+            mock.patch.object(nbnotify, "post",
+                              lambda t, b="", **k: posted.append((t, b))):
         a._save_cfg()
     check("MAPS-FAILURE pack-loaded save was attempted", len(calls) == 1, calls)
-    check("MAPS-FAILURE failed save surfaces reason through module attr",
-          "injected maps disk full" in getattr(maps.nbapp, "save_failure_reason", ""),
-          getattr(maps.nbapp, "save_failure_reason", "<missing>"))
+    check("MAPS-FAILURE failed save records the reason on the window",
+          getattr(a, "_save_error", "") == expect,
+          repr(getattr(a, "_save_error", "")))
+    check("MAPS-FAILURE failed save reaches the notification centre",
+          len(posted) == 1 and posted[0][1] == expect, posted)
+    check("MAPS-FAILURE the shared reason producer survives the failure",
+          callable(maps.nbapp.save_failure_reason))
 
     # The verifier must actually reject the old behaviour that leaves a valid
     # wrong-shape JSON file in place for the shared parse-only guard.

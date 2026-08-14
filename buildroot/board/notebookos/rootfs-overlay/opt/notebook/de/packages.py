@@ -1000,6 +1000,10 @@ class Packages(nbapp.AppWindow):
             pass
 
     def _save_view_prefs(self):
+        """Returns whether the store reached the disk. The caller acting on a
+        real user action has to know: this handler swallows the same exception
+        types the callers used to guard with, so a caller that only wrapped the
+        call in its own try never heard about a failed write at all."""
         try:
             # getattr, not bare reads: this writer also runs from the destroy
             # handler, and a window torn down mid-construction (or a harness
@@ -1012,8 +1016,10 @@ class Packages(nbapp.AppWindow):
                 "sort_field": getattr(self, "sort_field", None),
                 "sort_desc": bool(getattr(self, "sort_desc", False)),
             })
+            return True
         except (OSError, TypeError, ValueError) as exc:
-            nbapp.save_failure_reason = str(exc)
+            nbapp.note_save_failure(self, exc, self._removed_apps_path())
+            return False
 
     def _set_app_removed(self, remove):
         """Read-modify-write the current store after a real user action."""
@@ -1028,11 +1034,19 @@ class Packages(nbapp.AppWindow):
             current.add(p[NAME])
         else:
             current.discard(p[NAME])
-        try:
-            self._removed_apps = current
-            self._save_view_prefs()
-        except (OSError, TypeError, ValueError) as exc:
-            nbapp.save_failure_reason = str(exc)
+        # Removing an application is a real user action with the person right
+        # here looking at it, so a write that did not land is said in the
+        # inspector rather than left for them to discover at the next launch —
+        # the listing would show the app back with nothing to explain it.
+        self._removed_apps = current
+        if not self._save_view_prefs():
+            # Back to what is actually recorded, read from the file rather than
+            # remembered: the write failed, so the disk is what the next launch
+            # will show, and the listing must not disagree with it in the
+            # meantime.
+            self._removed_apps = self._load_removed_apps()
+            self._flash(getattr(self, "_save_error", None)
+                        or nbapp.save_failure_reason(None), True)
             return
         self._rebuild_detail()
 

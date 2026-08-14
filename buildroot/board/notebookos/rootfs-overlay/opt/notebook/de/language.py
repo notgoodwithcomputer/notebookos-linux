@@ -554,7 +554,7 @@ class Language(nbapp.AppWindow):
                 _quarantine(CFG_FILE)
             nbapp.atomic_write_json(CFG_FILE, self.progress)
         except Exception as exc:
-            nbapp.save_failure_reason = str(exc)
+            nbapp.note_save_failure(self, exc, CFG_FILE)
 
     def _roll_day(self):
         """Start today's XP ledger. The daily goal is what the streak is scored

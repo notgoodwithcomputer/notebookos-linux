@@ -395,10 +395,7 @@ class Maps(nbapp.AppWindow):
                  "cy": self.cy, "scale": self.scale,
                  "_extra": getattr(self, "_extra", {})})
         except Exception as exc:
-            # Autosaves have no dialog-owning call site.  Publish the reason
-            # through the shared module attribute, as the other apps do, so a
-            # caller and the durability suite can observe the failed write.
-            nbapp.save_failure_reason = str(exc)
+            nbapp.note_save_failure(self, exc, self._cfg_path())
 
     def _scan_maps(self):
         # /opt/notebook/maps ships the bundled default; large add-on packs (a

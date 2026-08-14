@@ -303,7 +303,7 @@ class SystemMonitor(nbapp.AppWindow):
                 "sort_desc": self._sort_order == Gtk.SortType.DESCENDING,
             })
         except (OSError, TypeError, ValueError) as exc:
-            nbapp.save_failure_reason = str(exc)
+            nbapp.note_save_failure(self, exc, self._prefs_path())
 
     # ---- sampling ----
     def refresh(self, manual=False):
