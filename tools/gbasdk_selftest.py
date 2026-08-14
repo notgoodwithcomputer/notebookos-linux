@@ -3447,6 +3447,43 @@ check("...and says a build is already running instead of Compiling… forever",
 _bl_path = os.path.join(HOME, ".config", "notebook", "gbasdk-build.log")
 check("...and the phase log names the rejected start",
       os.path.exists(_bl_path) and "REJECTED" in open(_bl_path).read())
+
+# THE CONTROL, without which the check above proves very little: an ordinary
+# build must actually DELIVER. nbjobs runs work on a thread but hands the
+# result back through the GLib main loop, so join() waits for the thread and
+# not for the callback — a suite that never pumps sees no delivery at all and
+# would report "_building was cleared" identically whether the landing path
+# works or has been deleted. Pump, and prove the success case lands.
+# (Real gcc takes 60-120s; the worker is stubbed so this measures the
+# DELIVERY, which is the part under test here.)
+_bd_app = app()
+pump()
+_bd_said, _bd_done = [], []
+_bd_app._flash = lambda m: _bd_said.append(m)
+_real_build_rom = gbabuild.build_rom
+gbabuild.build_rom = lambda *a, **k: (True, "/tmp/fake.gba", "log")
+try:
+    _bd_app._build_async({}, tempfile.mkdtemp(prefix="gbasdk-bd-"),
+                         lambda ok, rom, log: _bd_done.append(ok))
+    _bd_job = _bd_app.jobs.job("build")
+    if _bd_job is not None:
+        _bd_job.join(10)
+    check("a build in flight has not delivered before the loop is pumped",
+          _bd_done == [], repr(_bd_done))
+    _ctx = GLib.MainContext.default()
+    for _ in range(200):
+        _ctx.iteration(False)
+        if _bd_done:
+            break
+    check("a successful build delivers through the main loop", _bd_done == [True],
+          repr(_bd_done))
+    check("...and clears the building flag on the way",
+          getattr(_bd_app, "_building", None) is False)
+finally:
+    gbabuild.build_rom = _real_build_rom
+_bd_app.destroy()
+pump()
+
 _bj_app.destroy()
 pump()
 
