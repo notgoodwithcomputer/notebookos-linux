@@ -7042,6 +7042,80 @@ def sound_name_family():
     shutil.rmtree(home, ignore_errors=True)
 
 
+def undo_cap_family():
+    """The history has a floor, and the app never offers an Undo below it.
+
+    UNDO_DEPTH is 200. Past that the oldest edits are dropped, which is the
+    design — a film cannot carry an unbounded history on this machine. What
+    matters for the person is that the app never OFFERS an Undo that would
+    do nothing: at the bottom the item greys rather than clicking silently,
+    which is the defect class this app has met in four other places today.
+
+    Driven to exhaustion: 240 edits, undo until refused."""
+    if not gtk_available():
+        skip("F64 the undo floor", "no display")
+        return
+
+    def wound(module):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = 0
+        app.sheet = module.Sheet(app.doc, 0)
+        cel, _run = app.sheet.ensure_drawing(0, 0)
+        over = 40
+        for index in range(module.UNDO_DEPTH + over):
+            app._snapshot(module._t("Draw"))
+            module.write_pixel(cel.decoded(0), 3 + index % 140,
+                               4 + (index * 3) % 100, "#1A1916")
+            cel.version += 1
+            app._commit_change()
+
+        def offered():
+            for label, callback in app.menu_items("Edit"):
+                if label != "-" and label.lstrip().startswith(module._t("Undo")):
+                    return label, callback
+            return None, None
+
+        steps = 0
+        while offered()[1] is not None and steps < 500:
+            offered()[1]()
+            steps += 1
+        image = app.doc.cels[0].decoded(0)
+        image.flush()
+        data = bytes(image.get_data())
+        ink = sum(1 for at in range(3, len(data), 4) if data[at])
+        label = offered()[0]
+        app._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(app, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(app, timer, None)
+        return steps, ink, label, over
+
+    steps, ink, label, over = wound(animation)
+    check("F64 the history holds exactly its depth and no more",
+          steps == animation.UNDO_DEPTH, (steps, animation.UNDO_DEPTH))
+    check("F64 and what is left is exactly what fell past the floor",
+          ink == over, (ink, over))
+    check("F64 at the floor the menu stops offering Undo rather than going quiet",
+          label is not None and animation._t("Undo") in label, label)
+
+    graded, scratch = module_mutant("F64-undo-offered-forever", [
+        ("        if name == 'Edit':\n            return nbapp.undo_menu_items(self.history) + [",
+         "        if name == 'Edit':\n            return [(text, callback or (lambda: None))\n"
+         "                    for text, callback in nbapp.undo_menu_items(self.history)] + ["),
+    ])
+    spent, _ink, _label, _over = wound(graded)
+    mutant("F64 an Undo still offered with nothing to undo is caught",
+           spent > animation.UNDO_DEPTH, spent)
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -7084,6 +7158,7 @@ for _family in (
         palette_agreement_family,
         menu_bar_fits_family,
         sound_name_family,
+        undo_cap_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
