@@ -364,24 +364,91 @@ def main():
               "%d lit edge pixels" % edge)
     app._exp_cleanup_tmp()
 
-    print("== a failed render leaves nothing behind ==")
-    # a half-written .mp4 in Videos looks like a saved film and plays as a
-    # broken one, so a failure must remove it
+    print("== a failed render leaves nothing behind, and takes nothing with it ==")
+    # A half-written .mp4 in Videos looks like a saved film and plays as a
+    # broken one, so a failure must remove its draft. What it must NEVER remove
+    # is the destination: exporting over a film you already have and then
+    # pressing Stop used to delete that film outright.
+    #
+    # This block used to plant its bytes AT _exp_out and assert they were gone,
+    # which is the defect written down as the contract. The destination now
+    # starts with something valuable in it, which is the only way the check can
+    # tell the two files apart.
     app.clips = [c(IMG, "image", 2)]
-    app._exp_out = os.path.join(tmp, "halfwritten.mp4")
+    app._exp_out = os.path.join(tmp, "vacation.mp4")
+    app._exp_draft = os.path.join(tmp, ".nbvid-vacation.mp4.part")
     app._exp_done = False
     with open(app._exp_out, "wb") as fh:
+        fh.write(b"THE FILM THE PERSON ALREADY HAD")
+    with open(app._exp_draft, "wb") as fh:
         fh.write(b"\0" * 2048)
     app._discard_partial_export()
-    check(not os.path.exists(app._exp_out),
-          "a failed export removes its part-written file")
-    app._exp_out = os.path.join(tmp, "keepme.mp4")
-    with open(app._exp_out, "wb") as fh:
+    check(not os.path.exists(app._exp_draft),
+          "a failed export removes its part-written draft")
+    check(os.path.exists(app._exp_out)
+          and open(app._exp_out, "rb").read() == b"THE FILM THE PERSON ALREADY HAD",
+          "a failed export leaves the film already there untouched")
+
+    # And the finished film is never taken away by a late teardown.
+    app._exp_draft = os.path.join(tmp, ".nbvid-keepme.mp4.part")
+    with open(app._exp_draft, "wb") as fh:
         fh.write(b"\0" * 2048)
     app._exp_done = True
     app._discard_partial_export()
-    check(os.path.exists(app._exp_out),
+    check(os.path.exists(app._exp_draft),
           "a finished export is never removed")
+    os.remove(app._exp_draft)
+
+    # The draft is what ffmpeg is given, so nothing is written to the
+    # destination until there is a whole film to put there.
+    app._exp_out = os.path.join(tmp, "argcheck.mp4")
+    app._exp_draft = os.path.join(tmp, ".nbvid-argcheck.mp4.part")
+    args, _total, _err = app._build_ffmpeg_cmd(
+        [c(IMG, "image", 2)], app._exp_draft, None)
+    check(args and args[-1] == app._exp_draft,
+          "the render writes to the draft, not to the destination")
+    check(app._exp_out not in args,
+          "the destination is never handed to ffmpeg")
+
+    print("== sound that could not be checked is not passed off as silence ==")
+    # ffprobe missing (or timing out) makes _probe_has_audio answer "no", which
+    # is the same answer as a genuinely silent clip. The render must treat them
+    # alike; the person must not. A holiday video whose sound was dropped
+    # because the prober was absent used to come back saying only "Saved".
+    import shutil as _shutil
+    app._audio_probe_cache = {}
+    app._audio_unknown = []
+    real_which = _shutil.which
+    _shutil.which = lambda tool: None if tool == "ffprobe" else real_which(tool)
+    try:
+        answered = app._probe_has_audio(clip)
+    finally:
+        _shutil.which = real_which
+    check(answered is False,
+          "an unprobeable clip is not claimed to have audio")
+    check(app._audio_unknown == [clip],
+          "a clip whose sound could not be checked is recorded",
+          repr(app._audio_unknown))
+
+    said = []
+    app._exp_show_status = lambda text, error=False: said.append(text)
+    app._exp_prog = type("P", (), {"set_fraction": lambda self, f: None})()
+    app._exp_errfh = None
+    app._exp_done = False
+    app._exp_out = os.path.join(tmp, "silent.mp4")
+    app._exp_draft = os.path.join(tmp, ".nbvid-silent.mp4.part")
+    with open(app._exp_draft, "wb") as fh:
+        fh.write(b"\0" * 2048)
+    app._exp_gone = []
+    app._exp_finish(0)
+    check(any("plays silent" in t for t in said),
+          "the export says the sound is missing instead of only 'Saved'",
+          repr(said))
+    check(os.path.isfile(app._exp_out),
+          "the finished draft is moved onto the destination")
+    check(not os.path.exists(app._exp_draft),
+          "no draft is left beside the finished film")
+    app._audio_unknown = []
 
     print("== the project survives a render ==")
     before = json.dumps(app._serialize(), sort_keys=True)

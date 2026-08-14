@@ -251,8 +251,12 @@ def export_offthread_check():
           "render ran on the calling thread")
     check("the exported PDF reaches its destination",
           os.path.exists(dest) and os.path.getsize(dest) > 0)
+    # Any stray, not one named ".part": the draft's name belongs to
+    # nbapp.atomic_write_via now, and a check that names it itself would pass
+    # for the wrong reason the moment that changed.
     check("no draft file is left beside a finished export",
-          not os.path.exists(dest + ".part"))
+          [f for f in os.listdir(journal.DOCS_DIR)] == ["journal-test.pdf"],
+          repr(os.listdir(journal.DOCS_DIR)))
 
     # An entry typed while the render runs must not change what is being
     # written: the worker is handed a copy, never the live list.
@@ -290,7 +294,8 @@ def export_offthread_check():
     check("a failed export leaves the previous PDF untouched",
           after == b"%PDF-previous", repr(after[:40]))
     check("a failed export leaves no draft behind",
-          not os.path.exists(dest + ".part"))
+          sorted(os.listdir(journal.DOCS_DIR)) == ["journal-test.pdf"],
+          repr(os.listdir(journal.DOCS_DIR)))
 
 
 if __name__ == "__main__":

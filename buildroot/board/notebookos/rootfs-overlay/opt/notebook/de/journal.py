@@ -1191,9 +1191,10 @@ class Journal(nbapp.AppWindow):
         text on screen — and the model is copied before the worker starts, so an
         entry typed while it runs cannot change what is being written.
 
-        The PDF is drawn on a temp sibling and moved into place, so an export
-        that fails half way never replaces the previous file with a partial
-        one."""
+        The PDF is drawn on a draft and moved into place, so an export that
+        fails half way never replaces the previous file with a partial one —
+        through nbapp.atomic_write_via, which is the shared form of a dance
+        Cookbook, Comics and this app each grew a private copy of."""
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
         except OSError as exc:
@@ -1204,17 +1205,10 @@ class Journal(nbapp.AppWindow):
         dest = os.path.join(DOCS_DIR, name)
 
         def work(_job):
-            draft = dest + ".part"
-            try:
+            def render(draft):
                 self._render_pdf(draft, entries)
                 _job.checkpoint()
-                os.replace(draft, dest)
-            except BaseException:
-                try:
-                    os.unlink(draft)
-                except OSError:
-                    pass
-                raise
+            nbapp.atomic_write_via(dest, render)
             return name
 
         def done(_name):

@@ -3348,13 +3348,21 @@ class VideoEditor(nbapp.AppWindow):
         Result is memoised per path. When ffprobe is absent we return False —
         a wrong 'yes' would map a missing [i:a] pad and fail the whole render,
         so we only pull a video clip's own track when we can confirm it exists;
-        dedicated audio-lane files are always included regardless."""
+        dedicated audio-lane files are always included regardless.
+
+        WHICH MEANS 'NO' HERE HAS TWO MEANINGS: this clip is silent, and this
+        clip could not be asked. They are the same to the render and must not
+        be the same to the person — a holiday video whose sound was dropped
+        because ffprobe was missing came back saying only "Saved". Anything
+        that could not be asked is recorded and named at the end, the same way
+        a missing file is."""
         cache = getattr(self, "_audio_probe_cache", None)
         if cache is None:
             cache = self._audio_probe_cache = {}
         if path in cache:
             return cache[path]
         ok = False
+        asked = False
         fp = shutil.which("ffprobe")
         if fp and path and os.path.isfile(path):
             try:
@@ -3364,8 +3372,15 @@ class VideoEditor(nbapp.AppWindow):
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL, timeout=10)
                 ok = bool(r.stdout and r.stdout.strip())
-            except Exception:
+                asked = True
+            except Exception:                                     # noqa: BLE001
                 ok = False
+        if not asked and path and os.path.isfile(path):
+            unknown = getattr(self, "_audio_unknown", None)
+            if unknown is None:
+                unknown = self._audio_unknown = []
+            if path not in unknown:
+                unknown.append(path)
         cache[path] = ok
         return ok
 
@@ -3921,8 +3936,25 @@ class VideoEditor(nbapp.AppWindow):
         # GLib.idle_add to launch the render. The card shows 'Preparing…' and
         # its controls are disabled meanwhile, so clicking Render never freezes.
         self._exp_out = out
+        # ffmpeg renders to a DRAFT beside the destination and the finished file
+        # is moved into place, because the destination is usually a film the
+        # person still has. It used to be handed straight to ffmpeg with -y, and
+        # the failure path then REMOVED it: exporting Vacation.mp4 a second time
+        # and pressing Stop did not damage the old Vacation.mp4, it deleted it —
+        # and stopping something that is taking too long is the most reasonable
+        # thing anyone does mid-render. Hidden, so a half-written film never
+        # shows up in Videos while it is being made.
+        #
+        # nbapp.atomic_write_via is the shared form of this and is the right
+        # call anywhere it fits; it cannot fit here, because it hands a producer
+        # a path and requires it to be finished on return, and this producer is
+        # a subprocess polled across many main-loop turns.
+        self._exp_draft = os.path.join(
+            os.path.dirname(out) or ".",
+            ".nbvid-" + os.path.basename(out) + ".part")
         self._exp_segs = segs         # so a failure can name the clip that broke
         self._exp_gone = []           # media that was not on disk (set by build)
+        self._audio_unknown = []      # clips whose sound could not be asked about
         self._exp_build_gen = getattr(self, "_exp_build_gen", 0) + 1
         gen = self._exp_build_gen
         try:
@@ -3934,7 +3966,7 @@ class VideoEditor(nbapp.AppWindow):
         self._exp_show_status(_t("Preparing…"))
         threading.Thread(
             target=self._exp_build_worker,
-            args=(gen, segs, out, self._exp_progress_file),
+            args=(gen, segs, self._exp_draft, self._exp_progress_file),
             daemon=True).start()
 
     def _exp_build_worker(self, gen, segs, out, progress_file):
@@ -3967,9 +3999,15 @@ class VideoEditor(nbapp.AppWindow):
         self._exp_total = max(1, total)
         try:
             self._exp_errfh = open(self._exp_err_file, "wb")
+            # Its OWN process group, so Stop can take the whole render down.
+            # ffmpeg is not always one process — it spawns for filters and for
+            # the encoder — and terminate() reaches only the child we launched,
+            # leaving the rest holding the draft and the CPU. This is the same
+            # defect that wedged the GBA toolchain build (gbabuild._run_capped)
+            # and it is fixed here the same way: new session out, killpg back.
             self._exp_proc = subprocess.Popen(
                 cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=self._exp_errfh)
+                stderr=self._exp_errfh, start_new_session=True)
         except Exception:
             self._exp_show_status(_t("The video could not be saved."),
                                   error=True)
@@ -4100,8 +4138,16 @@ class VideoEditor(nbapp.AppWindow):
             pass
         self._exp_errfh = None
         out = getattr(self, "_exp_out", None)
-        ok = (ret == 0 and out and os.path.isfile(out)
-              and os.path.getsize(out) > 0)
+        draft = getattr(self, "_exp_draft", None) or out
+        ok = (ret == 0 and draft and os.path.isfile(draft)
+              and os.path.getsize(draft) > 0)
+        if ok and draft != out:
+            # The one moment the destination changes, and only once there is a
+            # whole film to put there.
+            try:
+                os.replace(draft, out)
+            except OSError:
+                ok = False
         if ok:
             try:
                 self._exp_prog.set_fraction(1.0)
@@ -4113,10 +4159,16 @@ class VideoEditor(nbapp.AppWindow):
             # lie. Name the files that were not there.
             gone = getattr(self, "_exp_gone", None)
             self._exp_show_status(msg)
+            lines = []
             if gone:
-                self._exp_show_status(
-                    msg + "\n" + _t("Missing file: %s") % ", ".join(gone),
-                    error=False)
+                lines.append(_t("Missing file: %s") % ", ".join(gone))
+            # Sound that could not be asked about was left out of the render.
+            # Silence nobody was told about is the same lie as a black gap.
+            if getattr(self, "_audio_unknown", None):
+                lines.append(_t("A sound could not be read, so it plays silent."))
+            if lines:
+                self._exp_show_status(msg + "\n" + "\n".join(lines),
+                                      error=False)
             self._exp_done = True
             # A render is the longest job in this app — minutes for a short
             # film — so where it ended up also goes to the menu bar's
@@ -4167,16 +4219,45 @@ class VideoEditor(nbapp.AppWindow):
             pass
         self._close_export()
 
+    def _stop_render_group(self, proc):
+        """End a render and everything it started. Signals the process GROUP,
+        because ffmpeg's helpers are not the process we launched and a
+        terminate() aimed at that one leaves them running: still writing the
+        draft we are about to inspect, still holding a core. SIGKILL follows if
+        the polite signal is ignored, so Stop always means stopped."""
+        import signal as _signal
+        try:
+            group = os.getpgid(proc.pid)
+        except OSError:
+            group = None
+        for sig, wait in ((_signal.SIGTERM, 3), (_signal.SIGKILL, 2)):
+            try:
+                if group is not None:
+                    os.killpg(group, sig)
+                else:
+                    proc.send_signal(sig)
+            except (OSError, ValueError):
+                pass
+            try:
+                proc.wait(timeout=wait)   # let it release the draft
+                return
+            except Exception:             # noqa: BLE001  (still running)
+                continue
+
     def _discard_partial_export(self):
-        """Remove the unfinished .mp4 a stopped or failed render left behind.
-        Only ever the file THIS render was writing, and never once it has
-        finished successfully (_exp_done)."""
-        out = getattr(self, "_exp_out", None)
-        if not out or getattr(self, "_exp_done", False):
+        """Remove the unfinished draft a stopped or failed render left behind.
+
+        THE DRAFT, never the destination. This used to remove _exp_out, which
+        is the film the person already had: a second export of Vacation.mp4
+        that was stopped, or that failed on a missing clip, deleted the
+        original outright — worse than the truncation this OS already refuses
+        to do on the save paths, and reached by pressing Stop."""
+        draft = getattr(self, "_exp_draft", None)
+        if not draft or getattr(self, "_exp_done", False):
             return
         try:
-            if os.path.isfile(out):
-                os.remove(out)
+            if os.path.isfile(draft):
+                os.remove(draft)
         except OSError:
             pass
 
@@ -4215,14 +4296,7 @@ class VideoEditor(nbapp.AppWindow):
             self._exp_poll_id = 0
         proc = getattr(self, "_exp_proc", None)
         if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-            try:
-                proc.wait(timeout=3)   # let it release the file before we look
-            except Exception:
-                pass
+            self._stop_render_group(proc)
             # A cancelled render used to leave its half-written .mp4 sitting in
             # the Videos folder, indistinguishable from a finished film until
             # the user tried to play it. Take it away with the render.
