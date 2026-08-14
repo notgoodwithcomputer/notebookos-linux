@@ -21,6 +21,7 @@ os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="about-origin-")
 import gi                                                     # noqa: E402
 gi.require_version("Gtk", "3.0")
 import nbapp                                                  # noqa: E402
+import nbtransitions                                          # noqa: E402
 
 FAILS = []
 
@@ -53,27 +54,31 @@ check("the drop anchor sits on the title's bottom edge",
 check("an unresolved title yields no anchor (About then just appears)",
       nbapp._title_anchor(None, object()) is None)
 
-# 2. About grows from that anchor to the centred target, and reveals the real
-# card only on landing — read from the source that runs
+# 2. About now DELEGATES to the shared nbtransitions.present_card (extracted
+# 2026-08-08); present_card_selftest gates the grow / reveal-on-landing / retract
+# in full. Here: About carries its marker, drops from the TITLE anchor, and
+# routes through the shared presenter -- where the motion actually lives.
 src = inspect.getsource(nbapp.AppWindow._about)
 check("About carries its inventory origin marker",
       "nbmotion-inventory: app.about" in src)
-check("About grows a GrowCard from a title anchor",
-      "GrowCard" in src and "_title_anchor" in src and ".grow(" in src)
+check("About delegates to nbtransitions.present_card from a title anchor",
+      "present_card(" in src and "_title_anchor" in src)
+shared = inspect.getsource(nbtransitions.present_card)
+check("the shared presenter grows a GrowCard from the anchor",
+      "GrowCard" in shared and ".grow(anchor" in shared)
 check("the real card is revealed on landing, not before",
-      "set_no_show_all(True)" in src
-      and src.index("set_no_show_all(True)") < src.index(".grow("))
+      "set_no_show_all(True)" in shared
+      and shared.index("set_no_show_all(True)") < shared.index(".grow(anchor"))
 check("landing shows the card",
-      "_landed" in src and ".show()" in src)
+      "reveal" in shared and "card_win.show()" in shared)
 
 # 3. close retracts to the title before removing (B3 departure retraces)
 closed = inspect.getsource(nbapp.AppWindow._close_about)
-check("close retracts the card rather than cutting it",
-      "retract(" in closed and "_about_remove" in closed)
+check("close routes through the shared presenter's retract-then-remove",
+      "close()" in closed and "retract(" in shared and "remove()" in shared)
 check("Escape and the scrim share the one close path",
-      "_close_about" in inspect.getsource(nbapp.AppWindow._about)
-      and "_close_about" in inspect.getsource(nbapp._on_key)
-      if hasattr(nbapp, "_on_key") else True)
+      "present_card(" in src
+      and "_close_about" in inspect.getsource(nbapp.AppWindow._on_key))
 
 # 4. the geometry only ever grows (shared primitive, spot-checked here too)
 import nbtransitions                                          # noqa: E402

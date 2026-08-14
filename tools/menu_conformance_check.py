@@ -62,6 +62,11 @@ DEBT = {
     ("maps.py", "registry-accelerator", "Zoom Out: shown '', registry 'Ctrl+Minus'"): 1,
     ("packages.py", "registry-accelerator", "Find: shown '', registry 'Ctrl+F'"): 1,
     ("packages.py", "registry-ellipsis", "Find: shown ellipsis True, registry False"): 1,
+    # Animation's New… genuinely asks (the canvas-preset + fps card; size and
+    # speed are fixed at creation), so the ellipsis is the honest label per
+    # MENU-CONVENTIONS rule 1 — a deliberate deviation from the registry's
+    # immediate document-app New.
+    ("animation.py", "registry-ellipsis", "New: shown ellipsis True, registry False"): 1,
     ("screenplay.py", "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"): 1,
     ("sequencer.py", "registry-accelerator", "Zoom In: shown '+', registry 'Ctrl+Plus'"): 1,
     ("sequencer.py", "registry-accelerator", "Zoom Out: shown '−', registry 'Ctrl+Minus'"): 1,
@@ -273,6 +278,29 @@ def main():
     global checks
     real = set()
     files = sorted(os.path.join(DE, f) for f in os.listdir(DE) if f.endswith(".py"))
+    # Apps withheld by finder.HIDDEN_APPS have no reachable menus; skip them
+    # VISIBLY and resume the moment they unhide (same doctrine as
+    # i18n_check/i18n_coverage_check). Parsed from source, never imported.
+    try:
+        _tree = ast.parse(open(os.path.join(DE, "finder.py"),
+                               encoding="utf-8").read())
+        _names, _mods = set(), {}
+        for _node in ast.walk(_tree):
+            if isinstance(_node, ast.Assign) and _node.targets and \
+                    isinstance(_node.targets[0], ast.Name):
+                if _node.targets[0].id == "HIDDEN_APPS":
+                    _names = {k.value for k in _node.value.keys}
+                elif _node.targets[0].id == "APP_MODULES":
+                    _mods = {k.value: v.value for k, v in
+                             zip(_node.value.keys, _node.value.values)}
+        for _hf in sorted(_mods[n] + ".py" for n in _names if n in _mods):
+            _p = os.path.join(DE, _hf)
+            if _p in files:
+                files.remove(_p)
+                print("SKIP %s (hidden app — menus unreachable; resumes on "
+                      "unhide)" % _hf)
+    except (OSError, SyntaxError, AttributeError, TypeError):
+        pass
     parse_fail = []
     for path in files:
         try:

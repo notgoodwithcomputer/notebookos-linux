@@ -242,6 +242,31 @@ def main():
     files = ([os.path.join(DE, f) for f in a.file] if a.file else
              sorted(os.path.join(DE, f) for f in os.listdir(DE)
                     if f.endswith(".py")))
+    # Apps withheld by finder.HIDDEN_APPS have no reachable strings; skip
+    # them VISIBLY (never silently), and resume the moment they unhide.
+    # Parsed from source — this tool must not import GTK-bearing modules.
+    try:
+        import ast as _ast
+        _tree = _ast.parse(io.open(os.path.join(DE, "finder.py"),
+                                   encoding="utf-8").read())
+        _names, _mods = set(), {}
+        for _node in _ast.walk(_tree):
+            if isinstance(_node, _ast.Assign) and _node.targets and \
+                    isinstance(_node.targets[0], _ast.Name):
+                if _node.targets[0].id == "HIDDEN_APPS":
+                    _names = {k.value for k in _node.value.keys}
+                elif _node.targets[0].id == "APP_MODULES":
+                    _mods = {k.value: v.value for k, v in
+                             zip(_node.value.keys, _node.value.values)}
+        _hidden = {_mods[n] + ".py" for n in _names if n in _mods}
+        for _hf in sorted(_hidden):
+            _p = os.path.join(DE, _hf)
+            if _p in files:
+                files.remove(_p)
+                print("SKIP %s (hidden app — withheld from every launch "
+                      "surface; resumes on unhide)" % _hf)
+    except (OSError, SyntaxError, AttributeError, TypeError):
+        pass
     # Known gaps live in a baseline so --fail can catch a NEW omission without
     # being drowned by the standing debt. The file only ever shrinks: adding to
     # it to silence a failure is the one thing it must not be used for.

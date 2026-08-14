@@ -4,12 +4,22 @@
 app-improve found this 2026-08-09 and it is the campaign's TRUE bar in a place
 nobody looked: no app in the OS had ever been run right-to-left. GTK mirrors
 the CONTAINERS correctly and for free, so the screenshot looks right and you
-move on — but a leading "+"/"−"/"$"/"%"/"(" is a bidi-WEAK character, and
-followed by European numerals the Unicode bidi algorithm resolves it to the
-paragraph direction and lays it on the FAR side. A label holding "+$1,105.00"
-has Pango draw "$1,105.00+"; a debit "−$950.00" draws "$950.00−". In a ledger
-the sign is the only thing on the row that says which way the money went. The
-UNSIGNED figures are unaffected, which is exactly why it hid.
+move on — but a LEADING "+" or "−" (a bidi European SEPARATOR, class ES) is a
+WEAK character, and followed by European numerals the Unicode bidi algorithm
+resolves it to the paragraph direction and lays it on the FAR side. A label
+holding "+$1,105.00" has Pango draw "$1,105.00+"; a debit "−$950.00" draws
+"$950.00−". In a ledger the sign is the only thing on the row that says which
+way the money went. The UNSIGNED figures are unaffected, which is exactly why
+it hid.
+
+  THE DISTINGUISHING FEATURE IS SIGN, NOT CURRENCY (app-improve, measured
+  through Pango 2026-08-08). "$", "£", "€" and "%" are European TERMINATORS
+  (class ET): they stay with their number and do NOT flip — "$0.01" lays out
+  "$0.01" and "50%" lays out "50%" in yi. What flips in "+$1,105.00" is the
+  leading "+", dragging the figure with it; the "$" alone is stationary. So
+  only "+"/"−" are flagged. Flagging currency or "%" was an earlier over-reach
+  that would have made compound sentences ("at least $0.01", "50% in use")
+  "fix" a non-bug by whole-wrapping — which HARMS them (see AT_RISK).
 
 The fix is nbi18n.ltr(): U+2066 LEFT-TO-RIGHT ISOLATE .. U+2069 keeps the weak
 char attached, gated on the direction ACTUALLY IN FORCE so the other sixteen
@@ -43,46 +53,42 @@ ROOT = os.path.dirname(HERE)
 DE = os.path.join(ROOT, "buildroot", "board", "notebookos", "rootfs-overlay",
                   "opt", "notebook", "de")
 
-# A bidi-weak sign / currency / bracket sitting immediately against a number,
-# OR a number immediately before a DISPLAYED percent or a close-bracket. `−` is
-# U+2212 (the real minus the money code uses), not the ASCII hyphen. A NUMBER
-# is a digit or a numeric format placeholder (%d/%i/%f, or {} / {:..}); %s is
-# usually text and is NOT a number here (the runtime-composed case the
-# docstring cedes to the dynamic proof). The displayed percent is the LITERAL
-# `%%` in a format string (renders as "%"), never the `%` of a format
-# specifier — including that `%` was the first draft's bug, matching every
-# %d/%02d/%s in the OS.
+# A leading bidi SEPARATOR ("+" or "−", class ES) sitting immediately against a
+# number — those are what flip. `−` is U+2212 (the real minus the money code
+# uses), not the ASCII hyphen. A NUMBER is a digit or a numeric format
+# placeholder (%d/%i/%f, or {} / {:..}); %s is usually text and is NOT a number
+# here (the runtime-composed case the docstring cedes to the dynamic proof).
 _NUM = r"(?:\d|%[-+ #0]*\d*\.?\d*[difDIF]|\{\d*:?[^{}]*\})"
-# HIGH-CONFIDENCE only: a sign/currency that STARTS a numeric run (at string
-# start or after whitespace), or a number directly before a literal percent.
-# Deliberately NOT flagged, because the static view cannot tell a truly-broken
-# one from a correct one and the dynamic Pango proof must: a "+" after a Latin
-# word ("Ctrl+1" — the strong-LTR prefix anchors the run) and bracket groups
-# ("(0)" — brackets MIRROR correctly under RTL, that is the right behaviour).
-# Those belong to the per-app dynamic check, not this source guard.
+# HIGH-CONFIDENCE only: a SIGN that STARTS a numeric run (at string start or
+# after whitespace). Deliberately NOT flagged, because the static view cannot
+# tell a truly-broken one from a correct one and the dynamic Pango proof must:
+# a "+" after a Latin word ("Ctrl+1" — the strong-LTR prefix anchors the run)
+# and bracket groups ("(0)" — brackets MIRROR correctly under RTL).
+#
+# NOT flagged, because MEASURED not to flip (bidi European TERMINATORS, class
+# ET — they attach to their number and stay put):
+#   * trailing "%"  — "50%" is byte-identical wrapped or not; removed 2026-08-08
+#   * leading "$"/"£"/"€" — "$0.01" lays out "$0.01"; removed 2026-08-08 after
+#     app-improve measured it. The bug in "+$1,105.00" is the leading "+", not
+#     the "$"; the currency alone is stationary. Flagging either would have made
+#     compound sentences ("at least $0.01", "50% in use") "fix" a non-bug by
+#     whole-wrapping, which FLIPS the figure to the wrong end and splits yi
+#     combining marks. The class (ES vs ET), not the character's look, decides.
 AT_RISK = re.compile(
-    r"(?:^|\s)[-+−$£€]" + _NUM                # leading sign/currency at a boundary
-    + r"|" + _NUM + r"%%")                    # number directly before "%"
+    r"(?:^|\s)[-+−]" + _NUM)                  # leading SIGN (ES) at a boundary
 
-# Debt: the initial OS-wide sweep, 2026-08-09 — at-risk labels not yet routed
-# through ltr(). module -> count, exact-match both directions (fix one and drop
-# the count, or a new one landed). Burn-down is per-lane: wrap each label in
-# nbi18n.ltr() at the point the finished string reaches its widget, then lower
-# the count. Dominant class is "%d%%" (a percent that lands on the wrong side
-# of its number in yi); "+%d more"/"+%d XP" are the leading-sign class; the
-# currency message is accounting's.
+# Debt: LEADING-SIGN labels ("+"/"−" before a number) not yet routed through
+# ltr(). module -> count, exact-match both directions (fix one and drop the
+# count, or a new one landed). Burn-down is per-lane: wrap each label in
+# nbi18n.ltr() at the widget, then lower the count. Two false-positive classes
+# used to sit here and were removed by MEASUREMENT (both bidi ET, they don't
+# flip): the seven "%d%%" entries (illustrator/installer/media/sequencer/
+# settings/sysmon/usbwriter) on 2026-08-08, and accounting's "at least $0.01"
+# (leading "$") the same day — app-improve laid it out and "$0.01" is
+# stationary. widgets/language were the real leading-sign cases in reach and are
+# wrapped. calendar's "+%d more" is the one real straggler left (bug-fix's lane).
 DEBT = {
-    "accounting.py": 1,    # "at least $0.01" (app-improve's — validation msg)
-    "calendar.py": 1,      # "+%d more"       (bug-fix's claim)
-    "illustrator.py": 5,   # zoom "%d%%" / "%.1f%%"
-    "installer.py": 1,     # progress "%d%%"  (campaign)
-    "language.py": 1,      # "+%d XP"          (campaign)
-    "media.py": 1,         # "%d%%"           (bug-fix's claim)
-    "sequencer.py": 2,     # "%d%%" x2
-    "settings.py": 2,      # "%d%%" x2         (campaign)
-    "sysmon.py": 1,        # "%d%% in use"     (campaign)
-    "usbwriter.py": 1,     # write "%d%%"      (campaign)
-    "widgets.py": 2,       # "+%d more" x2     (campaign)
+    "calendar.py": 1,      # "+%d more"  (bug-fix's — leading sign, real)
 }
 
 _FAILS = []

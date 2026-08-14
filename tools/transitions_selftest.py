@@ -573,6 +573,80 @@ def test_highlight(t, sched):
           t.highlight(None, "x") is False and t.highlight(w, "") is False)
 
 
+def test_smooth_fraction(m, t, clock):
+    """app.progress: the fill GLIDES between reported fractions -- linear,
+    retargeting, landing exactly, instant-equivalent, and leaking no driver."""
+    set_policy(m, False, True)           # accelerated: it should animate
+
+    class FakeBar(FakeWidget):
+        def __init__(self):
+            FakeWidget.__init__(self)
+            self._frac = 0.0
+
+        def get_fraction(self):
+            return self._frac
+
+        def set_fraction(self, v):
+            self._frac = float(v)
+
+    # A glide from 0 to 0.5 over the FEEDBACK token, driven frame by frame.
+    bar = FakeBar()
+    fired = []
+    ms = t.smooth_fraction(bar, 0.5, on_done=lambda ok: fired.append(ok))
+    check("smooth_fraction runs for the feedback token", ms == m.FEEDBACK, str(ms))
+    check("the fill does not jump to the target at once",
+          bar.get_fraction() < 0.5, str(bar.get_fraction()))
+    clock.advance(m.FEEDBACK / 2000.0)
+    bar.tick()
+    check("a progress fraction is LINEAR, not eased (~half-way at the midpoint)",
+          0.20 < bar.get_fraction() < 0.30, str(bar.get_fraction()))
+    check("smooth_fraction does not report mid-glide", fired == [])
+    clock.advance(m.FEEDBACK / 1000.0)   # a full token more: comfortably past t=1
+    bar.tick()
+    check("the glide lands EXACTLY on the target",
+          bar.get_fraction() == 0.5, str(bar.get_fraction()))
+    check("smooth_fraction reports completion once", fired == [True])
+    check("the glide leaves no live driver",
+          not bar.ticks and m.live_drivers() == 0,
+          "%s / %d" % (bar.ticks, m.live_drivers()))
+
+    # RETARGET: a fresh report reuses the ONE scalar and heads to the newest
+    # target from where the fill is, never restarting from zero.
+    bar = FakeBar()
+    t.smooth_fraction(bar, 0.5)
+    sc1 = getattr(bar, "_nbt_frac", None)
+    clock.advance(m.FEEDBACK / 2000.0)
+    bar.tick()                           # ~0.25 on the way to 0.5
+    t.smooth_fraction(bar, 0.9)          # retarget up to 0.9
+    check("smooth_fraction keeps ONE scalar per bar",
+          sc1 is not None and getattr(bar, "_nbt_frac", None) is sc1)
+    for _ in range(3):
+        clock.advance(m.FEEDBACK / 2000.0)
+        bar.tick()
+    check("a retargeted glide lands on the newest target",
+          bar.get_fraction() == 0.9, str(bar.get_fraction()))
+    check("retarget leaves no live driver", m.live_drivers() == 0)
+
+    # A fraction outside [0, 1] is clamped, not handed to the bar.
+    bar = FakeBar()
+    t.smooth_fraction(bar, 1.4)
+    for _ in range(3):
+        clock.advance(m.FEEDBACK / 2000.0)
+        bar.tick()
+    check("smooth_fraction clamps above 1.0",
+          bar.get_fraction() == 1.0, str(bar.get_fraction()))
+    check("smooth_fraction on a None bar is safe", t.smooth_fraction(None, 0.5) == 0)
+
+    # Destroy mid-glide: no callback fires, no driver leaks.
+    bar = FakeBar()
+    after = []
+    t.smooth_fraction(bar, 0.9, on_done=lambda ok: after.append(ok))
+    bar.destroy()
+    clock.advance(1.0)
+    check("no progress callback after destroy", after == [], str(after))
+    check("destroy mid-glide leaves no driver", m.live_drivers() == 0)
+
+
 # ---------------------------------------------------------------- static -----
 def test_no_per_frame_timer():
     """Article VI §3: the frame clock, not a timer. The ONLY schedule in the
@@ -596,24 +670,24 @@ def test_no_per_frame_timer():
           "return False             # single shot" in src)
 
 
-def test_no_layout_or_spring_animation():
-    """No width/height/margin/padding animation and nothing that overshoots."""
-    src = open(os.path.join(DE, "nbtransitions.py")).read()
-    tree = ast.parse(src)
-    banned = ("set_size_request", "set_margin_start", "set_margin_end",
-              "set_margin_top", "set_margin_bottom", "set_padding",
-              "set_border_width")
-    called = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            called.add(node.func.attr)
-    check("no layout property is animated",
-          not called.intersection(banned), str(called.intersection(banned)))
-    lowered = src.lower()
-    for word in ("spring", "bounce", "elastic", "overshoot", "parallax"):
-        check("no %s" % word, word not in lowered.replace("no %s" % word, ""))
-    check("only opacity is animated by hand",
-          "set_opacity" in called and called.intersection(banned) == set())
+def test_motion_character():
+    """Animation belongs on EVERY state change, with a slight spring on arrival.
+
+    The old ban this used to enforce -- colour/border only, no layout animation,
+    nothing that overshoots -- was removed 2026-08-08: it was the campaign's
+    invention, never the design intent. The only things out are 3D and liquid
+    glass (they do not fit the paper style), and a transition may animate
+    anything GTK can, layout included. What survives as a check is the CHARACTER:
+    the arrival curve springs a LITTLE and lands EXACTLY, so 'lively' is a
+    restrained spring, not a wild bounce (the tight bound is gated in
+    tools/motion_selftest.py's easing checks)."""
+    import nbmotion
+    peak = max(nbmotion.ARRIVE(i / 100.0) for i in range(101))
+    check("arrival springs, but only slightly (1.0 < peak <= 1.15)",
+          1.0 < peak <= 1.15, "peak=%r" % peak)
+    check("arrival lands exactly on its target",
+          abs(nbmotion.ARRIVE(1.0) - 1.0) < 1e-9
+          and abs(nbmotion.ARRIVE(0.0)) < 1e-9)
 
 
 def test_settings_uses_the_primitive():
@@ -784,8 +858,9 @@ def main():
     test_replace_animated(m, t, clock)
     test_highlight(t, sched)
     test_grow_card(m, t, clock)
+    test_smooth_fraction(m, t, clock)
     test_no_per_frame_timer()
-    test_no_layout_or_spring_animation()
+    test_motion_character()
     test_settings_uses_the_primitive()
     test_imports_without_gi()
     test_byte_compiles()

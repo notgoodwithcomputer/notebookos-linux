@@ -10,6 +10,10 @@ import traceback
 
 DE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                   "buildroot", "board", "notebookos", "rootfs-overlay", "opt", "notebook", "de")
+# $CALCULATOR_MODULE_DIR wins over the repo path. Without it every red
+# proof against this suite is VACUOUS: the mutated copy is ignored, the
+# pristine module is measured, and a sabotage reports all-green.
+DE = os.environ.get("CALCULATOR_MODULE_DIR", DE)
 sys.path.insert(0, DE)
 import calculator as C  # noqa: E402
 

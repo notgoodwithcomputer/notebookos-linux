@@ -137,6 +137,12 @@ COLOUR_MACHINERY_FILES = {
 # from @hair is still drift and still reported.
 SEMANTIC_FILES = {
     "illustrator.py": "the colour picker IS a spectrum",
+    "comics.py": "Illustrator's palette staples, reused; its #000000/#FFFFFF "
+                 "are artwork ink on artwork paper (novel's print rule) and "
+                 "stay reported, deliberately",
+    "animation.py": "Illustrator's 112-swatch palette builders, reused; "
+                    "onion-skin washes and the timeline's run bars paint "
+                    "with design tokens only",
     "writer.py": "document text + highlighter swatches, and a link blue",
     "language.py": "per-course identity badges",
     "gbasdk.py": "sprite / tile editor palettes",

@@ -82,6 +82,7 @@ import nbapp
 import nbstate
 import nbpicker
 import nbicons
+import nbtransitions
 from nbi18n import _t  # noqa: E402
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -140,6 +141,15 @@ def _epub_localname(tag):
 
 
 _MARKUP_TEXT_RE = re.compile(r"</?[ib]>")
+
+# The face tables are measured AND drawn in. One constant because they used to
+# be two different strings — the width pass asked for a bare "Newsreader" and
+# the layout pass for "Newsreader,Liberation Serif,Georgia,serif" — so column
+# widths were measured in whatever Pango fell back to while the text that
+# filled them was drawn in something else. Neither Newsreader nor Georgia is on
+# this image, so both landed on Liberation Serif by luck rather than by saying
+# so; name what actually ships and the two passes cannot drift.
+TABLE_FAMILY = "Liberation Serif,DejaVu Serif,serif"
 
 
 def escape_markup(s):
@@ -1283,7 +1293,7 @@ class EbookReader(nbapp.AppWindow):
                 if cr is not None:
                     layout = PangoCairo.create_layout(cr)
                     fd = Pango.FontDescription()
-                    fd.set_family("Newsreader")
+                    fd.set_family(TABLE_FAMILY)
                     fd.set_size(int(font_pt * Pango.SCALE))
                     layout.set_font_description(fd)
                     layout.set_markup(markup, -1)
@@ -1324,7 +1334,7 @@ class EbookReader(nbapp.AppWindow):
                 width = sum(widths) if full else widths[min(ci, len(widths)-1)]
                 layout = PangoCairo.create_layout(cr)
                 fd = Pango.FontDescription()
-                fd.set_family("Newsreader,Liberation Serif,Georgia,serif")
+                fd.set_family(TABLE_FAMILY)
                 fd.set_size(int(font_pt * Pango.SCALE))
                 layout.set_font_description(fd)
                 layout.set_width(max(1, int((width - 16) * Pango.SCALE)))
@@ -1375,18 +1385,24 @@ class EbookReader(nbapp.AppWindow):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.set_hexpand(True)
 
-        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        col.get_style_context().add_class("readpage")
-        col.set_halign(Gtk.Align.CENTER)
-        col.set_size_request(620, -1)
-        col.set_margin_top(72)
-        col.set_margin_bottom(80)
+        col = self._new_epub_column()
 
         outer.pack_start(col, False, False, 0)
         scroll.add(outer)
         self._epub_col = col
         self._epub_scroll = scroll
         return scroll
+
+    @staticmethod
+    def _new_epub_column():
+        """A document child for the stable EPUB page holder."""
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        col.get_style_context().add_class("readpage")
+        col.set_halign(Gtk.Align.CENTER)
+        col.set_size_request(620, -1)
+        col.set_margin_top(72)
+        col.set_margin_bottom(80)
+        return col
 
     def _epub_chapter_header(self, index, start=0, end=None):
         """The centred reading-area header for one page: a neutral 'CHAPTER n'
@@ -1474,11 +1490,17 @@ class EbookReader(nbapp.AppWindow):
         return img
 
     def _epub_show_chapter(self, to_top=True):
-        col = self._epub_col
-        if col is None:
+        old_col = self._epub_col
+        if old_col is None:
             return
-        for child in col.get_children():
-            col.remove(child)
+        # A page turn replaces one document surface with another. Build the new
+        # page offscreen and crossfade the stable holder once, rather than
+        # revealing dozens of paragraphs independently. A type-size reflow is
+        # the same page and stays instant.
+        col = self._new_epub_column() if to_top else old_col
+        if not to_top:
+            for child in col.get_children():
+                col.remove(child)
         try:
             ci, start, end = self._epub_pages[self._page]
         except (IndexError, TypeError):
@@ -1529,6 +1551,30 @@ class EbookReader(nbapp.AppWindow):
             col.pack_start(lbl, False, False, 0)
         flush_table()
         col.show_all()
+        if to_top:
+            # nbmotion-inventory: content.ebook
+            # The page/chapter turn: ONE container replacement of the document
+            # column, on the PAGE token. A chapter genuinely IS a different
+            # document, so this is a replacement (Article C §C2) and not a
+            # transform — and emphatically not per-paragraph reveals, which
+            # would shimmer a page of text into view. Gated on `to_top`, so a
+            # reading-SIZE change re-flows in place and does not throw the
+            # reader back to the top of the chapter.
+            holder = old_col.get_parent()
+            if holder is not None:
+                try:
+                    nbtransitions.replace(
+                        holder, col, duration=nbtransitions.PAGE,
+                        pack=lambda box, child: box.pack_start(
+                            child, False, False, 0))
+                except Exception:                                 # noqa: BLE001
+                    # Motion must never gate the document. Install the completed
+                    # page plainly if the transition primitive cannot run.
+                    for child in holder.get_children():
+                        holder.remove(child)
+                    holder.pack_start(col, False, False, 0)
+                    col.show_all()
+                self._epub_col = col
         # A page/chapter turn starts at the top; a re-flow after a reading-size
         # change must NOT throw the reader back to the top of the chapter.
         if to_top:
@@ -1908,7 +1954,18 @@ class EbookReader(nbapp.AppWindow):
 
         scrim.add(sheet)
         scrim.set_no_show_all(True)
-        return scrim
+        try:
+            revealer = Gtk.Revealer()
+            revealer.set_reveal_child(False)
+            revealer.add(scrim)
+            revealer.set_no_show_all(True)
+            self._library_sheet_revealer = True
+            return revealer
+        except Exception:                                       # noqa: BLE001
+            # The sheet remains usable on a GTK build where Revealer cannot be
+            # constructed; motion is never a prerequisite for Library access.
+            self._library_sheet_revealer = False
+            return scrim
 
     def _book_row(self, book):
         """One Library row: title over a 'format · author/path' line as a click
@@ -1967,8 +2024,12 @@ class EbookReader(nbapp.AppWindow):
         shelf = getattr(self, "_shelf", None)
         if shelf is None:
             return
+        previous = set(getattr(self, "_shelf_paths", ()))
+        current = tuple(book["path"] for book in self._books)
+        arriving = set(current) - previous
         for child in shelf.get_children():
             shelf.remove(child)
+        opening = []
         if not self._books:
             # Already names the way in ("Use Open Book… below"); it just never
             # said it in the reader's language — the catalogs carry this string
@@ -1982,15 +2043,53 @@ class EbookReader(nbapp.AppWindow):
             shelf.pack_start(empty, False, False, 0)
         else:
             for book in self._books:
-                shelf.pack_start(self._book_row(book), False, False, 0)
+                row = self._book_row(book)
+                if book["path"] in arriving:
+                    try:
+                        rev = Gtk.Revealer()
+                        rev.set_reveal_child(False)
+                        rev.add(row)
+                        shelf.pack_start(rev, False, False, 0)
+                        opening.append(rev)
+                        continue
+                    except Exception:                             # noqa: BLE001
+                        pass
+                shelf.pack_start(row, False, False, 0)
+        self._shelf_paths = current
         shelf.show_all()
+        # All new books settle together: even a bulk import is one short
+        # response, never a hundreds-row staggered cascade.
+        for rev in opening:
+            try:
+                nbtransitions.reveal(
+                    rev, True, direction=nbtransitions.SLIDE_DOWN,
+                    duration=nbtransitions.SURFACE_IN)
+            except Exception:                                   # noqa: BLE001
+                try:
+                    rev.set_reveal_child(True)
+                except Exception:                               # noqa: BLE001
+                    pass
 
     def _on_library_open(self, *_):
         # Rebuild the shelf before showing so newly opened books and the current
         # open-book highlight are reflected each time the sheet is shown.
         self._populate_shelf()
         self._library_sheet.show()
-        self._library_sheet.get_child().show_all()
+        child = self._library_sheet.get_child()
+        if child is not None:
+            child.show_all()
+        if not getattr(self, "_library_sheet_revealer", False):
+            return
+        try:
+            nbtransitions.reveal(
+                self._library_sheet, True,
+                direction=nbtransitions.SLIDE_UP,
+                duration=nbtransitions.SURFACE_IN)
+        except Exception:                                       # noqa: BLE001
+            try:
+                self._library_sheet.set_reveal_child(True)
+            except Exception:                                   # noqa: BLE001
+                pass
 
     def _on_library_add(self, *_):
         """Open Book… from inside the Library: dismiss the sheet, then run the
@@ -2006,7 +2105,23 @@ class EbookReader(nbapp.AppWindow):
         return True
 
     def _close_library(self):
-        self._library_sheet.hide()
+        def hidden(_completed=True):
+            self._library_sheet.hide()
+        if not getattr(self, "_library_sheet_revealer", False):
+            hidden(False)
+            return True
+        try:
+            nbtransitions.reveal(
+                self._library_sheet, False,
+                direction=nbtransitions.SLIDE_DOWN,
+                duration=nbtransitions.SURFACE_OUT,
+                on_done=hidden)
+        except Exception:                                       # noqa: BLE001
+            try:
+                self._library_sheet.set_reveal_child(False)
+            except Exception:                                   # noqa: BLE001
+                pass
+            hidden(False)
         return True
 
     # ---------------------------------------------- remove from library

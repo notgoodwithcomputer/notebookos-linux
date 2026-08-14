@@ -1,0 +1,365 @@
+{
+ "opening": 1234567.89,
+ "tx": [
+  {
+   "date": "01 Aug",
+   "iso": "2026-08-01",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 0",
+   "amt": 987654.32
+  },
+  {
+   "date": "02 Aug",
+   "iso": "2026-08-02",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 1",
+   "amt": -1234567.89
+  },
+  {
+   "date": "03 Aug",
+   "iso": "2026-08-03",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 2",
+   "amt": 987654.32
+  },
+  {
+   "date": "04 Aug",
+   "iso": "2026-08-04",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 3",
+   "amt": -1234567.89
+  },
+  {
+   "date": "05 Aug",
+   "iso": "2026-08-05",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 4",
+   "amt": 987654.32
+  },
+  {
+   "date": "06 Aug",
+   "iso": "2026-08-06",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 5",
+   "amt": -1234567.89
+  },
+  {
+   "date": "07 Aug",
+   "iso": "2026-08-07",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 6",
+   "amt": 987654.32
+  },
+  {
+   "date": "08 Aug",
+   "iso": "2026-08-08",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 7",
+   "amt": -1234567.89
+  },
+  {
+   "date": "09 Aug",
+   "iso": "2026-08-09",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 8",
+   "amt": 987654.32
+  },
+  {
+   "date": "10 Aug",
+   "iso": "2026-08-10",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 9",
+   "amt": -1234567.89
+  },
+  {
+   "date": "11 Aug",
+   "iso": "2026-08-11",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 10",
+   "amt": 987654.32
+  },
+  {
+   "date": "12 Aug",
+   "iso": "2026-08-12",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 11",
+   "amt": -1234567.89
+  },
+  {
+   "date": "13 Aug",
+   "iso": "2026-08-13",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 12",
+   "amt": 987654.32
+  },
+  {
+   "date": "14 Aug",
+   "iso": "2026-08-14",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 13",
+   "amt": -1234567.89
+  },
+  {
+   "date": "15 Aug",
+   "iso": "2026-08-15",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 14",
+   "amt": 987654.32
+  },
+  {
+   "date": "16 Aug",
+   "iso": "2026-08-16",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 15",
+   "amt": -1234567.89
+  },
+  {
+   "date": "17 Aug",
+   "iso": "2026-08-17",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 16",
+   "amt": 987654.32
+  },
+  {
+   "date": "18 Aug",
+   "iso": "2026-08-18",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 17",
+   "amt": -1234567.89
+  },
+  {
+   "date": "19 Aug",
+   "iso": "2026-08-19",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 18",
+   "amt": 987654.32
+  },
+  {
+   "date": "20 Aug",
+   "iso": "2026-08-20",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 19",
+   "amt": -1234567.89
+  },
+  {
+   "date": "21 Aug",
+   "iso": "2026-08-21",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 20",
+   "amt": 987654.32
+  },
+  {
+   "date": "22 Aug",
+   "iso": "2026-08-22",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 21",
+   "amt": -1234567.89
+  },
+  {
+   "date": "23 Aug",
+   "iso": "2026-08-23",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 22",
+   "amt": 987654.32
+  },
+  {
+   "date": "24 Aug",
+   "iso": "2026-08-24",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 23",
+   "amt": -1234567.89
+  },
+  {
+   "date": "25 Aug",
+   "iso": "2026-08-25",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 24",
+   "amt": 987654.32
+  },
+  {
+   "date": "26 Aug",
+   "iso": "2026-08-26",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 25",
+   "amt": -1234567.89
+  },
+  {
+   "date": "27 Aug",
+   "iso": "2026-08-27",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 26",
+   "amt": 987654.32
+  },
+  {
+   "date": "28 Aug",
+   "iso": "2026-08-28",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 27",
+   "amt": -1234567.89
+  },
+  {
+   "date": "01 Aug",
+   "iso": "2026-08-01",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 28",
+   "amt": 987654.32
+  },
+  {
+   "date": "02 Aug",
+   "iso": "2026-08-02",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 29",
+   "amt": -1234567.89
+  },
+  {
+   "date": "03 Aug",
+   "iso": "2026-08-03",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 30",
+   "amt": 987654.32
+  },
+  {
+   "date": "04 Aug",
+   "iso": "2026-08-04",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 31",
+   "amt": -1234567.89
+  },
+  {
+   "date": "05 Aug",
+   "iso": "2026-08-05",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 32",
+   "amt": 987654.32
+  },
+  {
+   "date": "06 Aug",
+   "iso": "2026-08-06",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 33",
+   "amt": -1234567.89
+  },
+  {
+   "date": "07 Aug",
+   "iso": "2026-08-07",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 34",
+   "amt": 987654.32
+  },
+  {
+   "date": "08 Aug",
+   "iso": "2026-08-08",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 35",
+   "amt": -1234567.89
+  },
+  {
+   "date": "09 Aug",
+   "iso": "2026-08-09",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 36",
+   "amt": 987654.32
+  },
+  {
+   "date": "10 Aug",
+   "iso": "2026-08-10",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 37",
+   "amt": -1234567.89
+  },
+  {
+   "date": "11 Aug",
+   "iso": "2026-08-11",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 38",
+   "amt": 987654.32
+  },
+  {
+   "date": "12 Aug",
+   "iso": "2026-08-12",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 39",
+   "amt": -1234567.89
+  },
+  {
+   "date": "13 Aug",
+   "iso": "2026-08-13",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 40",
+   "amt": 987654.32
+  },
+  {
+   "date": "14 Aug",
+   "iso": "2026-08-14",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 41",
+   "amt": -1234567.89
+  },
+  {
+   "date": "15 Aug",
+   "iso": "2026-08-15",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 42",
+   "amt": 987654.32
+  },
+  {
+   "date": "16 Aug",
+   "iso": "2026-08-16",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 43",
+   "amt": -1234567.89
+  },
+  {
+   "date": "17 Aug",
+   "iso": "2026-08-17",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 44",
+   "amt": 987654.32
+  },
+  {
+   "date": "18 Aug",
+   "iso": "2026-08-18",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 45",
+   "amt": -1234567.89
+  },
+  {
+   "date": "19 Aug",
+   "iso": "2026-08-19",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 46",
+   "amt": 987654.32
+  },
+  {
+   "date": "20 Aug",
+   "iso": "2026-08-20",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 47",
+   "amt": -1234567.89
+  },
+  {
+   "date": "21 Aug",
+   "iso": "2026-08-21",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 48",
+   "amt": 987654.32
+  },
+  {
+   "date": "22 Aug",
+   "iso": "2026-08-22",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 49",
+   "amt": -1234567.89
+  },
+  {
+   "date": "23 Aug",
+   "iso": "2026-08-23",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 50",
+   "amt": 987654.32
+  },
+  {
+   "date": "24 Aug",
+   "iso": "2026-08-24",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 51",
+   "amt": -1234567.89
+  },
+  {
+   "date": "25 Aug",
+   "iso": "2026-08-25",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 52",
+   "amt": 987654.32
+  },
+  {
+   "date": "26 Aug",
+   "iso": "2026-08-26",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 53",
+   "amt": -1234567.89
+  },
+  {
+   "date": "27 Aug",
+   "iso": "2026-08-27",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 54",
+   "amt": 987654.32
+  },
+  {
+   "date": "28 Aug",
+   "iso": "2026-08-28",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 55",
+   "amt": -1234567.89
+  },
+  {
+   "date": "01 Aug",
+   "iso": "2026-08-01",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 56",
+   "amt": 987654.32
+  },
+  {
+   "date": "02 Aug",
+   "iso": "2026-08-02",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 57",
+   "amt": -1234567.89
+  },
+  {
+   "date": "03 Aug",
+   "iso": "2026-08-03",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 58",
+   "amt": 987654.32
+  },
+  {
+   "date": "04 Aug",
+   "iso": "2026-08-04",
+   "desc": "Quarterly settlement for the west building including grounds maintenance and winter salt 59",
+   "amt": -1234567.89
+  }
+ ]
+}

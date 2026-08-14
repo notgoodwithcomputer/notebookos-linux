@@ -70,6 +70,7 @@ import time
 import nbapp
 import nbpicker
 import nbicons
+import nbtransitions
 from nbi18n import _t  # noqa: E402
 
 # The document starts as a small sprite canvas, which is what the zoom is for.
@@ -97,6 +98,40 @@ SIZE_MIN, SIZE_MAX = 1, 64
 # rather than fifteen. They are DRAWN at their relative size in the current
 # brush shape, which is also the only place the round/square tip is visible.
 SIZE_RAMP = (1, 2, 4, 8, 16)
+# A stylus at rest still reports a little pressure, and a hand at full lean
+# rarely reaches 1.0. Treat the middle of the range as the useful part: below
+# PEN_FLOOR is the thinnest mark the tip can make, above PEN_CEIL is the chosen
+# size. Without this a normal drawing hand only ever reaches two-thirds width.
+PEN_FLOOR, PEN_CEIL = 0.04, 0.85
+
+
+def pen_size(size, pressure):
+    """The brush width for one pressure sample, in image pixels.
+
+    Pressure drives WIDTH, not opacity. This engine writes exact pixel values
+    and never blends — that is what makes its edges hard (see `_stamp_on`) —
+    so a translucent mark is not something it can express. Width is also the
+    honest analogue: pressing a real pencil harder broadens the mark.
+
+    The chosen brush size is the CEILING, reached at a firm press; the floor is
+    always 1 px so a feathered stroke tapers to a hairline instead of vanishing
+    and leaving a gap in the line."""
+    top = max(SIZE_MIN, min(SIZE_MAX, int(size)))
+    if top <= SIZE_MIN:
+        return top
+    try:
+        p = float(pressure)
+    except (TypeError, ValueError):
+        return top
+    if p != p:                      # NaN: a driver reporting an unset axis
+        return top
+    p = max(0.0, min(1.0, p))
+    span = PEN_CEIL - PEN_FLOOR
+    frac = 1.0 if p >= PEN_CEIL else (p - PEN_FLOOR) / span
+    if frac < 0.0:
+        frac = 0.0
+    # round-half-up across the whole range, so the ceiling is actually reachable
+    return max(SIZE_MIN, min(top, int(SIZE_MIN + frac * (top - SIZE_MIN) + 0.5)))
 # Enlargement stays on integer steps, where every image pixel is an exact
 # screen-pixel block. Reduction necessarily shares screen pixels; those steps
 # exist so a document larger than the field can still be seen as a whole.
@@ -588,6 +623,9 @@ class Illustrator(nbapp.AppWindow):
         self._drawing = False
         self._start = None
         self._last = None
+        # (brush size, erase override) from the last sample of the live stroke.
+        # (None, None) is the mouse case: chosen size, tool decides erasing.
+        self._pen_last = (None, None)
         self._shift = False
         self._preview = None      # (tool, a, b) while a shape is being dragged
         self._preview_rect = None  # what of _scratch currently holds preview
@@ -1291,21 +1329,43 @@ class Illustrator(nbapp.AppWindow):
         self._rebuild_layers()
         return panel
 
-    def _rebuild_layers(self):
+    def _rebuild_layers(self, arriving=None, departing=None):
+        """Rebuild the layer column, animating only the changed identity.
+
+        ``arriving`` is a newly-added Layer. ``departing`` is ``(layer, index)``
+        captured before deletion; its inert row is included at its old position
+        only long enough to close. Every surviving row is packed plainly, so a
+        one-row edit never restages the rest of the column.
+        """
         for ch in self.layer_list.get_children():
             self.layer_list.remove(ch)
         # idx -> that row's opacity label, so a live opacity drag can update the
         # number in place without rebuilding this whole widget tree per tick
         self._op_labels = {}
-        # top layer first
-        for idx in range(len(self.layers) - 1, -1, -1):
-            ly = self.layers[idx]
+        opening = []
+        closing = []
+        display = [(ly, idx, idx, True)
+                   for idx, ly in enumerate(self.layers)]
+        if departing is not None:
+            gone, old_idx = departing
+            # Deletion shifts every higher model index down by one. Restore
+            # those rows' pre-delete display keys so the ghost occupies the
+            # exact slot it is departing from.
+            display = [(ly, idx, key + (key >= old_idx), interactive)
+                       for ly, idx, key, interactive in display]
+            display.append((gone, old_idx, old_idx, False))
+        # top layer first; the saved index restores a deleted row's old place.
+        display.sort(key=lambda item: item[2], reverse=True)
+        for ly, idx, _display_key, interactive in display:
             row = Gtk.Button()
             row.set_relief(Gtk.ReliefStyle.NONE)
             row.get_style_context().add_class("lrow")
-            if idx == self.active:
+            if interactive and idx == self.active:
                 row.get_style_context().add_class("active")
-            row.connect("clicked", self._select_layer, idx)
+            if interactive:
+                row.connect("clicked", self._select_layer, idx)
+            else:
+                row.set_sensitive(False)
 
             inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
             eye = Gtk.Button()
@@ -1320,7 +1380,10 @@ class Illustrator(nbapp.AppWindow):
                 eye.add(nbicons.image("eye" if ly.visible else "eyeoff", 15, col))
             except GLib.Error:
                 eye.add(Gtk.Image())
-            eye.connect("clicked", self._toggle_visible, idx)
+            if interactive:
+                eye.connect("clicked", self._toggle_visible, idx)
+            else:
+                eye.set_sensitive(False)
             inner.pack_start(eye, False, False, 0)
 
             name = Gtk.Label(label=ly.name, xalign=0)
@@ -1338,9 +1401,23 @@ class Illustrator(nbapp.AppWindow):
             op = Gtk.Label(label="%d%%" % ly.opacity, xalign=1)
             op.get_style_context().add_class("lopacity")
             inner.pack_start(op, False, False, 0)
-            self._op_labels[idx] = op
+            if interactive:
+                self._op_labels[idx] = op
             row.add(inner)
-            self.layer_list.pack_start(row, False, False, 0)
+            changed = ly is arriving or not interactive
+            if changed:
+                try:
+                    rev = Gtk.Revealer()
+                    rev.set_reveal_child(not interactive)
+                    rev.add(row)
+                    self.layer_list.pack_start(rev, False, False, 0)
+                    (opening if interactive else closing).append(rev)
+                    continue
+                except Exception:                                 # noqa: BLE001
+                    pass
+            # Motion is never a condition of content existing.
+            if interactive:
+                self.layer_list.pack_start(row, False, False, 0)
 
         # A single row above 400 px of nothing says the panel is empty rather
         # than that the document has one layer. One line of what the + does,
@@ -1376,6 +1453,31 @@ class Illustrator(nbapp.AppWindow):
         self.op_scale.handler_unblock(self._op_handler)
         self.op_val.set_text("%d%%" % ly.opacity)
         self.layer_list.show_all()
+
+        # nbmotion-inventory: content.illustrator
+        # Only the identity added/removed moves. Gtk.Revealer owns allocation
+        # settling in C; policy-still reaches the exact visible/hidden state
+        # synchronously. A primitive failure is forced to the same end state.
+        for rev in opening:
+            try:
+                nbtransitions.reveal(
+                    rev, True, direction=nbtransitions.SLIDE_DOWN,
+                    duration=nbtransitions.SURFACE_IN)
+            except Exception:                                     # noqa: BLE001
+                try:
+                    rev.set_reveal_child(True)
+                except Exception:                                 # noqa: BLE001
+                    pass
+        for rev in closing:
+            try:
+                nbtransitions.reveal(
+                    rev, False, direction=nbtransitions.SLIDE_UP,
+                    duration=nbtransitions.SURFACE_OUT)
+            except Exception:                                     # noqa: BLE001
+                try:
+                    rev.set_reveal_child(False)
+                except Exception:                                 # noqa: BLE001
+                    pass
 
     # ---------------- status bar ----------------
     def _statusbar(self):
@@ -1704,7 +1806,7 @@ class Illustrator(nbapp.AppWindow):
             out += [(h - y, xa, xb) for (y, xa, xb) in list(out)]
         return out
 
-    def _stamp_on(self, surf, pts, px):
+    def _stamp_on(self, surf, pts, px, size=None):
         """Stamp the brush at every point of `pts` into `surf`.
 
         The slice assignment REPLACES those bytes: a painted pixel is exactly
@@ -1716,7 +1818,8 @@ class Illustrator(nbapp.AppWindow):
         data = surf.get_data()
         stride = surf.get_stride()
         w, h = self.cw, self.ch
-        for dy, dx0, dx1 in brush_runs(self.size, self._brush_shape()):
+        for dy, dx0, dx1 in brush_runs(self.size if size is None else size,
+                                       self._brush_shape()):
             for cx, cy in pts:
                 y = cy + dy
                 if y < 0 or y >= h:
@@ -1751,9 +1854,9 @@ class Illustrator(nbapp.AppWindow):
             data[i:i + 4 * n] = px * n
         surf.mark_dirty()
 
-    def _paint_ops(self, surf, pts, spans, erase=False):
+    def _paint_ops(self, surf, pts, spans, erase=False, size=None):
         px = CLEAR4 if erase else px4(self.color)
-        self._stamp_on(surf, pts, px)
+        self._stamp_on(surf, pts, px, size)
         self._spans_on(surf, spans, px)
 
     def _ops_bbox(self, pts, spans):
@@ -2004,6 +2107,43 @@ class Illustrator(nbapp.AppWindow):
                 pass
         return view_pixel(x, y, self.zoom, self.cw, self.ch, clamp)
 
+    def _pen(self, ev):
+        """(effective brush size, erase-override) for one event.
+
+        A size of None means "whatever the brush is set to, live" — the value
+        the paint path already used before tablets existed. A mouse therefore
+        returns (None, None) and every path below behaves exactly as it did,
+        down to honouring a brush size changed mid-stroke.
+
+        The device SOURCE is what gates this, not the presence of a pressure
+        axis: a touchscreen reports pressure too, and scaling a fingertip by it
+        would make touch strokes wander between widths for no reason the hand
+        can see."""
+        try:
+            dev = ev.get_source_device()
+            src = dev.get_source() if dev is not None else None
+        except (AttributeError, TypeError):
+            return None, None
+        if src not in (Gdk.InputSource.PEN, Gdk.InputSource.ERASER):
+            return None, None
+        # The eraser end of a stylus erases whatever tool is selected — that is
+        # what turning the pen over means. Only for the freehand tools: flipping
+        # the pen should not silently turn "draw a rectangle" into something
+        # else, so the shape tools keep their own behaviour.
+        erase = None
+        if src == Gdk.InputSource.ERASER and self.tool in ("pencil", "brush"):
+            erase = True
+        try:
+            ok, p = ev.get_axis(Gdk.AxisUse.PRESSURE)
+        except (AttributeError, TypeError):
+            ok, p = False, None
+        # A pen in range but not touching the surface reports 0.0; that is a
+        # real reading, not a missing one, so only a MISSING axis falls back to
+        # the chosen size.
+        if not ok or p is None:
+            return None, erase
+        return pen_size(self.size, p), erase
+
     def _inside(self, p):
         return 0 <= p[0] < self.cw and 0 <= p[1] < self.ch
 
@@ -2048,7 +2188,8 @@ class Illustrator(nbapp.AppWindow):
         elif self.tool in ("pencil", "brush", "eraser"):
             self._begin_edit()        # hold pre-stroke pixels for Undo
             self._stroke_track = None
-            self._stroke_seg(ly, p, p)
+            self._pen_last = size, erase = self._pen(ev)
+            self._stroke_seg(ly, p, p, size, erase)
         # line / rect / ellipse only touch the surface on release, so the Undo
         # snapshot is taken there — and only for a shape that was actually
         # dragged — so a stray single click never dirties the doc or wipes Redo.
@@ -2069,7 +2210,8 @@ class Illustrator(nbapp.AppWindow):
         self._shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
         ly = self.layers[self.active]
         if self.tool in ("pencil", "brush", "eraser"):
-            self._stroke_seg(ly, self._last, p)
+            self._pen_last = size, erase = self._pen(ev)
+            self._stroke_seg(ly, self._last, p, size, erase)
             self._last = p
         elif self.tool in ("line", "rect", "ellipse"):
             self._render_preview(self._start, self._constrain(self._start, p))
@@ -2109,7 +2251,13 @@ class Illustrator(nbapp.AppWindow):
         # compression can drop the last motion sample, so the stroke would
         # otherwise stop short), then finalize with a tight repaint.
         if p != self._last:
-            self._stroke_seg(ly, self._last, p)
+            # The RELEASE event's pressure is the lift — near zero by the time
+            # the pen has left the surface. Using it here would taper the last
+            # segment to a hairline that the hand never drew, and event
+            # compression can make that segment long. Carry the last sample the
+            # pen actually painted at instead.
+            size, erase = self._pen_last
+            self._stroke_seg(ly, self._last, p, size, erase)
             self._last = p
         self._end_stroke(self._stroke_track)
         return True
@@ -2123,9 +2271,11 @@ class Illustrator(nbapp.AppWindow):
         self._dmg_cursor(was)
         return False
 
-    def _stroke_seg(self, ly, a, b):
+    def _stroke_seg(self, ly, a, b, size=None, erase=None):
         pts = self._mirror_points(_line_points(a[0], a[1], b[0], b[1]))
-        self._paint_ops(ly.surface, pts, [], erase=(self.tool == "eraser"))
+        if erase is None:
+            erase = (self.tool == "eraser")
+        self._paint_ops(ly.surface, pts, [], erase=erase, size=size)
         region = self._ops_bbox(pts, [])
         # Grow the running record of everything this gesture has touched, so the
         # Undo frame committed at release covers the WHOLE stroke and not just
@@ -2658,7 +2808,7 @@ class Illustrator(nbapp.AppWindow):
         self.next_id += 1
         self.layers.append(ly)
         self.active = len(self.layers) - 1
-        self._rebuild_layers()
+        self._rebuild_layers(arriving=ly)
         self._refresh_status()
         self.canvas.queue_draw()
         self._mark_unsaved()
@@ -2688,10 +2838,12 @@ class Illustrator(nbapp.AppWindow):
         if not (0 < self.active < len(self.layers)):
             return
         self._push(self._struct_frame(), "Delete Layer")
-        name = self.layers[self.active].name
+        old_idx = self.active
+        gone = self.layers[old_idx]
+        name = gone.name
         del self.layers[self.active]
         self.active = max(0, self.active - 1)
-        self._rebuild_layers()
+        self._rebuild_layers(departing=(gone, old_idx))
         self._refresh_status()
         self.canvas.queue_draw()
         self._mark_unsaved()

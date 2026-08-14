@@ -48,17 +48,40 @@ PDF_ML = 48.0           # left text margin (pt)
 PDF_MR = 30.0           # right text margin (pt)
 PDF_MT = 54.0           # top text margin — first baseline (pt)
 PDF_MB = 48.0           # bottom text margin (pt)
+# A standard script is a SIXTY-COLUMN measure: 6.0 inches of text at ten
+# characters to the inch, with every element's indent fixed in that grid. This
+# half-letter page holds 63 columns at PDF_FS, so the standard indents are
+# scaled into it rather than guessed — the proportions a reader recognises as a
+# screenplay are what survive the change of paper size, which is the whole point
+# of "script formatting" as opposed to "monospace text".
+#
+# The two full-width elements used to be 54 and 56 columns wide. Nothing wanted
+# that; a scene heading and the action under it share one measure.
+PDF_COLS = 63           # columns the half-letter measure holds at PDF_FS
+_STD_MEASURE = 60.0     # the standard 6.0in text block, in columns
+
+
+def _std(units):
+    """A standard-script column, scaled into this page's measure."""
+    return int(round(units * PDF_COLS / _STD_MEASURE))
+
+
 # Per element: (indent in monospace columns, wrap width in columns, UPPER-case,
-# right-align). Indents mirror a real script: dialogue block set in from the
-# left, the character cue further in, parentheticals inside the dialogue block.
+# right-align). The standard positions, in inches from the paper's left edge
+# with its 1.5in left margin: cue 3.7, parenthetical 3.1, dialogue 2.5.
 PDF_ELEMENT = {
-    0: (0, 54, True, False),    # Scene Heading
-    1: (0, 56, False, False),   # Action
-    2: (20, 34, True, False),   # Character cue
-    3: (10, 34, False, False),  # Dialogue
-    4: (14, 26, False, False),  # Parenthetical
-    5: (0, 56, True, True),     # Transition (flush right)
+    0: (0, PDF_COLS, True, False),                      # Scene Heading
+    1: (0, PDF_COLS, False, False),                     # Action
+    2: (_std(22), PDF_COLS - _std(22), True, False),    # Character cue
+    3: (_std(10), _std(35), False, False),              # Dialogue
+    4: (_std(16), _std(20), False, False),              # Parenthetical
+    5: (0, PDF_COLS, True, True),                       # Transition (flush right)
 }
+
+# Element indices, named where the pagination rules read them.
+EL_SCENE, EL_ACTION, EL_CUE, EL_DIALOGUE, EL_PAREN, EL_TRANSITION = range(6)
+MORE_MARK = "(MORE)"
+CONTD_MARK = "(CONT'D)"
 
 # -- persistence: the script survives close/reboot under $NB_HOME/.config/notebook,
 # matching writer.py's word-processor pattern (plain body + formatting spans) --
@@ -82,6 +105,112 @@ DEFAULT_TITLE = "UNTITLED SCREENPLAY"
 # box. Pango keeps the monospace face for the Latin the format is built around
 # and falls back per glyph for the rest.
 _PDF_FAMILY = "Liberation Mono, DejaVu Sans Mono, monospace"
+
+
+# ---- script pagination ------------------------------------------------------
+# A row is (column, text, right_align, element, cue) or None for a blank
+# spacer. `cue` is the speaking character on dialogue rows and None elsewhere;
+# it exists only so a speech broken by a page can name itself again on the next.
+def _row(col, text, right, element, cue=None):
+    return (col, text, right, element, cue)
+
+
+def _splits_speech(rows, at):
+    """The character whose dialogue a break at `at` would cut in half, or None.
+
+    Both sides have to be the SAME speaker's dialogue: a break between one
+    character's last line and the next character's cue is a paragraph break, not
+    a split speech, and marking it (MORE) would be a lie about who is talking.
+    """
+    if at <= 0 or at >= len(rows):
+        return None
+    before, after = rows[at - 1], rows[at]
+    if before is None or after is None:
+        return None
+    if (before[3] in (EL_DIALOGUE, EL_PAREN)
+            and after[3] in (EL_DIALOGUE, EL_PAREN)
+            and before[4] and before[4] == after[4]):
+        return before[4]
+    return None
+
+
+def _pull_back(rows, start, end):
+    """Move a page break back off a line that must not end a page.
+
+    A scene heading stranded at the foot of a page tells the reader nothing —
+    its scene is overleaf. A character cue with its speech on the next sheet is
+    worse. Both get pushed forward whole. The walk is bounded: a page has to
+    hold SOMETHING, so a pathological run gives up and breaks where it was.
+    """
+    limit = end
+    for _ in range(8):
+        if end - start <= 1:
+            return limit
+        last = rows[end - 1]
+        if last is None:                       # trailing air, free to drop
+            end -= 1
+            continue
+        kind = last[3]
+        if kind in (EL_SCENE, EL_CUE, EL_PAREN):
+            end -= 1
+            continue
+        # one lonely line of dialogue under its cue: take the cue with it
+        if (kind == EL_DIALOGUE and end - 2 >= start
+                and rows[end - 2] is not None and rows[end - 2][3] == EL_CUE):
+            end -= 2
+            continue
+        break
+    return end if end > start else limit
+
+
+def paginate_script(rows, lines_per_page):
+    """Split laid-out rows into pages the way a script paginates.
+
+    Cutting every N lines is what a text file does. A script has rules, and they
+    are most of what makes a printed page read as a screenplay:
+
+      * a speech broken by a page gets **(MORE)** beneath it, and the speaker's
+        name again with **(CONT'D)** at the top of the continuation;
+      * a **scene heading never ends a page**;
+      * a **character cue never ends a page**, and never loses its first line of
+        dialogue across the break;
+      * a page never **opens on blank air**.
+
+    Returns a list of pages, each a list of rows. Shared by the page counter and
+    the PDF on purpose — they used to compute page counts separately and
+    disagreed, and page count is the number a screenwriter works in.
+    """
+    lpp = max(1, int(lines_per_page))
+    rows = list(rows)
+    pages, carried = [], []
+    i, n = 0, len(rows)
+    while i < n:
+        while i < n and rows[i] is None:       # never open a page on air
+            i += 1
+        if i >= n:
+            break
+        room = max(1, lpp - len(carried))
+        end = min(i + room, n)
+        if end < n:
+            end = _pull_back(rows, i, end)
+        speaker = _splits_speech(rows, end)
+        if speaker is not None and end - i >= 2:
+            end -= 1                           # give (MORE) its own line
+            speaker = _splits_speech(rows, end)
+        page = carried + [r for r in rows[i:end]]
+        carried = []
+        while page and page[-1] is None:       # trailing air prints as nothing
+            page.pop()
+        if speaker is not None:
+            cue_col = PDF_ELEMENT[EL_CUE][0]
+            page.append(_row(cue_col, MORE_MARK, False, EL_CUE, speaker))
+            carried = [_row(cue_col, "%s %s" % (speaker, CONTD_MARK), False,
+                            EL_CUE, speaker)]
+        pages.append(page)
+        i = end
+    if carried:
+        pages.append(carried)
+    return pages or [[]]
 
 
 def _pdf_layout(cr, text, size):
@@ -597,11 +726,12 @@ class Screenplay(nbapp.AppWindow):
         format is fixed-pitch with fixed indents, so page count follows LINES,
         and a dialogue-heavy scene has far fewer words per page than an action
         one. The bar disagreed with the script that came out of the printer, and
-        page count is the one number a screenwriter actually works in."""
-        rows = self._pdf_lines()
-        usable = nbprint.HALF_H_PT - PDF_MT - PDF_MB
-        lpp = max(1, int(usable // PDF_LEAD))
-        return max(1, -(-len(rows) // lpp))
+        page count is the one number a screenwriter actually works in.
+
+        It reads the SAME paginator the PDF does, so the (MORE)/(CONT'D) lines
+        and the pages a widowed slugline pushes forward are counted here too."""
+        pages, _lpp = self._page_rows()
+        return max(1, len(pages))
 
     def _retag_current_line(self):
         """Apply the active element's tag across the whole caret line so typed
@@ -1268,6 +1398,7 @@ class Screenplay(nbapp.AppWindow):
         caps; a blank line is inserted before the elements that want the air."""
         rows = []
         prev_blank = True
+        speaker = None
         for idx, text in self._script_elements():
             col, width, upper, right = PDF_ELEMENT.get(idx, PDF_ELEMENT[1])
             t = text.strip()
@@ -1275,13 +1406,30 @@ class Screenplay(nbapp.AppWindow):
                 if not prev_blank:
                     rows.append(None); prev_blank = True
                 continue
-            if upper and idx in (0, 2, 5) and not prev_blank:
+            if upper and idx in (EL_SCENE, EL_CUE, EL_TRANSITION) \
+                    and not prev_blank:
                 rows.append(None)          # air before scene / cue / transition
             disp = t.upper() if upper else t
+            # Who is speaking, carried onto the dialogue so a speech split by a
+            # page can put the name back at the top of the continuation. A cue
+            # already carrying (CONT'D) keeps its plain name, or a speech
+            # crossing two page breaks would grow a second one.
+            if idx == EL_CUE:
+                speaker = disp.split("(")[0].strip() or disp
+            elif idx not in (EL_DIALOGUE, EL_PAREN):
+                speaker = None
             for wl in self._wrap_text(disp, width):
-                rows.append((col, wl, right))
+                rows.append(_row(col, wl, right, idx,
+                                 speaker if idx in (EL_DIALOGUE, EL_PAREN)
+                                 else None))
             prev_blank = False
         return rows
+
+    def _page_rows(self):
+        """(pages, lines_per_page) — the one pagination both routes read."""
+        usable = nbprint.HALF_H_PT - PDF_MT - PDF_MB
+        lpp = max(1, int(usable // PDF_LEAD))
+        return paginate_script(self._pdf_lines(), lpp), lpp
 
     def _build_pages(self):
         """Return (page_count, draw_page) for nbprint. Page 1 is the title page;
@@ -1294,10 +1442,8 @@ class Screenplay(nbapp.AppWindow):
         # screen, and printed a script with no name on it. NOT uppercased — the
         # title is shouted by convention, a byline is not.
         byline = self.scriptsubtitle.get_text().strip()
-        rows = self._pdf_lines()
-        usable = nbprint.HALF_H_PT - PDF_MT - PDF_MB
-        lpp = max(1, int(usable // PDF_LEAD))
-        body_pages = max(1, -(-len(rows) // lpp))
+        pages, _lpp = self._page_rows()
+        body_pages = max(1, len(pages))
         page_count = 1 + body_pages
 
         def draw_page(cr, page_no, w, h):
@@ -1328,9 +1474,10 @@ class Screenplay(nbapp.AppWindow):
             _pdf_show(cr, w - PDF_MR - _pdf_w(cr, pn, PDF_FS),
                       PDF_MT - PDF_LEAD - 6, pn, PDF_FS)
             y = PDF_MT
-            for row in rows[(page_no - 2) * lpp:(page_no - 1) * lpp]:
+            page_rows = pages[page_no - 2] if page_no - 2 < len(pages) else []
+            for row in page_rows:
                 if row is not None:
-                    col, text, right = row
+                    col, text, right = row[0], row[1], row[2]
                     if right:
                         x = w - PDF_MR - _pdf_w(cr, text, PDF_FS)
                     else:

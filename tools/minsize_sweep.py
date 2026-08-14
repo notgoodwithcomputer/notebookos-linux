@@ -69,6 +69,55 @@ TIGHT_PX = 40
 RISK_LANGS = ("ru", "pl", "el", "sr", "pt", "de")
 RETEST_PX = 120
 
+# MEASURING THE EMPTY SHELL IS NOT MEASURING THE APP. An app is built with an
+# empty NB_HOME here, so a store-backed app is swept showing its empty state --
+# and an app whose POPULATED clip-floor is higher than its empty chrome then
+# reports a floor below the one a user with data actually hits. bills is the
+# caught case (app-improve, 2026-08-08): empty it wants 622px, but a populated
+# bills cannot shrink below 782 (its reading column floors at 430), so "ALL FIT"
+# had proven only that EMPTY apps fit. bills itself was never at risk -- it is a
+# FILL-THE-PANEL app (col = sw-364, so its natural tracks the screen) and fits
+# every panel above 782 -- so this is an accuracy fix; the shape that WOULD bite
+# is a fixed, non-shrinking populated table whose floor clears the panel.
+#
+# Any file in tools/minsize_fixtures/ named after an app's STORE (bills.json)
+# is copied into the measured NB_HOME before construct, so that app is swept
+# POPULATED. An app with no fixture is still measured empty.
+#
+# WHICH apps need a fixture (measured 2026-08-08, not guessed): the populated
+# state must add a FIXED-COLUMN ROW GRID that the empty state does not show.
+# accounting qualifies -- its 5-column ledger (_GRID = (80, -1, 118, 118, 140))
+# only exists once there are rows, so content raised its floor to 1002 in German
+# (22px from the panel) from an empty 964; bills qualifies -- its reading column
+# only appears with a bill selected. The floor is also LANGUAGE-SENSITIVE
+# (accounting en 987 / de 1002), which is why the fixture is re-measured in every
+# RISK_LANG, not just the shipped one.
+#   Ruled OUT by measurement, and the distinction is the point:
+#   * cookbook -- its content flows INTO fixed columns (a 344px sidebar list, a
+#     300px ingredient box) and ELLIPSISES there, so populated == empty (995 in
+#     ru, both). "Has a fixed column" is not enough; the column must SUM ACROSS
+#     THE ROW, not contain the content. No fixture.
+#   * music -- its library is a FILESYSTEM SCAN of ~/Music, not this JSON store
+#     (music.json holds only playlists + cached lengths), so a store fixture
+#     cannot populate its track table at all. A scan-populated app needs dummy
+#     files, a different mechanism than this dir. Out of reach here.
+# Fixtured: bills, accounting.
+_FIXTURES = os.path.join(REPO, "tools", "minsize_fixtures")
+
+
+def _seed_fixtures(home):
+    """Copy every store fixture into the measured NB_HOME so content-growing
+    apps are swept at the width the user actually meets, not their empty shell.
+    """
+    import shutil
+    if not os.path.isdir(_FIXTURES):
+        return
+    cfg = os.path.join(home, ".config", "notebook")
+    os.makedirs(cfg, exist_ok=True)
+    for fn in os.listdir(_FIXTURES):
+        if fn.endswith(".json"):
+            shutil.copyfile(os.path.join(_FIXTURES, fn), os.path.join(cfg, fn))
+
 
 def measure_one(name, W, H):
     """Measure one app in THIS process. Only ever called in a --one child, so
@@ -93,6 +142,7 @@ def measure_one(name, W, H):
 
     os.environ.setdefault("NB_HOME", "/tmp/nbhome-minsize")
     os.makedirs(os.environ["NB_HOME"], exist_ok=True)
+    _seed_fixtures(os.environ["NB_HOME"])
     uishot.load_theme()
     # Apps that size themselves from the screen (music's fixed columns,
     # a reading column) must believe they are on THIS panel, or they

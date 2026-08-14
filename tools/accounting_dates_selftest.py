@@ -14,6 +14,23 @@ would run into DESCRIPTION on every row. New entries therefore carry a separate
 `iso` field — the date a spreadsheet can use — beside the short display string,
 and the CSV leads with it.
 
+ROUND 2 — PRESENT IS NOT THE SAME AS RIGHT. The check "editing does not drop
+the ISO date" asserted that the field still EXISTED after an edit. It did, and
+it was WRONG: `iso` was carried over unconditionally, so editing an entry's
+DATE left the machine-readable column naming a different day from the shown
+one. The CSV writes both, and this suite's own fixture had been exporting
+`['2026-08-08', '6 Aug', ...]` — stale iso, corrected display — the whole time,
+with every check green. Measured with the fix reverted:
+
+    FAIL the CSV's sortable date and its shown date name the same day
+         [['2026-08-03', '1 Jan', 'Rent', ...], ['2026-08-08', '6 Aug', ...]]
+
+The iso now MOVES with the date. Dropping it was tried first and was wrong —
+it broke the older contract above, and an edit that costs a row its sortable
+date is its own small data loss. Keeping the YEAR and taking the new day and
+month is not inventing anything: the entry already carried that year. A row
+that never recorded a year still gets none.
+
 WHAT MIGRATION MEANS HERE. Nothing is rewritten. An entry saved before this
 existed keeps its "28 Jul" and gets NO `iso`: a year cannot be inferred from a
 row that never recorded one, and a ledger is the last place to invent data. Its
@@ -184,6 +201,82 @@ def main():
           any(v == "" for v in isos), repr(isos))
     check("every row still carries its shown date",
           all(len(r) > 1 and r[1] for r in body), repr([r[:2] for r in body]))
+
+    # ---------------------------------------------------------------------
+    # THE TWO DATE COLUMNS MUST NEVER DISAGREE.
+    # `iso` was carried over unconditionally when an entry was edited, with a
+    # comment (correctly) explaining that editing a DESCRIPTION must not cost
+    # the row its only sortable date. But the editor exposes the DATE too, and
+    # when that changed the stale iso came along: an entry retyped from
+    # "03 Aug" to "01 Jan" exported as ['2026-08-03', '01 Jan', ...] — the
+    # machine-readable column and the shown column naming different days, in
+    # the one file whose whole reason for existing is that a spreadsheet can
+    # sort it. The iso now MOVES with the date rather than being dropped
+    # (dropping was the first fix tried, and it broke the contract three checks
+    # above: an edit that costs the row its sortable date is its own data loss).
+    E = Accounting_edited_iso = accounting.Accounting._edited_iso
+    check("editing the day moves the sortable date with it",
+          E({"date": "3 Aug", "iso": "2026-08-03"}, "1 Jan") == "2026-01-01",
+          E({"date": "3 Aug", "iso": "2026-08-03"}, "1 Jan"))
+    check("editing only the spelling keeps the same day",
+          E({"date": "6 Aug", "iso": "2026-08-06"}, "06 August") == "2026-08-06",
+          E({"date": "6 Aug", "iso": "2026-08-06"}, "06 August"))
+    check("a year the user typed is believed",
+          E({"date": "3 Aug", "iso": "2026-08-03"}, "1 Jan 2027") == "2027-01-01",
+          E({"date": "3 Aug", "iso": "2026-08-03"}, "1 Jan 2027"))
+    check("an unchanged date keeps its iso exactly",
+          E({"date": "3 Aug", "iso": "2026-08-03"}, "3 Aug") == "2026-08-03")
+    # The doctrine this file already states: a year cannot be inferred from a
+    # row that never recorded one. An edit must not conjure one either.
+    check("a row that never had a year still does not get one",
+          E({"date": "28 Jul"}, "29 Jul") is None,
+          E({"date": "28 Jul"}, "29 Jul"))
+    check("...unless the user writes the year themselves",
+          E({"date": "28 Jul"}, "29 Jul 2025") == "2025-07-29",
+          E({"date": "28 Jul"}, "29 Jul 2025"))
+    check("text that is not a date derives nothing",
+          E({"date": "3 Aug", "iso": "2026-08-03"}, "sometime soon") is None,
+          E({"date": "3 Aug", "iso": "2026-08-03"}, "sometime soon"))
+
+    # ...and the whole way through, end to end: edit a real entry's date and
+    # read the exported CSV back. A helper agreeing with itself proves nothing
+    # if the app does not call it.
+    import csv as _csv
+    app3 = accounting.Accounting()
+    app3.add_entry("Rent", -950.0)
+    app3.tx[0]["iso"] = "2026-08-03"
+    app3.tx[0]["date"] = "3 Aug"
+    app3._edit_tx(0)
+    if hasattr(app3, "_e_date"):
+        app3._e_date.set_text("1 Jan")
+        app3._e_desc.set_text("Rent")
+        app3._e_amt.set_text("950")
+        app3._save_edit()
+    app3._export_csv()
+    docs = os.path.join(_HOME, "Documents")
+    files = sorted(f for f in os.listdir(docs) if f.endswith(".csv"))
+    rows = []
+    if files:
+        with open(os.path.join(docs, files[-1]), encoding="utf-8") as fh:
+            rows = list(_csv.reader(fh))
+    body = [r for r in rows[1:] if r and any(r)]
+    same_day = True
+    for r in body:
+        iso_cell, shown = r[0], r[1]
+        if iso_cell:
+            parts = accounting._short_date_parts(shown)
+            if parts is None:
+                continue
+            d, m, _y = parts
+            y2, m2, d2 = (int(x) for x in iso_cell.split("-"))
+            if (m2, d2) != (m, d):
+                same_day = False
+    check("the CSV's sortable date and its shown date name the same day",
+          same_day and bool(body), repr(body))
+    try:
+        app3.destroy()
+    except Exception:
+        pass
 
     try:
         app.destroy()

@@ -21,8 +21,10 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SOCK = os.path.join(ROOT, "boot-work", "ttyS1.sock")
+# NB_TTYS1 points gsh at a guest booted with a private NB_WORK dir.
+SOCK = os.environ.get("NB_TTYS1") or os.path.join(ROOT, "boot-work", "ttyS1.sock")
 SENTINEL = "__GSH_DONE__"
+BEGIN = "__GSH_BEGIN__"
 
 
 def main():
@@ -42,11 +44,16 @@ def main():
     except socket.timeout:
         pass
 
-    # serial tty wants CR line endings; wake the prompt first. The sentinel
-    # is split ('' in the middle) so the tty ECHO of this command line never
-    # contains the assembled marker — only the real output line does.
+    # serial tty wants CR line endings; wake the prompt first. Both markers
+    # are split ('' in the middle) so the tty ECHO of this command line never
+    # contains an assembled marker — only real output lines do. The BEGIN
+    # marker exists because the tty wraps the echoed command at its width, so
+    # a long command's echo arrives as SEVERAL lines that no first-line
+    # heuristic can strip; everything before the assembled BEGIN is echo.
     split = SENTINEL[:6] + "''" + SENTINEL[6:]
-    full = ("\r\nexport DISPLAY=:0; { %s; }; echo %s$?\r\n" % (cmd, split))
+    begin = BEGIN[:6] + "''" + BEGIN[6:]
+    full = ("\r\nexport DISPLAY=:0; echo %s; { %s; }; echo %s$?\r\n"
+            % (begin, cmd, split))
     s.sendall(full.encode())
 
     buf, deadline = b"", time.time() + 30
@@ -62,18 +69,20 @@ def main():
             continue
     out = buf.decode(errors="replace")
 
-    # strip the echoed command line and the sentinel trailer
+    # keep only lines between the assembled markers: before BEGIN is the
+    # tty's (possibly wrapped) echo of the command, after DONE is the prompt
     lines = out.splitlines()
-    body, rc = [], None
+    body, rc, seen_begin = [], None, False
     for ln in lines:
+        if not seen_begin:
+            if BEGIN in ln and begin not in ln:
+                seen_begin = True
+            continue
         if SENTINEL in ln:
             tail = ln.split(SENTINEL, 1)[1].strip()
             rc = tail if tail else "0"
             break
         body.append(ln)
-    # drop the echo of what we typed (first line usually)
-    if body and cmd[:20] in body[0]:
-        body = body[1:]
     print("\n".join(body))
     if rc is None:
         print("[gsh: timed out waiting for sentinel]", file=sys.stderr)

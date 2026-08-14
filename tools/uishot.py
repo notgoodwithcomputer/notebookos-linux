@@ -135,6 +135,46 @@ def shot(build, w, h, path, app_css=None, settle=60):
     return _save_offscreen(off, path)
 
 
+class _PanelClamp(Gtk.Bin):
+    """Hold the app to an EXACT panel box, the way the hardware frame does.
+
+    Gtk.OffscreenWindow sizes itself to its child's NATURAL request, and
+    set_size_request is only a MINIMUM -- so an app whose content is wider or
+    taller than the panel renders at that larger size and the PNG shows a
+    layout the hardware can never display. app-improve caught bills rendering
+    at its 1172px developer-monitor width inside a nominal 1024 shot
+    (2026-08-09), which had quietly invalidated every design-fidelity and
+    eyeball review of any app wider than the panel. This container reports the
+    panel box as BOTH its minimum and its natural size and hands the child
+    exactly that box, so content past the panel edge is clipped by the
+    offscreen surface -- the honest "this does not fit" picture instead of an
+    invented one. It does NOT rebuild the child: an app that read screen_size at
+    construct must have been built under the matching pin (appshot / uishot_all
+    do this); the clamp then simply stops the frame from growing past the panel.
+    """
+    def __init__(self, w, h):
+        super().__init__()
+        self._w, self._h = w, h
+
+    def do_get_preferred_width(self):
+        return (self._w, self._w)
+
+    def do_get_preferred_height(self):
+        return (self._h, self._h)
+
+    def do_get_preferred_width_for_height(self, _h):
+        return (self._w, self._w)
+
+    def do_get_preferred_height_for_width(self, _w):
+        return (self._h, self._h)
+
+    def do_size_allocate(self, alloc):
+        self.set_allocation(alloc)
+        child = self.get_child()
+        if child is not None:
+            child.size_allocate(alloc)
+
+
 def shot_window(win, w, h, path, settle=80, after_show=None):
     """Render a fully-constructed toplevel (an nbapp app, the Finder, ...) to a
     PNG without ever mapping it on screen.
@@ -175,7 +215,11 @@ def shot_window(win, w, h, path, settle=80, after_show=None):
     for _cls in _wctx.list_classes():
         bg.get_style_context().add_class(_cls)
     bg.add(child)
-    off.add(bg)
+    # Hold the whole tree to the panel box so an app wider/taller than the
+    # panel renders CLIPPED at the panel edge, not at its own natural size.
+    clamp = _PanelClamp(w, h)
+    clamp.add(bg)
+    off.add(clamp)
     off.show_all()
     # Some widgets only honour state changes once shown — e.g. Gtk.Stack ignores
     # set_visible_child_name until its pages are visible, so an editor selected

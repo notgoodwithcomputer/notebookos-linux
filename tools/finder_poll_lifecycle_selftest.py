@@ -30,7 +30,11 @@ check(win._poll_app_flag() is True and calls == ["app"],
 
 win._mounts_sig = ("old",)
 win._devices = lambda: [("USB", "disk", "new")]
-win._fill_sidebar = lambda: calls.append("devices")
+# *a/**k, not (): _fill_sidebar takes the newly-arrived mount points (only a new
+# volume animates in). A stub pinned to the old zero-argument shape raises
+# TypeError inside _poll_devices' except-and-continue guard, so the refresh
+# silently stops and this suite blames the poll instead of its own stub.
+win._fill_sidebar = lambda *a, **k: calls.append("devices")
 check(win._poll_devices() is True and calls[-1] == "devices",
       "a live changed-device poll refreshes once and continues")
 

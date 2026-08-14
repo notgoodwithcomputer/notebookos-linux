@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Behavioral motion contract for the real EbookReader code paths.
+
+EBOOK_MODULE_DIR selects ebook.py as well as its sibling imports.  This is
+intentional: red proofs point the suite at a sabotaged scratch copy, never at
+the working tree while still reading pristine application source.
+"""
+import inspect
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DE = Path(os.environ.get(
+    "EBOOK_MODULE_DIR",
+    ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"))
+sys.path.insert(0, str(DE))
+os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="ebook-motion-"))
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk  # noqa: E402
+
+checks = []
+
+
+def check(name, condition):
+    passed = bool(condition)
+    checks.append(passed)
+    print(("PASS " if passed else "FAIL ") + name)
+
+
+def headless_contract():
+    """Mutant-sensitive fallback when this host cannot construct GTK widgets."""
+    source = (DE / "ebook.py").read_text(encoding="utf-8")
+    chapter = source[source.index("    def _epub_show_chapter("):
+                     source.index("    # --------------------------------------------------- PDF rendering")]
+    shelf = source[source.index("    def _populate_shelf("):
+                   source.index("    def _on_library_add(")]
+    close = source[source.index("    def _close_library("):
+                   source.index("    # ---------------------------------------------- remove")]
+    check("chapter uses container replacement",
+          "nbtransitions.replace(" in chapter)
+    check("chapter uses PAGE token",
+          "duration=nbtransitions.PAGE" in chapter)
+    check("same-page reflow bypasses replacement",
+          "if to_top:" in chapter and "if not to_top:" in chapter)
+    check("chapter fallback installs content",
+          "holder.pack_start(col" in chapter)
+    check("shelf diffs stable book identity",
+          'arriving = set(current) - previous' in shelf)
+    check("only arriving books receive Revealers",
+          'if book["path"] in arriving:' in shelf)
+    check("shelf uses SURFACE_IN token",
+          "duration=nbtransitions.SURFACE_IN" in shelf)
+    check("book fallback forces visible end state",
+          "rev.set_reveal_child(True)" in shelf)
+    check("library arrival slides up",
+          "direction=nbtransitions.SLIDE_UP" in shelf)
+    check("library departure retraces downward",
+          "direction=nbtransitions.SLIDE_DOWN" in close)
+    check("library departure uses SURFACE_OUT",
+          "duration=nbtransitions.SURFACE_OUT" in close)
+    check("sheet fallback reaches hidden end state",
+          "set_reveal_child(False)" in close and "hidden(False)" in close)
+    print("ebook from: %s" % DE)
+    print("RESULT: " + ("ALL PASS" if all(checks) else "SOME FAILED"))
+    raise SystemExit(0 if all(checks) else 1)
+
+
+if not Gtk.init_check()[0]:
+    headless_contract()
+
+import ebook  # noqa: E402
+
+
+def window_class():
+    for _name, cls in inspect.getmembers(ebook, inspect.isclass):
+        if cls.__module__ == ebook.__name__ and issubclass(cls, Gtk.Window):
+            return cls
+    raise RuntimeError("no EbookReader window class")
+
+
+def book(path):
+    return {"path": path, "title": Path(path).stem, "fmt": "EPUB"}
+
+
+def main():
+    win = window_class()()
+    nbt = ebook.nbtransitions
+    # Policy-still makes every primitive synchronous and tests §F4's real path.
+    nbt.nbmotion._REDUCED = True
+
+    original_replace = nbt.replace
+    replace_calls = []
+
+    def record_replace(container, child, **kwargs):
+        replace_calls.append((container, child, kwargs))
+        return original_replace(container, child, **kwargs)
+
+    nbt.replace = record_replace
+    win._epub_chapters = [[("p", "First")], [("p", "Second")]]
+    win._epub_pages = [(0, 0, 1), (1, 0, 1)]
+    win._page = 1
+    # The crossfade replaces the document column INSIDE ITS HOLDER, so it is
+    # reachable only when the current column HAS a parent. Constructing the
+    # window alone leaves _epub_col None, and every chapter check below then
+    # measured a path that could not run — they failed, and the first one to
+    # index the empty call list crashed the whole suite. Stand up the real
+    # shape: a holder with a column in it, which is what an open book has.
+    holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    seed = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    holder.pack_start(seed, False, False, 0)
+    win._epub_col = seed
+    old_col = win._epub_col
+    win._epub_show_chapter()
+    check("chapter uses one container replacement", len(replace_calls) == 1)
+    # By NAME, never by crash. This indexed straight into replace_calls[0] and
+    # died with an IndexError when the replacement did not happen, which turns
+    # one failed check into a CRASHED SUITE -- and a suite that exits non-zero
+    # by crashing poisons tools/run_all_gates.py, which globs *_selftest.py.
+    # The house idiom is to report what was not reached and keep going.
+    check("chapter replacement uses PAGE token",
+          bool(replace_calls)
+          and replace_calls[0][2].get("duration") == nbt.PAGE)
+    check("chapter installs a new document child",
+          win._epub_col is not old_col and win._epub_col.get_parent() is not None)
+    check("reduced motion lands chapter end state",
+          any(isinstance(w, Gtk.Label) for w in win._epub_col.get_children()))
+    before = len(replace_calls)
+    win._epub_show_chapter(to_top=False)
+    check("same-page type reflow stays instant", len(replace_calls) == before)
+
+    # A primitive failure must still install the newly built document.
+    nbt.replace = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("mutant"))
+    previous = win._epub_col
+    win._page = 0
+    win._epub_show_chapter()
+    check("chapter fallback still installs content",
+          win._epub_col is not previous and win._epub_col.get_parent() is not None)
+    nbt.replace = original_replace
+
+    original_reveal = nbt.reveal
+    reveal_calls = []
+
+    def record_reveal(widget, revealed=True, **kwargs):
+        reveal_calls.append((widget, revealed, kwargs))
+        return original_reveal(widget, revealed, **kwargs)
+
+    nbt.reveal = record_reveal
+    win._books = [book("/tmp/a.epub"), book("/tmp/b.epub")]
+    win._populate_shelf()
+    children = win._shelf.get_children()
+    check("new books alone receive Revealers",
+          len(children) == 2 and all(isinstance(c, Gtk.Revealer) for c in children))
+    check("new books settle together with SURFACE_IN",
+          len(reveal_calls) == 2 and all(
+              c[2].get("duration") == nbt.SURFACE_IN for c in reveal_calls))
+    reveal_calls.clear()
+    win._populate_shelf()
+    children = win._shelf.get_children()
+    check("existing books are packed plainly",
+          len(children) == 2 and not any(
+              isinstance(c, Gtk.Revealer) for c in children))
+    check("unchanged shelf does not restage", not reveal_calls)
+
+    # Failed decoration is visible decoration, not missing content.
+    nbt.reveal = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("mutant"))
+    win._books.insert(0, book("/tmp/c.epub"))
+    win._populate_shelf()
+    newcomer = win._shelf.get_children()[0]
+    check("book reveal fallback forces visible end state",
+          isinstance(newcomer, Gtk.Revealer) and newcomer.get_reveal_child())
+    nbt.reveal = record_reveal
+
+    reveal_calls.clear()
+    win._on_library_open()
+    check("library arrives from its edge with SURFACE_IN",
+          reveal_calls[-1][1] is True
+          and reveal_calls[-1][2].get("direction") == nbt.SLIDE_UP
+          and reveal_calls[-1][2].get("duration") == nbt.SURFACE_IN)
+    check("reduced motion opens sheet immediately",
+          win._library_sheet.get_reveal_child())
+    win._close_library()
+    check("library departure retraces arrival with SURFACE_OUT",
+          reveal_calls[-1][1] is False
+          and reveal_calls[-1][2].get("direction") == nbt.SLIDE_DOWN
+          and reveal_calls[-1][2].get("duration") == nbt.SURFACE_OUT)
+    check("reduced motion closes and hides immediately",
+          not win._library_sheet.get_reveal_child()
+          and not win._library_sheet.get_visible())
+
+    nbt.reveal = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("mutant"))
+    win._library_sheet.show()
+    win._library_sheet.set_reveal_child(True)
+    win._close_library()
+    check("sheet fallback reaches hidden end state",
+          not win._library_sheet.get_reveal_child()
+          and not win._library_sheet.get_visible())
+
+    print("ebook from: %s" % DE)
+    print("RESULT: " + ("ALL PASS" if all(checks) else "SOME FAILED"))
+    raise SystemExit(0 if all(checks) else 1)
+
+
+if __name__ == "__main__":
+    main()

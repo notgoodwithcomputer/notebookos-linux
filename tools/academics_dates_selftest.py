@@ -37,6 +37,21 @@ applied alone, with the output measured, not imagined:
        FAIL a lecture from last year is named, not counted   <- 14 November
        FAIL a date in another year says which year           <- 9 March
        RESULT: 2 FAILED
+  4. stop checking the calendar in _pretty_due (drop the _canonical_date guard)
+       FAIL 2026-02-29 is not a day and is not spoken as one  <- '29 February'
+       FAIL 2026-02-30 ...                                    <- '30 February'
+       FAIL 2026-04-31 ...                                    <- '31 April'
+       FAIL 2026-01-32 ...                                    <- '32 January'
+       RESULT: 8 FAILED
+  5. let _canonical_date accept any parsable ordinal
+     (`return canon if (y, m, d) == (cy, cm, cd) else None` -> `return canon`)
+       FAIL 2026-02-29 is not a day and is not spoken as one  <- '1 March'
+       FAIL 2026-02-30 ...                                    <- '2 March'
+       FAIL 2026-04-31 ...                                    <- '1 May'
+       RESULT: 8 FAILED
+     Worth reading that one twice: without the round-trip comparison the app
+     does not print a fake day, it prints a REAL day that is not the one the
+     user typed — which is the quieter and worse of the two failures.
 """
 import os
 import subprocess
@@ -111,6 +126,30 @@ check("month 0 is not silently read as December",
       "December" not in said("2026-00-14"), said("2026-00-14"))
 check("month 13 is not accepted", "January" not in said("2026-13-14"),
       said("2026-13-14"))
+
+# ------------------------------------------------- days that are not on a calendar
+# nbapp.day_ordinal is deliberately forgiving: it takes 2026-02-29 (2026 is not
+# a leap year) and hands back the ordinal for 2026-03-01, likewise 2026-04-31
+# and 2026-01-32. The app validated with it and then stored and PRINTED the raw
+# string, so a homework row could read "32 January", "31 April" or "30 February"
+# while being grouped and sorted as the following month. A day that does not
+# exist is said as nothing.
+for bad in ("2026-02-29", "2026-02-30", "2026-04-31", "2026-01-32",
+            "2026-06-31", "2026-09-31", "2025-02-29", "2100-02-29"):
+    check("%s is not a day and is not spoken as one" % bad, said(bad) == "",
+          repr(said(bad)))
+# ...and the days that DO exist are untouched, including the leap days.
+for good, want in (("2024-02-29", "29 February 2024"),
+                   ("2000-02-29", "29 February 2000"),
+                   ("2026-01-31", "31 January"),
+                   ("2026-04-30", "30 April"),
+                   ("2026-12-31", "31 December")):
+    check("%s is a real day and is spoken" % good, said(good) == want,
+          "%r, expected %r" % (said(good), want))
+# Sloppy FORMATTING is not the same mistake as a sloppy date: the fifth of
+# January written without its leading zeros still means the fifth of January.
+check("a date without leading zeros is still read", said("2026-1-5") == "5 January",
+      repr(said("2026-1-5")))
 
 # --------------------------------------------------------- the other languages
 # nbi18n reads NB_LANG at import, so each language needs its own process. The

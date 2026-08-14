@@ -108,8 +108,21 @@ def full_home():
     home = fresh_home()
     put(home, "tasks.json", [{"text": "Task %d" % i, "done": False}
                              for i in range(6)])
-    put(home, "calendar.json", [{"title": "Dentist", "date": day(-3),
-                                 "time": "09:30"}])
+    # The shape calendar.py itself writes (float-hour start/end, a named cal,
+    # all_day and cancelled flags): a timed and an all-day event today for the
+    # Schedule tile's day chart, a cancelled occurrence that must appear
+    # NOWHERE, and an old record for the agenda's date filter.
+    put(home, "calendar.json", [
+        {"title": "Dentist", "date": day(0), "start": 9.5, "end": 10.5,
+         "cal": "Personal", "location": "High St"},
+        {"title": "Book fair", "date": day(0), "all_day": True,
+         "cal": "Personal"},
+        {"title": "Skipped standup", "date": day(0), "start": 11.0,
+         "end": 11.5, "cal": "Personal", "cancelled": True,
+         "series": "s1", "repeat": "weekly"},
+        {"title": "Old checkup", "date": day(-3), "time": "09:30"}])
+    put(home, "calendars.json", [{"name": "Personal", "color": "#4A5E73"},
+                                 {"name": "Work", "color": "#417E74"}])
     log = {day(n): {"a": [15, 15, 15], "b": [20, 20]} for n in range(6)}
     put(home, "workout.json",
         {"log": log, "goals": {d: 5 for d in log},
@@ -296,7 +309,7 @@ for W, H in PANELS:
 # would otherwise go unchecked.
 import widgets as _w_readers
 READERS = _w_readers.TILE_ORDER
-FILES = {"academics": "academics.json", "homework": "academics.json",
+FILES = {"schedule": "calendar.json", "homework": "academics.json",
          "workout": "workout.json", "journal": "journal.json",
          "language": "language.json", "accounting": "accounting.json",
          "bills": "bills.json", "birthdays": "contacts.json",
@@ -371,11 +384,11 @@ check("the accounting tile totals opening + tx, formatted like the app",
 # A tile reader may hand back anything a hand-edited JSON file can hold. The
 # board used to build the label straight from it, so a class called 7 was a
 # TypeError that took the WHOLE desktop down at launch, not one tile.
-b._read_academics = lambda: (7, ["not", "a", "string"])
+b._read_schedule = lambda: (7, ["not", "a", "string"])
 b._read_homework = lambda: None
 b._read_workout = lambda: ()
 b._read_journal = lambda: "just one string"
-words, _empty = tile_words(b, "academics")
+words, _empty = tile_words(b, "schedule")
 check("a reader that returns a number still renders a tile", bool(words), words)
 for tid in ("homework", "workout", "journal"):
     words, empty = tile_words(b, tid)
@@ -495,10 +508,31 @@ check("...by standing Accounting down, not by growing the grid",
       b.board["accounting"] is False
       and len(b._tilegrid.get_children()) == wmod.TILE_COLS * wmod.TILE_ROWS,
       (b.board, len(b._tilegrid.get_children())))
+# The stored ids are the OLD build's -- "academics" was the Classes tile --
+# and the tile that took that name's place inherits its slot and its switch
+# (see widgets.TILE_ALIAS).
+NEW_SIX = [wmod.TILE_ALIAS.get(t, t) for t in OLD_SIX]
 check("...into the slot Accounting held, leaving the rest where they were",
-      b.board_order[:6] == list(OLD_SIX[:5]) + ["bills"], b.board_order)
+      b.board_order[:6] == NEW_SIX[:5] + ["bills"], b.board_order)
 check("...and every other tile keeps the state it was saved with",
-      all(b.board[t] is True for t in OLD_SIX[:5]), b.board)
+      all(b.board[t] is True for t in NEW_SIX[:5]), b.board)
+check("...with the renamed Classes tile carried over as Schedule",
+      b.board["schedule"] is True and "academics" not in b.board, b.board)
+b.destroy()
+
+# The rename alone, on a store that already knows Bills: a switch or an order
+# entry saved under the tile's old name must keep driving the tile that took
+# its place -- NOT read as a tile this build does not have (the "weather" rule
+# above), which would silently undo the owner's own choice.
+put(plain, "widgets.json",
+    {"tiles": dict({t: True for t in OLD_SIX}, bills=True, academics=False),
+     "order": ["journal", "academics", "meals", "workout", "homework",
+               "accounting", "bills"]})
+wmod, b = board(plain)
+check("a switch saved under a renamed tile's old id still drives it",
+      b.board["schedule"] is False, b.board)
+check("...and an order naming the old id still places the renamed tile",
+      b.board_order[1] == "schedule", b.board_order)
 b.destroy()
 
 # ...and it is a ONE-TIME move, not a rule that keeps re-asserting itself. A
@@ -721,7 +755,7 @@ off.destroy()
 b.destroy()
 
 # Two tiles must not be laid out as two tiles and four empty column-widths.
-put(packed, "widgets.json", {"tiles": {t: t in ("academics", "accounting")
+put(packed, "widgets.json", {"tiles": {t: t in ("schedule", "accounting")
                                        for t in wmod.TILE_ORDER}})
 wmod, b = board(packed, 1920, 1080)
 off = render(b)
@@ -801,8 +835,11 @@ check("...and each one says what to do about it",
           for t in _wm.TILE_ORDER),
       {t: _wm.TILE_EMPTY[t][1] for t in _wm.TILE_ORDER})
 
-# "Next class" that only looks at today and tomorrow goes blank all weekend —
-# exactly when someone wants to know what Monday holds.
+# THE SCHEDULE TILE IS THE CALENDAR DAY CHART: today's calendar.json events
+# and today's line of the Academics weekly pattern, on one clock -- and
+# nothing from any other day. The pinned month card beside it is where the
+# rest of the week lives, so a Saturday with only a Monday class shows the
+# tile's written empty state rather than borrowing Monday.
 sat = fresh_home()
 put(sat, "academics.json",
     {"classes": [{"name": "Linear Algebra", "room": "Hall 2",
@@ -812,15 +849,44 @@ SAT = time.localtime(time.mktime((2026, 8, 15, 12, 0, 0, 0, 1, -1)))   # Saturda
 time.localtime = lambda *a: SAT
 try:
     wmod, b = board(sat, 1366, 768)
-    words, empty = tile_words(b, "academics")
-    check("the next class is found later in the week, not just tomorrow",
-          not empty and "Linear Algebra" in words and "09:00" in words, words)
-    check("...and it is named by its weekday",
-          wmod._t("Monday") in words, words)
+    words, empty = tile_words(b, "schedule")
+    check("a day with nothing on shows the schedule tile's empty state",
+          empty and bool(words), (words, empty))
+    check("...and never another day's classes", "Linear Algebra" not in words,
+          words)
+    # A Saturday-morning shift IS on Saturday's chart, classes or none.
+    put(sat, "calendar.json", [{"title": "Market shift", "date": "2026-08-15",
+                                "start": 8.0, "end": 12.0, "cal": "Work"}])
+    wmod, b2 = board(sat, 1366, 768)
+    words, empty = tile_words(b2, "schedule")
+    check("a calendar event alone fills the schedule tile",
+          not empty and "Market shift" in words and "08:00" in words, words)
+    b2.destroy()
     b.destroy()
 finally:
     time.localtime = _real_localtime
 shutil.rmtree(sat, ignore_errors=True)
+
+# The merged day, read through the same contract the tile renders: the class
+# from Academics and the timed event from calendar.json share the chart, the
+# all-day event leads it (the Calendar day view's own order), and a cancelled
+# occurrence is nowhere -- the Calendar hides it, so the board must too.
+merged = full_home()
+wmod, b = board(merged)
+words, empty = tile_words(b, "schedule")
+check("the schedule tile merges classes and calendar events",
+      not empty and "Organic Chemistry" in words and "Dentist" in words,
+      words)
+check("...carrying each event's time and place",
+      "09:30" in words and "High St" in words and "14:00" in words, words)
+check("...with the all-day event present", "Book fair" in words, words)
+check("...and a cancelled occurrence nowhere on the board",
+      "Skipped standup" not in words, words)
+rows = b._read_schedule()[1]
+check("...the all-day band leading the day, the way the Calendar's does",
+      rows and rows[0][1] == "Book fair" and rows[0][0] is None, rows)
+b.destroy()
+shutil.rmtree(merged, ignore_errors=True)
 shutil.rmtree(home, ignore_errors=True)
 
 

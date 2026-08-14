@@ -86,18 +86,6 @@ REVIEWED = {
     ("widgets.py", ".agsec"):
         "SIXTH POSITION: a rule above an agenda SECTION HEADING, dividing "
         "stacked sections in a column. Same shape as tasks .minical.",
-    # Govorimo's stream chrome (lane closed 2026-08-12; reviewed here at the
-    # aggregate's first post-landing run).
-    ("govorimo.py", ".gvpost"):
-        "between ruled rows — each post's bottom rule in the message list.",
-    ("govorimo.py", ".gvreply"):
-        "between ruled rows — the rule between a post and its reply strip, "
-        "inside the same ruled list.",
-    ("govorimo.py", ".gvcompose"):
-        "above a bottom bar — the compose strip is the window's fixed bottom "
-        "band.",
-    ("govorimo.py", ".gvbanner"):
-        "under a header band — the link-status banner beneath the menu bar.",
 }
 
 # ⚠ SPEC GAP FOR THE DESIGN OWNER, found by building this gate rather than by

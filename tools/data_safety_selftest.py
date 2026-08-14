@@ -245,6 +245,24 @@ _NOT_USER_DATA = {
 # is not listed here fails this section on purpose, so a future truncating
 # write of somebody's only copy has to be argued for rather than slipped in.
 _ALLOWED = [
+    # The tablet-mode daemon's files are RUNTIME STATE, not user work: the
+    # /tmp/nb-tablet-mode flag other processes poll, and its own tmp+rename
+    # sidecar. Both are rebuilt on the next fold event; losing them costs one
+    # lid flip. (The test-batch lane's 047-048 residue finally recorded —
+    # this row was owed since 2026-08-08.)
+    ("xtabletd.py", "self.inhibited_file", "runtime flag in /tmp"),
+    ("xtabletd.py", 'open(tmp, "w", encoding="ascii")',
+     "tmp + rename of the same /tmp runtime flag"),
+    # Every write the Disc Burner makes goes into a scratch directory it just
+    # created with mkdtemp and deletes when the burn ends — the menu PNGs, the
+    # spumux/dvdauthor XML, and the subpicture-muxed menu stream. None of them
+    # can land on a file a person owns: the destination is a directory that did
+    # not exist a moment earlier and whose name it chose. The person's own
+    # songs and videos are only ever READ; the disc is the output.
+    ("burner.py", "surf.write_to_png(path)", "menu art into its own scratch dir"),
+    ("burner.py", '"spumux.xml"', "generated input in its own scratch dir"),
+    ("burner.py", '"dvdauthor.xml"', "generated input in its own scratch dir"),
+    ("burner.py", "open(menu_sub,", "muxed menu stream in its own scratch dir"),
     ("settings.py", "/etc/hostname", "system config, not user work"),
     ("finder.py", "origins", "trash put-back sidecar, rebuilt on next trash"),
     ("finder.py", "nbapp.APP_FLAG", "runtime flag in /tmp"),
@@ -260,6 +278,11 @@ _ALLOWED = [
     # The flattened export goes to "<path>.new" and is moved into place, so a
     # failed export never replaces the previous PNG with a partial one.
     ("illustrator.py", "write_to_png(tmp)", "temp + os.replace of the export"),
+    # Animation's PNG-frames export: each frame lands in a mkstemp file in the
+    # destination folder and is os.replace()d into its numbered name, so a
+    # cancelled or failed export never leaves a truncated frame. The frames are
+    # a derived product, regenerable from the project store.
+    ("animation.py", "write_to_png(tmp)", "temp + os.replace of the export"),
     # A fresh mkstemp scratch frame handed to ffmpeg, deleted after the export.
     ("video.py", "surf.write_to_png(p)", "mkstemp scratch frame, never $HOME"),
     ("shell.py", "/tmp/nb-ready", "runtime flag in /tmp"),

@@ -306,6 +306,36 @@ def synth_tests():
 
 
 # ---------------------------------------------------------------------------
+def settle_view(app):
+    """Let the view finish travelling.
+
+    Every zoom and scroll is animated now (nbmotion, PAGE token, ARRIVE), and
+    a headless suite has no main loop for the frame clock to tick — so a test
+    that reads the view has to land it first. `settle()` is nbmotion's own
+    "stop where you are" and fires the completion, which is the same path a
+    retarget takes; the app deliberately lands on the exact target in either
+    case, so this is not a shortcut around the code under test."""
+    anim = getattr(app, "_view_anim", None)
+    if anim is not None:
+        anim.settle()
+
+
+def step_view(app, fraction):
+    """Drive the view animation to `fraction` of its duration and stop there,
+    so the frames BETWEEN the two states can be inspected.
+
+    Uses Scalar.advance(now) — nbmotion's single interpolation path, shared by
+    the frame-clock driver — with an explicit time, rather than re-implementing
+    the easing in the test."""
+    import nbmotion
+    import time as _time
+    anim = getattr(app, "_view_anim", None)
+    if anim is None:
+        return False
+    return anim.advance(_time.monotonic()
+                        + (nbmotion.PAGE / 1000.0) * fraction)
+
+
 def fresh_app(Q):
     """A Sequencer with no session to recover.
 
@@ -388,28 +418,35 @@ def app_tests():
 
     print("sequencer — zooming in on the tape")
     app.zoom_fit()
+    settle_view(app)
     check("FIT shows the whole tape",
           abs(app.view_span() - app.length) < 1e-9 and app.view_start == 0.0)
     W = 800
     check("pixels and seconds are inverses of each other",
           abs(app.time_at_px(app.px_of_time(9.0, W), W) - 9.0) < 1e-9)
     app.set_zoom(8.0, anchor=20.0, frac=0.5)
+    settle_view(app)
     check("zooming in shows less of the tape",
           abs(app.view_span() - app.length / 8.0) < 1e-6)
     check("...and holds the moment it was zoomed about",
           abs(app.time_at_px(W * 0.5, W) - 20.0) < 1e-6,
           "%.4f" % app.time_at_px(W * 0.5, W))
     app.set_zoom(8.0, anchor=0.0, frac=0.5)
+    settle_view(app)
     check("the view can never start before the tape does",
           app.view_start >= 0.0, "%.3f" % app.view_start)
     app.set_zoom(8.0, anchor=app.length, frac=0.5)
+    settle_view(app)
     check("...nor run off the end of it",
           app.view_start + app.view_span() <= app.length + 1e-6)
     app.set_zoom(Q.ZOOM_MAX * 10)
+    settle_view(app)
     check("zoom stops somewhere", app.zoom <= Q.ZOOM_MAX)
     app.set_zoom(0.01)
+    settle_view(app)
     check("...and cannot go wider than the whole song", app.zoom >= Q.ZOOM_FIT)
     app.zoom_to(4.0, 8.0)
+    settle_view(app)
     check("zoom-to fills the lanes with the stretch asked for",
           app.view_start <= 4.0 and app.view_start + app.view_span() >= 8.0,
           "%.2f..%.2f" % (app.view_start, app.view_start + app.view_span()))
@@ -428,6 +465,7 @@ def app_tests():
     # what a wheel does everywhere else in the OS.
     from gi.repository import Gdk
     app.zoom_fit()
+    settle_view(app)
     W = 800
 
     def wheel(direction, state=0, x=400.0, plain=False):
@@ -440,8 +478,10 @@ def app_tests():
     check("...but over the ruler, which scrolls nothing else, it is",
           wheel(Gdk.ScrollDirection.DOWN, plain=True))
     app.zoom_fit()
+    settle_view(app)
     at = app.time_at_px(200.0, W)
     took = wheel(Gdk.ScrollDirection.UP, Gdk.ModifierType.CONTROL_MASK, x=200.0)
+    settle_view(app)
     check("Ctrl+wheel zooms in", took and app.zoom > ZOOM_FIT_CHECK,
           "zoom=%.2f" % app.zoom)
     check("...about the pointer, not about the middle",
@@ -449,9 +489,11 @@ def app_tests():
           "%.3f vs %.3f" % (app.time_at_px(200.0, W), at))
     before = app.view_start
     wheel(Gdk.ScrollDirection.DOWN, Gdk.ModifierType.SHIFT_MASK)
+    settle_view(app)
     check("Shift+wheel scrolls sideways", app.view_start > before,
           "%.3f -> %.3f" % (before, app.view_start))
     app.zoom_fit()
+    settle_view(app)
 
     print("sequencer — every new control survives being pressed")
     # A HANDLER WIRED TO A BUTTON IS HANDED THE BUTTON. A method written
@@ -499,6 +541,7 @@ def app_tests():
     check("every enabled menu item runs when it is chosen",
           not called, "; ".join(called))
     app.zoom_fit()
+    settle_view(app)
     app.snap = 4.0
     app._set_tool(Q.TOOL_SELECT)
 
@@ -511,11 +554,134 @@ def app_tests():
     check("an unknown tool falls back to SELECT rather than to nothing",
           app.tool == Q.TOOL_SELECT)
 
+    print("sequencer — the view TRAVELS to its new value")
+    import nbmotion
+    app.zoom_fit()
+    settle_view(app)
+    W = 800
+    # A zoom is a scale ABOUT A POINT, and the point has to be held to the same
+    # pixel for the WHOLE journey or the picture slides sideways under the hand
+    # instead of growing out from under it. Sampled across the animation, not
+    # only at the ends — an implementation that interpolated view_start would
+    # pass an endpoints-only check and fail every frame in between.
+    app.set_zoom(16.0, anchor=20.0, frac=0.25)
+    drift = []
+    for frac in (0.1, 0.25, 0.4, 0.55, 0.7, 0.85):
+        step_view(app, frac)
+        drift.append(abs(app.time_at_px(W * 0.25, W) - 20.0))
+    check("the anchor is pinned for every frame of the zoom, not just the ends",
+          max(drift) < 0.02, "worst drift %.4f s" % max(drift))
+    check("...and the view really is moving in between",
+          len(set(round(d, 6) for d in drift)) >= 1 and app.zoom > 1.5,
+          "zoom part-way = %.2f" % app.zoom)
+    # ...and it interpolates GEOMETRICALLY. Interpolated linearly, most of the
+    # journey is spent already zoomed in; geometrically each frame scales by the
+    # same ratio, which is what "scaling" means and what the eye expects.
+    #
+    # Measured WITHOUT re-implementing the easing and without knowing the frame
+    # time. A plain scroll interpolates view_start LINEARLY by construction, so
+    # on a move that changes both, view_start recovers the eased parameter for
+    # THAT FRAME and the zoom can be checked against exp() and against a linear
+    # ramp at the very same instant. (Sampling at a fixed fraction of the clock
+    # would prove nothing: a spring is already past its target half-way
+    # through.)
+    app.zoom_fit()
+    settle_view(app)
+    z0, s0 = app.zoom, app.view_start
+    app.zoom_to(30.0, 34.0)
+    z1, s1 = app._view_target_zoom, app._view_target_start
+    e = None
+    for frac in (0.06, 0.10, 0.16, 0.24):
+        step_view(app, frac)
+        got = (app.view_start - s0) / (s1 - s0)
+        if 0.05 < got < 0.9:
+            e = got
+            break
+    if e is None:
+        not_reached_view = True
+        check("a mid-flight frame of the zoom was captured", False,
+              "view_start never landed between the endpoints")
+    else:
+        check("a mid-flight frame of the zoom was captured", True,
+              "eased parameter e=%.3f" % e)
+        geo = math.exp(math.log(z0) + (math.log(z1) - math.log(z0)) * e)
+        lin = z0 + (z1 - z0) * e
+        check("zoom is interpolated geometrically, so the motion reads uniform",
+              abs(app.zoom - geo) < max(0.05, geo * 0.03),
+              "at e=%.3f zoom=%.3f, geometric=%.3f, linear would be %.3f"
+              % (e, app.zoom, geo, lin))
+        check("...and a linear ramp is ruled out at that frame",
+              abs(app.zoom - lin) > lin * 0.08,
+              "zoom=%.3f vs linear %.3f" % (app.zoom, lin))
+    settle_view(app)
+    check("...and it lands exactly on the target, not near it",
+          abs(app.zoom - z1) < 1e-9, "%.6f vs %.6f" % (app.zoom, z1))
+
+    # the spring is the house character, and it must come from nbmotion rather
+    # than a hand-rolled curve
+    check("the view uses the OS arrival curve",
+          app._view_anim is not None
+          and nbmotion.ARRIVE is nbmotion.ease_out_back)
+
+    print("sequencer — the moving view must not re-rasterise eight lanes")
+    # ARTICLE F1. A view change invalidates every input to a lane's cached
+    # surface, so the naive animation re-renders eight full-width lanes per
+    # frame on the software rasteriser. Mid-flight a lane must BLIT what it has.
+    lane = app.lanes[0]
+    lane._cache = ("key", object(), (0.0, 64.0))
+    app.zoom_fit()
+    settle_view(app)
+    app.set_zoom(8.0, anchor=8.0, frac=0.5)
+    step_view(app, 0.4)
+    check("the view reports that it is moving, so the lanes know to blit",
+          app.view_moving())
+    settle_view(app)
+    check("...and stops reporting it once it has arrived", not app.view_moving())
+    # a cache entry carries the view it was rendered AT, or a stretch is
+    # impossible and the blit path silently degrades to a stale picture
+    check("a lane's cached raster remembers the view it was taken at",
+          len(lane._cache) == 3 and lane._cache[2] == (0.0, 64.0))
+
+    print("sequencer — Reduced Motion arrives instantly")
+    # §F4: instant-equivalence. Nothing here may branch on it — nbmotion's
+    # policy does — so the check is that the END STATE is identical.
+    real = nbmotion.reduced_motion
+    nbmotion.reduced_motion = lambda: True
+    try:
+        app.zoom_fit()
+        app.set_zoom(12.0, anchor=6.0, frac=0.5)
+        check("with Reduced Motion the view is already there, no settle needed",
+              abs(app.zoom - 12.0) < 1e-9 and not app.view_moving(),
+              "zoom=%.4f moving=%s" % (app.zoom, app.view_moving()))
+    finally:
+        nbmotion.reduced_motion = real
+    app.zoom_fit()
+    settle_view(app)
+
+    print("sequencer — the scrollbar is the one view change that never eases")
+    app.set_zoom(8.0, anchor=8.0, frac=0.5)
+    settle_view(app)
+    app._hadj.set_value(3.0)
+    check("dragging the thumb moves the view at once, with no spring",
+          abs(app.view_start - 3.0) < 1e-6 and not app.view_moving(),
+          "%.4f" % app.view_start)
+    # ...and a drag part-way through an animation wins: the hand is the authority
+    app.set_zoom(2.0, anchor=20.0, frac=0.5)
+    step_view(app, 0.3)
+    app._hadj.set_value(1.0)
+    check("...and it cancels anything in flight rather than fighting it",
+          not app.view_moving() and abs(app.view_start - 1.0) < 1e-6,
+          "moving=%s start=%.4f" % (app.view_moving(), app.view_start))
+    app.zoom_fit()
+    settle_view(app)
+
     print("sequencer — the playhead does not run off the screen")
     app.set_zoom(16.0, anchor=0.0, frac=0.0)
+    settle_view(app)
     app.transport = "play"
     app.pos = app.view_start + app.view_span() * 3
     app.follow_playhead()
+    settle_view(app)
     check("a running transport brings the view to the playhead",
           app.view_start <= app.pos <= app.view_start + app.view_span(),
           "%.2f not in %.2f..%.2f"
@@ -528,6 +694,7 @@ def app_tests():
           app.view_start == before)
     app.transport = "stop"
     app.zoom_fit()
+    settle_view(app)
 
     print("sequencer — cutting a take in two")
     tmp = tempfile.mkdtemp()

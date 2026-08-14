@@ -21,6 +21,7 @@ Run it after any change to accounting.py. Exit status is the number of failures.
 """
 import json
 import os
+import subprocess
 import random
 import shutil
 import sys
@@ -36,6 +37,8 @@ os.makedirs(os.path.join(HOME, ".config", "notebook"), exist_ok=True)
 
 import gi                                                     # noqa: E402
 gi.require_version("Gtk", "3.0")
+gi.require_version("Pango", "1.0")
+from gi.repository import Pango                               # noqa: E402
 import accounting                                             # noqa: E402
 
 A = accounting.Accounting
@@ -193,6 +196,54 @@ check("salvage says so", "Recovered" in app.status_lbl.get_text(),
 app._autosave()
 check("damaged original is preserved when the ledger is written back",
       len(damaged_copies()) == 1, damaged_copies())
+
+# THE OPENING BALANCE IS PART OF THE SALVAGE.
+# _salvage_tx keeps only objects carrying "amt", so the outer wrapper — where
+# `opening` lives, and which never closes in a truncated file — went with the
+# damage. The ledger reopened with an opening of ZERO and every balance on the
+# screen was out by that amount, silently, while the status line said
+# "Recovered N entries" and read like a complete account of the loss.
+clear_damaged()
+withopen = json.dumps({"opening": 250.5,
+                       "tx": [{"date": "%d Jan" % (i + 1),
+                               "desc": "Item %d" % i, "amt": -1.0}
+                              for i in range(20)]})
+with open(accounting.TX_FILE, "w") as fh:
+    fh.write(withopen[:len(withopen) - 30])
+app = fresh()
+check("a damaged ledger keeps its opening balance",
+      app.opening == 250.5, app.opening)
+check("...so the recovered balance is right, not short by it",
+      round(app.opening + sum(t["amt"] for t in app.tx), 2)
+      == round(250.5 - len(app.tx), 2),
+      (app.opening, len(app.tx)))
+
+# Recovering a WRONG opening balance is worse than recovering none, so two
+# different decoys must both be refused. Each is written with NO real opening
+# ahead of it — with one present the scan returns that first and the check
+# passes whatever the guard does, which is how the first version of this test
+# was vacuous: it stayed green with the depth guard deleted.
+#
+# (a) the text inside a DESCRIPTION. Caught by the scan's string-awareness.
+decoy_str = ('{"tx":[{"date":"01 Jan","desc":"note \\"opening\\": 999 here",'
+             '"amt":-5.0}')
+check("`opening` written inside a description is not believed",
+      accounting._salvage_opening(decoy_str) is None,
+      accounting._salvage_opening(decoy_str))
+# (b) a real KEY, but on a transaction rather than the wrapper. This is what the
+# brace-depth test is for; string-awareness cannot see it.
+decoy_key = '{"tx":[{"date":"01 Jan","desc":"x","opening":999,"amt":-5.0}'
+check("`opening` on a transaction is not the ledger's opening balance",
+      accounting._salvage_opening(decoy_key) is None,
+      accounting._salvage_opening(decoy_key))
+# ...and the real one, at the wrapper, still is.
+real = '{"opening":100.0,"tx":[{"date":"01 Jan","desc":"x","amt":-5.0}'
+check("the wrapper's opening balance is still recovered",
+      accounting._salvage_opening(real) == 100.0,
+      accounting._salvage_opening(real))
+check("a file with no opening balance salvages none",
+      accounting._salvage_opening('{"tx":[{"desc":"x","amt":-1.0}') is None,
+      accounting._salvage_opening('{"tx":[{"desc":"x","amt":-1.0}'))
 
 # damage in the MIDDLE, not at the end
 mid = good[:300] + "@@@@" + good[304:]
@@ -352,6 +403,58 @@ if csvs:
 
 app._export_pdf()
 pdfs = [n for n in os.listdir(accounting.DOCS_DIR) if n.endswith(".pdf")]
+# THE PDF TRUNCATES WITH THE SAME ELLIPSIS AS EVERYTHING ELSE.
+# The exporter appended ASCII "..." on the written grounds that it was "the
+# ellipsis every other export in this OS uses". That was not true: academics,
+# journal, installer and gbahelp all append U+2026, and so does the
+# delete-confirm card in accounting.py itself. The original reason (cairo's toy
+# font API does no per-glyph fallback) had already stopped applying when the
+# renderer moved to PangoCairo, as the comment went on to admit.
+#
+# EXTRACTING the character is not enough to know it PRINTED — pdftotext reads
+# the text layer whether or not a glyph was found, which is the trap
+# pango_render_selftest exists for. So count unknown glyphs at the Pango layer
+# as well: a tofu box and a real ellipsis extract identically.
+_unknown_ell = [0]
+_orig_set_text = Pango.Layout.set_text
+
+
+def _counting_set_text(layout, text, length=-1):
+    r = _orig_set_text(layout, text, length)
+    if text and "\u2026" in text:
+        try:
+            _unknown_ell[0] += layout.get_unknown_glyphs_count()
+        except Exception:
+            pass
+    return r
+
+
+Pango.Layout.set_text = _counting_set_text
+try:
+    app = fresh()
+    app.add_entry("A deliberately long description that will not fit the "
+                  "column on paper and must therefore be cut", -12.34)
+    app._export_pdf()
+    pdfs = [f for f in os.listdir(accounting.DOCS_DIR) if f.endswith(".pdf")]
+    text = ""
+    if pdfs:
+        try:
+            text = subprocess.run(
+                ["pdftotext", os.path.join(accounting.DOCS_DIR, pdfs[-1]), "-"],
+                capture_output=True, text=True, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            text = ""
+finally:
+    Pango.Layout.set_text = _orig_set_text
+
+if text:
+    check("the PDF truncates with the same ellipsis as the rest of the OS",
+          "\u2026" in text, repr(text[:400]))
+    check("...and not the ASCII one", "..." not in text,
+          repr([l for l in text.splitlines() if "..." in l][:3]))
+check("every ellipsis the PDF drew resolved to a real glyph, not a box",
+      _unknown_ell[0] == 0, _unknown_ell[0])
+
 check("PDF still exports", len(pdfs) == 1, pdfs)
 
 shutil.rmtree(HOME, ignore_errors=True)

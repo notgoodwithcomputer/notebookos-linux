@@ -14,7 +14,9 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 KERNEL="$ROOT/kbuild-desktop/arch/x86/boot/bzImage"
 ROOTFS="$ROOT/buildroot/output/images/rootfs.ext4"
-WORK="$ROOT/boot-work"; mkdir -p "$WORK"
+# NB_WORK: private working dir (rootfs snapshot, serial.log, sockets) so two
+# harnesses can boot guests side by side without stomping each other's files.
+WORK="${NB_WORK:-$ROOT/boot-work}"; mkdir -p "$WORK"
 [ -f "$KERNEL" ] || { echo "missing desktop kernel: $KERNEL"; exit 2; }
 [ -f "$ROOTFS" ] || { echo "missing rootfs: $ROOTFS"; exit 2; }
 
@@ -67,6 +69,12 @@ COMMON=(
   -serial "file:$WORK/serial.log"
   -serial "unix:$WORK/ttyS1.sock,server=on,wait=off"
 )
+
+# Extra QEMU arguments, word-split on purpose — lets a harness attach devices
+# without editing this file, e.g. an emulated USB-serial adapter to test the
+# LoRa-dongle plumbing:
+#   NB_QEMU_EXTRA="-chardev pty,id=u0 -device usb-serial,chardev=u0"
+COMMON+=(${NB_QEMU_EXTRA:-})
 
 if [ "${1:-}" = "--headless" ]; then
   exec qemu-system-x86_64 "${COMMON[@]}" \

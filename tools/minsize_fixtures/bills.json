@@ -1,0 +1,16 @@
+{
+ "bills": [
+  {
+   "payee": "Metropolitan Water & Power Authority",
+   "account": "Account 4471-88203-11",
+   "amount": 110500,
+   "due": "2026-09-01",
+   "method": "mail",
+   "address": "PO Box 991, Central Station, Springfield",
+   "phone": "+1 (800) 555-0142",
+   "note": "Autopay is off; confirm the meter read before paying.",
+   "lead": 5,
+   "paid": []
+  }
+ ]
+}

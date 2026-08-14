@@ -72,9 +72,8 @@ with the commit that closes them.
 - 52 Serbian Disc-Burner strings arrived in Cyrillic vs the sr-Latin law —
   transliterated. ja called Music 音楽 in one string — ミュージック now.
 - ellipsis_sweep 0 cuts OS-wide (comics dock geometry + 11px tool names;
-  composer hints shortened x3). govorimolib speaks "the radio service".
-- govorimo hairlines reviewed into the E4 ledger; page-switch debt entry;
-  board_settle rewritten to pin the REMOVED settle (red-proved);
+  composer hints shortened x3).
+- board_settle rewritten to pin the REMOVED settle (red-proved);
   document_safety/performance_ux stop pinning single spellings; packages
   suites drive the real prefs writer (getattr-hardened app-side).
 
@@ -84,7 +83,6 @@ with the commit that closes them.
   calendar, tasks, cookbook, journal, ... (*peer-held files: report, don't
   edit).
 - i18n_coverage_check: 141 uncovered (61 new) + 35 stale baseline rows.
-- jargon_sweep: 5 unaccounted in govorimolib.
 - TREE LANDED: all stranded lanes committed suite-green (5a000f10,
   d369456e, 15d4b7ee, d151cea0, 7b95eea9, 32c0030a, ebc50cc3 + catalogs
   in 77479de1). Remaining dirty = the fonts/tablet session's claim

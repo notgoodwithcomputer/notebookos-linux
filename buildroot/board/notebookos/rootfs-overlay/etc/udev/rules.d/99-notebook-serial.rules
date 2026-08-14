@@ -1,0 +1,24 @@
+# USB serial adapters — the LoRa dongle's path into a machine with no network.
+#
+# The Ebyte E22-900T22U (and its 230/400 MHz siblings) is an SX1262 LoRa radio
+# behind a small MCU that speaks plain 9600-8N1 serial, wrapped in a USB-UART
+# bridge. Ebyte has shipped both the WCH CH340 and the SiLabs CP2102 as that
+# bridge across production batches, so BOTH identities get the stable
+# /dev/lora* name; whichever way a given stick enumerates, software opens the
+# same path. The kernel side is ch341.ko / cp210x.ko (plus ftdi_sio, pl2303,
+# cdc-acm for other adapters), autoloaded by MODALIAS when the stick is
+# plugged in.
+#
+# USB tty nodes default to root:root 0600 under eudev. The session runs as
+# root today; group dialout + 0660 keeps this working unchanged the day the
+# session drops privileges.
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", GROUP="dialout", MODE="0660"
+
+# The bare /dev/lora name is the software contract: with one stick plugged in
+# it is right no matter which ttyUSB number the kernel handed out (another
+# adapter may have claimed ttyUSB0 first). lora%n exists to tell two sticks
+# apart; %n is the kernel's tty number, so it is NOT stable across replugs.
+# E22-xxxT22U, CH340-bridged batch (WCH generic id):
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="lora lora%n"
+# E22-xxxT22U, CP2102-bridged batch (SiLabs generic id):
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="lora lora%n"

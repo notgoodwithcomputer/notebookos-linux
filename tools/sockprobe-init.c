@@ -6,17 +6,14 @@
  *
  * Expected result on the shipped desktop kernel (post Bluetooth removal,
  * 2026-08 — CONFIG_BT is unset; BlueZ and its last consumer are gone):
- *   the local-only families AF_UNIX (1), AF_NETLINK (16) and AF_ALG (38)
- *   are SUPPORTED; every other family reports EAFNOSUPPORT — notably
- *   AF_INET (2), AF_INET6 (10), AF_PACKET (17) and now AF_BLUETOOTH (31),
- *   which this probe REQUIRED to work until the removal made that
- *   expectation a lie about the product.
- *
- * On AF_ALG: local-only userspace crypto, no addressing, no peer, nothing
- * reachable off the machine. It was enabled FOR BlueZ's LE crypto; BlueZ is
- * gone, so it is now consumerless dead weight that violates no product
- * claim. CRYPTO_USER_API is queued to be unset in the kernel-config pass
- * after task 032 lands — flip its entry to must-fail in that same change.
+ *   the local-only families AF_UNIX (1) and AF_NETLINK (16) are SUPPORTED;
+ *   every other family reports EAFNOSUPPORT — notably AF_INET (2),
+ *   AF_INET6 (10), AF_PACKET (17), AF_BLUETOOTH (31) and AF_ALG (38). The
+ *   last two were removed 2026-08 with Bluetooth: AF_ALG (CRYPTO_USER_API)
+ *   existed ONLY for BlueZ's LE crypto (ecb/cmac-aes), so with BlueZ gone it
+ *   is a consumerless local kernel-crypto attack surface and is unset too.
+ *   This probe REQUIRED both to work until that removal made the expectation
+ *   a lie about the product.
  */
 #include <stdio.h>
 #include <string.h>
@@ -93,13 +90,12 @@ int main(void)
     int bad = 0;
     for (size_t i = 0; i < sizeof(fams) / sizeof(fams[0]); i++) {
         /* The local-only families that MUST be supported in this kernel:
-         * AF_UNIX (1), AF_NETLINK (16 — udev's uevent socket) and, until
-         * the post-032 config pass unsets CRYPTO_USER_API, AF_ALG (38).
-         * None can carry traffic off the machine. Everything else MUST
-         * report EAFNOSUPPORT — including AF_BLUETOOTH (31) since the
-         * 2026-08 removal. */
-        int must_work = (fams[i].af == 1 || fams[i].af == 16 ||
-                         fams[i].af == 38);
+         * AF_UNIX (1) and AF_NETLINK (16 — udev's uevent socket). Neither
+         * can carry traffic off the machine. Everything else MUST report
+         * EAFNOSUPPORT — including AF_BLUETOOTH (31) and AF_ALG (38), both
+         * removed in the 2026-08 Bluetooth purge (AF_ALG existed only for
+         * BlueZ's LE crypto). */
+        int must_work = (fams[i].af == 1 || fams[i].af == 16);
         int s = socket(fams[i].af, fams[i].type, fams[i].proto);
         if (s >= 0) {
             printf("FAM %s -> SUPPORTED\n", fams[i].name);

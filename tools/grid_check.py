@@ -39,8 +39,6 @@ import design_tokens as dt  # noqa: E402
 # ---- Debt: sidebars not yet converged on RAIL (PAPER-PHYSICS §9 row 3d).
 # module -> (constant name, current width). Exact match required.
 RAIL_DEBT = {
-    "workout": ("SIDEBAR_W", 210),
-    "packages": ("SIDEBAR_W", 212),
     "bills": ("SIDEBAR_W", 252),
 }
 

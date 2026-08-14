@@ -73,9 +73,18 @@ except Exception as exc:                                        # noqa: BLE001
 #    document would launch something we have declared unfit to be seen.
 try:
     hidden_mods = {finder.APP_MODULES[a] for a in HIDDEN if a in finder.APP_MODULES}
-    assoc = {ext: mod for ext, mod in getattr(finder, "FILE_APPS", {}).items()
-             if mod in hidden_mods}
-    check("no file type opens with a hidden app", not assoc, assoc)
+    # Measure the RESOLVER, not the map: FILE_APPS may keep a hidden app's
+    # association on record (unhiding restores it with no edit), but
+    # _default_app_for must WITHHOLD it — the user's double-click is the
+    # route that matters. _default_app_for reads no instance state, so it is
+    # driven unbound here.
+    leaks = {}
+    for ext, mod in getattr(finder, "FILE_APPS", {}).items():
+        if mod in hidden_mods:
+            resolved = finder.Finder._default_app_for(None, ext)
+            if resolved in hidden_mods:
+                leaks[ext] = resolved
+    check("no file type opens with a hidden app", not leaks, leaks)
 except Exception as exc:                                        # noqa: BLE001
     check("file associations could be checked", False, repr(exc))
 

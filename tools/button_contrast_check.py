@@ -136,6 +136,17 @@ def check_app(mod_name):
         lab = _label_of(btn)
         if lab is None or not (lab.get_text() or "").strip():
             continue
+        # WCAG exempts DISABLED controls from the contrast minimum: low contrast
+        # is HOW a disabled control reads as disabled. A label inside an
+        # insensitive button returns the disabled colour from get_property here
+        # (GTK3 carries the insensitive state into the child, and the
+        # `:disabled label` rule has already matched by the time the property is
+        # read), so without this skip the gate reports the greying of a disabled
+        # button as a defect. is_sensitive() is effective (button + ancestors),
+        # so a SENSITIVE button whose label is merely greyed by a .dim section
+        # is still checked -- that is a real defect, not a disabled state.
+        if not btn.is_sensitive():
+            continue
         fg, alpha = _rgba(lab.get_style_context(), "color")
         if alpha < 0.1:
             continue

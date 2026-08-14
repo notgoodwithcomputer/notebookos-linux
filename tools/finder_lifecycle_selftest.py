@@ -90,7 +90,12 @@ def window(glib, closed=False):
     w.calls = []
     # The two things a poll may reach for. Recording them is the point: a
     # closed window must touch neither.
-    w._fill_sidebar = lambda: w.calls.append("fill_sidebar")
+    # *a/**k, not (): _fill_sidebar takes the set of newly-arrived mount points
+    # so only a new volume animates in. A stub pinned to the old zero-argument
+    # shape raises TypeError inside _poll_devices' except-and-continue guard,
+    # so the refresh silently stops happening and this suite reports it as the
+    # POLL being broken rather than as its own stub being stale.
+    w._fill_sidebar = lambda *a, **k: w.calls.append("fill_sidebar")
     w._devices = lambda: (w.calls.append("devices") or
                           [("d", "disk", "/mnt/stick")])
     w._sync_app_flag = lambda: w.calls.append("sync_app_flag")

@@ -19,6 +19,7 @@ os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="finder-info-card-")
 import gi                                                     # noqa: E402
 gi.require_version("Gtk", "3.0")
 import finder                                                 # noqa: E402
+import nbtransitions                                          # noqa: E402
 
 FAILS = []
 
@@ -44,15 +45,20 @@ check("the row anchor uses the cell-origin geometry",
 check("grid view / no selection yields no anchor (centre-grows)",
       "return None" in anc)
 
-# 3. the presenter: grows from the anchor, reveals on landing, retracts on close
+# 3. the presenter now DELEGATES to the shared nbtransitions.present_card
+#    (extracted 2026-08-08); present_card_selftest gates the grow / reveal-on-
+#    landing / retract behaviour in full. Here: finder routes through it with
+#    the row anchor, and the shared presenter is where the motion actually lives.
 pres = inspect.getsource(finder.Finder._present_card_from)
-check("presenter grows a GrowCard from the anchor",
-      "GrowCard" in pres and ".grow(anchor" in pres)
-check("presenter reveals the real content only on landing",
-      "set_no_show_all(True)" in pres
-      and pres.index("set_no_show_all(True)") < pres.index(".grow(anchor"))
-check("close retracts before removing (B3 departure retraces)",
-      "retract(" in pres and "remove()" in pres)
+check("presenter delegates to the shared nbtransitions.present_card",
+      "nbtransitions.present_card(" in pres and "anchor" in pres)
+shared = inspect.getsource(nbtransitions.present_card)
+check("the shared presenter grows a GrowCard from the anchor",
+      "GrowCard" in shared and ".grow(anchor" in shared)
+check("the shared presenter reveals on landing and retracts (B3) on close",
+      "set_no_show_all(True)" in shared
+      and shared.index("set_no_show_all(True)") < shared.index(".grow(anchor")
+      and "retract(" in shared and "remove()" in shared)
 check("the returned handle emits destroy (async fill watch unchanged)",
       "card_win.destroy()" in pres and pres.rstrip().endswith("return card_win"))
 check("scrim click and Esc both route through the one close path",

@@ -122,6 +122,24 @@ GOOD = {
                       "done": False, "note": ""},
                      {"title": "Essay draft", "cls": 1, "due": "2026-07-26",
                       "done": False, "note": ""}]}},
+
+ # bills: app-improve's fixture (task 047), lifted 2026-08-08. amount:null on b3
+ # is a varying-figure bill (a phone bill) -- a real shape the loader supports;
+ # a natural place for a loader to invent or drop a figure.
+ "bills": {"bills.json": {"bills": [
+        {"id": "b1", "payee": "Riverside Electric", "account": "8841-2207",
+         "amount": 8420, "due": "2026-08-15", "every": 1, "method": "mail",
+         "address": "Riverside Electric\nPO Box 4120\nSpringfield",
+         "phone": "555-0142", "note": "Budget plan", "lead": 5,
+         "paid": [{"on": "2026-07-12", "for": "2026-07-15", "amount": 8420,
+                   "method": "mail", "ref": "cheque 1042"}]},
+        {"id": "b2", "payee": "Metro Water & Sewer", "account": "MW-99013",
+         "amount": 4155, "due": "2026-08-22", "every": 2, "method": "phone",
+         "address": "", "phone": "555-0199", "note": "", "lead": 0, "paid": []},
+        {"id": "b3", "payee": "Countryside Mutual", "account": "POL-77120",
+         "amount": None, "due": "2026-09-01", "every": 6, "method": "mail",
+         "address": "Countryside Mutual\n77 Lake Rd", "phone": "",
+         "note": "Varies", "lead": 7, "paid": []}]}},
 }
 
 BUILD = {
@@ -135,6 +153,7 @@ BUILD = {
  "mealplanner": lambda m: m.MealPlanner(),
  "language":   lambda m: m.Language(),
  "academics":  lambda m: m.Academics(),
+ "bills":      lambda m: m.Bills(),
 }
 
 
@@ -150,9 +169,33 @@ def count(app, d):
     if app == "accounting":
         a = d.get("accounting.json", {})
         return len(a.get("tx", [])) if isinstance(a, dict) else 0
+    if app == "bills":
+        # count PAYEES, accepting BOTH a list and a dict-keyed-by-id -- the two
+        # shapes _records() takes. Counting only lists would make the "bills is
+        # an object" case plant 0 and keep 3, scoring a tolerated wrapper as the
+        # app INVENTING data (app-improve's catch: the count must know every
+        # shape the loader knows, or the mutation is graded backwards).
+        b = d.get("bills.json", {})
+        if not isinstance(b, dict):
+            return 0
+        rows = b.get("bills", [])
+        if isinstance(rows, dict):
+            rows = list(rows.values())
+        if not isinstance(rows, list):
+            return 0
+        return sum(1 for x in rows if isinstance(x, dict) and x.get("payee"))
     if app == "cookbook":
         c = d.get("cookbook.json", {})
         r = c.get("recipes", []) if isinstance(c, dict) else []
+        # a dict keyed by id is a shape _as_list() accepts (its VALUES are the
+        # recipes); count them too, or the "recipes is an object" case is graded
+        # backwards -- count must know every shape the loader knows (app-improve,
+        # 2026-08-08). language already does this (len() over dict|list); this
+        # was the one narrow count.
+        if isinstance(r, dict):
+            r = list(r.values())
+        if not isinstance(r, list):
+            return 0
         return sum(1 for x in r if isinstance(x, dict) and x.get("title"))
     if app == "contacts":
         c = d.get("contacts.json", {})
@@ -280,6 +323,31 @@ CASES = {
                                .__setitem__("amt", "1200.00")),
   "opening is junk":      _mut(lambda f: f["accounting.json"].__setitem__("opening", "x")),
   "file is not json":     None,
+ },
+ "bills": {
+  "control":                 _mut(lambda f: None),
+  # the keyed-by-id wrapper _records() reads as its values in file order, so a
+  # dict must NOT read as "no bills" -- the failure mode is losing the whole book
+  "bills is an object":      _mut(lambda f: f["bills.json"].__setitem__(
+        "bills", dict(("k%d" % i, b)
+                      for i, b in enumerate(f["bills.json"]["bills"])))),
+  # normalise() returns None for a payee-less record (correct) -- must not take
+  # the bills either side of it with it
+  "a bill with no payee":    _mut(lambda f: f["bills.json"]["bills"].insert(
+        1, {"id": "bx", "payee": "", "account": "", "amount": 100,
+            "due": "2026-08-18", "every": 1, "method": "phone", "address": "",
+            "phone": "", "note": "", "lead": 0, "paid": []})),
+  # a hand-edited/exported figure -- must not become a phantom amount or drop
+  "amount is a string":      _mut(lambda f: f["bills.json"]["bills"][0]
+                                  .__setitem__("amount", "84.20")),
+  # documented: KEEP the bill and reset the date; a regression that DROPPED it
+  # would be silent
+  "due is unreadable":       _mut(lambda f: f["bills.json"]["bills"][1]
+                                  .__setitem__("due", "next tuesday")),
+  # one bad payment must not empty the whole history
+  "a payment is not a dict": _mut(lambda f: f["bills.json"]["bills"][0]["paid"]
+                                  .append("cheque 1043")),
+  "file is not json":        None,
  },
  "cookbook": {
   "control":              _mut(lambda f: None),
@@ -540,10 +608,46 @@ COVERAGE = {
     # warned of. The distinction that caught them: read/render-ROBUSTNESS (the
     # app survives corrupt INPUT) is not store-file PRESERVATION (the damaged
     # FILE is kept, not overwritten). Only the latter is the C2 contract.
-    "bills": "suite:bills_selftest VERIFIED — malformed store survives "
-             "repeated autosaves, handles the .bak-rotation subtlety",
+    "bills": "exercised",       # GOOD/BUILD/CASES lifted from app-improve's
+                                # fixture 2026-08-08 — damage matrix + the
+                                # preservation check both cover it now
+
     "gbasdk": "suite:gbasdk_damage_selftest VERIFIED — truncated/not-json/"
               "empty store, recovery + .bak/.damaged asserted",
+    "composer": "suite:composer_selftest VERIFIED 2026-08-10 (batch-0810 ran "
+                "it with display + read it) — damaged/unrecognized store "
+                "moved to a .damaged-<stamp> sibling at load, that session "
+                "runs read-only, original bytes asserted across 3 "
+                "fresh-process open+close cycles, and the in-suite mutant "
+                "(guard removed) proves the checks go red",
+    "comics": "suite:comics_selftest VERIFIED 2026-08-10 (comics lane, read "
+              "+ run + red-proved) — store_cycle_family drives the REAL app "
+              "in fresh child processes over a wrong-shape store: original "
+              "bytes asserted aside, the read-only session writes NOTHING "
+              "through a real autosave firing, the second session starts a "
+              "fresh valid store and the aside survives it; sabotage of the "
+              "read-only guard goes red by name ('store real-app read-only "
+              "session writes nothing'). load_store-level damage/zero-byte/"
+              "wrong-shape + _extra round-trip covered in store_family",
+    "animation": "suite:animation_selftest VERIFIED 2026-08-11 (animation "
+                 "lane, read + run + red-proved) — the F7 display family "
+                 "drives the REAL app in two fresh child processes over a "
+                 "wrong-shape recovery store: quarantined aside asserted "
+                 "byte-identical, the read-only session writes NOTHING "
+                 "through a forced live autosave, and the second session "
+                 "starts fresh with the aside surviving; the in-suite "
+                 "mutant (open_document routed through load_store) and a "
+                 "recorded expectation-flip red-proof show the family can "
+                 "fail. Headless subset covers damaged/zero-byte/"
+                 "wrong-shape/_extra plus open_document never moving or "
+                 "rewriting a user document",
+    "sysmon": "small-store-judged 2026-08-10 (batch-0810): a 2-key sort "
+              "preference (col + direction) added by the view-persistence "
+              "pass, derived from one click and never user content; loader "
+              "shrugs at any damaged shape and falls back to defaults. A "
+              "later save may overwrite damaged bytes — the worst loss is "
+              "the sort order. Owning lane may upgrade to a gate; see "
+              "HANDOFF 2026-08-10",
     "music": "suite:music_adversarial_selftest VERIFIED — corrupt CFG_FILE "
              "survives open+close byte-for-byte, with a sabotage red-proof",
     "screenplay": "suite:screenplay_adversarial_selftest VERIFIED — two "
@@ -646,8 +750,228 @@ def coverage_report():
     return not unaccounted
 
 
+# ---------------------------------------------------- unknown-key preservation
+# The data-loss-on-open class -- the worst this OS has (see [[data-loss-read-
+# side]]): opening an app, letting it save, and finding fields GONE that the
+# app's own schema never knew about -- a newer version's key, a hand-added
+# field, another tool's annotation. app-improve found it a THIRD time in bills
+# day-3 (a bill's category/reconciled/sort_hint and the store's schema/
+# ledger_name, five fields lost by merely opening), and it has THREE independent
+# sites: the loader that rebuilds a record (loss at READ), an edit-commit that
+# rebuilds from reachable fields (loss at EDIT), a save that writes a fixed
+# wrapper (loss at SAVE). A round-trip must PRESERVE what it did not understand.
+#
+# This plants an unknown TOP-LEVEL key and an unknown PER-RECORD key with unique
+# sentinel VALUES, opens the app, runs the same Esc->close a user does, and
+# asserts both values are still on disk -- BY VALUE, so a surviving key with a
+# lost value still fails and a reorder does not (app-improve's rule). It reuses
+# GOOD/BUILD, so every app the damage matrix constructs is covered for free.
+_TOP_KEY = "__nbprobe_top"
+_REC_KEY = "__nbprobe_rec"
+_TOP_VAL = "PRESERVE-TOP-4f2a9c"          # unique -> searchable by value alone
+_REC_VAL = "PRESERVE-REC-4f2a9c"
+
+# Known non-preservers: app -> what it drops on open+save + the lane that owns
+# the fix (the `_extra` round-trip pattern; per-record wants the loader to carry
+# unknown entry keys THROUGH validation, validated fields still winning). Both-
+# direction ratchet like DEBT: a NEW dropper not listed here FAILS; an entry
+# that now PRESERVES fails as stale so the bookkeeping cannot rot.
+#
+# Found by this check's FIRST run, 2026-08-08. accounting was on this list too;
+# app-improve fixed it the same day (its loader _parse_tx dropped
+# entry_id/reconciled/category — the READ site of the three-site store-eater,
+# left standing in an app whose own 401 green suites could not see it), 7 -> 6.
+PRESERVE_DEBT = {
+    "journal":     "per-record keys (loader rebuilds entries) -- bug-fix's lane",
+    "calendar":    "per-record keys (loader rebuilds events) -- bug-fix's lane",
+    "cookbook":    "top-level + per-record (recipes rebuilt) -- app-improve day 7",
+    "mealplanner": "top-level key (plan wrapper rebuilt) -- app-improve day 15",
+    "tasks":       "top-level + per-record (tasks-app rebuilt) -- app-improve day 24",
+    "workout":     "top-level + per-record -- app-improve day 28",
+}
+
+
+def _plant(obj):
+    """Inject an unknown top-level key (dict root) and an unknown key into the
+    first record of the first list-of-dicts (a dict value, or a list root).
+    Returns (did_top, did_rec) -- what was actually plantable in this shape."""
+    did_top = did_rec = False
+    if isinstance(obj, dict):
+        obj[_TOP_KEY] = _TOP_VAL
+        did_top = True
+        for v in obj.values():
+            if isinstance(v, list) and v and isinstance(v[0], dict):
+                v[0][_REC_KEY] = _REC_VAL
+                did_rec = True
+                break
+    elif isinstance(obj, list) and obj and isinstance(obj[0], dict):
+        obj[0][_REC_KEY] = _REC_VAL
+        did_rec = True
+    return did_top, did_rec
+
+
+def _has_value(obj, val):
+    """True if val appears anywhere as a value -- robust to the app reordering
+    or restructuring, and BY VALUE (a surviving KEY whose value was lost still
+    counts as loss)."""
+    if obj == val:
+        return True
+    if isinstance(obj, dict):
+        return any(_has_value(v, val) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_has_value(v, val) for v in obj)
+    return False
+
+
+def _close_like_user(w):
+    """The exact close run_case performs: pump, Esc, then the destroy/save flush,
+    with the fallbacks for apps that flush on action rather than on destroy."""
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk, Gdk
+    n = 0
+    while Gtk.events_pending() and n < 300:
+        Gtk.main_iteration_do(False)
+        n += 1
+    try:
+        ev = Gdk.EventKey()
+        ev.keyval = Gdk.KEY_Escape
+        ev.state = 0
+        w._on_key(w, ev)
+    except Exception:                                             # noqa: BLE001
+        pass
+    if hasattr(w, "_on_destroy"):
+        w._on_destroy()
+    elif hasattr(w, "_save"):
+        w._save()
+    elif hasattr(w, "_save_progress"):
+        w._save_progress()
+
+
+def _preserve_core(files, primary, build, mod, cfg):
+    """Plant into files[primary], write every file, construct, close, re-read
+    the primary. Returns (did_top, did_rec, top_ok, rec_ok). Raises ONLY on a
+    broken check (construct/close/re-read throwing) -- the caller turns that into
+    an ERROR, never a pass (#14: a crash is not a green; #12: the re-read can
+    throw on the very input it plants)."""
+    did_top, did_rec = _plant(files[primary])
+    for name, obj in files.items():
+        with open(os.path.join(cfg, name), "w") as fh:
+            json.dump(obj, fh)
+    ppath = os.path.join(cfg, primary)
+    # Stamp the primary's mtime into the past so a save (any rewrite) is
+    # detectable regardless of filesystem timestamp resolution. Without this a
+    # PASS could be vacuous (#4): an app that never writes on close leaves the
+    # planted sentinels untouched and "preserves" them by doing nothing.
+    os.utime(ppath, (0, 0))
+    w = build(mod)
+    _close_like_user(w)
+    saved = os.path.getmtime(ppath) > 1
+    with open(ppath) as fh:
+        after = json.load(fh)
+    top_ok = (not did_top) or _has_value(after, _TOP_VAL)
+    rec_ok = (not did_rec) or _has_value(after, _REC_VAL)
+    return did_top, did_rec, top_ok, rec_ok, saved
+
+
+def run_preservation(app):
+    """One app, its own process (CSS isolation, like run_case)."""
+    home = "/tmp/nbhome-preserve-%s" % app
+    shutil.rmtree(home, ignore_errors=True)
+    cfg = os.path.join(home, ".config", "notebook")
+    os.makedirs(cfg, exist_ok=True)
+    os.environ["NB_HOME"] = home
+    files = copy.deepcopy(GOOD[app])
+    primary = list(files)[0]
+    mod = __import__(app)
+    try:
+        did_top, did_rec, top_ok, rec_ok, saved = _preserve_core(
+            files, primary, BUILD[app], mod, cfg)
+    except Exception as exc:                                      # noqa: BLE001
+        print("ERR  %-12s construct/save/re-read raised %s: %r -- check BROKEN, "
+              "not a pass" % (app, type(exc).__name__, str(exc)[:60]))
+        return False
+    if not (did_top or did_rec):
+        print("SKIP %-12s no dict root and no list-of-dicts to plant" % app)
+        return True
+    preserved = top_ok and rec_ok
+    if preserved and not saved:
+        # No write on close -> nothing was dropped, but the save path was not
+        # exercised here (the app may flush on edit instead). An honest weaker
+        # pass, distinct from a proven round-trip, so it is not a vacuous green.
+        print("PASS %-12s no close-save; nothing dropped, save path not "
+              "exercised" % app)
+        return True
+    lost = ", ".join(([] if top_ok else ["top-level key"])
+                     + ([] if rec_ok else ["per-record key"]))
+    debt = app in PRESERVE_DEBT
+    if preserved and not debt:
+        planted = [x for x in (("top" if did_top else None),
+                               ("record" if did_rec else None)) if x]
+        print("PASS %-12s round-trips unknown %s key(s)"
+              % (app, "+".join(planted)))
+        return True
+    if preserved and debt:
+        print("FAIL %-12s now PRESERVES -- stale PRESERVE_DEBT, remove it" % app)
+        return False
+    if not preserved and debt:
+        print("debt %-12s drops %s (known: %s)" % (app, lost, PRESERVE_DEBT[app]))
+        return True
+    print("FAIL %-12s DROPS %s on open+save -- silent data loss, unaccounted"
+          % (app, lost))
+    return False
+
+
+def _redproof_preservation():
+    """Prove the check goes RED on a dropper AND GREEN on a keeper -- both
+    directions, on synthetic apps, so it never depends on a real app happening
+    to be broken and can never sit vacuously green (#4/#11)."""
+    import tempfile
+    all_ok = True
+    for label, drop in (("dropper", True), ("keeper", False)):
+        home = tempfile.mkdtemp(prefix="preserve-rp-")
+        cfg = os.path.join(home, ".config", "notebook")
+        os.makedirs(cfg, exist_ok=True)
+        os.environ["NB_HOME"] = home
+        path = os.path.join(cfg, "rp.json")
+
+        class _App:
+            def __init__(self):
+                with open(path) as fh:
+                    self._d = json.load(fh)
+
+            def _on_destroy(self, _drop=drop, _path=path):
+                d = self._d
+                if _drop:                       # the store-eater: rebuild known
+                    d = {"items": [{"a": r.get("a")}
+                                   for r in d.get("items", [])]}
+                with open(_path, "w") as fh:
+                    json.dump(d, fh)
+
+        files = {"rp.json": {"items": [{"a": 1}]}}
+        try:
+            _dt, _dr, top_ok, rec_ok, _saved = _preserve_core(
+                files, "rp.json", lambda _m: _App(), None, cfg)
+            preserved = top_ok and rec_ok
+        except Exception as exc:                                  # noqa: BLE001
+            print("  red-proof %-8s CRASHED %s -- broken proof"
+                  % (label, type(exc).__name__))
+            all_ok = False
+            shutil.rmtree(home, ignore_errors=True)
+            continue
+        expect = not drop
+        good = preserved == expect
+        all_ok = all_ok and good
+        print("  red-proof %-8s preserved=%-5s expect=%-5s  %s"
+              % (label, preserved, expect, "OK" if good else "*** WRONG ***"))
+        shutil.rmtree(home, ignore_errors=True)
+    return all_ok
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 3:
+        if sys.argv[2] == "__preserve__":
+            raise SystemExit(0 if run_preservation(sys.argv[1]) else 1)
         raise SystemExit(0 if run_case(sys.argv[1], sys.argv[2]) else 1)
     if len(sys.argv) == 2 and sys.argv[1] == "--coverage":
         raise SystemExit(0 if coverage_report() else 1)
@@ -665,6 +989,27 @@ if __name__ == "__main__":
             print(line)
             if "PASS" not in line:
                 bad += 1
+    # Unknown-key preservation (the data-loss-on-open class): red-proof first --
+    # the check must go RED on a dropper and GREEN on a keeper -- then one app
+    # per process for the same CSS isolation the damage cases need.
+    print("\n-- unknown-key preservation (data-loss-on-open) --")
+    if not _redproof_preservation():
+        print("FAIL  preservation red-proof did not go red AND green -- the "
+              "check is broken, not the apps")
+        bad += 1
+    pres = apps if len(sys.argv) == 2 else sorted(GOOD)
+    for app in pres:
+        if app not in GOOD or app not in BUILD:
+            continue
+        r = subprocess.run([sys.executable, os.path.abspath(__file__), app,
+                            "__preserve__"], capture_output=True, text=True,
+                           timeout=180, env=dict(os.environ))
+        out = (r.stdout or "").strip().splitlines()
+        line = out[-1] if out else "(crash) %s preserve: %s" % (
+            app, (r.stderr or "").strip().splitlines()[-1:])
+        print(line)
+        if not line.startswith(("PASS", "debt", "SKIP")):
+            bad += 1
     # The coverage ratchet runs as part of the aggregate (not a separate flag
     # someone has to remember): a store-bearing app that nobody exercises or
     # accounts for fails the run, and the standing debt prints every time.

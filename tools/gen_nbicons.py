@@ -16,7 +16,8 @@ DEFAULT_OUTPUT = ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/
 # Every Notebook OS glyph is selected from the professionally designed Lucide
 # set.  This table is intentionally the only hand-authored part of the family.
 MAPPING = {
-    "writer": "file-pen-line", "novel": "book-open", "comics": "panels-top-left",
+    # A filmstrip of frames is the subject; shot footage owns clapperboard, stills own image.
+    "writer": "file-pen-line", "novel": "book-open", "comics": "panels-top-left", "animation": "film",
     "academic": "graduation-cap", "journal": "notebook-pen", "screenplay": "scroll-text",
     "tasks": "list-todo", "calendar": "calendar", "workout": "dumbbell",
     "cookbook": "cooking-pot", "mealplanner": "utensils", "ebook": "book",
@@ -30,6 +31,10 @@ MAPPING = {
     "mappin": "map-pin", "globe": "languages", "cartridge": "cassette-tape",
     "illustrator": "pen-tool", "sequencer": "audio-lines", "composer": "music",
     "video": "clapperboard", "media": "image", "music": "disc-3",
+    # music owns disc-3, the grooved record — something already recorded. The
+    # burner gets the plain blank disc, which is the thing you put in the drive
+    # and the distinction a person actually makes between the two.
+    "burner": "disc",
     "packages": "package", "signal": "radio-tower", "play": "play",
     "stopsq": "square", "pause": "pause", "wclose": "x", "wzoom": "maximize-2",
     "wshade": "chevron-up", "rew": "rewind", "ff": "fast-forward",
@@ -64,6 +69,17 @@ MAPPING = {
     "ball": "circle-dot", "tree": "tree-pine", "city": "building-2", "flame": "flame",
     "crown": "crown", "lock": "lock-keyhole", "trophy": "trophy",
     "target": "target", "speech": "message-circle",
+    # The menu bar's notification centre. A bell, not "inbox" (already the
+    # Finder's tray) and not "speech" (a message from a PERSON, which nothing
+    # in this offline OS can be): the sender is always the machine reporting on
+    # work the user started.
+    #
+    # Two glyphs, because the unread mark is REGISTERED rather than painted on
+    # top: bell-dot is the same bell with its shoulder cut back to leave a notch
+    # for the spot, so shell.bell_surface can fill that notch in signage red and
+    # the ink outline lands exactly on the fill's edge. Overlaying a dot on the
+    # plain bell would have crossed its silhouette.
+    "bell": "bell", "belldot": "bell-dot",
 }
 
 _TOKEN = re.compile(r"[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")

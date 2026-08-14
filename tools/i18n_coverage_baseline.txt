@@ -113,7 +113,6 @@ settings.py	Plug in speakers or headphones, or switch on the sound device, then 
 settings.py	Printing is not installed, so a printer cannot be set up here. A document can still be saved as a PDF from its File menu.
 settings.py	Set the date and time here, then press Set Clock. Current time confirms the change.
 settings.py	Sound is going out over HDMI, so the television sets how loud it is — use its own volume control or its remote.
-settings.py	Stopping…
 settings.py	The copy stopped unexpectedly. Files already copied remain on the stick, but this backup is incomplete.
 settings.py	These settings apply to every app. An app that is already open keeps the look it started with until it is closed and opened again.
 settings.py	This sound device has no volume control of its own. Use the volume control on the speakers.

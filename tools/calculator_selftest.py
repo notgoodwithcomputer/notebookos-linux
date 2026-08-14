@@ -23,8 +23,13 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(
-    REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"))
+# $CALCULATOR_MODULE_DIR or the repo. Hardcoding the repo path made every red
+# proof against this suite VACUOUS: the mutated copy was ignored and the suite
+# happily re-measured the pristine file, so a sabotage that should have gone red
+# reported "all checks passed". Measured on 2026-08-08 with a mutation that
+# makes sanitize_state always answer "degrees".
+sys.path.insert(0, os.environ.get("CALCULATOR_MODULE_DIR", os.path.join(
+    REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")))
 os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="calc-selftest-")
 
 import gi                                                     # noqa: E402
@@ -232,13 +237,168 @@ check("...and the display is in the alert style",
 check("...and can still be recalled to fix",
       app2.recall(-1) and app2.expr == "1÷0", app2.expr)
 
-# angle mode survives a relaunch, and only that
+# angle mode survives a relaunch, and only that.
+#
+# These two checks used to call `_load_prefs()`, a second reader of
+# calculator.json that NOTHING IN THE APP CALLED -- __init__ has taken the angle
+# mode from _load_state/sanitize_state since the tape was added. So the suite
+# was asserting that a method the app never runs could read the file, and a
+# relaunch that genuinely lost the setting would not have failed either line.
+# The method is gone; these now open the app the way a person does and read the
+# mode off the instance.
 app3 = C()
 app3._set_deg(False)
-check("radians is remembered", C()._load_prefs() is False)
+check("radians is remembered", C().deg is False)
 app3._set_deg(True)
-check("degrees is remembered", C()._load_prefs() is True)
+check("degrees is remembered", C().deg is True)
 check("the calculator still opens empty", C().expr == "")
+
+# ------------------------------------------------------- the 2nd modifier
+# The mutation sweep survived a swap in `self.second and value in ALT_VALUE`,
+# and the triage confirmed it changes behaviour: with `or`, pressing sin WITHOUT
+# 2nd inserts asin(. A calculator that silently takes the arc- function when the
+# person asked for the plain one is worse than one that errors.
+_K = {k[0]: k for k in calculator.KEYS}
+
+
+def _keys(names):
+    _c = C()
+    _c.expr = ""
+    _c.second = False
+    for _n in names:
+        _c.press(_K[_n])
+    return _c.expr
+
+
+check("2nd then sin gives the inverse", _keys(["2nd", "sin"]) == "asin(",
+      _keys(["2nd", "sin"]))
+check("sin on its own does NOT", _keys(["sin"]) == "sin(", _keys(["sin"]))
+check("2nd pressed twice cancels itself",
+      _keys(["2nd", "2nd", "sin"]) == "sin(", _keys(["2nd", "2nd", "sin"]))
+check("2nd then a key with no inverse just types that key",
+      _keys(["2nd", "7"]) == "7", _keys(["2nd", "7"]))
+
+# ----------------------------------------- the display follows the mode
+# The mutation sweep survived swaps in `_refresh`'s and `_sync_dynamic_keys`'s
+# cache guards -- `if mode != self._mode_txt` and
+# `if self._face_cache.get(lbl) == key`. Those caches exist so typing a digit
+# does not force a keypad relayout, and the failure they can produce is a
+# display that quietly stops following the state: the mode still changes, the
+# LABEL still says DEGREES. I had checked this by hand and recorded it as
+# correct, which is not the same as pinning it.
+_m = C()
+_m._set_deg(True)
+_deg_text = _m.mode_lbl.get_text()
+_m._set_deg(False)
+_rad_text = _m.mode_lbl.get_text()
+check("the mode line says which mode it is in",
+      _deg_text != _rad_text and _deg_text and _rad_text,
+      (_deg_text, _rad_text))
+_m._set_deg(True)
+check("...and goes back when the mode does",
+      _m.mode_lbl.get_text() == _deg_text, _m.mode_lbl.get_text())
+
+_plain = [f.get_text() for _l, _b, f in _m._inv_btns]
+_m.second = True
+_m._sync_dynamic_keys()
+_inv = [f.get_text() for _l, _b, f in _m._inv_btns]
+_m.second = False
+_m._sync_dynamic_keys()
+_back = [f.get_text() for _l, _b, f in _m._inv_btns]
+check("the sin/cos/tan keys show their inverse face while 2nd is on",
+      _plain != _inv and len(_inv) == 3, (_plain, _inv))
+check("...and show it no longer when 2nd goes off", _back == _plain,
+      (_back, _plain))
+
+# ------------------------------------------------- the +/- key
+# The arithmetic sweep survived a swap in `("−(" + self.expr + ")")`, which is
+# string concatenation -- with a minus it raises TypeError. It survived because
+# NOTHING pressed +/- on a non-empty expression. On an empty display the key
+# takes a different branch, which is the one every existing check happened to
+# exercise.
+check("+/- on an empty display starts a negative number",
+      _keys(["±"]) == "−", _keys(["±"]))
+check("+/- wraps what is already typed", _keys(["5", "±"]) == "−(5)",
+      _keys(["5", "±"]))
+check("...including a whole expression",
+      _keys(["1", "+", "2", "±"]) == "−(1+2)", _keys(["1", "+", "2", "±"]))
+
+# ------------------------------------------------------- Copy Result
+# The display holds a translated SENTENCE when a calculation fails ("Cannot
+# divide by zero"), and pasting that into a spreadsheet would be worse than
+# pasting nothing -- it silently replaces whatever useful value the clipboard
+# already held with UI prose. Copy Result declines on an error, which is a
+# deliberate decision and exactly the kind a later tidy-up removes.
+_sent = []
+
+
+class _ClipSpy(object):
+    def set_text(self, text, _len):
+        _sent.append(text)
+
+    def store(self):
+        pass
+
+
+_real_clip = Gtk.Clipboard.get
+Gtk.Clipboard.get = staticmethod(lambda _sel: _ClipSpy())
+try:
+    _c = C()
+    _c.expr = "1+2"
+    _c.error = False
+    _c.press(("=", "eq", None, "eq"))
+    _c._copy_result()
+    check("Copy Result puts the answer on the clipboard",
+          _sent == ["3"], _sent)
+    _n = len(_sent)
+    _c.expr = "1÷0"
+    _c.error = False
+    _c.press(("=", "eq", None, "eq"))
+    check("...a failed calculation shows why, in words",
+          _c.disp_lbl.get_text() == calculator._WHY_ZERO, _c.disp_lbl.get_text())
+    _c._copy_result()
+    check("...and Copy Result declines to paste that sentence anywhere",
+          len(_sent) == _n, _sent[_n:])
+finally:
+    Gtk.Clipboard.get = _real_clip
+
+# ---------------------------------------------------------------- _sci
+# A 375-digit exact answer is not readable on one line: the display ellipsizes
+# it and shows only its LAST digits, which say nothing about how big it is.
+# _sci rounds the mantissa out of the DIGIT STRING, because float() overflows
+# past ~1e308 and cannot help. That is hand-rolled decimal arithmetic, so it is
+# graded against the real thing.
+#
+# Graded on RELATIVE ERROR, not on the exponent. My first version of this
+# compared exponents and reported seven failures on the all-nines cases -- and
+# every one of them was the check being wrong: 21 nines is 10^21 - 1, and
+# rounding that to 12 significant figures carries legitimately into 1e+21. The
+# exponent is SUPPOSED to move there.
+import random as _random                                      # noqa: E402
+from decimal import Decimal as _D, getcontext as _ctx         # noqa: E402
+_ctx().prec = 80
+_random.seed(3)
+_cases = []
+for _n in (21, 22, 23, 30, 50, 100, 375):
+    _cases += ["9" * _n, "1" + "0" * (_n - 1), "9" * (_n - 1) + "5",
+               "1" + "9" * (_n - 1),
+               ("".join(_random.choice("0123456789")
+                        for _ in range(_n)).lstrip("0") or "1")]
+_cases += ["-" + "9" * 40, "-" + "1234567890" * 4, "5" + "0" * 30,
+           "999999999999" + "0" * 20]
+_bad = []
+for _s in _cases:
+    _out = calculator._sci(_s)
+    _got, _want = _D(_out), _D(_s)
+    _mant = abs(_got.scaleb(-_got.adjusted()))
+    if not (1 <= _mant < 10):
+        _bad.append((_s[:14], _out, "mantissa %s" % _mant))
+    elif abs(_got - _want) / abs(_want) > _D("5e-12"):
+        _bad.append((_s[:14], _out, "relative error"))
+    elif len(str(_mant).replace(".", "").rstrip("0")) > 12:
+        _bad.append((_s[:14], _out, "more than 12 significant figures"))
+check("a very long exact answer is shown to 12 significant figures, correctly "
+      "rounded (%d cases)" % len(_cases), not _bad, _bad[:3])
 
 print("\n%d check(s) failed" % len(FAILS) if FAILS else "\nall checks passed")
 sys.exit(len(FAILS))

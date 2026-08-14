@@ -151,12 +151,24 @@ def test_easing(m):
         check("easing %s clamps low" % name, near(fn(-3.0), 0.0))
         check("easing %s clamps high" % name, near(fn(4.5), 1.0))
         prev = -1.0
+        spring = "back" in name          # ease-out-back springs; the cubics do not
+        peak = 0.0
         for i in range(0, 101):
             v = fn(i / 100.0)
-            check("easing %s no overshoot" % name, -1e-12 <= v <= 1.0 + 1e-12,
-                  "t=%.2f -> %r" % (i / 100.0, v))
-            check("easing %s monotonic" % name, v >= prev - 1e-12)
+            peak = max(peak, v)
+            if spring:
+                # a SLIGHT spring may overshoot the target, but only a little,
+                # and it never dips below 0 or runs away (that would be a bounce)
+                check("easing %s bounded spring" % name, -0.02 <= v <= 1.15,
+                      "t=%.2f -> %r" % (i / 100.0, v))
+            else:
+                check("easing %s no overshoot" % name,
+                      -1e-12 <= v <= 1.0 + 1e-12, "t=%.2f -> %r" % (i / 100.0, v))
+                check("easing %s monotonic" % name, v >= prev - 1e-12)
             prev = v
+        if spring:
+            check("easing %s actually springs (lively, not flat)" % name,
+                  peak > 1.0)
     # the curves must be distinguishable, or a token means nothing
     check("ease_out leads linear", m.ease_out(0.25) > m.linear(0.25))
     check("ease_in trails linear", m.ease_in(0.25) < m.linear(0.25))
@@ -164,7 +176,7 @@ def test_easing(m):
           near(m.ease_in_out(0.5), 0.5) and
           near(m.ease_in_out(0.25) + m.ease_in_out(0.75), 1.0, 1e-9))
     check("named tokens are the curves",
-          m.ARRIVE is m.ease_out and m.DEPART is m.ease_in
+          m.ARRIVE is m.ease_out_back and m.DEPART is m.ease_in
           and m.MOVE is m.ease_in_out)
 
 

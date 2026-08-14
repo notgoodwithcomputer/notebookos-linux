@@ -23,6 +23,7 @@ os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="finder-confirm-card-")
 import gi                                                     # noqa: E402
 gi.require_version("Gtk", "3.0")
 import finder                                                 # noqa: E402
+import nbtransitions                                          # noqa: E402
 
 FAILS = []
 
@@ -67,11 +68,17 @@ check("Delete Immediately grows from the selected row",
       "_selected_row_anchor()" in df)
 
 # 4. on_shown fires on BOTH the animated and the instant path (a confirm that
-# never focuses Cancel because motion was off would be a safety hole)
+# never focuses Cancel because motion was off would be a safety hole). The
+# presenter is now the shared nbtransitions.present_card, whose instant-
+# equivalence present_card_selftest gates directly; here we prove confirm routes
+# through it and the shared presenter reveals (firing on_shown) on both paths.
 pres = inspect.getsource(finder.Finder._present_card_from)
-check("on_shown fires wherever the card is revealed",
-      pres.count("on_shown()") >= 1 and "def reveal" in pres
-      and "reveal()" in pres)
+check("confirm's presenter delegates to nbtransitions.present_card",
+      "nbtransitions.present_card(" in pres)
+shared = inspect.getsource(nbtransitions.present_card)
+check("the shared presenter reveals (and fires on_shown) on both paths",
+      "_call(on_shown)" in shared and "def reveal" in shared
+      and "reveal()" in shared)
 
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(len(FAILS))

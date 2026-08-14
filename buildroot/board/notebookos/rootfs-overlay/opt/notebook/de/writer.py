@@ -77,9 +77,29 @@ PAGE_SIZES = {           # inches, portrait
 DEFAULT_MARGINS_IN = (1.0, 1.0, 1.0, 1.0)   # top, right, bottom, left
 
 # ---- fonts that actually ship (see tools; no Newsreader on the guest) --------
+#
+# Grouped by what the face is FOR, because a flat alphabetical list of two
+# dozen names asks a person to already know which of them is a typewriter face
+# and which is a headline face. Order is the grouping — a GtkComboBoxText has
+# no headings — so the run of serifs, then sans, then monospaced, then the two
+# loud ones, then the handwriting, is the whole navigation aid.
+#
+# Every family here is on the disc: tools/font_selftest.py resolves each name
+# through fontconfig and fails if one falls back to a different file, which is
+# what listing a font the image does not carry looks like from the inside.
 FONT_FAMILIES = [
-    "Liberation Serif", "Liberation Sans", "Liberation Mono",
-    "DejaVu Serif", "DejaVu Sans", "DejaVu Sans Mono", "Nimbus Sans",
+    # Serif — for reading at length
+    "Liberation Serif", "DejaVu Serif", "PT Serif", "Crimson Text",
+    "Spectral", "Cardo", "IBM Plex Serif", "Arvo",
+    # Sans
+    "Liberation Sans", "DejaVu Sans", "Nimbus Sans", "Lato", "Fira Sans",
+    # Monospaced — every character the same width
+    "Liberation Mono", "DejaVu Sans Mono", "IBM Plex Mono", "Fira Mono",
+    "Space Mono",
+    # Display — headings and covers, not paragraphs
+    "Bebas Neue", "Abril Fatface",
+    # Handwriting
+    "Patrick Hand", "Indie Flower", "Komika Hand",
 ]
 # Families this app used to offer, mapped to the face that replaced them. A
 # document saved before the swap still carries "Helvetica" in its font: tags;
@@ -88,6 +108,10 @@ FONT_FAMILIES = [
 # this the picker would sit blank on an older document.
 LEGACY_FAMILIES = {"Helvetica": "Nimbus Sans", "Helvetica Neue": "Nimbus Sans"}
 FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64]
+# The font list draws each name in its own face at this size. It matches the
+# toolbar's own 13px (.tbcombo) on purpose: the combo's button takes its height
+# from the tallest row, so a free-sized display face would grow the toolbar.
+FONT_PREVIEW_PT = 13
 DEFAULT_FAMILY = "Liberation Serif"
 DEFAULT_SIZE = 12
 
@@ -714,6 +738,13 @@ class Writer(nbapp.AppWindow):
         self.font_combo.set_active(FONT_FAMILIES.index(DEFAULT_FAMILY))
         self.font_combo.set_tooltip_text(_t("Font"))
         self.font_combo.get_style_context().add_class("tbcombo")
+        # Draw each family's NAME IN ITS OWN FACE. With two dozen entries the
+        # names alone stop being an answer — "Arvo" and "Spectral" tell a person
+        # nothing — and the face is the thing being chosen, so it should be the
+        # thing shown. The size is PINNED to the toolbar's own 13px: left free,
+        # a heavy display face sets the row height and the whole toolbar grows.
+        for _cell in self.font_combo.get_cells():
+            self.font_combo.set_cell_data_func(_cell, self._font_cell_face)
         self.font_combo.connect("changed", self._on_font_combo)
         row.add_item(self.font_combo)
 
@@ -1469,6 +1500,19 @@ class Writer(nbapp.AppWindow):
         if 0 <= i < len(STYLE_ORDER):
             self._set_style(STYLE_ORDER[i])
             self.body.grab_focus()
+
+    @staticmethod
+    def _font_cell_face(_layout, cell, model, it, _data=None):
+        """Render one row of the font list in the face it names.
+
+        Pango parses "Family 13" as a full font description, so the size is
+        fixed here and cannot be pushed around by the family. A name Pango
+        cannot resolve would silently render in the default face — which is
+        exactly the state tools/font_selftest.py exists to make impossible, by
+        checking every name in FONT_FAMILIES resolves to a file that ships.
+        """
+        family = model.get_value(it, 0)
+        cell.set_property("font", "%s %dpx" % (family, FONT_PREVIEW_PT))
 
     def _on_font_combo(self, combo):
         if self._syncing:

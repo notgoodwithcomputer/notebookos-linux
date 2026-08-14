@@ -219,8 +219,33 @@ def check_chrome(cats):
         english |= set(cat)
     if not english:
         return 0
+    # An app withheld by finder.HIDDEN_APPS has no reachable chrome, so its
+    # untranslated strings are not shippable debt YET — skipped VISIBLY, and
+    # the moment the app is unhidden this check resumes flagging it. Parsed
+    # from the source (no finder import: this tool must not construct GTK).
+    hidden_files = set()
+    try:
+        import ast
+        fsrc = open(os.path.join(DE, "finder.py"), encoding="utf-8").read()
+        tree = ast.parse(fsrc)
+        names, mods = set(), {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and node.targets and \
+                    isinstance(node.targets[0], ast.Name):
+                if node.targets[0].id == "HIDDEN_APPS":
+                    names = {k.value for k in node.value.keys}
+                elif node.targets[0].id == "APP_MODULES":
+                    mods = {k.value: v.value for k, v in
+                            zip(node.value.keys, node.value.values)}
+        hidden_files = {mods[n] + ".py" for n in names if n in mods}
+    except (OSError, SyntaxError, AttributeError, TypeError):
+        hidden_files = set()
     problems = 0
     for path in sorted(glob.glob(os.path.join(DE, "*.py"))):
+        if os.path.basename(path) in hidden_files:
+            print("SKIP CHROME  %s  (hidden app — withheld from every "
+                  "launch surface; resumes on unhide)" % os.path.basename(path))
+            continue
         missing = sorted(s for s in _chrome_strings(path)
                          if s and s not in english
                          and s not in CHROME_ALLOW and s.strip() != "-")

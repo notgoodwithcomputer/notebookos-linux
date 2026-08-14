@@ -16,6 +16,8 @@ import tokenize
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY = ROOT / "tools/motion_inventory.json"
 DE = ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"
+THEME = ROOT / ("buildroot/board/notebookos/rootfs-overlay/usr/share/themes/"
+                "Papertone/gtk-3.0/gtk.css")
 
 
 def comments(path):
@@ -29,8 +31,30 @@ def comments(path):
 
 def markers(path):
     prefix = "# nbmotion-inventory:"
+    if path.suffix == ".css":
+        return _css_markers(path)     # some transitions are realised in the theme
     return [(c[len(prefix):].strip(), path) for c in comments(path)
             if c.startswith(prefix)]
+
+
+def _css_markers(path):
+    """CSS block-comment markers: /* nbmotion-inventory: <id> ... */. The theme
+    realises the state-feedback transitions (app.toolbar-state), so a marker in
+    gtk.css is as valid as one in a .py file. The id is the first token after
+    the prefix (ids have no spaces)."""
+    import re
+    try:
+        src = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for block in re.findall(r"/\*(.*?)\*/", src, re.S):
+        i = block.find("nbmotion-inventory:")
+        if i != -1:
+            rest = block[i + len("nbmotion-inventory:"):].strip()
+            if rest:
+                out.append((rest.split()[0], path))
+    return out
 
 
 def symbols(path):
@@ -40,6 +64,50 @@ def symbols(path):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             found.add(node.name)
     return found
+
+
+# Statuses that are a real answer even though no frame trace exists. Both come
+# from tools/transition_pacing_probe.py: `configured-verified` read the duration
+# GTK itself was configured with (a Stack/Revealer transition, or a CSS one) and
+# checked it against the band — a genuine check, deliberately NOT called
+# `measured` so it can never be mistaken for one; `continuous-untraced` is a
+# value that follows a real quantity (the sequencer playhead follows the audio)
+# and so creates no discrete run to time. Anything else is an absence.
+# `exempt` is a DECISION, not a gap: a transition the design owner has ruled must
+# NOT animate (the menu bar is deliberately static; the desktop board appears
+# without staging). Counting those as `unimplemented` overstates the backlog and
+# invites a future pass to "finish" them — which would undo an owner's call. An
+# exempt row must SAY WHY, so nobody can quietly retire work by relabelling it.
+STATUSES = ("implemented", "partial", "unimplemented", "exempt")
+
+PACING_ANSWERED = {"configured-verified", "continuous-untraced"}
+
+
+def pacing_problems(entry):
+    """Why `entry`'s pacing record is not a passing measurement, if it is not.
+
+    A RECORD is not the same as a PASS. The staged plan is that setting
+    `pacing_required` turns null results into failures — but once every entry
+    carries some record, a null-only test passes trivially, and an entry saying
+    "nobody has driven this yet" would count exactly like one that was measured
+    and conformed. That is a gate that cannot fail. So when the flag is on, the
+    record has to SAY something: measured and passing, or one of the named
+    non-traceable answers above, each of which somebody had to decide."""
+    p = entry.get("pacing")
+    if p is None:
+        return ["null pacing result: %s" % entry["id"]]
+    if not isinstance(p, dict):
+        return ["pacing result is not a record: %s" % entry["id"]]
+    status = p.get("status")
+    if status == "measured":
+        if p.get("verdict") != "pass":
+            return ["measured pacing outside its band: %s (%s)"
+                    % (entry["id"], p.get("reason"))]
+        return []
+    if status in PACING_ANSWERED:
+        return []
+    return ["pacing not measured: %s (status %r: %s)"
+            % (entry["id"], status, p.get("reason"))]
 
 
 def main():
@@ -54,8 +122,12 @@ def main():
     failures, warnings = [], []
     checks = 0
     counts = {s: sum(e["status"] == s for e in entries)
-              for s in ("implemented", "partial", "unimplemented")}
-    scan = list(DE.glob("*.py")) + a.extra_file
+              for s in STATUSES}
+    unknown = [e["id"] for e in entries if e["status"] not in STATUSES]
+    if unknown:
+        # A status nobody counts is a row that silently leaves the ledger.
+        failures.append("unknown status: " + ", ".join(unknown))
+    scan = list(DE.glob("*.py")) + [THEME] + a.extra_file
     seen = []
     for path in scan:
         seen.extend(markers(path))
@@ -68,6 +140,13 @@ def main():
             failures.append(f"entry missing implementation binding: {e['id']}")
         if status == "unimplemented" and binding:
             failures.append(f"unimplemented entry has binding (status lie): {e['id']}")
+        if status == "exempt":
+            checks += 1
+            if not (e.get("note") or "").strip():
+                failures.append("exempt entry gives no reason: %s" % e["id"])
+            if e["id"] in marker_ids:
+                failures.append(
+                    "exempt entry has implementation marker: %s" % e["id"])
         if status == "unimplemented" and e["id"] in marker_ids:
             failures.append(f"unimplemented entry has implementation marker (status lie): {e['id']}")
         if binding:
@@ -92,16 +171,19 @@ def main():
             else:
                 failures.append(f"unknown binding kind: {e['id']} ({kind})")
         checks += 1
-        if e.get("pacing") is None and status in ("implemented", "partial"):
-            msg = f"null pacing result: {e['id']}"
-            (failures if data.get("pacing_required") else warnings).append(msg)
+        if status in ("implemented", "partial"):
+            problems = pacing_problems(e)
+            (failures if data.get("pacing_required") else warnings).extend(problems)
 
     for mid, path in seen:
         checks += 1
         if mid not in ids:
             failures.append(f"implementation marker with no inventory entry: {mid} ({path})")
 
-    print("STATUS: implemented={implemented} partial={partial} unimplemented={unimplemented} total={total}".format(total=len(entries), **counts))
+    # Every status printed, so the parts visibly sum to the total. A line that
+    # does not add up is read as a miscount or as rows quietly going missing.
+    print("STATUS: " + " ".join("%s=%d" % (s, counts[s]) for s in STATUSES)
+          + " total=%d" % len(entries))
     print("Entries missing an implementation binding:")
     missing = [e["id"] for e in entries if e["status"] in ("implemented", "partial") and not e.get("binding")]
     print("  " + (", ".join(missing) if missing else "none"))

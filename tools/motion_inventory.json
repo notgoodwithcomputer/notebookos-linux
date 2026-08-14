@@ -1,620 +1,1174 @@
 {
- "schema_version": 1,
- "source": "docs/PAPER-PHYSICS.md Article G",
- "pacing_required": false,
- "entries": [
-  {
-   "id": "system.boot-session",
-   "origin": "\u2014",
-   "motion": "splash progress, always advancing",
-   "tokens": [
-    "linear"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "binding": {
-    "binding_kind": "module-behavior",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/splash.py",
-    "symbol_or_marker": "_tick_bar"
-   },
-   "pacing": null
-  },
-  {
-   "id": "system.splash-desktop",
-   "origin": "splash",
-   "motion": "splash lifts, desktop settles beneath",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "note": "Splash exits after a grace period; no lift/settle transition was found.",
-   "pacing": null
-  },
-  {
-   "id": "system.app-launch",
-   "origin": "its icon",
-   "motion": "icon rectangle grows into the window",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": true,
-   "status": "implemented",
-   "pacing": null,
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
-    "symbol_or_marker": "system.app-launch"
-   },
-   "note": "Complete 2026-08-08: continuity (Finder holds until the map beacon; crashed launches never blank the desktop) + the transform (the clicked icon's rectangle grows into a paper card under PAGE/arrival, drawn over everything, holds while the app maps beneath, retracts to its icon on a dead launch)."
-  },
-  {
-   "id": "system.app-close",
-   "origin": "the window",
-   "motion": "collapses back into the icon",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": true,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "system.app-app",
-   "origin": "outgoing window",
-   "motion": "outgoing departs, incoming arrives from its icon",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "system.desktop-board-appearing",
-   "origin": "\u2014",
-   "motion": "cards settle in, staggered along their columns",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "pacing": null,
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/widgets.py",
-    "symbol_or_marker": "system.desktop-board-appearing"
-   },
-   "note": "Built 2026-08-08: one linear Scalar, per-card clamped remap staggered by column and eased on arrival, 12px paint-translate settle, per-card damage strips; runs on every board arrival (map-event)."
-  },
-  {
-   "id": "system.panel-menu-open",
-   "origin": "its title",
-   "motion": "drops from the title, down its column",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/shell.py",
-    "symbol_or_marker": "system.panel-menu-open"
-   },
-   "pacing": null
-  },
-  {
-   "id": "system.panel-menu-close",
-   "origin": "\u2014",
-   "motion": "retracts to the title",
-   "tokens": [
-    "SURFACE_OUT"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/shell.py",
-    "symbol_or_marker": "system.panel-menu-close"
-   },
-   "pacing": null
-  },
-  {
-   "id": "system.login-first-run-step",
-   "origin": "previous step",
-   "motion": "directional slide along the grid",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "system.sleep-wake",
-   "origin": "\u2014",
-   "motion": "field dims and returns",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "system.shutdown",
-   "origin": "\u2014",
-   "motion": "desktop settles out",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "finder.navigate-forward",
-   "origin": "the opened row",
-   "motion": "contents slide left, along the grid",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "finder.navigate-back",
-   "origin": "\u2014",
-   "motion": "contents slide right",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "finder.open-folder",
-   "origin": "the clicked row",
-   "motion": "row grows into the new listing",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": true,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "finder.list-grid",
-   "origin": "\u2014",
-   "motion": "crossfade in place (different presentations, not a transform)",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "pacing": null,
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
-    "symbol_or_marker": "finder.list-grid"
-   },
-   "note": "Built 2026-08-09: switching list<->grid fades the incoming presentation in (PAGE/arrival) - a crossfade in place, not a transform (Article C); animates only on a deliberate toggle, never on show_all remaps."
-  },
-  {
-   "id": "finder.selection-change",
-   "origin": "previous row",
-   "motion": "the highlight travels between rows",
-   "tokens": [
-    "SELECT"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "finder.sidebar-reveal",
-   "origin": "its edge",
-   "motion": "slides along the column edge",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "finder.search-results",
-   "origin": "the search field",
-   "motion": "results settle in beneath it",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "finder.copy-move-trash",
-   "origin": "the source row",
-   "motion": "the object visibly goes where it went",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "finder.get-info",
-   "origin": "the selected row",
-   "motion": "card grows from the row",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "pacing": null,
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
-    "symbol_or_marker": "finder.get-info"
-   },
-   "note": "Built 2026-08-08: Get Info grows from the selected row via the reusable _present_card_from (GrowCard), reveals content on landing, retracts to the row on close; the presenter is the pattern the finder confirm cards adopt next."
-  },
-  {
-   "id": "app.page-pane-switch",
-   "origin": "previous pane",
-   "motion": "directional, consistent OS-wide",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "module-behavior",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
-    "symbol_or_marker": "switch_page"
-   },
-   "note": "Shared primitive exists; pervasive adoption is not established.",
-   "pacing": null
-  },
-  {
-   "id": "app.overlay-card",
-   "origin": "the control that raised it",
-   "motion": "grows from that control",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "note": "Primitive available: nbtransitions.GrowCard (44a64b9e) - anchor-carrying, B4 origin discipline enforced. Awaiting per-app call-site adoption.",
-   "pacing": null
-  },
-  {
-   "id": "app.confirm",
-   "origin": "the destructive control",
-   "motion": "grows from it",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "note": "Built 2026-08-08 on _present_card_from: the finder destructive confirms grow from the control that raised them (Empty Trash from its toolbar button, Delete from the selected row); safety firmer than the old modal - Cancel focuses on-shown so a stray Enter can't reach the danger button before Cancel exists.",
-   "pacing": null,
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
-    "symbol_or_marker": "app.confirm"
-   }
-  },
-  {
-   "id": "app.about",
-   "origin": "app-name title",
-   "motion": "drops from it",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbapp.py",
-    "symbol_or_marker": "app.about"
-   },
-   "note": "Built 2026-08-08 as the reference GrowCard consumer: the shared About card (all apps) drops from the app-name menu title's bottom edge, reveals its real text on landing, retracts to the title on close.",
-   "pacing": null
-  },
-  {
-   "id": "app.picker",
-   "origin": "the menu item",
-   "motion": "grows from it",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "note": "Primitive available: nbtransitions.GrowCard (44a64b9e) - anchor-carrying, B4 origin discipline enforced. Awaiting per-app call-site adoption.",
-   "pacing": null
-  },
-  {
-   "id": "app.tab-section-change",
-   "origin": "previous tab",
-   "motion": "underline travels; content crossfades",
-   "tokens": [
-    "SELECT",
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "module-behavior",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
-    "symbol_or_marker": "replace"
-   },
-   "note": "Content crossfade exists; travelling underline is not supplied.",
-   "pacing": null
-  },
-  {
-   "id": "app.list-insert",
-   "origin": "insertion point",
-   "motion": "row opens and settles",
-   "tokens": [
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "module-behavior",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
-    "symbol_or_marker": "reveal"
-   },
-   "note": "Inline reveal can carry opening; row-specific adoption is not established.",
-   "pacing": null
-  },
-  {
-   "id": "app.list-remove",
-   "origin": "\u2014",
-   "motion": "row closes; neighbours settle up",
-   "tokens": [
-    "SURFACE_OUT"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "module-behavior",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
-    "symbol_or_marker": "reveal"
-   },
-   "note": "Inline reveal can close allocation; pervasive adoption is not established.",
-   "pacing": null
-  },
-  {
-   "id": "app.list-reorder",
-   "origin": "the row's own position",
-   "motion": "rows travel to their new positions",
-   "tokens": [
-    "SELECT"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "app.inline-edit-begin-end",
-   "origin": "the field",
-   "motion": "field takes and releases its edit state",
-   "tokens": [
-    "FEEDBACK"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "css-section",
-    "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
-    "symbol_or_marker": "90ms   state feedback: hover, press, focus, check, selection"
-   },
-   "note": "Theme supplies short state feedback, not a named field-level behavior.",
-   "pacing": null
-  },
-  {
-   "id": "app.toolbar-state",
-   "origin": "the control",
-   "motion": "colour and border only",
-   "tokens": [
-    "FEEDBACK"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "css-section",
-    "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
-    "symbol_or_marker": "transition-property: background-color, background-image, border-color, color,"
-   },
-   "note": "Theme applies the 90ms allowed-property feedback broadly.",
-   "pacing": null
-  },
-  {
-   "id": "app.any-value-change",
-   "origin": "the value",
-   "motion": "old value settles out, new settles in",
-   "tokens": [
-    "FEEDBACK"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "module-behavior",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
-    "symbol_or_marker": "replace"
-   },
-   "note": "Crossfade replacement can carry values, but pervasive adoption is not established.",
-   "pacing": null
-  },
-  {
-   "id": "app.any-toggle",
-   "origin": "the control",
-   "motion": "state travels, never jumps",
-   "tokens": [
-    "FEEDBACK"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "css-section",
-    "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
-    "symbol_or_marker": "90ms   state feedback: hover, press, focus, check, selection"
-   },
-   "note": "Theme animates check/state feedback; it does not prove travelling geometry everywhere.",
-   "pacing": null
-  },
-  {
-   "id": "app.progress",
-   "origin": "\u2014",
-   "motion": "continuous, never stepped",
-   "tokens": [
-    "linear"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "app.empty-populated",
-   "origin": "the empty state",
-   "motion": "empty departs, content settles",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "partial",
-   "binding": {
-    "binding_kind": "module-behavior",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
-    "symbol_or_marker": "replace"
-   },
-   "note": "Crossfade replace can carry the state change; pervasive adoption is not established.",
-   "pacing": null
-  },
-  {
-   "id": "app.scroll",
-   "origin": "\u2014",
-   "motion": "momentum, bounded rubber-band, no overshoot past the band",
-   "tokens": [],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "app.zoom",
-   "origin": "the zoom origin",
-   "motion": "scales about the pointer or centre",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "content.language",
-   "origin": "Language",
-   "motion": "lesson flow, crown and streak moments",
-   "tokens": [
-    "PAGE",
-    "SURFACE_IN"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "content.illustrator",
-   "origin": "Illustrator",
-   "motion": "tool change, layer add/remove/reorder",
-   "tokens": [
-    "FEEDBACK",
-    "SELECT"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "content.sequencer",
-   "origin": "Sequencer",
-   "motion": "transport state, playhead travel",
-   "tokens": [
-    "FEEDBACK",
-    "linear"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "content.video",
-   "origin": "Video",
-   "motion": "timeline scrub, clip select, trim handles",
-   "tokens": [
-    "linear",
-    "SELECT"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "content.media",
-   "origin": "Media",
-   "motion": "fullscreen enter and exit",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "content.maps",
-   "origin": "Maps",
-   "motion": "pan and zoom",
-   "tokens": [
-    "linear",
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "content.ebook",
-   "origin": "E-book",
-   "motion": "page turn",
-   "tokens": [
-    "PAGE"
-   ],
-   "transform": false,
-   "status": "unimplemented",
-   "pacing": null
-  },
-  {
-   "id": "content.2048",
-   "origin": "2048",
-   "motion": "tile slide and merge",
-   "tokens": [
-    "FEEDBACK"
-   ],
-   "transform": false,
-   "status": "implemented",
-   "note": "Was recorded unimplemented at baseline despite the spec calling it the reference; built 2026-08-08 on Damaged/LayerCache: traced-provenance slide + settle phases on a pass-through overlay, labels as the resting truth beneath.",
-   "pacing": null,
-   "binding": {
-    "binding_kind": "comment-marker",
-    "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/g2048.py",
-    "symbol_or_marker": "content.2048"
-   }
-  }
- ]
+  "schema_version": 1,
+  "source": "docs/PAPER-PHYSICS.md Article G",
+  "pacing_required": false,
+  "entries": [
+    {
+      "id": "system.boot-session",
+      "origin": "—",
+      "motion": "splash progress, always advancing",
+      "tokens": [
+        "linear"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/splash.py",
+        "symbol_or_marker": "_tick_bar"
+      },
+      "pacing": {
+        "status": "not-driven",
+        "reason": "inventory declares linear motion without a duration token/band"
+      }
+    },
+    {
+      "id": "system.splash-desktop",
+      "origin": "splash",
+      "motion": "the splash lifts away on departure (the desktop half is another process)",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/splash.py",
+        "symbol_or_marker": "system.splash-desktop"
+      },
+      "note": "Built 2026-08-10 (Codex under the motion lane, M2-verified). ONLY HALF THE ENTRY IS BUILDABLE HERE and that is stated rather than glossed: G1 says 'splash lifts, desktop settles beneath', but the desktop is ANOTHER PROCESS — splash.py can only lift itself. The splash's exit IS under its own control (session.sh backgrounds it; /tmp/nb-ready or a 30s failsafe calls _finish() -> Gtk.main_quit()), so the departure was animatable: a 32px upward toplevel lift on PAGE with DEPART. THE SAFETY ORDERING IS THE IMPORTANT PART, because this runs during BOOT: the existing 180ms quit deadline is ARMED BEFORE the motion is attempted, and any failure to import or invoke nbmotion quits immediately. So a stalled or broken animation cannot hold the boot behind it — the handover happens on the deadline regardless. _tick_bar (system.boot-session) was left untouched. GATE tools/splash_motion_selftest.py, 9 checks, real GTK widgets, drives _finish(). Red-proved by killing the ARGUMENTS: 2 named FAILs. It also reports Gtk.init_check explicitly, so its own numbers can be trusted or discounted on sight. ⚠ ON-HARDWARE RISK TO WATCH, specific to this one: it animates a TOPLEVEL WINDOW's position, and the splash runs BEFORE the compositor on the software renderer. A moving toplevel is exactly the case that can judder without a compositor. Of everything in this pass, this is the entry I would look at FIRST on a real boot.",
+      "pacing": null
+    },
+    {
+      "id": "system.app-launch",
+      "origin": "—",
+      "motion": "the app fades in calmly on first map",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          200.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.99,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      },
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "system.app-launch"
+      },
+      "note": "Continuity (finder.py, marker at _launch_module): the Finder holds the screen until the app's .mapped beacon, so a launch — even a crashed one — never blanks the desktop. Transform (nbapp.py, marker in _assert_fullscreen's first-map block): a calm widget-opacity FADE-IN of the content overlay over PAGE/EASE_OUT, motion-gated and instant-equivalent. The growing paper card that grew from the icon was RETIRED 2026-08-09 on the design owner's direction (a simple fade, not a growing card); finder's _zoom_* machinery is left inert. Not a 'transform' in the identity sense any more — it is a fade, not one object becoming another."
+    },
+    {
+      "id": "system.app-close",
+      "origin": "the app, whole",
+      "motion": "fades out calmly on close (retraces the launch fade-in)",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          200.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.994,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      },
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbapp.py",
+        "symbol_or_marker": "system.app-close"
+      },
+      "note": "Implemented 2026-08-10 on the design owner's direction ('apps should have an animation on close like when they open'): the departure retraces the arrival (PAPER-PHYSICS B3). system.app-launch is a calm PAGE fade-in of the content overlay on first map, so close is the SAME overlay fading out over PAGE/DEPART, with the real destroy landing in fade_to's on_done. Wired connect_after on delete-event so an app's own close guard (illustrator's discard prompt, the installer's mid-install lock) runs first and can veto before any motion; those guarded flows finish via destroy(), which skips delete-event and stays instant by design. Once-only flag: a second Esc/Ctrl+W closes immediately; any engine failure falls through to the default close, so a window can never become unclosable. Instant-equivalent under policy-still. The old spec line 'collapses back into the icon' described the grow-card era; that card was retired 2026-08-09, so the honest mirror is the fade."
+    },
+    {
+      "id": "system.app-app",
+      "origin": "outgoing window",
+      "motion": "outgoing departs, incoming arrives from its icon",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "unimplemented",
+      "pacing": null
+    },
+    {
+      "id": "system.desktop-board-appearing",
+      "origin": "—",
+      "motion": "the board appears; it does NOT animate (by design)",
+      "tokens": [],
+      "transform": false,
+      "status": "exempt",
+      "pacing": null,
+      "note": "EXEMPT by the article's own words: 'the board appears; it does NOT animate (by design)'. The board is the desktop's resting state, not a surface that arrives, so staging it would animate the machine turning on rather than anything the person did. PRIOR NOTE: Removed 2026-08-09 on the design owner's direction: the desktop board must NOT animate. The old settle-in ran on EVERY board arrival — including every return from a closed app (the board remaps) — so a change the user did not act on here animated, which is the ambient motion the design forbids (no motion the user did not cause). It also read as buggy. The board now appears and updates in place; the Scalar/paint-translate machinery and its widgets.py marker were deleted. Left unimplemented as a DECISION, not a gap (same as app.scroll)."
+    },
+    {
+      "id": "system.panel-menu-open",
+      "origin": "its title",
+      "motion": "drops from the title, down its column",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "exempt",
+      "pacing": null,
+      "note": "EXEMPT on the design owner's direction (2026-08-10, given in another session): the menu bar is to feel STATIC. The drop-from-the-title arrival and its retract were REMOVED from shell.py, not left undone. tools/panel_menu_selftest.py exists to catch a re-add. Do not 'finish' this. PRIOR NOTE: Removed 2026-08-10 on the design owner's direction: the menu bar is motion-exempt across the OS ('toolbar menus shouldn't be animated; the toolbar needs to remain static across the OS; animations shouldn't affect it'). The G1 drop-from-the-title arrival and its retract — both measured in-band at 160ms earlier the same day — were deleted from shell.py (_popup/_menu_close); menus now appear and leave at rest. Same class as the 08-09 board-settle and launch-grow retirements: a DECISION, not a gap. The menu corner-transparency fix that landed in the same pass (menu_shape_rects, rounded bounding shape) is geometry, not motion."
+    },
+    {
+      "id": "system.panel-menu-close",
+      "origin": "—",
+      "motion": "retracts to the title",
+      "tokens": [
+        "SURFACE_OUT"
+      ],
+      "transform": false,
+      "status": "exempt",
+      "pacing": null,
+      "note": "EXEMPT on the design owner's direction (2026-08-10): the menu bar is motion-exempt; the retract was REMOVED from shell.py. See system.panel-menu-open. Do not 'finish' this. PRIOR NOTE: Removed 2026-08-10 on the design owner's direction: the menu bar is motion-exempt across the OS ('toolbar menus shouldn't be animated; the toolbar needs to remain static across the OS; animations shouldn't affect it'). The G1 drop-from-the-title arrival and its retract — both measured in-band at 160ms earlier the same day — were deleted from shell.py (_popup/_menu_close); menus now appear and leave at rest. Same class as the 08-09 board-settle and launch-grow retirements: a DECISION, not a gap. The menu corner-transparency fix that landed in the same pass (menu_shape_rects, rounded bounding shape) is geometry, not motion."
+    },
+    {
+      "id": "system.login-first-run-step",
+      "origin": "previous step",
+      "motion": "directional slide along the grid",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "unimplemented",
+      "pacing": null,
+      "note": "BLOCKED ON A FEATURE THAT DOES NOT EXIST — measured 2026-08-10, do not re-dispatch this. Article G specifies a 'directional slide along the grid' between first-run STEPS, but there are no steps: de/login.py builds ONE static sign-in form directly in a Gtk.Box (no Gtk.Stack, no step order, no forward/back), and the real first-run screen de/firstrun.py — launched by session.sh before login — is likewise a SINGLE scrolling form ending in Finish. The only multi-page stack is the INSTALLER, which is a separate workflow. So this entry cannot be implemented as written without first inventing a stepped first-run flow, which is a PRODUCT decision, not motion work. FOR THE DESIGN OWNER: either retire this entry, or repoint it at the installer's page stack, or decide first-run should become stepped. Left `unimplemented` deliberately rather than `exempt`: exempt means 'must never animate', and this is 'the thing it describes is not there'."
+    },
+    {
+      "id": "system.sleep-wake",
+      "origin": "—",
+      "motion": "field dims and returns",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "unimplemented",
+      "pacing": null
+    },
+    {
+      "id": "system.shutdown",
+      "origin": "—",
+      "motion": "desktop settles out",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "unimplemented",
+      "pacing": null
+    },
+    {
+      "id": "finder.navigate-forward",
+      "origin": "the opened row",
+      "motion": "contents slide left, along the grid",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "finder.navigate-forward"
+      },
+      "note": "Built 2026-08-09 (motion lane, user's chosen target). On a Forward move finder.load() snapshots the content overlay to an ImageSurface (_snapshot_content) BEFORE repopulating, then _start_nav_slide draws it sliding LEFT off the freshly-loaded listing (sign -1) via a pass-through DrawingArea + draw handler (_nav_draw), driven by nbmotion.animate on the PAGE token (MOVE easing). PAINT, not allocation (F2); the store/model are untouched. Instant-EQUIVALENT under policy-still and robust (any capture/draw failure falls back to the instant swap). PARTIAL not implemented: the mechanism parses + constructs (38/0) and is instant-equivalent by nbmotion.Scalar's contract, but the VISUAL slide + its perf on the software rasteriser are not verifiable headless — on-hardware verification is still owed (a mechanism selftest would also strengthen it).",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          200.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.992,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "finder.navigate-back",
+      "origin": "—",
+      "motion": "contents slide right",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "finder.navigate-back"
+      },
+      "note": "Built 2026-08-09 (motion lane) — the Back half of the same mechanism as finder.navigate-forward: finder.load() snapshots the outgoing content before repopulating, then _start_nav_slide draws it sliding RIGHT off the new listing (sign +1) via the pass-through DrawingArea + _nav_draw, on the PAGE token. Same properties: paint not allocation (F2), instant-EQUIVALENT under policy-still, failure falls back to the instant swap. PARTIAL for the same reason — mechanism verified (parses, constructs 38/0, instant-equivalent by contract), on-hardware visual/perf verification still owed.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          200.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.996,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "finder.open-folder",
+      "origin": "the clicked row",
+      "motion": "contents slide left, along the grid (see note: this is a directional slide, NOT the anchored grow Article G first specified)",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "finder.open-folder"
+      },
+      "note": "Built 2026-08-10 (motion lane). Opening a folder was the last HARD CUT in Finder navigation: Back and Forward already slid, so going IN cut and coming OUT slid. _open_path arms a one-shot self._nav_enter and load() slides the outgoing listing LEFT (sign -1), reusing the SAME tested mechanism as finder.navigate-* (snapshot + pass-through DrawingArea + _start_nav_slide), so Back is now its exact inverse. DELIBERATE DEVIATION FROM ARTICLE G, pending design-owner confirmation: G2 specified 'row grows into the new listing' (a transform). Built as a directional slide instead, for three reasons — (1) the design owner already RETIRED the same anchored-grow effect for system.app-launch on 2026-08-09 in favour of a calm fade, so growing an anchor into a full VIEW is a shape this OS has now rejected once; (2) a grow of a full listing either scales a text bitmap (visibly cheap) or re-lays-out per frame (§F2), while the slide is one snapshot and an offset paint (§F1); (3) G2's OWN 'Navigate forward' row gives its origin as 'the opened row', so a forward slide on open is within the article's intent. Anchored growth stays where it belongs: CARDS (get-info, confirm, about, overlay-card). THE TRAP IT AVOIDS: restores_place() reads _nav_dir and counts FORWARD as a RETURN, so stamping the direction there would have slid correctly AND silently restored a stale selection/scroll into a freshly-opened folder. Direction of travel and 'is this a return?' now use separate signals. Gated by tools/finder_open_folder_selftest.py (18 checks, behavioural: it drives a real store row through _open_path and reads the slide the Finder actually scheduled; red-proved twice against scratch copies via FINDER_MODULE_DIR). PARTIAL for the same reason as navigate-*: on-hardware visual/perf verification still owed.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          200.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.996,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "finder.list-grid",
+      "origin": "—",
+      "motion": "crossfade in place (different presentations, not a transform)",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          200.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.997,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      },
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "finder.list-grid"
+      },
+      "note": "Built 2026-08-09: switching list<->grid fades the incoming presentation in (PAGE/arrival) - a crossfade in place, not a transform (Article C); animates only on a deliberate toggle, never on show_all remaps."
+    },
+    {
+      "id": "finder.selection-change",
+      "origin": "previous row",
+      "motion": "the selected row eases via the theme; it does NOT travel (see note)",
+      "tokens": [
+        "SELECT"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "css-section",
+        "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
+        "symbol_or_marker": "treeview.view,"
+      },
+      "note": "Measured 2026-08-10 (motion lane), NOT built — and the distinction matters. WHAT EXISTS: `treeview.view` is inside the theme's 90ms feedback block, so a row's background/colour is DECLARED to ease with the slight spring rather than cut. Finder selection is therefore not a hard cut today. WHAT DOES NOT EXIST: Article G2 asks for the highlight to TRAVEL between rows on SELECT (120ms), and nothing travels — a fade in place is a different motion. Building travel means custom-drawing a moving highlight over a Gtk.TreeView whose rows are painted by CELL RENDERERS, not by styled child widgets, and keeping it correct across scroll, sort, filter and the wide-search results. That is a real piece of work with real ways to look wrong, and it was NOT attempted on the strength of a guess. ⚠ UNVERIFIED, DO NOT READ THE CSS AS PROOF: GTK3 renders TreeView rows through gtk_render_background from the style context, and whether a declared CSS transition on that node actually ANIMATES (rather than being declared and inert) cannot be settled headless — it needs the on-hardware look every partial entry in this pass is waiting for. The theme DECLARING a transition is exactly the 'declared vs actually renders' trap this project has been bitten by before (the button-label rule that never reached its text). Recorded as partial because something real is there, with the gap named.",
+      "pacing": {
+        "status": "not-driven",
+        "reason": "no transition-specific driver has been implemented yet"
+      }
+    },
+    {
+      "id": "finder.sidebar-reveal",
+      "origin": "its edge",
+      "motion": "a newly mounted volume slides open down the column edge",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "finder.sidebar-reveal"
+      },
+      "note": "Built 2026-08-10 (motion lane). WHAT THIS ENTRY ACTUALLY DESCRIBES, checked against the code before building: the Finder sidebar has NO show/hide toggle — it is packed unconditionally in the body and there is no menu item or shortcut to collapse it — so 'sidebar reveal' cannot mean a whole-column disclosure. The real, frequent state change on that column is a VOLUME ARRIVING: _poll_devices watches the mount set on a timer and, on any change, called _fill_sidebar, which removes every child and repacks from scratch. Plugging in a USB stick therefore flashed the ENTIRE sidebar to show one new row. Now the arriving mount points are diffed in _poll_devices and only those rows are packed inside a Gtk.Revealer, opened via nbtransitions.reveal after show_all (SLIDE_DOWN, SURFACE_IN) — which is exactly G2's 'slides along the column edge', applied to the state change that exists. WHY ONLY THE NEW ROW: the whole column is rebuilt on ANY mount change, so revealing every row would restage rows nobody touched — an unplug, or a second stick, would animate the lot. That is a worse flash than the one being removed, so 'only the arriving row opens' is pinned behaviourally. FUNCTION IS NEVER GATED ON MOTION: a Revealer that cannot be built degrades to a plain pack, and a reveal that raises forces set_reveal_child(True) — a drive that is plugged in must appear whether or not it animates. Gated by tools/finder_sidebar_reveal_selftest.py (17 checks, behavioural: it stubs _devices() and drives the real poll). Red-proved TWICE against scratch copies via FINDER_MODULE_DIR, and the two proofs fail DIFFERENTLY — dropping the arriving diff leaves the volume un-opened (4 named fails), wrapping every row restages the column (4 different named fails). PARTIAL: on-hardware verification with a real USB stick still owed, and this host has none.",
+      "pacing": {
+        "status": "not-driven",
+        "reason": "no transition-specific driver has been implemented yet"
+      }
+    },
+    {
+      "id": "finder.search-results",
+      "origin": "the search field",
+      "motion": "results settle in beneath it",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "surface-in",
+        "token_ms": 160,
+        "trace_run_token_ms": [
+          160.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 10,
+        "longest_gap_ms": 16.0,
+        "total_duration_ms": 159.997,
+        "band_ms": [
+          140,
+          180
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      },
+      "note": "Built 2026-08-08: the whole-Home (wide) search results settle IN (SURFACE_IN) beneath the in-folder matches when the async scan lands; a fade on the active view opacity, instant-equivalent under policy-still. Only fires when the scan added matches.",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "finder.search-results"
+      }
+    },
+    {
+      "id": "finder.empty-populated",
+      "origin": "the empty view",
+      "motion": "empty message settles in / departs as the view empties and populates",
+      "tokens": [
+        "SURFACE_IN",
+        "SURFACE_OUT"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "note": "Built 2026-08-08: the empty-folder / no-results message fades IN when a view empties and OUT when it populates (a fade on the _empty_label opacity, the list<->grid / search-results primitive), only on the empty<->populated BOUNDARY so a search narrowing to nothing just rewrites the text. Finder’s adoption of the generic app.empty-populated.",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "finder.empty-populated"
+      },
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "surface-in",
+        "token_ms": 160,
+        "trace_run_token_ms": [
+          160.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 10,
+        "longest_gap_ms": 16.0,
+        "total_duration_ms": 159.997,
+        "band_ms": [
+          140,
+          180
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "finder.copy-move-trash",
+      "origin": "the source row",
+      "motion": "the object visibly goes where it went",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "unimplemented",
+      "pacing": null
+    },
+    {
+      "id": "finder.get-info",
+      "origin": "the selected row",
+      "motion": "card grows from the row",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "surface-in",
+        "token_ms": 160,
+        "trace_run_token_ms": [
+          160.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 10,
+        "longest_gap_ms": 16.0,
+        "total_duration_ms": 159.997,
+        "band_ms": [
+          140,
+          180
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      },
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "finder.get-info"
+      },
+      "note": "Built 2026-08-08: Get Info grows from the selected row via the reusable _present_card_from (GrowCard), reveals content on landing, retracts to the row on close; the presenter is the pattern the finder confirm cards adopt next."
+    },
+    {
+      "id": "app.page-pane-switch",
+      "origin": "previous pane",
+      "motion": "directional, consistent OS-wide",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+        "symbol_or_marker": "app.page-pane-switch"
+      },
+      "note": "Built 2026-08-08: the directional Stack pane switch is nbtransitions.PageSwitcher (direction inferred from page order), adopted by 7 apps (academics/cookbook/language/packages/sequencer/settings/video). tools/page_switch_consistency_check.py ratchets the OS-wide consistency: 4 apps still hand-roll a set_visible_child switch (calculator/installer/gbaworkspace/gbasdk) and are named debt; a new hand-roller fails.",
+      "pacing": {
+        "status": "configured-verified",
+        "mode": "shared-helper setter capture",
+        "token": "page",
+        "configured_duration_ms": 200,
+        "band_ms": [
+          180,
+          220
+        ],
+        "verdict": "pass",
+        "reason": "helper handed its owner an in-band duration; does not prove GTK retained it or rendered frames/cadence/time"
+      }
+    },
+    {
+      "id": "app.overlay-card",
+      "origin": "the control that raised it",
+      "motion": "grows from that control",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+        "symbol_or_marker": "present_card"
+      },
+      "note": "Advanced unimplemented->partial 2026-08-08 (motion lane, verified): nbtransitions.present_card builds scrim + GrowCard grow-from-anchor + reveal-on-landing + retract-on-close, instant-EQUIVALENT under policy-still, and its GrowCard core is gated by transitions_selftest. Real call-site adoptions now exist: nbapp._about (OS-wide, so every app's About card grows from its menu title), finder Get Info and finder confirm (via _present_card_from). Still PARTIAL, not implemented, because the ~41 hand-rolled per-app confirms do NOT yet route through it — pervasive adoption is the S5 confirm-unification work. GrowCard.grow raises without an anchor, so no adopter can forget its origin (Article B).",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "surface-in",
+        "token_ms": 160,
+        "trace_run_token_ms": [
+          160.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 10,
+        "longest_gap_ms": 16.0,
+        "total_duration_ms": 159.996,
+        "band_ms": [
+          140,
+          180
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "app.confirm",
+      "origin": "the destructive control",
+      "motion": "grows from it",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "note": "Built 2026-08-08 on _present_card_from: the finder destructive confirms grow from the control that raised them (Empty Trash from its toolbar button, Delete from the selected row); safety firmer than the old modal - Cancel focuses on-shown so a stray Enter can't reach the danger button before Cancel exists.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "surface-in",
+        "token_ms": 160,
+        "trace_run_token_ms": [
+          160.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 10,
+        "longest_gap_ms": 16.0,
+        "total_duration_ms": 159.997,
+        "band_ms": [
+          140,
+          180
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      },
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/finder.py",
+        "symbol_or_marker": "app.confirm"
+      }
+    },
+    {
+      "id": "app.about",
+      "origin": "app-name title",
+      "motion": "drops from it",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbapp.py",
+        "symbol_or_marker": "app.about"
+      },
+      "note": "Built 2026-08-08 as the reference GrowCard consumer: the shared About card (all apps) drops from the app-name menu title's bottom edge, reveals its real text on landing, retracts to the title on close.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "surface-in",
+        "token_ms": 160,
+        "trace_run_token_ms": [
+          160.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 10,
+        "longest_gap_ms": 16.0,
+        "total_duration_ms": 159.996,
+        "band_ms": [
+          140,
+          180
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "app.picker",
+      "origin": "the menu item",
+      "motion": "the picker body settles in on arrival (NOT the specified grow — see note)",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbpicker.py",
+        "symbol_or_marker": "app.picker"
+      },
+      "note": "Built 2026-08-10 (Codex under the motion lane, M2-verified). DELIBERATE DEVIATION FROM ARTICLE G, needs the design owner. G3 says the picker 'grows from' the menu item that raised it. IT CANNOT, and the reason is structural, not effort: nbpicker is a modal Gtk.Dialog TOPLEVEL that builds its OWN overlay and blocks in dlg.run(), while present_card/GrowCard need the CALLING app's overlay plus an anchor rectangle — and no anchor ever reaches the picker, because open_file()/save_file() are handed only the parent window. Growing from the menu item would mean changing the public picker API, every caller, and the synchronous modal lifecycle. IT ALSO REFUSED THE EASY WAY OUT, which is the part worth keeping: present_card allows an explicit anchor=None centre-grow, and it declined to use it because Article B says this surface's origin IS the menu item, so anchor=None would be a LIE about where it came from. Instead the dialog's own body settles in 12px on SURFACE_IN with ARRIVE. FOR THE DESIGN OWNER: accept the settle as the picker's motion, or decide the picker should stop being a toplevel dialog (a real rewrite that would make it the same object as every other card in the OS), or retire the 'grows from it' wording. GATE tools/nbpicker_motion_selftest.py, 8 checks. Red-proved by killing the ARGUMENTS (duration=0, easing=None): 2 named FAILs, while 'failed animation still yields usable picker content' stays GREEN under that sabotage — motion is not gating the file dialog. Both pre-existing picker suites pass. PARTIAL: on-hardware look still owed.",
+      "pacing": {
+        "status": "not-driven",
+        "reason": "no transition-specific driver has been implemented yet"
+      }
+    },
+    {
+      "id": "app.tab-section-change",
+      "origin": "previous tab",
+      "motion": "underline travels; content crossfades",
+      "tokens": [
+        "SELECT",
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+        "symbol_or_marker": "replace"
+      },
+      "note": "Content crossfade exists; travelling underline is not supplied.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          100.0,
+          100.0
+        ],
+        "trace_runs": 2,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.994,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "app.list-insert",
+      "origin": "insertion point",
+      "motion": "row opens and settles",
+      "tokens": [
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+        "symbol_or_marker": "reveal"
+      },
+      "note": "Inline reveal can carry opening; row-specific adoption is not established.",
+      "pacing": {
+        "status": "configured-verified",
+        "mode": "shared-helper setter capture",
+        "token": "surface-in",
+        "configured_duration_ms": 160,
+        "band_ms": [
+          140,
+          180
+        ],
+        "verdict": "pass",
+        "reason": "helper handed its owner an in-band duration; does not prove GTK retained it or rendered frames/cadence/time"
+      }
+    },
+    {
+      "id": "app.list-remove",
+      "origin": "—",
+      "motion": "row closes; neighbours settle up",
+      "tokens": [
+        "SURFACE_OUT"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+        "symbol_or_marker": "reveal"
+      },
+      "note": "Inline reveal can close allocation; pervasive adoption is not established. ADOPTION TARGET flagged 2026-08-08 by the bug-fix session: commit 8ddfd945 deleted the confirmation CARDS for delete/clear/new (correct per 'destruction gets no friction' — undo is the recourse), so those mutations now happen INSTANTLY. Under 'animate every state change' the confirm removal stands but the RESULT must still be shown: the deleted row should settle out (this entry) rather than vanish, quick and interruptible so undo settles it back in. Motion-lane work, not a defect in the delete logic.",
+      "pacing": {
+        "status": "configured-verified",
+        "mode": "shared-helper setter capture",
+        "token": "surface-out",
+        "configured_duration_ms": 160,
+        "band_ms": [
+          140,
+          180
+        ],
+        "verdict": "pass",
+        "reason": "helper handed its owner an in-band duration; does not prove GTK retained it or rendered frames/cadence/time"
+      }
+    },
+    {
+      "id": "app.list-reorder",
+      "origin": "the row's own position",
+      "motion": "rows travel to their new positions",
+      "tokens": [
+        "SELECT"
+      ],
+      "transform": false,
+      "status": "unimplemented",
+      "note": "Finding 2026-08-08 (motion lane): there is NO clean generic nbtransitions primitive for this, and building one was the wrong plan. Animating rows to new positions means per-frame position change, which re-layouts a Gtk.Box every frame (PAPER-PHYSICS Article F forbids it). The sanctioned way is the cairo pass-through overlay (nbmotion.Damaged + LayerCache) g2048's tile-slide uses — but that only works where the app DRAWS its rows on a DrawingArea (g2048, illustrator canvas, maps, sequencer lanes). A list of real GTK widgets (Gtk.Box/ListBox rows) would need fragile per-widget snapshot-to-surface, out of scope. So reorder is PER-APP for cairo-drawn surfaces (use nbmotion.Damaged directly), not a shared primitive. The shared toolkit (reveal/replace/highlight/PageSwitcher/GrowCard/present_card/spring/Damaged+LayerCache) is complete for what is cleanly shareable.",
+      "pacing": null
+    },
+    {
+      "id": "app.inline-edit-begin-end",
+      "origin": "the field",
+      "motion": "field takes and releases its edit state",
+      "tokens": [
+        "FEEDBACK"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "css-section",
+        "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
+        "symbol_or_marker": "90ms   state feedback: hover, press, focus, check, selection"
+      },
+      "note": "Theme supplies short state feedback, not a named field-level behavior.",
+      "pacing": {
+        "status": "configured-verified",
+        "mode": "theme source declaration parse",
+        "token": "feedback",
+        "configured_duration_ms": 90,
+        "band_ms": [
+          70,
+          100
+        ],
+        "verdict": "pass",
+        "reason": "declared CSS duration in band; does not prove theme loading, rendered frames, cadence, or elapsed time"
+      }
+    },
+    {
+      "id": "app.toolbar-state",
+      "origin": "the control",
+      "motion": "colour, border and shadow ease with the slight spring",
+      "tokens": [
+        "FEEDBACK"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
+        "symbol_or_marker": "app.toolbar-state"
+      },
+      "note": "Built 2026-08-08: realised OS-wide by Papertone gtk.css — a 90ms state-feedback transition eases background/border/color/box-shadow/opacity between states on the slight-spring timing-function (cubic-bezier(0.34,1.3,0.64,1)). Per PAPER-PHYSICS Amendment 3 the old colour-and-border-only ban is gone; layout may animate too (the bar is render cost, not the property). tools/theme_transition_check.py checks the theme animates its state changes and carries this marker; nbapp gtk-enable-animations gates it.",
+      "pacing": {
+        "status": "configured-verified",
+        "mode": "theme source declaration parse",
+        "token": "feedback",
+        "configured_duration_ms": 90,
+        "band_ms": [
+          70,
+          100
+        ],
+        "verdict": "pass",
+        "reason": "declared CSS duration in band; does not prove theme loading, rendered frames, cadence, or elapsed time"
+      }
+    },
+    {
+      "id": "app.any-value-change",
+      "origin": "the value",
+      "motion": "old value settles out, new settles in",
+      "tokens": [
+        "FEEDBACK"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+        "symbol_or_marker": "replace"
+      },
+      "note": "Crossfade replacement can carry values, but pervasive adoption is not established.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "feedback",
+        "token_ms": 90,
+        "trace_run_token_ms": [
+          45.0,
+          45.0
+        ],
+        "trace_runs": 2,
+        "frame_count": 6,
+        "longest_gap_ms": 15.0,
+        "total_duration_ms": 89.991,
+        "band_ms": [
+          70,
+          100
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "app.any-toggle",
+      "origin": "the control",
+      "motion": "state travels, never jumps",
+      "tokens": [
+        "FEEDBACK"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/usr/share/themes/Papertone/gtk-3.0/gtk.css",
+        "symbol_or_marker": "app.any-toggle"
+      },
+      "note": "Built 2026-08-08: realised OS-wide — a GtkSwitch knob TRAVELS along its track via GTK native slider animation (gated by nbmotion gtk-enable-animations), and its checked colour EASES over the Papertone 90ms slight-spring feedback transition. Per PAPER-PHYSICS Amendment 3 the 0ms instant-press block was removed, so check/radio/press now animate too rather than snapping. tools/theme_transition_check.py enforces the switch is eased and never forced instant.",
+      "pacing": {
+        "status": "configured-verified",
+        "mode": "theme source declaration parse",
+        "token": "feedback",
+        "configured_duration_ms": 90,
+        "band_ms": [
+          70,
+          100
+        ],
+        "verdict": "pass",
+        "reason": "declared CSS duration in band; does not prove theme loading, rendered frames, cadence, or elapsed time"
+      }
+    },
+    {
+      "id": "app.progress",
+      "origin": "—",
+      "motion": "continuous, never stepped",
+      "tokens": [
+        "linear"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+        "symbol_or_marker": "smooth_fraction"
+      },
+      "note": "Primitive built + tested 2026-08-08 (motion lane): nbtransitions.smooth_fraction glides a progress bar between the fractions the work reports instead of stepping to each. LINEAR (the fraction is a physical quantity, an ease would lie about the rate), retargets from the on-screen fill (never restarts from 0), lands EXACTLY on the target, instant-EQUIVALENT under policy-still, one nbmotion.Scalar reused per bar, destroy-safe. 14 checks in transitions_selftest test_smooth_fraction; red-proof at release/1.0/redproofs/smooth-fraction-2026-08-08.txt (LINEAR->EASE_OUT goes red). PARTIAL, not implemented: no app routes its nbjobs on_progress fraction through it YET — per-app adoption is `bar.set_fraction(x)` -> `nbtransitions.smooth_fraction(bar, x)` at each progress bar, which the app-day / long-op sessions own.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "feedback",
+        "token_ms": 90,
+        "trace_run_token_ms": [
+          90.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 6,
+        "longest_gap_ms": 15.0,
+        "total_duration_ms": 89.996,
+        "band_ms": [
+          70,
+          100
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "app.empty-populated",
+      "origin": "the empty state",
+      "motion": "empty departs, content settles",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/nbtransitions.py",
+        "symbol_or_marker": "replace"
+      },
+      "note": "Crossfade replace can carry the state change; pervasive adoption is not established. finder.empty-populated is the reference adoption (2026-08-08); pervasive app-lane adoption still pending.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          100.0,
+          100.0
+        ],
+        "trace_runs": 2,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.993,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "app.scroll",
+      "origin": "—",
+      "motion": "momentum, bounded rubber-band, no overshoot past the band",
+      "tokens": [],
+      "transform": false,
+      "status": "unimplemented",
+      "note": "Evaluated 2026-08-08 (motion lane) and deliberately NOT built — this entry is a glass idiom that does not fit the paper material, and the evidence is against it. (1) Momentum/coast and rubber-band are buoyant, touch-surface motion; paper has weight and damping (PAPER-PHYSICS §D). It also carries no duration token, unlike every real transition here. (2) There is NO shared ScrolledWindow — 37 app modules each build their own, so there is no one place to add it; adoption would be a 37-app per-app change. (3) Apps that scroll a CANVAS actively DISABLE kinetic scrolling because it fights their interaction: illustrator.py:665 and sequencer.py:4293 both call set_kinetic_scrolling(False) (illustrator's comment: a GtkScrolledWindow installs a capture-phase pan/kinetic that captured its canvas drags). An OS-wide smooth/momentum scroll would REGRESS exactly those apps. The correct behavior is GTK's native scroll; the honest 'no overshoot' is simply not adding a bounce. Left unimplemented as a decision, not a gap.",
+      "pacing": null
+    },
+    {
+      "id": "app.zoom",
+      "origin": "the zoom origin",
+      "motion": "scales about the pointer or centre",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/sequencer.py",
+        "symbol_or_marker": "app.zoom"
+      },
+      "note": "Built 2026-08-08 by the sequencer session; recorded here by the motion lane after a clean read. Sequencer._animate_view drives every zoom/scroll through nbmotion.animate on the PAGE token with easing=nbmotion.ARRIVE (the slight spring). Zoom interpolates in LOG space and the anchor is re-pinned every frame, so it scales ABOUT THE POINTER rather than lurching; on_done lands EXACTLY on the target so the spring overshoot cannot leave ZOOM_FIT unreachable. While view_moving() the eight lanes blit their cached raster scaled and re-render once on arrival (Article F1). Verified against the real nbmotion.ARRIVE call at sequencer.py:3609, not just the marker comment.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "page",
+        "token_ms": 200,
+        "trace_run_token_ms": [
+          200.0
+        ],
+        "trace_runs": 1,
+        "frame_count": 12,
+        "longest_gap_ms": 16.667,
+        "total_duration_ms": 199.993,
+        "band_ms": [
+          180,
+          220
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "total in band; non-vacuous"
+      }
+    },
+    {
+      "id": "content.language",
+      "origin": "Language",
+      "motion": "lesson flow, crown and streak moments",
+      "tokens": [
+        "PAGE",
+        "SURFACE_IN"
+      ],
+      "transform": false,
+      "status": "unimplemented",
+      "pacing": null
+    },
+    {
+      "id": "content.illustrator",
+      "origin": "Illustrator",
+      "motion": "a layer row opens on add and closes on remove; neighbours settle",
+      "tokens": [
+        "FEEDBACK",
+        "SELECT"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/illustrator.py",
+        "symbol_or_marker": "content.illustrator"
+      },
+      "note": "Built 2026-08-10 (Codex under the motion lane, M2-verified). A layer ADDED opens downward on SURFACE_IN; a layer REMOVED closes upward on SURFACE_UP/SURFACE_OUT so the departure retraces the arrival (B3), and only the row that changed animates — rows already on screen are packed plainly. Layers carry real identity, so the diff-only rule applied cleanly here without any data-model work, unlike the list surfaces blocked behind positional identity. THE CANVAS IS DELIBERATELY UNTOUCHED: a stroke stays 1:1 with the hand and nothing on the drawing hot path animates. GATE tools/illustrator_motion_selftest.py, 15 checks, only ONE text assertion — behavioural, in the shape the maps suite set. Red-proved the way that matters, by killing the ARGUMENTS and leaving the call in place (direction=NONE, duration=0): it fails BY NAME with the house idiom, 'added row opens downward with SURFACE_IN: not reached: add arguments absent or dead'. That is the exact sabotage the media gate missed, and this one catches it. All 5 illustrator suites pass. PARTIAL: on-hardware look still owed, like every other entry in this pass.",
+      "pacing": {
+        "status": "not-driven",
+        "reason": "no transition-specific driver has been implemented yet"
+      }
+    },
+    {
+      "id": "content.sequencer",
+      "origin": "Sequencer",
+      "motion": "transport state, playhead travel",
+      "tokens": [
+        "FEEDBACK",
+        "linear"
+      ],
+      "transform": false,
+      "status": "implemented",
+      "binding": {
+        "binding_kind": "module-behavior",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/sequencer.py",
+        "symbol_or_marker": "_runner"
+      },
+      "note": "Both tokens met by existing mechanisms; verified by the motion lane 2026-08-08 (no new app code needed). FEEDBACK: the transport lit-state (play/stop/rec/LOOP/METRO/MONITOR) is a CSS class swap on .tbtn.on / .metrobtn.on which change background + border-color — both in Papertone's 90ms feedback transition-property list — so they ease on the theme's slight-spring feedback for free (GtkButtons, no app rule overrides the transition). linear: Sequencer._runner (the 100ms transport tick) sets self.pos from engine.position() (the audio clock) or a free-running monotonic clock, redrawn with NO easing. Per PAPER-PHYSICS §D2 a playhead MUST stay linear — a spring there would be a lie about where the sound actually is — so 'linear' is realised correctly by construction. Bound to _runner as the travel driver; the transport-state half rides the theme.",
+      "pacing": {
+        "status": "continuous-untraced",
+        "reason": "linear playhead follows the audio/timer continuously; it creates no nbmotion run"
+      }
+    },
+    {
+      "id": "content.video",
+      "origin": "Video",
+      "motion": "selecting a clip acknowledges on the selection token; scrub stays 1:1",
+      "tokens": [
+        "linear",
+        "SELECT"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/video.py",
+        "symbol_or_marker": "content.video"
+      },
+      "note": "Built 2026-08-10 (Codex under the motion lane, M2-verified). Selecting a clip acknowledges on SELECT with EASE_OUT (opacity, so EASE_OUT is right — a spring has nowhere to overshoot to), touching ONLY the newly selected clip's story cell and its lane cells. THREE PATHS DELIBERATELY LEFT INSTANT and this is the point: the SCRUB stays 1:1 with the hand (interpolating a drag reads as LAG, the opposite of the goal), the playhead follows the media clock, and timer-driven preview/render paths are not user-caused. IT REPORTED THE BLOCKER INSTEAD OF ANIMATING THROUGH IT, which is the result I most wanted: its own docstring records that insert/delete paths do NOT animate 'because clips have no persistent identity'. A reveal keyed on list position animates the WRONG card after an insert — visibly wrong, worse than the cut it replaces. Same data-model blocker as accounting/contacts/academics; clip identity is app-lane work. GATE tools/video_motion_selftest.py, 10 checks, one text assertion. Red-proved by killing the ARGUMENTS (duration=0, easing=None): 2 named FAILs. I REWROTE ONE CHECK: it asserted an opacity contract on cells that selection can REBUILD, so it failed while the app was correct — a false red. It now asks WHICH WIDGETS reached the primitive (touched <= selected set, disjoint from the neighbour's), which is the 'only what changed animates' property measured directly and cannot be defeated by widget churn. PARTIAL: on-hardware look still owed.",
+      "pacing": {
+        "status": "not-driven",
+        "reason": "no transition-specific driver has been implemented yet"
+      }
+    },
+    {
+      "id": "content.media",
+      "origin": "Media",
+      "motion": "fullscreen enter and exit; surfaces cross-fade; a new thumbnail opens along the strip",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/media.py",
+        "symbol_or_marker": "content.media"
+      },
+      "note": "Built 2026-08-10 (Codex under the motion lane, M2-verified). Fullscreen enter/exit fades the chrome out on SURFACE_OUT/DEPART and back on SURFACE_IN, the surface swap (empty <-> image <-> video) cross-fades on PAGE with DEPART then ARRIVE, and the filmstrip reveals only thumbnails NEW since the last build (diffed on path) sliding in along the strip's own axis, SLIDE_RIGHT/SURFACE_IN. IT RESPECTS THE USER-CAUSED RULE EXPLICITLY, which is the part worth keeping: the TIMER slideshow calls _rebuild_strip(False) so an automatic advance animates NOTHING. Motion never gates function -- a Revealer that will not build packs the cell plainly and a failed reveal forces it visible. GATE tools/media_motion_selftest.py, 14 checks. I ADDED THE LAST 3 AFTER CATCHING IT VACUOUS: the strip half was SOURCE-TEXT assertions, so neutering the reveal to direction=NONE/duration=0 -- which disables the motion completely -- left every assertion still matching and the suite passed 11/11. It now instruments nbtransitions.reveal and measures what the strip is HANDED; the same sabotage gives 2 named FAILs, clean control 14/14. FIXTURE TRAP recorded in the suite: the cell must be a REAL Gtk widget, because Gtk.Revealer.add() rejects a stub and the app's own defensive except-and-pass then routes the fixture down the no-animation fallback, measuring nothing. PARTIAL: on-hardware look still owed.",
+      "pacing": {
+        "status": "not-driven",
+        "reason": "no transition-specific driver has been implemented yet"
+      }
+    },
+    {
+      "id": "content.maps",
+      "origin": "Maps",
+      "motion": "pan and zoom ease the viewport to its new centre and scale",
+      "tokens": [
+        "linear",
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/maps.py",
+        "symbol_or_marker": "content.maps"
+      },
+      "note": "Built 2026-08-10 (Codex under the motion lane, M2-verified). Maps is NOT a widget container — it draws its own cairo vector map — so the motion tweens the RENDERER'S VIEWPORT (cx/cy/scale) via nbmotion.animate on PAGE with ARRIVE, not a Revealer. IT SOLVED THE PERFORMANCE PROBLEM THE RIGHT WAY, which was the real risk in this file: the renderer is expensive (LOD, two-pass roads, labels) and the OS targets SOFTWARE rendering, so a per-frame re-render would have been SLOWER than the instant jump it replaced and the app would feel worse. Instead _draw's `need` test skips _render_surface while _view_moving is true and reuses the CACHED surface under a cairo transform (ratio/dx/dy), re-rendering the true vector map ONCE on landing — the same trick as finder's navigation snapshot. Also correct: queue_draw_area damages only the canvas allocation, never the whole window (F1, and the code says so); a generation counter drops a superseded tween; a prior animation is cancelled before a new one starts; and on_done assigns the exact target centre and scale, so a tween cannot leave the viewport a hair off. GATE tools/maps_motion_selftest.py, 11 checks, and unlike the media suite it is genuinely BEHAVIOURAL — only one text assertion (the marker). Red-proved by killing the ARGUMENTS rather than the call (duration=0, easing=None): 2 named FAILs naming the token and the easing. PARTIAL: on-hardware look still owed.",
+      "pacing": {
+        "status": "not-driven",
+        "reason": "no transition-specific driver has been implemented yet"
+      }
+    },
+    {
+      "id": "content.ebook",
+      "origin": "E-book",
+      "motion": "page/chapter turn: the document column is replaced with a crossfade",
+      "tokens": [
+        "PAGE"
+      ],
+      "transform": false,
+      "status": "partial",
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/ebook.py",
+        "symbol_or_marker": "content.ebook"
+      },
+      "note": "Built 2026-08-10 (Codex under the motion lane, M2-verified). A chapter turn is ONE container replacement on the PAGE token — a chapter IS a different document, so it is a replacement (C2), NOT per-paragraph reveals, which would shimmer a page of text into view. Gated on to_top so a reading-SIZE change re-flows in place instead of throwing the reader to the top. THE SAME FILE also gained two transitions that ride SHARED entries rather than this one: the library shelf reveals only books NEW since the last fill (app.list-insert's shape, diffed on book['path'], existing rows packed plainly, a bulk import settling together rather than cascading), and the library sheet arrives SURFACE_IN / retraces SURFACE_OUT (B3). Every path falls back to installing the content plainly if the primitive will not run — motion never gates the document. PARTIAL, and the reason is recorded honestly: tools/ebook_motion_selftest.py is QUARANTINED as .pending (see its README) — 14 of 16 checks pass including this crossfade firing once on PAGE, but 2 checks on the chapter path's POST-STATE are still red and were NOT relaxed to make them green. All four pre-existing ebook suites pass, which is what proves no pinned contract broke.",
+      "pacing": {
+        "status": "not-driven",
+        "reason": "no transition-specific driver has been implemented yet"
+      }
+    },
+    {
+      "id": "content.2048",
+      "origin": "2048",
+      "motion": "tile slide and merge",
+      "tokens": [
+        "FEEDBACK"
+      ],
+      "pacing_beats": 2,
+      "transform": false,
+      "status": "implemented",
+      "note": "Was recorded unimplemented at baseline despite the spec calling it the reference; built 2026-08-08 on Damaged/LayerCache: traced-provenance slide + settle phases on a pass-through overlay, labels as the resting truth beneath.",
+      "pacing": {
+        "status": "measured",
+        "mode": "offscreen-stepped",
+        "token": "feedback",
+        "token_ms": 90,
+        "trace_run_token_ms": [
+          90.0,
+          90.0
+        ],
+        "trace_runs": 2,
+        "frame_count": 12,
+        "longest_gap_ms": 15.0,
+        "total_duration_ms": 179.992,
+        "band_ms": [
+          70,
+          100
+        ],
+        "gap_verdict": "advisory",
+        "verdict": "pass",
+        "reason": "each of 2 beats in band; non-vacuous"
+      },
+      "binding": {
+        "binding_kind": "comment-marker",
+        "module": "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/g2048.py",
+        "symbol_or_marker": "content.2048"
+      }
+    }
+  ]
 }

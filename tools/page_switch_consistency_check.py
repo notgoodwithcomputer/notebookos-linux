@@ -41,10 +41,6 @@ DEBT = {
                        "direction, so PageSwitcher would slide it — B lane",
     "gbaworkspace.py": "workspace panes switched by hand — gba-loop lane",
     "gbasdk.py":       "SDK workspace panes switched by hand — gba-loop lane",
-    "govorimo.py":     "boards<->thread<->contacts Stack switched by hand; the "
-                       "lane shipped and closed 2026-08-12 before this gate "
-                       "first ran over it — apple-quality lane owns the "
-                       "adoption",
 }
 
 _PRIMITIVE = ("PageSwitcher", "switch_page")

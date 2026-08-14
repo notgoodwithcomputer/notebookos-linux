@@ -133,28 +133,9 @@ for so in ld-linux-x86-64.so.2 libc.so.6 libm.so.6 libresolv.so.2 libcrypt.so.1 
     copy_lib "$so"
 done
 
-# Bluetooth firmware, in the INITRAMFS.
-#
-# btusb is built into the kernel, so it probes while USB enumerates — during
-# early boot, long before this initramfs has found the medium, mounted the
-# squashfs and switch_root'ed. request_firmware() therefore reads a /lib/firmware
-# that does not exist yet and fails with -2, and an Intel controller that never
-# got its firmware keeps the null address 00:00:00:00:00:00: bluetoothd starts
-# fine but publishes no adapter, so Bluetooth is simply missing. Recovering
-# afterwards means putting the CONTROLLER back into bootloader mode (see
-# etc/init.d/S39btfirmware), which is fiddly and chip-dependent.
-#
-# The initramfs is unpacked by populate_rootfs() (a rootfs_initcall) BEFORE the
-# device_initcalls that bring up USB, so firmware placed here is on the root
-# filesystem in time for the very first probe — no recovery, no reset, nothing
-# chip-specific. Costs ~20MB in initrd.img, which is the right trade for
-# Bluetooth working at all.
-say "adding Bluetooth firmware to the initramfs (early btusb probe)"
-for d in intel rtl_bt qca mediatek; do
-    [ -d "$TARGET/lib/firmware/$d" ] || continue
-    mkdir -p "$IRD/lib/firmware/$d"
-    cp -a "$TARGET/lib/firmware/$d/." "$IRD/lib/firmware/$d/" 2>/dev/null || true
-done
+# (Bluetooth firmware was staged into the initramfs here for an early btusb
+# probe; removed 2026-08 with Bluetooth — the kernel has no btusb driver to
+# request it, so there is nothing to stage. See docs/SECURITY-MODEL.md.)
 
 install -m 0755 "$INIT_SRC" "$IRD/init"
 ( cd "$IRD" && find . -print0 | cpio --null -o -H newc --quiet | gzip -9 ) > "$GRAFT/live/initrd.img"
