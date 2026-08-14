@@ -125,7 +125,18 @@ EDITOR visible/focused/typing + full Esc ladder (palette→card→app);
 GBA Build & Play first in the Build menu + UI ALIVE mid-compile (menu
 opened over "Compiling…"); nbgame re-embed caught vbam's window swap
 (log: "found via pid").
-OPEN (one lifecycle thread, logs on disk):
+RESOLVED ACROSS SESSIONS (80219c80 + e1c4c6cc): Finder-over-SDK fixed
+(flag unlink + monitor reconcile); repeat-build wedge root-caused JOINTLY
+(REJECT-None ignored + gcc timeout leaving orphaned grandchildren holding
+pipes — subprocess.run blocked forever in drain) and fixed via
+Popen(start_new_session)+killpg group-kill, sabotage-proved; nbgame logs
+its exit route; the Ctrl+Esc grab now requires real Ctrl; nbdiacritics
+replays palette-open letters to the text widget; run-1's "early exit" was
+the harness's own delayed Esc (X starved by gcc) landing on vbam.
+STILL OWED ON-TARGET after the next respin: repeat Build & Play x3 +
+build-log read; D-pad click-into-game discriminator (arrows PROVEN
+delivered in X via the Finder-selection oracle); Finder-over-SDK re-check.
+OLD notes (superseded above):
 - FIXED (pending on-target re-drive): FINDER RE-PRESENTED ITSELF OVER
   THE COMPILING SDK — root cause was TWO-SIDED: gbasdk._emulator_exited
   unlinked the shared app-active flag unconditionally while the SDK was
