@@ -27,6 +27,39 @@ with the commit that closes them.
   exact-string pin; 3cdc1400).
 - Gate: toyfont ledger ratchet + reasoned keeps; nbprint's own fixture call
   removed (16e812b5).
+- Comics: _on_key had no _prompt_layer guard — every lowercase tool-shortcut
+  letter and bare Delete fired even while the bubble editor's TextView was
+  focused, switching tools mid-sentence or destroying the bubble being
+  lettered. Guarded the whole bare-key block on `_prompt_layer is None`,
+  illustrator's own idiom (5683fb77). Red-proved in isolation (monkeypatched
+  pre-fix _on_key: tool-letter swallowed + changed to eraser, Delete dropped
+  the bubble 1->0) before landing against the real fix.
+- Comics: this round's Codex audit-and-fix pass over the previously-
+  unaudited flows closes that whole line below — see FIXED entry and
+  103-check suite in 5683fb77: _place_scale upscale bug (a 20x20 placed
+  image blew up 82x against a 1650x2550 page — now caps at 1.0), low-zoom
+  selection handles resolved by nearest on-screen distance instead of
+  first-match (dead-center clicks on a min-size bubble at 1/8 zoom picked
+  the wrong handle), export/print write through a temp file + atomic
+  replace (a failed run could previously corrupt an existing good PDF),
+  _impose leak-proofed (try/finally surface.finish() + per-slot clip),
+  _place_image given a properly rect-sized undo frame + hidden-layer
+  flash. Plus my own fix alongside it: _export/_print now snapshot via
+  Layer.encode() (PNG bytes) instead of autosave_snapshot()'s raw-surface
+  copy — that shape is fine for autosave's usual 1-2-dirty-page case but
+  unbounded for a caller visiting every page; opening an old format-1
+  document marks every page dirty at once, and autosave-on-open was
+  copying every one of those surfaces before a single export byte reached
+  disk (~485MB on top of the migration cost for a real 32-page legacy
+  book).
+- Gate: button_contrast_check sampled a freshly constructed window's style
+  properties before Papertone's 90ms button background transition had
+  settled, so Comics' default-selected Pencil tool button was caught
+  mid-flight (1.32:1 INVISIBLE in the full sweep, 5.12:1 once actually
+  rendered — no real user ever sees the pre-cascade frame). Now blocks on
+  a real 300ms timeout before sampling; also registered comics in the
+  default APPS list (121866ea). Verified stable (0 findings) across 4
+  full OS-wide runs.
 
 ## GBA SDK trio — ALL 16 AUDIT ITEMS CLOSED (d151cea0, 77479de1, b1bd8988,
 ## 7b95eea9): async build (#9), open-confirm (#1), scalar quarantine (#3),
@@ -46,9 +79,12 @@ with the commit that closes them.
 - Animation: guest playhead/clock chip wording pass — "Saved HH:MM" chip
   meaning (recovery) vs document staleness; consider naming the store.
   Low-priority now the unbound close is silent.
-- Comics: deeper flows still unaudited at Apple bar: Zine Print full run,
-  Export PDF at scale on target, Place Image, select-tool handle affordances
-  at low zoom, CJK bubble lettering at 100%.
+- Comics: Zine Print, Export PDF, Place Image, low-zoom selection handles
+  and CJK lettering all audited this round (Codex static pass + host-side
+  real-handler suite, see FIXED above, 5683fb77) — the bugs found there are
+  fixed and covered by 103 real-app checks. STILL OWED: an actual on-target
+  drive-through (booted guest, real speed/resolution) of Export/Zine Print
+  at genuine multi-page scale — nothing this round exercised the guest.
 - FIXED 52672195: breadcrumb folds whole pills behind a leading "…"
   (navigates to the deepest hidden ancestor, tooltip carries the path);
   the mid-letter "e" sliver class is dead. Verified by synchronous draw

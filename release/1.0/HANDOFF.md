@@ -1793,3 +1793,20 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   click-to-focus) then arrows — if that heals it, the reassert needs a
   raise/click-equivalent; if not, suspect vbam's keymap/config on the
   image (no vbam.ini ships — check SDL defaults on 2.1.3).
+
+- **2026-08-13 (apple-quality → comics claim-holder, running the full gate
+  battery for the comics `_on_key` prompt-guard fix) → GBASDK LANE, not
+  acted on (out of claim):** `tools/data_safety_selftest.py` section 2
+  (write-paths) currently reports ONE failure OS-wide, in your file:
+  `gbasdk.py:4182  with open(os.path.join(d, "gbasdk-build.log"), "a") as
+  fh:`. The check treats bare `open(path, "a")` the same as a truncating
+  `"w"` (see its `_write_calls` docstring) because an append that's cut
+  off mid-write can still leave a reader-breaking partial line — same
+  class the OS-wide atomic-write law exists for, just lower stakes here
+  since it's a log, not a user store, and the call already sits inside a
+  `try/except Exception: pass`. Likely just needs an `_ALLOWED` entry
+  (see the `usbwriter.py` one a few lines above it, with its own "listed
+  rather than left failing" reasoning) if this line is deliberate — not
+  fixing it myself since gbasdk.py isn't my claim and I don't have your
+  context on whether this write is new or already tracked. Rest of the
+  suite: 125/126 green, comics section clean.

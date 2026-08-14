@@ -4969,6 +4969,100 @@ def compaction_family():
     shutil.rmtree(scratch)
 
 
+def zoom_family():
+    """Zoom in, zoom out, Fit — and the readout that claims to describe it."""
+    if not gtk_available():
+        skip("F44 zoom", "no display")
+        return
+    from gi.repository import Gtk
+
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(320, 240))
+    app.scene_i = app.layer_i = app.playhead = 0
+    app.sheet = animation.Sheet(app.doc, 0)
+    child = app.get_child()
+    app.remove(child)
+    stage = Gtk.OffscreenWindow()
+    stage.set_size_request(1024, 722)
+    stage.add(child)
+    stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+
+    app._fit_canvas()
+    area = app.canvas_scroll.get_allocation()
+    limit = min(max(1, area.width - 24) / app.doc.canvas[0],
+                max(1, area.height - 24) / app.doc.canvas[1])
+    fits = [step for step in animation.ZOOM_STEPS if step <= limit]
+    check("F44 Fit picks the largest step the window can hold",
+          app.zoom == (fits[-1] if fits else animation.ZOOM_STEPS[0]),
+          (app.zoom, limit))
+
+    app._set_zoom(1)
+    start = app.zoom
+    for _ in range(3):
+        app._zoom_step(1)
+    stepped_up = app.zoom
+    for _ in range(3):
+        app._zoom_step(-1)
+    check("F44 stepping in and back out lands exactly where it started",
+          stepped_up > start and app.zoom == start, (start, stepped_up, app.zoom))
+
+    app._set_zoom(animation.ZOOM_STEPS[-1])
+    app._zoom_step(1)
+    top = app.zoom
+    app._set_zoom(animation.ZOOM_STEPS[0])
+    app._zoom_step(-1)
+    check("F44 the ends of the range hold",
+          top == animation.ZOOM_STEPS[-1] and
+          app.zoom == animation.ZOOM_STEPS[0], (top, app.zoom))
+
+    disagreed = []
+    for step in animation.ZOOM_STEPS:
+        app._set_zoom(step)
+        if app.zoom_label.get_text() != "%d%%" % round(step * 100):
+            disagreed.append((step, app.zoom_label.get_text()))
+    check("F44 the readout says the zoom it is actually at", not disagreed,
+          disagreed)
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+
+    graded, scratch = module_mutant(
+        "F44-zoom-drifts",
+        [("        self.zoom = choices[-1] if choices else ZOOM_STEPS[0]",
+          "        self.zoom = choices[0] if choices else ZOOM_STEPS[0]")])
+    astray = graded.Animation()
+    astray._flash = lambda *a, **k: None
+    astray.doc = graded.AnimationDocument(canvas=(320, 240))
+    astray.scene_i = astray.layer_i = astray.playhead = 0
+    astray.sheet = graded.Sheet(astray.doc, 0)
+    astray_child = astray.get_child()
+    astray.remove(astray_child)
+    astray_stage = Gtk.OffscreenWindow()
+    astray_stage.set_size_request(1024, 722)
+    astray_stage.add(astray_child)
+    astray_stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    astray._fit_canvas()
+    mutant("F44 a Fit that picks the wrong step is caught",
+           astray.zoom != (fits[-1] if fits else graded.ZOOM_STEPS[0]),
+           astray.zoom)
+    astray._alive = False
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -4998,6 +5092,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        zoom_family,
         compaction_family,
         sound_row_family,
         drop_family,
