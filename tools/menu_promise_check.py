@@ -59,11 +59,16 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      would fail on nobody's change, and a flaky gate teaches people to
 #      re-run rather than to look.
 #
-#      WHAT IS MISSING TO CHASE IT: findings that sit WITHIN the ledger are
-#      never printed, so the total moves while the visible output stays
-#      empty, and diffing two runs names nothing. This needs a per-app tally
-#      it can print on request — then two runs can be diffed and the
-#      timing-dependent item named. Do that before anything else here.
+#      NOW NAMED, by the TALLY line this gate prints on every run. Diffing
+#      two runs of an unchanged tree: gbaemu.py gave 2 then 1, and gbasdk.py
+#      gave 9 then 8. Both GBA apps, each varying by one, which accounts for
+#      the whole 52-56 spread. Every other app was identical across runs.
+#
+#      That is where to look: something in those two probes finishes inside
+#      the 25-second window sometimes and not others — an emulator or build
+#      step that opens its surface late. Ledger them as a range, or make the
+#      probe wait for the surface rather than for the clock. Until then this
+#      stays out of the aggregate.
 #
 # How it got here, for whoever picks it up. Stubbing the audio pump and the
 # file pickers took invoked items 104 -> 203 and blocked probes 16 -> 11.
@@ -447,6 +452,13 @@ def main():
               "lane must fix or ledger them before it ships" % (name, len(findings)))
         for _menu, label, why in findings:
             print("  %s: %s: %s" % (name, label, why))
+    # Per-app tally, always. Findings WITHIN the ledger are never printed, so
+    # the total could move between runs of an unchanged tree while the visible
+    # output stayed empty — which made this gate's own flakiness impossible to
+    # chase by diffing two runs. Now two runs can be diffed and the varying
+    # app named.
+    print("TALLY " + " ".join("%s=%d" % (app, counts[app])
+                              for app in sorted(counts)))
     print("%d apps swept; %d enabled items invoked; %d headless handoffs skipped; "
           "%d violations found" % (len(modules), total_invoked,
                                      total_skipped, total_findings))
