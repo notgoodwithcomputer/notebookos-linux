@@ -2028,3 +2028,38 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   THE _t() CALLS STAY: explicit is better, and the string a translator has
   to find should be visible at the call site. They were never the fix they
   were advertised as.
+
+- **2026-08-14 (apple-quality) · MAPS AUDIT TRIAGED BY MEASUREMENT: two of
+  its findings are NOT defects, one is real and I am not guessing its
+  number.** Nothing changed in maps.py; this is the evidence so nobody
+  re-derives it.
+  CLEARED — "switching maps leaks the old pack descriptor and can prevent
+  removable media unmounting". Measured by reading /proc/self/fd across a
+  real pack switch: exactly ONE .nbm2 fd before and after. CPython drops
+  the old NBM2 on reassignment and refcounting closes the file. An
+  explicit close() is still reasonable hygiene, but it is not the bug it
+  was described as, and nobody should spend a fix on an unmount problem
+  that does not happen.
+  CLEARED — "file-controlled compressed lengths cause multi-gigabyte
+  reads". f.read(n) does not preallocate n for a regular file: measured
+  f.read(0xFFFFFFFF) against a 4KB file — 4096 bytes returned, ZERO extra
+  RSS. A corrupt length is naturally bounded by the file.
+  REAL — the DECOMPRESSION half of that same finding, which the read half
+  was obscuring. lzma.decompress() is called with no output bound at
+  maps.py:187 (per cell) and :256 (the places section). Measured: a 30,644
+  byte blob expands to 209,715,200 bytes — 6844x — for a 118MB RSS jump,
+  on a machine with 2GB and one app at a time. Truncation does NOT reach
+  this (a short stream raises), so it needs a crafted or badly corrupted
+  pack rather than the documented copy-from-a-stick case.
+  WHY I HAVE NOT FIXED IT: the fix is an incremental LZMADecompressor with
+  max_length, and the only hard part is the NUMBER. A cell is a tile and a
+  places section is a continent's gazetteer; the shipped monaco pack is far
+  too small to calibrate against, and continent packs are not encoded yet
+  (see the map-pack notes). A cap guessed here breaks the first real North
+  America pack somebody builds, silently, in the field. It wants a number
+  from whoever owns the format — or, better, an uncompressed-length field
+  in the directory so the cap is per-section and self-describing.
+  ALSO REAL, unfixed: an unreadable pack mid-session is reported as "No
+  place matching …" (maps.py:253/950) — a false search answer rather than
+  "the map storage is unavailable", and the empty result is CACHED, so
+  reconnecting the stick does not repair search for that session.
