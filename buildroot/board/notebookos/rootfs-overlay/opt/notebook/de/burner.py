@@ -56,6 +56,7 @@ worker checkpoints between files, and no callback reaches a widget after the
 window has gone.
 """
 import os
+import select
 import re
 import shutil
 import subprocess
@@ -553,6 +554,34 @@ class StepFailed(BurnError):
 
 
 # ---- the pipelines ----------------------------------------------------------
+def _end_group(proc):
+    """End a burn step and everything it started.
+
+    Signals the process GROUP: the tools here are not one process each, and a
+    terminate() aimed at the one we launched leaves its children holding the
+    pipe we are still reading — which is how a cancelled burn hangs instead of
+    stopping. SIGKILL follows if the polite signal is ignored, so Stop always
+    means stopped."""
+    import signal as _signal
+    try:
+        group = os.getpgid(proc.pid)
+    except OSError:
+        group = None
+    for sig, wait in ((_signal.SIGTERM, 3), (_signal.SIGKILL, 2)):
+        try:
+            if group is not None:
+                os.killpg(group, sig)
+            else:
+                proc.send_signal(sig)
+        except (OSError, ValueError):
+            pass
+        try:
+            proc.wait(timeout=wait)
+            return
+        except Exception:                                         # noqa: BLE001
+            continue
+
+
 def _step(job, cmd, phase, fraction=None, span=0.0, progress_seconds=None):
     """Run one tool, checkpointing for cancellation, reporting as it goes.
 
@@ -568,20 +597,47 @@ def _step(job, cmd, phase, fraction=None, span=0.0, progress_seconds=None):
     if fraction is not None:
         job.progress(fraction, phase)
     try:
+        # ITS OWN PROCESS GROUP, so Stop can reach the whole burn. growisofs
+        # execs mkisofs, dvdauthor runs its own muxers, ffmpeg spawns for
+        # filters — terminate() reaches only the process we launched. The
+        # survivor keeps the write end of the pipe below open, so the read loop
+        # never sees EOF and the burn thread hangs on a cancel that appeared to
+        # work, with the drive still being written. Same defect that wedged the
+        # GBA toolchain build and Video's export cancel.
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
-                                bufsize=1)
+                                bufsize=1, start_new_session=True)
     except OSError as exc:
         raise StepFailed(_t("%s could not be started.") % cmd[0],
                          str(exc)) from exc
     tail = []
     try:
-        for line in proc.stdout:
+        # POLLED, NOT BLOCKED. This used to read the tool's output with a plain
+        # `for line in proc.stdout`, which parks until the next line arrives —
+        # and the cancel check lived INSIDE that loop. A burn is mostly silence:
+        # wodim says nothing while it writes a track, growisofs nothing while it
+        # closes a session. So Stop did nothing at all until the tool happened
+        # to speak again, which on a long track is minutes. Waking on a timer
+        # makes the button mean what it says.
+        while True:
+            ready = select.select([proc.stdout], [], [], 0.4)[0]
+            if not ready:
+                if job.cancelled():
+                    _end_group(proc)
+                    job.checkpoint()
+                    break
+                if proc.poll() is not None:
+                    break              # finished during a quiet stretch
+                continue
+            line = proc.stdout.readline()
+            if not line:
+                break                  # end of output: the tool is done
             tail.append(line)
             del tail[:-40]
             if job.cancelled():
-                proc.terminate()
+                _end_group(proc)
                 job.checkpoint()
+                break
             if progress_seconds and span and fraction is not None:
                 m = re.match(r"out_time_ms=(\d+)", line.strip())
                 if m:

@@ -508,6 +508,86 @@ else:
 
 
 # ============================================================== the verdict
+# ---------------------------------------------------------------------------
+#  A cancelled burn must actually stop — including what the tool started
+# ---------------------------------------------------------------------------
+# growisofs execs mkisofs, dvdauthor runs its own muxers, ffmpeg spawns for
+# filters. terminate() reaches only the process we launched, and the survivor
+# keeps the write end of the stdout pipe open — so the read loop never sees EOF
+# and a cancelled burn HANGS with the drive still being written. Driven against
+# a real process tree rather than a mock, because the whole defect lives in the
+# relationship between a parent, a child, and a pipe.
+import signal
+import subprocess
+import time
+
+
+class _CancelAfter:
+    """A job that reports cancelled once the burn has actually started."""
+
+    def __init__(self):
+        self.cancels = 0
+
+    def progress(self, *_a, **_k):
+        pass
+
+    def checkpoint(self):
+        pass
+
+    def cancelled(self):
+        self.cancels += 1
+        return self.cancels > 1
+
+
+# A shell that spawns a child holding the same stdout, then sleeps. The child
+# outlives a terminate() aimed at the parent, exactly like mkisofs under
+# growisofs.
+SCRIPT = ("python3 -c \"import subprocess,sys,time;"
+          "p=subprocess.Popen(['sleep','60']);"
+          "print('burning', flush=True);"
+          "sys.stdout.flush();"
+          "time.sleep(60)\"")
+
+# RUN IT ON A THREAD WITH A DEADLINE, so this check FAILS BY NAME when the
+# defect is present instead of hanging until the batch runner kills the whole
+# suite. A suite that hangs on a defect reads as an infrastructure flake and
+# gets re-run; it has to say what it found. (Learned the hard way: the first
+# version of this check called _step directly, and sabotaging the process group
+# took the entire file past its timeout with no verdict at all.)
+import threading
+
+job = _CancelAfter()
+done = threading.Event()
+
+
+def _drive():
+    try:
+        burner._step(job, ["/bin/sh", "-c", SCRIPT], "burning")
+    except Exception:                                            # noqa: BLE001
+        pass                      # a cancelled step raising is fine
+    finally:
+        done.set()
+
+
+started = time.time()
+threading.Thread(target=_drive, daemon=True).start()
+stopped = done.wait(20)
+elapsed = time.time() - started
+check("a cancelled burn stops instead of hanging on the pipe", stopped,
+      "still running after %.1fs" % elapsed)
+
+# And nothing it started is left running on the drive.
+leftover = subprocess.run(["pgrep", "-f", "^sleep 60"], capture_output=True,
+                          text=True, timeout=10).stdout.split()
+check("a cancelled burn leaves no tool still running", not leftover,
+      "still alive: %r" % leftover)
+for pid in leftover:                       # never leave the machine dirtier
+    try:
+        os.kill(int(pid), signal.SIGKILL)
+    except (OSError, ValueError):
+        pass
+
+
 print("\n%d checks, %d passed, %d FAILED"
       % (CHECKS[0], CHECKS[0] - len(FAILS), len(FAILS)))
 if FAILS:
