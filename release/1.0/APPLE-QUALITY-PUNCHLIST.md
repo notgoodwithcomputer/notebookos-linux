@@ -541,3 +541,26 @@ related glyph-coverage reason.
 
 **Regression state:** all sixteen suites covering today's 110 changed
 files are green, 42/42 apps construct.
+
+## ON-TARGET, 2.3-audit, second pass (Aug 14 ~17:15) — driven over QMP
+Everything below was clicked on the booted image, no shell (see HANDOFF on
+the nbdebug gate: gsh cannot work on a normally-booted ISO).
+- COOKBOOK's doubled empty state is GONE on target: one message, in the
+  main pane ("No recipes / Add one with New Recipe, below the list."), the
+  sidebar list correctly silent. Closes a825e996's on-target owing.
+- The DESKTOP BOARD renders all 8 tiles with honest empty states, each
+  naming the app that fills it ("Add events in Calendar"). Closing an app
+  returns to it cleanly — the app-exit path around the shared app-active
+  flag (80219c80) behaves on target across three app open/close cycles
+  (Cookbook, Workout, Calendar).
+- WORKOUT's empty state is single, centred, with its own CTA.
+STILL NOT VERIFIED ON TARGET, and why — so nobody records these as done:
+- COMICS bubble lettering (the peer's _prompt_layer guard + my nbdiacritics
+  replay). Reachable only by clicking through Finder, and each round trip
+  under TCG is ~15s; two coordinate misses cost more than the check is
+  worth in one sitting. Worth doing as a planned sequence next boot.
+- GBASDK .part/.old backup row: needs a shell to create a bystander
+  directory beside a saved project. Blocked on the nbdebug gate, NOT on
+  the fix. Host suite covers it with 4 red-proved checks.
+- EBOOK damaged-library notice: needs a shell to plant a damaged store.
+  Same gate. Host suite covers it with 5.
