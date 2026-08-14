@@ -260,6 +260,28 @@ APP_KIND = {
     "Disc Burner": "Media",
 }
 
+# Data-driven registry for apps installed from a signed package (tools/nbpkg.py)
+# rather than baked into the image. Additive and defensive: a malformed or
+# absent file leaves the built-in apps untouched — an installed app is
+# discoverable, but a bad registry can never hide a shipped one.
+def _merge_installed_apps():
+    import json as _json
+    try:
+        with open(os.path.join(DE_DIR, "installed_apps.json"),
+                  encoding="utf-8") as _f:
+            reg = _json.load(_f)
+    except Exception:
+        return
+    for display, info in reg.items():
+        mod = info.get("module")
+        if not isinstance(display, str) or not isinstance(mod, str):
+            continue
+        APP_MODULES.setdefault(display, mod)
+        APP_KIND.setdefault(display, info.get("kind", "Utility"))
+
+
+_merge_installed_apps()
+
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 # The Places sidebar is the standard set of Linux user folders (Nautilus
 # lineage). Applications is not a user folder — it lives under Devices so the
