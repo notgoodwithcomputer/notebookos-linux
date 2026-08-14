@@ -6836,6 +6836,92 @@ def palette_agreement_family():
     shutil.rmtree(scratch)
 
 
+def menu_bar_fits_family():
+    """The menu bar fits the smallest panel the OS supports, in every language.
+
+    Adding the Paint menu spent part of a margin nobody was watching. The
+    whole top strip — the menus plus the clock — wants 848px in English and
+    982px in Greek against a 1024px budget (Constitution §55: 1024x740 is
+    the smallest supported panel). Greek has 42px left. One more menu, or
+    one longer name, and the strip stops fitting: the window minimum climbs
+    and the app no longer fits the machine it is for.
+
+    Measured in a child process per language, because nbi18n binds NB_LANG
+    at import and a catalog cannot be swapped inside a running process.
+    """
+    if not gtk_available():
+        skip("F62 the menu bar's width", "no display")
+        return
+
+    def strip_width(language, module_dir=None):
+        script = (
+            "import os, sys\n"
+            "sys.path.insert(0, %r)\n"
+            # a graded copy holds only animation.py; nbapp and the rest of
+            # the nb family still live in the real de/ directory
+            "sys.path.append(%r)\n"
+            "import animation\n"
+            "from gi.repository import Gtk\n"
+            "app = animation.Animation()\n"
+            "app._flash = lambda *a, **k: None\n"
+            "holder = Gtk.OffscreenWindow()\n"
+            "body = app.get_child(); app.remove(body); holder.add(body)\n"
+            "holder.set_size_request(1024, 722); holder.show_all()\n"
+            "for _ in range(300):\n"
+            "    if not Gtk.events_pending(): break\n"
+            "    Gtk.main_iteration_do(False)\n"
+            "bar = None; stack = [body]\n"
+            "while stack:\n"
+            "    w = stack.pop()\n"
+            "    if isinstance(w, Gtk.Box):\n"
+            "        kids = [k for k in w.get_children() if isinstance(k, Gtk.Button)]\n"
+            "        if len(kids) >= 8 and any((b.get_label() or '') == animation._t('Paint') for b in kids):\n"
+            "            bar = w; break\n"
+            "    if isinstance(w, Gtk.Container): stack.extend(w.get_children())\n"
+            "strip = bar.get_parent() if bar is not None else None\n"
+            "print(strip.get_preferred_size()[0].width if strip is not None else -1)\n"
+            "app._alive = False\n"
+        ) % (module_dir or str(DE), str(DE))
+        home = tempfile.mkdtemp(prefix="animation-bar-")
+        # The guest's theme and fonts, set here rather than relying on the
+        # suite being launched through guestrun.sh. Measured under the
+        # developer's fonts instead, the Greek bar reads 872px where the
+        # shipped face wants 982 — a margin invented by the host machine.
+        overlay = REPO / "buildroot/board/notebookos/rootfs-overlay"
+        env = dict(os.environ, NB_LANG=language, NB_HOME=home,
+                   GTK_THEME="Papertone",
+                   XDG_DATA_DIRS="%s:%s" % (overlay / "usr/share",
+                                            os.environ.get("XDG_DATA_DIRS",
+                                                           "/usr/share")),
+                   FONTCONFIG_FILE=str(FONTCONF),
+                   FREETYPE_PROPERTIES=("cff:no-stem-darkening=0 "
+                                        "autofitter:no-stem-darkening=0"))
+        try:
+            out = subprocess.run([sys.executable, "-c", script], env=env,
+                                 capture_output=True, text=True, timeout=180)
+            digits = [line for line in out.stdout.split() if line.lstrip("-").isdigit()]
+            return int(digits[-1]) if digits else -1
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    widths = {code: strip_width(code) for code in ("en", "el", "ru")}
+    check("F62 the menu bar was found and measured in each language",
+          all(width > 300 for width in widths.values()), widths)
+    check("F62 and the whole top strip fits the 1024px budget everywhere",
+          all(0 < width <= 1024 for width in widths.values()), widths)
+
+    graded, scratch = module_mutant("F62-one-menu-too-many", [
+        ("    menus = ('File', 'Edit', 'View', 'Paint', 'Timeline', 'Scene', 'Drawing',\n"
+         "             'Layer', 'Sound')",
+         "    menus = ('File', 'Edit', 'View', 'Paint', 'Timeline', 'Timeline', 'Scene',\n"
+         "             'Drawing', 'Layer', 'Sound')"),
+    ])
+    crowded = strip_width("el", str(scratch))
+    mutant("F62 a bar with one menu too many for Greek is caught",
+           crowded > 1024, crowded)
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6876,6 +6962,7 @@ for _family in (
         save_chip_family,
         export_kind_family,
         palette_agreement_family,
+        menu_bar_fits_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
