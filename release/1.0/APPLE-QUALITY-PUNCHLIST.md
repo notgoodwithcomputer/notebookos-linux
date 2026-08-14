@@ -221,6 +221,50 @@ generate/write/gcc/objcopy phases). Suite: gbasdk 581/581 incl. a
 watchdog check that a timed-out step dies as a group (sabotage-proved).
 ON-TARGET RE-DRIVE OWED: repeat Build & Play x3, wedge log inspection.
 
+## MEDIA (Codex static audit + my verification, Aug 14)
+FIXED 3e00c26f: trashing a photo wrote NO origin sidecar, so the Finder's
+Put Back had no folder to return it to — bytes preserved, address lost,
+and the old check ("bytes reached .Trash") passed the whole time. Now
+writes <trash>/.origins/<name-in-trash> under the name the file actually
+took; proved end-to-end by pointing Finder's own _origins_dir() reader at
+a file Media trashed. Also: "Move to Trash…" dropped its ellipsis and the
+docstring stopped claiming it confirms (the confirm was retired OS-wide;
+_confirm is dead code nothing calls), and _on_destroy now cancels the
+fullscreen auto-hide timer — the one timer teardown missed.
+STILL OPEN (verified findings, not yet fixed):
+- NO in-app one-step Undo for the trash. This is the class the campaign
+  caught in tasks ("Remove List had no undo"). Media declares only
+  ("File","View") menus, so adding Edit ▸ Undo is a MENU-CONTRACT
+  decision (calendar sets the precedent: an Edit menu holding only
+  undo items). nbapp.UndoHistory is snapshot-over-a-document and fits a
+  filesystem move poorly — a purpose-built one-step undo is the shape.
+- Decode cap disabled when dimensions are UNKNOWN: get_file_info failure
+  becomes 0x0 and falls through to an unscaled new_from_file. Same class
+  for SVG (rsvg-convert unbounded when probing fails) and ffmpeg (the
+  scale filter runs AFTER the source frame is decoded). MAX_PIX is a
+  max SIDE, not a pixel-count budget: 8000x8000 RGBA is ~256MB.
+- A file deleted underneath the viewer leaves a stale surface: the decoded
+  pixbuf stays visible, the strip keeps the dead cell, Trash silently
+  no-ops, and _step can land on the missing entry repeatedly. No
+  Gio.FileMonitor anywhere in the app.
+- Codec-missing text groups an OS capability failure with file damage
+  ("may be damaged, or saved in a format Notebook OS does not read"),
+  so the one case the user could act on reads as a broken file.
+
+## OS-WIDE FIRST-GLANCE PASS (rendered at 1024x740, guest theme+fonts)
+12 unclaimed apps driven and LOOKED at: cookbook, journal, contacts,
+mealplanner, workout, academics, accounting, bills, ebook, language,
+maps, packages. All 12 fit the smallest panel. One real defect found and
+fixed (cookbook doubled empty state, a825e996). Two candidates MEASURED
+AND CLEARED rather than "fixed": accounting's out-of-order ledger dates
+are an append-only daybook's insertion order (running balance depends on
+it), and calendar's week/day views ignoring a new event was my harness
+constructing a fresh window per state — a relaunch legitimately opens on
+today. Contacts shows a milder version of the cookbook doubling (terse
+"No contacts" in the list beside the full sentence in the pane) — left
+as-is, noted, since the list label is short and Finder/Music use the
+same shape.
+
 ## OPEN — OS-wide sweeps not yet run at the new bar
 - Remaining ~38 apps: real-use drive-through each (task #6). Order by
   consumer surface: media, music, video, writer*, illustrator*, maps,
