@@ -2199,3 +2199,27 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   confused one both just echo. Use a shared path instead: the rootfs is a
   local ext4 image, so write the file into it BEFORE boot, or mount it
   read-only afterwards, rather than typing it down a serial line.
+
+- **2026-08-14 · AMENDING THE NOTE ABOVE: the NB_XAPPEND=nbdebug route is
+  PROVEN BUT FLAKY, and I would rather say so than leave it sounding
+  reliable.** It worked once, unambiguously — gsh returned GSH_OK and
+  grepped the guest's own /opt/notebook/de/comics.py for the focus fix (3
+  hits), on a guest booted from the current output/target. On two later
+  boots, with `nbdebug` confirmed present in /proc/<qemu>/cmdline and the
+  desktop fully up ("Notebook OS shell up" in serial.log), gsh timed out
+  waiting for its sentinel on even `echo SHORT_OK`. So the mechanism is
+  real and the reproduction is not yet reliable.
+  WHAT I DID NOT ESTABLISH, and it matters for reading gsh's own advice:
+  its timeout message blames a missing `nbdebug`, and in all three of my
+  failures that diagnosis was WRONG — the flag was there. A shell-less
+  tty and a wedged one both merely echo, so gsh cannot tell them apart and
+  names the likelier cause. Anyone debugging this should check
+  /proc/<pid>/cmdline first rather than trusting the hint. My first
+  failure I DID cause (chunked base64 down the serial line); the two after
+  it were fresh guests with no such abuse, which is what makes it flaky
+  rather than self-inflicted.
+  STILL OWED ON TARGET, unchanged: video's export cancel, the
+  damaged-store notices (music/workout/novel), the decode ceilings. All
+  three need file setup on the guest, so they need this route working or
+  a fixture written into the rootfs image before boot (debugfs -w can do
+  that without root; not attempted).
