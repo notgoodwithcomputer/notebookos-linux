@@ -16,6 +16,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
 
 import os
+import copy
 import json
 import time
 
@@ -23,6 +24,7 @@ import cairo  # noqa: F401  (PDF surfaces come from nbprint.report_page)
 
 import nbapp
 import nbicons
+import nbjobs
 import nbprint
 from nbi18n import _t  # noqa: E402
 
@@ -133,6 +135,10 @@ class Journal(nbapp.AppWindow):
         # where the editor is hidden)
         if 0 <= self.active < len(self.entries):
             self.body.grab_focus()
+
+        # Where the PDF export runs. Closed in _on_destroy, so a render still
+        # drawing when the window goes cannot call back into dead widgets.
+        self.jobs = nbjobs.JobOwner(name="journal")
 
         # final flush: closing the window (dot button / File->Close / Esc all
         # route through Gtk.Window.close -> "destroy") must not lose the last edit
@@ -320,6 +326,10 @@ class Journal(nbapp.AppWindow):
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        try:
+            self.jobs.close()
+        except Exception:
+            pass
         self.undo.cancel()
         for attr in ("_save_timer", "_count_timer", "_filter_timer"):
             tid = getattr(self, attr, None)
@@ -1159,25 +1169,66 @@ class Journal(nbapp.AppWindow):
             return
         self._write_export_pdf(name)
 
+    def _chip(self, text, colour):
+        """Set the save indicator to `text` in `colour` — the same one-line
+        surface _flash writes to, for the states that are not errors."""
+        try:
+            self.save.set_markup('<span foreground="%s">● </span>%s'
+                                 % (colour, GLib.markup_escape_text(text)))
+        except Exception:
+            pass
+
     def _write_export_pdf(self, name):
         """Render the journal to Documents/`name`. Split from _export_pdf so the
         replace-an-existing-file question can be answered before anything is
-        written."""
+        written.
+
+        THE DRAWING HAPPENS OFF THIS THREAD. A journal kept for a year is a lot
+        of text, and laying it out took the window with it: PangoCairo shapes
+        every line of every entry, and until it finished there was no repaint,
+        no scrolling and no way to stop. What stays here is the part that has to
+        — flushing the live buffer into the active entry, so the PDF matches the
+        text on screen — and the model is copied before the worker starts, so an
+        entry typed while it runs cannot change what is being written.
+
+        The PDF is drawn on a temp sibling and moved into place, so an export
+        that fails half way never replaces the previous file with a partial
+        one."""
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
-            # _make_pdf flushes the live buffer + formatting into the active
-            # entry so the export reflects the on-screen text.
-            self._make_pdf(os.path.join(DOCS_DIR, name))
-        except Exception:
-            self._flash("Export failed")
+        except OSError as exc:
+            self._flash(nbapp.save_failure_reason(exc, DOCS_DIR))
             return
-        # Success: the autosave state is unchanged, so only update the label.
-        # Name the destination folder so the file is findable in the Finder.
-        try:
-            self.save.set_markup('<span foreground="#7FA98C">● </span>'
-                                 'Exported to Documents')
-        except Exception:
-            pass
+        self._save_current()
+        entries = copy.deepcopy(self.entries)
+        dest = os.path.join(DOCS_DIR, name)
+
+        def work(_job):
+            draft = dest + ".part"
+            try:
+                self._render_pdf(draft, entries)
+                _job.checkpoint()
+                os.replace(draft, dest)
+            except BaseException:
+                try:
+                    os.unlink(draft)
+                except OSError:
+                    pass
+                raise
+            return name
+
+        def done(_name):
+            # Name the destination folder so the file is findable in the Finder.
+            self._chip(_t("Exported to Documents"), "#7FA98C")
+
+        def failed(_error):
+            self._flash(_t("Export failed"))
+
+        # REJECT, not REPLACE: two exports of the same journal write the same
+        # file name, and the second would race the first onto it.
+        self.jobs.start("export", work, on_done=done, on_error=failed,
+                        policy=nbjobs.REJECT)
+        self._chip(_t("Exporting…"), "#6E695E")
 
     @staticmethod
     def _line_spans(tags, base, lo, length):
@@ -1217,9 +1268,11 @@ class Journal(nbapp.AppWindow):
                 spans.append((ls, le, kind))
         return spans, quoted
 
-    def _render_pdf(self, path):
+    def _render_pdf(self, path, entries=None):
         """Draw every journal entry onto a cairo PDF at `path`, paginating when
-        the cursor overflows the page. Each entry emits its long date, title and
+        the cursor overflows the page. `entries` is the snapshot to draw, so the
+        export worker can render the journal as it stood when it started; the
+        print path passes nothing and draws the live list. Each entry emits its long date, title and
         body text — with the bold, italic and quote formatting it was written
         with — and a hairline rule separates one entry from the next.
 
@@ -1233,7 +1286,7 @@ class Journal(nbapp.AppWindow):
         page.emit(_t("JOURNAL"), 9.5, False, "#6E695E", gap_after=6)
         page.emit(time.strftime("%Y"), 26, True, "#1A1916", gap_after=3)
         page.rule()
-        for idx, en in enumerate(self.entries):
+        for idx, en in enumerate(self.entries if entries is None else entries):
             if idx:
                 page.y += 8
                 page.rule()

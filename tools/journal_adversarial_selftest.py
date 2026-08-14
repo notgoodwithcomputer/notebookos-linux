@@ -214,9 +214,89 @@ def ledger():
     print("EVIDENCE journal.py entry schema and renderer were inspected/executed; entries contain text/tags only and no photo attachment path exists")
 
 
+def export_offthread_check():
+    """Exporting a mature journal used to freeze the whole window: PangoCairo
+    shapes every line of every entry, and until it finished there was no
+    repaint, no scrolling and no way to stop."""
+    import copy
+    import threading
+    import types
+
+    app = bare()
+    app.entries = [{"date": "Friday, 8 August", "title": "Long day",
+                    "text": "Long day\n" + ("bounded line\n" * 400),
+                    "tags": []}]
+    app._save_current = lambda: None
+    app._chip = lambda *_a: None
+    app.jobs = journal.nbjobs.JobOwner(name="journal-test")
+    journal.DOCS_DIR = os.path.join(HOME, "Documents")
+
+    main_ident = threading.get_ident()
+    seen = {}
+    real_render = journal.Journal._render_pdf
+
+    def spy(self, path, entries=None):
+        seen["ident"] = threading.get_ident()
+        seen["entries"] = copy.deepcopy(entries)
+        seen["live"] = entries is self.entries
+        return real_render(self, path, entries)
+
+    app._render_pdf = types.MethodType(spy, app)
+    app._write_export_pdf("journal-test.pdf")
+    app.jobs.join()
+
+    dest = os.path.join(journal.DOCS_DIR, "journal-test.pdf")
+    check("the journal is drawn off the GTK thread",
+          seen.get("ident") not in (None, main_ident),
+          "render ran on the calling thread")
+    check("the exported PDF reaches its destination",
+          os.path.exists(dest) and os.path.getsize(dest) > 0)
+    check("no draft file is left beside a finished export",
+          not os.path.exists(dest + ".part"))
+
+    # An entry typed while the render runs must not change what is being
+    # written: the worker is handed a copy, never the live list.
+    check("the export draws a snapshot, not the live entry list",
+          seen.get("live") is False and seen.get("entries") == app.entries,
+          repr(seen.get("live")))
+    app.entries.append({"date": "Saturday", "title": "After", "text": "After"})
+    check("an entry added during an export cannot change what it draws",
+          len(seen.get("entries") or []) == 1, repr(len(seen.get("entries"))))
+
+    # A failed render must leave the previous export alone rather than
+    # replacing it with a partial file.
+    with open(dest, "wb") as fh:
+        fh.write(b"%PDF-previous")
+
+    def boom(self, path, entries=None):
+        with open(path, "wb") as fh:
+            fh.write(b"half a p")
+        raise OSError("injected render failure")
+
+    app._render_pdf = types.MethodType(boom, app)
+    notices = []
+    app._flash = notices.append
+    app.jobs = journal.nbjobs.JobOwner(name="journal-test-2")
+    app._write_export_pdf("journal-test.pdf")
+    app.jobs.join()
+    try:
+        with open(dest, "rb") as fh:
+            after = fh.read()
+    except OSError as exc:
+        # Reported, not raised: an export that DELETED the previous file is the
+        # loudest form of this defect, and a suite that dies here reads as one
+        # crashed run rather than the failure it actually found.
+        after = b"<gone: %s>" % str(exc).encode()
+    check("a failed export leaves the previous PDF untouched",
+          after == b"%PDF-previous", repr(after[:40]))
+    check("a failed export leaves no draft behind",
+          not os.path.exists(dest + ".part"))
+
+
 if __name__ == "__main__":
     damaged_store_check()
     delete_undo_check()
     ledger()
+    export_offthread_check()
     print("\n%d/%d checks passed" % (passed, passed + failed))
     raise SystemExit(1 if failed else 0)
