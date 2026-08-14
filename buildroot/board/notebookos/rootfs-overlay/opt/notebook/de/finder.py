@@ -1516,11 +1516,42 @@ class Finder(Gtk.Window):
             pass
 
     def _toggle_zoom(self, *_):
-        # Zoom box: toggle between the default window size and maximized.
+        """Zoom box: fill the work area, or go back to the size you had.
+
+        This asked the window manager to do it — Gtk.Window.maximize(), which
+        works by setting _NET_WM_STATE_MAXIMIZED_HORZ/VERT. matchbox 1.2 does
+        not implement those atoms at all: its EWMH table carries FULLSCREEN,
+        MODAL and ABOVE and nothing else, and it honours FULLSCREEN only for
+        MBCLIENT_TYPE_APP. The Finder is deliberately a DIALOG (see __init__)
+        precisely so matchbox leaves its geometry alone, so the request was
+        dropped on the floor and the button did nothing at all.
+
+        Which is why the geometry is set here instead, the same way the
+        Collapse box beside it already rolls the window up: matchbox honours a
+        dialog's own configure requests, and that is the whole reason the
+        Finder is one."""
         if getattr(self, "_zoomed", False):
-            self.unmaximize(); self._zoomed = False
-        else:
-            self.maximize(); self._zoomed = True
+            w, h = getattr(self, "_pre_zoom_size", None) or self._home_size
+            self.resize(w, h)
+            pos = getattr(self, "_pre_zoom_pos", None)
+            if pos is not None:
+                self.move(*pos)
+            self._zoomed = False
+            return
+        # Remember where it was, so the second click is a real restore rather
+        # than a jump to the default size.
+        try:
+            self._pre_zoom_size = self.get_size()
+            self._pre_zoom_pos = self.get_position()
+        except Exception:                                     # noqa: BLE001
+            self._pre_zoom_size, self._pre_zoom_pos = None, None
+        sw, sh = nbapp.screen_size()
+        # The top panel is a strut-docked bar; the work area starts under it.
+        # _clamp_to_workarea agrees with this number, so the move below is not
+        # something it will fight on the resulting configure-event.
+        self.move(0, self.PANEL_H)
+        self.resize(max(1, sw), max(1, sh - self.PANEL_H))
+        self._zoomed = True
 
     def _toggle_collapse(self, *_):
         # Collapse box (WindowShade): roll the window up to just its title bar;

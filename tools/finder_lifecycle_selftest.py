@@ -206,6 +206,54 @@ def sidebar_does_not_stack_pollers(glib):
     check(glib.added[-1][0] == 3, "the 3s fallback cadence is unchanged")
 
 
+def zoom_box_actually_resizes(_glib):
+    """The Zoom window control has to CHANGE THE WINDOW, with no help from a
+    window manager.
+
+    It used to call Gtk.Window.maximize(). That is a request to the WM to set
+    _NET_WM_STATE_MAXIMIZED_HORZ/VERT, and matchbox 1.2 — the WM this OS ships
+    — has no such atom: its EWMH table is FULLSCREEN, MODAL, ABOVE, and it
+    honours FULLSCREEN only for MBCLIENT_TYPE_APP. The Finder is a DIALOG on
+    purpose, so the request was dropped and the button did nothing.
+
+    Driving the method over a stand-in keeps the check honest about that: a
+    geometry call is recorded here, so a fix that goes back to asking the WM
+    records nothing and fails by name, on any developer machine, whatever WM
+    happens to be running it.
+    """
+    w = finder.Finder.__new__(finder.Finder)
+    w._home_size = (1180, 940)
+    w.resizes, w.moves, w.wm_calls = [], [], []
+    w.resize = lambda a, b: w.resizes.append((a, b))
+    w.move = lambda a, b: w.moves.append((a, b))
+    w.maximize = lambda: w.wm_calls.append("maximize")
+    w.unmaximize = lambda: w.wm_calls.append("unmaximize")
+    w.get_size = lambda: (800, 600)
+    w.get_position = lambda: (120, 90)
+
+    real_screen = finder.nbapp.screen_size
+    finder.nbapp.screen_size = lambda: (1280, 800)
+    try:
+        w._toggle_zoom()
+        panel = finder.Finder.PANEL_H
+        check(w.resizes == [(1280, 800 - panel)],
+              "zooming fills the work area (resized %r)" % (w.resizes,))
+        check(w.moves == [(0, panel)],
+              "...anchored under the panel (moved %r)" % (w.moves,))
+        check(w.wm_calls == [],
+              "...without asking a window manager that cannot do it (%r)"
+              % (w.wm_calls,))
+
+        w._toggle_zoom()
+        check(w.resizes[-1] == (800, 600),
+              "a second click restores the previous SIZE (%r)"
+              % (w.resizes[-1],))
+        check(w.moves[-1] == (120, 90),
+              "...and the previous POSITION (%r)" % (w.moves[-1],))
+    finally:
+        finder.nbapp.screen_size = real_screen
+
+
 if __name__ == "__main__":
     fake = FakeGLib()
     real_glib = finder.GLib
@@ -219,6 +267,7 @@ if __name__ == "__main__":
         teardown_survives_a_dead_source(fake)
         del fake.removed[:]
         sidebar_does_not_stack_pollers(fake)
+        zoom_box_actually_resizes(fake)
     finally:
         finder.GLib = real_glib
     if FAILED:
