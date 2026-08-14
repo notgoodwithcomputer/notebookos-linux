@@ -334,29 +334,37 @@ class Cookbook(nbapp.AppWindow):
         visible = [(i, r) for i, r in enumerate(self.recipes)
                    if cat_filter is None or r["cat"] == cat_filter]
         if not visible:
-            row = Gtk.ListBoxRow()
-            row.set_selectable(False)
-            row.set_activatable(False)
-            # Not a bare "No recipes": name the next move, and point at the
-            # button that makes it (which sits at the foot of this very list).
-            # Deliberately NOT the same sentence as the main pane's empty
-            # state — the two are always on screen together, and repeating one
-            # sentence twice reads as a rendering fault.
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-            box.get_style_context().add_class("emptylistbox")
-            lbl = Gtk.Label(label=_t("No recipes"))
-            lbl.get_style_context().add_class("emptylist")
-            hint = Gtk.Label(label=_t("Add one with New Recipe, below."))
-            hint.get_style_context().add_class("emptylisthint")
-            # Translated prose in a fixed-width sidebar: wrap it, or the
-            # sentence's own length sets the column's minimum.
-            hint.set_line_wrap(True)
-            hint.set_max_width_chars(22)
-            hint.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-            box.pack_start(lbl, False, False, 0)
-            box.pack_start(hint, False, False, 0)
-            row.add(box)
-            self.listbox.add(row)
+            # ONE empty state on screen at a time. This row used to carry
+            # "No recipes" + "Add one with New Recipe, below." while the main
+            # pane showed "No recipes" + "Add one with New Recipe, below the
+            # list." — the same two sentences, side by side, differing by two
+            # words. The old comment here set out to avoid exactly that and
+            # the wording drifted back into it; a doubled empty state reads as
+            # a rendering fault, so the main pane (centred, and the surface a
+            # first-run user looks at) now owns the message alone.
+            #
+            # The one thing this list knows that the main pane does not is
+            # that recipes DO exist and a category filter is hiding them —
+            # "No recipes" was also simply untrue in that case. So the row
+            # survives only there, and it names the category.
+            if self.recipes:
+                row = Gtk.ListBoxRow()
+                row.set_selectable(False)
+                row.set_activatable(False)
+                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+                box.get_style_context().add_class("emptylistbox")
+                lbl = Gtk.Label(
+                    label=_t("No recipes in “%s”") % cat_filter
+                    if cat_filter else _t("No recipes"))
+                lbl.get_style_context().add_class("emptylist")
+                # Translated prose in a fixed-width sidebar: wrap it, or the
+                # sentence's own length sets the column's minimum.
+                lbl.set_line_wrap(True)
+                lbl.set_max_width_chars(22)
+                lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                box.pack_start(lbl, False, False, 0)
+                row.add(box)
+                self.listbox.add(row)
         else:
             for idx, r in visible:
                 self.listbox.add(self._recipe_row(idx, r))
@@ -1959,14 +1967,12 @@ class Cookbook(nbapp.AppWindow):
                   font-size: 16px; color: #1A1916; }
         .rmeta { font-size: 11px; letter-spacing: 0.3px; color: #9A9484; }
         .emptylistbox { padding: 34px 12px; }
-        .emptylist { font-size: 11px; color: #9A9484; font-weight: 600; }
         /* No tracking here. 11px + ~0.18em is this OS's UPPERCASE eyebrow
-           style ("CLASSES", "TRANSITIONS"); applied to the sentence-case
-           "No recipes" it rendered as "N o   r e c i p e s" -- spaced-out text
-           reads as a rendering fault, and the untracked hint line directly
-           under it made the mismatch obvious. Music's "No playlists" sidebar
-           note, the same pattern one app over, is untracked. */
-        .emptylisthint { font-size: 12px; color: #9A9484; }
+           style ("CLASSES", "TRANSITIONS"); applied to a sentence-case line
+           it renders as "N o   r e c i p e s" -- spaced-out text reads as a
+           rendering fault. Music's "No playlists" sidebar note, the same
+           pattern one app over, is untracked too. */
+        .emptylist { font-size: 11px; color: #9A9484; font-weight: 600; }
 
         .sidefoot { border-top: 1px solid #D7D2C5; padding: 14px 18px; }
         .newrecipe { min-height: 40px; border: 1px solid #C9C4B6; border-radius: 8px;

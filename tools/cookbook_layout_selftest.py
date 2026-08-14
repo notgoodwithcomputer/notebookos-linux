@@ -140,6 +140,69 @@ check(m1 == m0,
 check(m1 <= W, "with the doubled label the app still fits %dpx (needs %d)"
       % (W, m1))
 
+# 5. ONE empty state on screen. A first-run cookbook showed the sidebar list
+#    saying "No recipes / Add one with New Recipe, below." beside the main
+#    pane saying "No recipes / Add one with New Recipe, below the list." —
+#    the same two sentences a few hundred pixels apart, differing by two
+#    words, which reads as a rendering fault rather than a considered empty
+#    state. The main pane owns the message; the list stays quiet unless it
+#    knows something the main pane does not.
+texts = []
+
+
+def collect(widget):
+    if isinstance(widget, Gtk.Label):
+        t = widget.get_text() or ""
+        if t.strip():
+            texts.append(t.strip())
+    if isinstance(widget, Gtk.Container):
+        for ch in widget.get_children():
+            collect(ch)
+
+
+app2 = cls()
+app2.recipes = []
+app2.active_cat = 0
+app2.rebuild_list()
+app2._refresh_editor() if hasattr(app2, "_refresh_editor") else None
+child2 = app2.get_child()
+app2.remove(child2)
+off2 = Gtk.OffscreenWindow()
+off2.set_size_request(W, H)
+off2.add(child2)
+off2.show_all()
+pump()
+collect(child2)
+empties = [t for t in texts if t.lower().startswith("no recipes")]
+check(len(empties) == 1,
+      "an empty cookbook states it once, not twice (found %r)" % (empties,))
+hints = [t for t in texts if "new recipe" in t.lower() and "," in t]
+check(len(hints) <= 1,
+      "and offers the next move once, not twice (found %r)" % (hints,))
+
+# ...and the list DOES speak when it alone knows why it is empty: recipes
+# exist, a category filter is hiding them. "No recipes" was untrue there.
+app3 = cls()
+app3.recipes = [{"name": "Soup", "cat": "Dinner", "ing": "", "steps": ""}]
+app3.cats = ["Dinner", "Baking"]
+app3.active_cat = 2                      # "Baking": real, and empty
+app3.rebuild_list()
+pump()
+rows = [r for r in app3.listbox.get_children()]
+filtered = []
+for r in rows:
+    collect_target = r
+    saved = list(texts)
+    del texts[:]
+    collect(collect_target)
+    filtered += texts
+    del texts[:]
+    texts.extend(saved)
+check(any("Baking" in t for t in filtered),
+      "a filtered-empty list names the category, not a bare 'No recipes' "
+      "(found %r)" % (filtered,))
+
+off2.destroy()
 off.destroy()
 
 print("%s — %d/%d checks passed"
