@@ -19,6 +19,7 @@ from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 import time
 import sys
 import os
+import stat
 import re
 import math
 import json
@@ -416,6 +417,38 @@ def _fsync_dir(d):
         pass
 
 
+def _keep_mode(path, tmp, default=0o600):
+    """Give the draft the mode the FINISHED file should carry, before it is
+    renamed into place.
+
+    A replace-based writer delivers the destination's contents; it must not
+    quietly redecide who the destination is for. mkstemp makes its file 0600 —
+    correct for a temporary, wrong to inherit — so a document that was 0644
+    came back 0600 after being exported a second time, having been given away
+    to nobody in particular by a helper it never asked about permissions.
+    Whatever the file already was, it stays; only a NEW file takes `default`,
+    which is 0600 for a private store and the umask's answer for a document a
+    person means to hand to someone."""
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        mode = default
+    try:
+        os.chmod(tmp, mode)
+    except OSError:
+        pass
+
+
+def _umask_mode():
+    """What an ordinary open() would have created, 0644 on the usual umask."""
+    try:
+        current = os.umask(0)
+        os.umask(current)
+        return 0o666 & ~current
+    except OSError:                                               # noqa: BLE001
+        return 0o644
+
+
 def atomic_write_text(path, text):
     """The plain-text twin of atomic_write_json, for the Save paths that write a
     document rather than a store (Writer's .txt, Screenplay's .fountain).
@@ -433,6 +466,7 @@ def atomic_write_text(path, text):
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
+        _keep_mode(path, tmp, _umask_mode())
         os.replace(tmp, path)
         _fsync_dir(d)
     except Exception:
@@ -468,6 +502,7 @@ def atomic_write_via(path, write):
     os.close(fd)
     try:
         write(tmp)
+        _keep_mode(path, tmp, _umask_mode())
         os.replace(tmp, path)
         _fsync_dir(d)
     except Exception:
@@ -569,6 +604,7 @@ def atomic_write_json(path, obj, indent=None, ensure_ascii=True):
             json.dump(obj, fh, indent=indent, ensure_ascii=ensure_ascii)
             fh.flush()
             os.fsync(fh.fileno())
+        _keep_mode(path, tmp, 0o600)
         os.replace(tmp, path)
         _fsync_dir(d)
     except Exception:

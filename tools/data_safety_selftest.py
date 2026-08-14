@@ -147,6 +147,43 @@ def section_atomic():
             made = False
         check("atomic: creates a missing config directory", made)
 
+        # WHO THE FINISHED FILE IS FOR. A replace-based writer delivers the
+        # destination's contents and must not quietly redecide its permissions:
+        # mkstemp makes its draft 0600, and inheriting that turned an exported
+        # 0644 document into a 0600 one on the second export — the file a person
+        # exports is usually the one they mean to hand to somebody.
+        import stat as _stat
+        os.umask(0o022)
+        mode = lambda p: _stat.S_IMODE(os.stat(p).st_mode)
+
+        d2 = os.path.join(root, "modes")
+        os.makedirs(d2, exist_ok=True)
+        fresh_doc = os.path.join(d2, "new.pdf")
+        nbapp.atomic_write_via(fresh_doc, lambda draft: open(draft, "wb").write(b"pdf"))
+        check("atomic: a new document is readable like any other file",
+              mode(fresh_doc) == 0o644, oct(mode(fresh_doc)))
+
+        again = os.path.join(d2, "again.pdf")
+        open(again, "wb").write(b"first")
+        os.chmod(again, 0o644)
+        nbapp.atomic_write_via(again, lambda draft: open(draft, "wb").write(b"second"))
+        check("atomic: exporting again does not tighten the file already there",
+              mode(again) == 0o644, oct(mode(again)))
+
+        # ...and the reverse, which is the same law: a file the person locked
+        # down must not be flung open by a save.
+        private = os.path.join(d2, "private.txt")
+        nbapp.atomic_write_text(private, "first")
+        os.chmod(private, 0o600)
+        nbapp.atomic_write_text(private, "second")
+        check("atomic: saving does not widen a file the owner restricted",
+              mode(private) == 0o600, oct(mode(private)))
+
+        store = os.path.join(d2, "store.json")
+        nbapp.atomic_write_json(store, {"a": 1})
+        check("atomic: a new app store stays private",
+              mode(store) == 0o600, oct(mode(store)))
+
         # -- the payload cannot be serialised (a bug in the app's model)
         d, p = fresh("unserialisable")
         try:
