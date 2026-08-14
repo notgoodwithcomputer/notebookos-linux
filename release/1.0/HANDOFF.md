@@ -1939,3 +1939,24 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   absent". I wrote "PNG/PDF export" into the brief from memory; Illustrator
   only ever offered PNG. Adding PDF export is a FEATURE, not a bug fix, and
   should not be smuggled in under an audit finding.
+
+- **2026-08-14 (apple-quality) · DERIVED-SCRATCH-NAME CLASS, swept OS-wide.**
+  A scratch/draft path built from the USER's path is a name the user may
+  already own. Two real instances, both fixed: illustrator's
+  `path + ".new"` (ce9aa2d8) and gbasdk's `dirpath + ".part"` / `".old"`
+  (5197c92e) — the latter the worst in the OS, because both were opened with
+  an unconditional `shutil.rmtree` on a path from the Save As picker, so
+  saving deleted a hand-made `MyGame.old` backup recursively.
+  THE REST OF THE SWEEP, checked and CLEARED with the reason, so nobody
+  re-walks it: music.py:1638 (`dest + ".new"`) writes inside the app's own
+  cover CACHE directory; nbaudio.py:501 and nbsynth.py:942 take whatever
+  path their caller gives them but are used for app-owned state and export
+  temps; nbapp.py:340 `path + ".bak"` is the deliberate, documented backup
+  of an app store in the app's own config dir, not a draft; nbpkg_install
+  .py:112 writes its own registry. video.py:3954 is the GOOD pattern and
+  worth copying: `.nbvid-<basename>.part` — dot-prefixed and app-branded, so
+  it is both hidden and implausible as a user's filename.
+  RULE OF THUMB for anyone adding one: if the destination came from a file
+  picker, the scratch name must be mkdtemp/mkstemp, not the destination
+  plus a suffix. If it came from the app's own config or cache directory, a
+  derived name is fine and often clearer.
