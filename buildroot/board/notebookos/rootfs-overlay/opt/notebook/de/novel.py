@@ -1359,6 +1359,7 @@ class Novel(nbapp.AppWindow):
         idle time the view has settled. The guard keeps a stale idle from
         poking a buffer the view no longer shows."""
         def later():
+            self._caret_idle = None
             try:
                 if buf is self.view.get_buffer():
                     off = min(max(0, int(offset)), buf.get_char_count())
@@ -1366,7 +1367,22 @@ class Novel(nbapp.AppWindow):
             except Exception:
                 pass
             return False
-        GLib.idle_add(later)
+        # Recorded and cancelled on close like every other source here. The
+        # callback already guards against a buffer the view has moved on from,
+        # so this was not a route to lost work — but "every source is recorded"
+        # is the rule that makes the other two provable, and an exception this
+        # small is how it stops being true.
+        self._cancel_caret_idle()
+        self._caret_idle = GLib.idle_add(later)
+
+    def _cancel_caret_idle(self):
+        tid = getattr(self, "_caret_idle", None)
+        if tid:
+            try:
+                GLib.source_remove(tid)
+            except Exception:
+                pass
+        self._caret_idle = None
 
     def _restore(self, state):
         """Rebuild the chapter list + text buffers from a parsed state dict.
@@ -1468,6 +1484,7 @@ class Novel(nbapp.AppWindow):
         # typing, and an editor whose autosave timer had been cancelled out
         # from under it would stop saving entirely.
         self.undo.cancel()
+        self._cancel_caret_idle()
         for attr in ("_save_timer", "_page_timer"):
             tid = getattr(self, attr, None)
             if tid:
@@ -2124,7 +2141,17 @@ class Novel(nbapp.AppWindow):
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
             count = self._prepare_render()
-            nbprint.simple_pdf(path, count, self._draw_page, PAGE_W, PAGE_H)
+            # Rendered beside the destination and moved into place only when
+            # complete. Writing onto `path` meant a layout or cairo failure
+            # part-way through had already truncated whatever was there — and
+            # the reason to export a novel twice is that the novel changed, so
+            # the casualty was yesterday's good PDF, seconds after the user
+            # answered "Replace". Seven other apps have been fixed for this;
+            # the shared primitive is the one they all use now.
+            nbapp.atomic_write_via(
+                path,
+                lambda draft: nbprint.simple_pdf(
+                    draft, count, self._draw_page, PAGE_W, PAGE_H))
         except Exception:
             self._set_save_error("Export failed")
             return

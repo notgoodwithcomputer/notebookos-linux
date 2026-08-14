@@ -134,6 +134,53 @@ def main():
     check(parse({"chapters": []}) is None and parse("nonsense") is None,
           "a document that is not a manuscript is still refused")
 
+    # Exporting over yesterday's PDF must not destroy it when the render
+    # fails. Novel rendered straight onto the destination, so a layout or
+    # cairo failure part-way through truncated the previous export moments
+    # after the user answered "Replace" — and the reason to export a novel
+    # twice is that the novel changed, so that file was one they wanted.
+    docs = novel.DOCS_DIR
+    os.makedirs(docs, exist_ok=True)
+    dest = os.path.join(docs, "Manuscript.pdf")
+    with open(dest, "wb") as fh:
+        fh.write(b"%PDF-1.4 yesterday's good export")
+    good = open(dest, "rb").read()
+
+    app = novel.Novel.__new__(novel.Novel)
+    app._set_save_error = lambda *a, **k: None
+    app._prepare_render = lambda: 1
+    app._draw_page = lambda *a, **k: None
+    app.save_lbl = type("L", (), {"set_markup": lambda *a, **k: None})()
+
+    real_simple_pdf = novel.nbprint.simple_pdf
+
+    def half_a_render(path, *a, **k):
+        # A real cairo failure leaves a partly-written file, so write before
+        # raising — a check that only ever saw an untouched empty draft would
+        # pass against a writer that renders straight onto the destination.
+        with open(path, "wb") as fh:
+            fh.write(b"%PDF-1.4 half")
+        raise RuntimeError("layout failed part-way")
+
+    novel.nbprint.simple_pdf = half_a_render
+    try:
+        app._write_export_pdf(dest)
+    finally:
+        novel.nbprint.simple_pdf = real_simple_pdf
+    check(open(dest, "rb").read() == good,
+          "a failed export leaves yesterday's PDF untouched")
+    check(not [n for n in os.listdir(docs) if n.startswith(".nbw-")],
+          "a failed export leaves no draft behind")
+
+    novel.nbprint.simple_pdf = lambda path, *a, **k: open(
+        path, "wb").write(b"%PDF new")
+    try:
+        app._write_export_pdf(dest)
+    finally:
+        novel.nbprint.simple_pdf = real_simple_pdf
+    check(open(dest, "rb").read() == b"%PDF new",
+          "a successful export still replaces the file")
+
     print()
     if FAILED:
         print("novel lifecycle selftest: %d FAILED" % len(FAILED))
