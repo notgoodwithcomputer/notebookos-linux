@@ -655,7 +655,7 @@ class EbookReader(nbapp.AppWindow):
         # Set by _load_state when the store on disk exists but could not be
         # read. The session then persists NOTHING: the reader's records stay
         # exactly where they are, at the path they would look for.
-        self._state_read_only = False
+        self._store_damaged = False
         self._load_state()
 
         self.content.pack_start(self._reading_bar(), False, False, 0)
@@ -730,14 +730,14 @@ class EbookReader(nbapp.AppWindow):
             # explanation. Novel, Music, Workout and Animation all take the
             # other path — read-only, and say so — and the reader was simply
             # the one that did not.
-            self._state_read_only = True
+            self._store_damaged = True
             return
         if isinstance(data, list):
             data = {"books": data}
         elif not isinstance(data, dict):
             # Valid JSON, but a scalar — some other file, or a repair gone
             # wrong. Nothing to read, and nothing may overwrite it either.
-            self._state_read_only = True
+            self._store_damaged = True
             return
         books = self._as_books(data.get("books"))
         if not books:
@@ -785,7 +785,7 @@ class EbookReader(nbapp.AppWindow):
             # write is better than moving it aside and starting fresh: the
             # records stay exactly where the reader left them, at the path
             # they would look for.
-            self._state_read_only = True
+            self._store_damaged = True
 
     # The reading generation is `self._nav`; `_doc_gen` stays as its documented
     # name (Article III §3) so a reader of the constitution — and the
@@ -804,12 +804,19 @@ class EbookReader(nbapp.AppWindow):
 
     def _save_state(self):
         """Persist the shelf and open book under $NB_HOME (best effort)."""
-        if getattr(self, "_state_read_only", False):
-            # The store on disk could not be read, so this session does not
-            # write: the shelf on screen is empty because loading FAILED, and
-            # saving it would replace twenty books' worth of reading positions
-            # with that emptiness. The reader is told on the message card.
-            return
+        # NOT gated on the damaged flag, deliberately. Refusing to save for
+        # the session is the cure Journal and Contacts both shipped and both
+        # had caught: it keeps the bytes and leaves an app that silently never
+        # saves again, "which is its own lie" (journal.py). The split across
+        # this OS is principled — Comics, Animation, Composer and Novel go
+        # read-only because their store is only a RECOVERY cache and the real
+        # work is in separate documents, while Calendar, Contacts and Journal
+        # keep saving because the store IS the data. A reader's shelf and its
+        # reading positions are the data, so this belongs with the latter:
+        # nbapp.atomic_write_json moves the unreadable file aside before it
+        # replaces anything, so the old bytes survive AND the reader can
+        # rebuild a shelf that persists. What was actually missing was never
+        # the refusal — it was telling them, which _show_damaged_store does.
         try:
             nbapp.atomic_write_json(
                 CONFIG_PATH, {"books": self._books, "open": self._open_path},
@@ -1019,7 +1026,7 @@ class EbookReader(nbapp.AppWindow):
         if book is None:
             # An unreadable store and an empty shelf look the same on screen
             # and are not the same thing.
-            if getattr(self, "_state_read_only", False):
+            if getattr(self, "_store_damaged", False):
                 self._show_damaged_store()
             else:
                 self._show_empty()

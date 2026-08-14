@@ -260,7 +260,7 @@ def main():
         w = cls.__new__(cls)
         w._books = []
         w._open_path = None
-        w._state_read_only = False
+        w._store_damaged = False
         try:
             cls._load_state(w)
         finally:
@@ -268,10 +268,13 @@ def main():
         return w, path
 
     w, path = _reader_with_store('{"books": [] this is not json')
-    check("a store that will not parse starts a read-only session",
-          w._state_read_only is True)
+    check("a store that will not parse is marked damaged, so the reader is told",
+          w._store_damaged is True)
 
-    # ...and read-only means the bytes stay exactly where the reader left them.
+    # It must NOT stop saving. That cure is the one Journal and Contacts each
+    # shipped and each had caught: the bytes survive and the app silently never
+    # saves again. The unreadable bytes are moved aside by the atomic writer,
+    # so the reader can rebuild a shelf that actually persists.
     before = open(path).read()
     real = ebook.CONFIG_PATH
     ebook.CONFIG_PATH = path
@@ -280,20 +283,23 @@ def main():
         cls._save_state(w)
     finally:
         ebook.CONFIG_PATH = real
-    check("...and nothing is written over the damaged store",
-          open(path).read() == before)
-    check("...which is still at its own path, not renamed aside",
-          _os.path.exists(path)
-          and not [n for n in _os.listdir(_os.path.dirname(path))
-                   if ".damaged-" in n])
+    saved = _json.load(open(path))
+    check("...and the reader can still build a shelf that persists",
+          [b["path"] for b in saved.get("books", [])] == ["/x"])
+    aside = [n for n in _os.listdir(_os.path.dirname(path))
+             if ".damaged-" in n]
+    check("...while the unreadable bytes are kept beside it, not destroyed",
+          len(aside) == 1
+          and open(_os.path.join(_os.path.dirname(path), aside[0])).read()
+          == before)
 
     w2, _ = _reader_with_store(None)
-    check("a first run is NOT read-only", w2._state_read_only is False)
+    check("a first run is NOT read-only", w2._store_damaged is False)
 
     w3, _ = _reader_with_store('{"books": [{"path": "/a", "title": "A", '
                                '"fmt": "PDF"}]}')
     check("a shelf that reads fine is not read-only",
-          w3._state_read_only is False and len(w3._books) == 1)
+          w3._store_damaged is False and len(w3._books) == 1)
 
     print("RESULT: " + ("ALL PASS" if all(results) else "SOME FAILED"))
     sys.exit(0 if all(results) else 1)
