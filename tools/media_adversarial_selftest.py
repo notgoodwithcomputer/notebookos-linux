@@ -42,7 +42,13 @@ def fallback_and_orientation_checks():
     with open(tmp, "wb") as fh:
         fh.write(b"real converted bytes")
 
-    real_load = media.GdkPixbuf.Pixbuf.new_from_file
+    # Patched at _bounded_pixbuf, which is the seam that decides the ceiling
+    # and performs the decode. It used to be patched one level lower, at
+    # GdkPixbuf.Pixbuf.new_from_file — but the bound is no longer decided from
+    # a probe and applied to that call; it comes off the loader's size-prepared
+    # signal, so a fake on new_from_file now intercepts nothing and this check
+    # would have passed over whatever the real loader did.
+    real_bounded_first = media._bounded_pixbuf
     real_decode = media._decode_to_png
     calls = []
 
@@ -52,12 +58,12 @@ def fallback_and_orientation_checks():
             raise RuntimeError("forced missing loader")
         return FakePixbuf()
 
-    media.GdkPixbuf.Pixbuf.new_from_file = load
+    media._bounded_pixbuf = load
     media._decode_to_png = lambda path: tmp
     try:
         pb = media._pixbuf_any(src)
     finally:
-        media.GdkPixbuf.Pixbuf.new_from_file = real_load
+        media._bounded_pixbuf = real_bounded_first
         media._decode_to_png = real_decode
     check("pixbuf-refused format is displayed through CLI fallback",
           calls == [src, tmp] and pb is not None, repr(calls))
@@ -65,11 +71,11 @@ def fallback_and_orientation_checks():
           getattr(pb, "oriented", False), "fallback pixbuf was not oriented")
 
     # Direct loader must obey the same orientation law.
-    media.GdkPixbuf.Pixbuf.new_from_file = lambda _path: FakePixbuf()
+    media._bounded_pixbuf = lambda _path: FakePixbuf()
     try:
         direct = media._pixbuf_any(src)
     finally:
-        media.GdkPixbuf.Pixbuf.new_from_file = real_load
+        media._bounded_pixbuf = real_bounded_first
     check("native pixbuf decode applies embedded orientation",
           direct.oriented, "native pixbuf was not oriented")
     check("MUTANT: returning raw pixbuf DOES ignore EXIF orientation",
@@ -119,32 +125,53 @@ def fallback_and_orientation_checks():
 
 
 def huge_decode_check():
+    """The decode ceiling, checked where it is now applied.
+
+    It used to be decided from get_file_info(), a probe that is ALLOWED to
+    fail — and on failure the dimensions became 0x0, which failed the
+    `width > 0` test and fell through to an unscaled new_from_file(). The file
+    whose header could not be read was the one file decoded with no ceiling.
+    The bound now comes off the loader's own size-prepared signal, which
+    carries the real dimensions and cannot be skipped."""
+    # A real PNG, big enough that a missed ceiling is unmistakable in the
+    # result: this goes through the actual GdkPixbuf loader, not a fake.
     src = os.path.join(HOME, "huge.png")
-    with open(src, "wb") as fh:
-        fh.write(b"header")
-    real_load = media.GdkPixbuf.Pixbuf.new_from_file
+    big = media.GdkPixbuf.Pixbuf.new(
+        media.GdkPixbuf.Colorspace.RGB, False, 8, 9000, 6000)
+    big.savev(src, "png", [], [])
+
+    decoded = media._bounded_pixbuf(src)
+    w, h = decoded.get_width(), decoded.get_height()
+    check("a huge image is decoded inside the area budget",
+          w * h <= media.MAX_AREA, "decoded %dx%d = %d px" % (w, h, w * h))
+    check("a huge image is decoded inside the side budget",
+          max(w, h) <= media.MAX_PIX, "decoded %dx%d" % (w, h))
+    check("the bounded decode keeps the aspect ratio",
+          abs((w / float(h)) - 1.5) < 0.02, "%dx%d" % (w, h))
+
+    # The defect itself: with the dimensions unreadable, the ceiling must
+    # TIGHTEN rather than disappear.
     real_info = media.GdkPixbuf.Pixbuf.get_file_info
-    real_scaled = media.GdkPixbuf.Pixbuf.new_from_file_at_scale
-    calls = []
-    media.GdkPixbuf.Pixbuf.get_file_info = lambda path: (object(), 50000, 50000)
-    media.GdkPixbuf.Pixbuf.new_from_file = lambda path: (
-        calls.append(("full", path)) or FakePixbuf(50000, 50000))
-    media.GdkPixbuf.Pixbuf.new_from_file_at_scale = lambda path, w, h, preserve: (
-        calls.append(("scaled", path, w, h, preserve)) or FakePixbuf(w, h))
+    media.GdkPixbuf.Pixbuf.get_file_info = lambda path: (None, 0, 0)
     try:
-        media._pixbuf_any(src)
+        blind = media._bounded_pixbuf(src)
     finally:
-        media.GdkPixbuf.Pixbuf.new_from_file = real_load
         media.GdkPixbuf.Pixbuf.get_file_info = real_info
-        media.GdkPixbuf.Pixbuf.new_from_file_at_scale = real_scaled
-    check("huge image decode is bounded before full allocation",
-          not any(call[0] == "full" for call in calls)
-          and calls == [("scaled", src, media.MAX_PIX, media.MAX_PIX, True)],
-          repr(calls))
-    mutant_calls = []
-    (lambda path: mutant_calls.append(("full", path)))(src)
-    check("MUTANT: unconditional new_from_file DOES request full allocation",
-          mutant_calls == [("full", src)])
+    bw, bh = blind.get_width(), blind.get_height()
+    check("an unprobeable image is still decoded inside the budget",
+          bw * bh <= media.MAX_AREA and max(bw, bh) <= media.MAX_PIX,
+          "decoded %dx%d = %d px" % (bw, bh, bw * bh))
+
+    # A side cap alone is not a memory bound, which is why MAX_AREA exists.
+    check("MUTANT: a side-only cap DOES admit a quarter-gigabyte image",
+          media.MAX_PIX * media.MAX_PIX > media.MAX_AREA,
+          "%d vs %d" % (media.MAX_PIX * media.MAX_PIX, media.MAX_AREA))
+    check("_fit_budget refuses unknown dimensions a free pass",
+          media._fit_budget(0, 0)[0] * media._fit_budget(0, 0)[1]
+          <= media.MAX_AREA, repr(media._fit_budget(0, 0)))
+    check("_fit_budget leaves an ordinary photo alone",
+          media._fit_budget(1600, 1200) == (1600, 1200),
+          repr(media._fit_budget(1600, 1200)))
 
     svg = os.path.join(HOME, "huge.svg")
     with open(svg, "w", encoding="utf-8") as fh:
@@ -163,8 +190,33 @@ def huge_decode_check():
         subprocess.run = real_run
     cmd = commands[0] if commands else []
     check("huge SVG fallback passes bounded dimensions to rsvg-convert",
-          "--width" in cmd and "--height" in cmd and
-          str(media.MAX_PIX) in cmd, repr(cmd))
+          "--width" in cmd and "--height" in cmd, repr(cmd))
+    try:
+        sw = int(cmd[cmd.index("--width") + 1])
+        sh = int(cmd[cmd.index("--height") + 1])
+    except (ValueError, IndexError):
+        sw = sh = 10 ** 9
+    check("the SVG fallback is bounded by area, not just by side",
+          sw * sh <= media.MAX_AREA, "%dx%d" % (sw, sh))
+
+    # A drawing with no readable size is the case that used to lose its
+    # ceiling entirely: rsvg-convert was handed no --width/--height at all.
+    sizeless = os.path.join(HOME, "sizeless.svg")
+    with open(sizeless, "w", encoding="utf-8") as fh:
+        fh.write('<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')
+    commands[:] = []
+    shutil.which = lambda tool: "/usr/bin/rsvg-convert" if tool == "rsvg-convert" else real_which(tool)
+    subprocess.run = lambda cmd, **kwargs: (commands.append(cmd) or
+        type("Result", (), {"returncode": 1})())
+    try:
+        media._decode_to_png(sizeless)
+    finally:
+        shutil.which = real_which
+        subprocess.run = real_run
+    sizeless_cmd = commands[0] if commands else []
+    check("an SVG with no readable size is still given a ceiling",
+          "--width" in sizeless_cmd and "--height" in sizeless_cmd,
+          repr(sizeless_cmd))
     check("MUTANT: unbounded rsvg-convert command DOES omit size limits",
           "--width" not in ["rsvg-convert", "-o", "out.png", svg])
 

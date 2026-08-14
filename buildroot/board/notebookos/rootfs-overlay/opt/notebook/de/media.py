@@ -99,6 +99,10 @@ ZOOM_MIN, ZOOM_MAX, ZOOM_STEP = 0.05, 8.0, 1.25
 # a hard cap on the scaled pixel size, so an extreme zoom can never allocate a
 # multi-gigabyte pixbuf (scale is trimmed to keep the larger side under this)
 MAX_PIX = 8000
+# the real memory ceiling: a cap on the longer side alone lets 8000x8000
+# through, which is ~256MB once GdkPixbuf holds it as RGBA. Counted in pixels
+# so it means the same thing on every format and every decoder path.
+MAX_AREA = 24_000_000
 # slideshow dwell (ms) before advancing to the next image
 SLIDESHOW_MS = 3500
 # toolbar icon tone (faint ink, matching the design language)
@@ -122,27 +126,35 @@ def _decode_to_png(path):
     os.close(fd)
     try:
         if ext == ".svg" and shutil.which("rsvg-convert"):
-            cmd = ["rsvg-convert"]
+            # ALWAYS bounded, including when the probe fails. A vector drawing
+            # has no inherent size, so "could not read the dimensions" is not a
+            # reason to let it rasterise to whatever it likes — that was the
+            # one path where an unreadable header removed the ceiling instead
+            # of tightening it.
             try:
                 _fmt, width, height = GdkPixbuf.Pixbuf.get_file_info(path)
             except Exception:
                 width = height = 0
-            if width > 0 and height > 0 and max(width, height) > MAX_PIX:
-                scale = MAX_PIX / float(max(width, height))
-                cmd += ["--keep-aspect-ratio",
-                        "--width", str(max(1, int(width * scale))),
-                        "--height", str(max(1, int(height * scale)))]
-            cmd += ["-o", out, path]
+            bw, bh = _fit_budget(width, height)
+            cmd = ["rsvg-convert", "--keep-aspect-ratio",
+                   "--width", str(bw), "--height", str(bh),
+                   "-o", out, path]
         elif shutil.which("ffmpeg"):
             # Bound the fallback's output before it becomes a PNG and before
             # GdkPixbuf allocates it.  MAX_PIX is the same real-pixel ceiling
             # used by the renderer; force_original_aspect_ratio=decrease also
             # prevents a small image from being enlarged.
+            # Bounded before it becomes a PNG and before GdkPixbuf allocates
+            # it. The ceiling is the area budget's square, not MAX_PIX: a side
+            # cap would let this write an 8000x8000 PNG for the next decoder to
+            # choke on. force_original_aspect_ratio=decrease also keeps a small
+            # image from being enlarged into the budget.
+            side = int(MAX_AREA ** 0.5)
             cmd = ["ffmpeg", "-y", "-v", "error", "-i", path,
                    "-frames:v", "1", "-vf",
                    "scale='min(%d,iw)':'min(%d,ih)':"
                    "force_original_aspect_ratio=decrease"
-                   % (MAX_PIX, MAX_PIX), out]
+                   % (side, side), out]
         else:
             os.unlink(out)
             return None
@@ -167,17 +179,74 @@ def _oriented(pixbuf):
         return pixbuf
 
 
-def _bounded_pixbuf(path):
-    """Decode without allocating an unbounded source-sized pixbuf."""
+def _fit_budget(width, height):
+    """`width` x `height` brought under both decode ceilings, aspect kept.
+
+    TWO ceilings, because one of them was never a memory bound. MAX_PIX caps
+    the longer SIDE, and a side cap does not bound an allocation: 8000x8000
+    passes it and costs about 256MB the moment GdkPixbuf holds it as RGBA. What
+    bounds the allocation is the area, so MAX_AREA is the real budget and the
+    side cap stays for the other shape of trouble — a 30000x50 panorama is well
+    inside any area budget and still nothing good.
+
+    Unknown or nonsensical dimensions collapse to the budget's own square
+    rather than to "no limit": a file whose header cannot be read is the last
+    file that should be trusted with an unbounded decode."""
     try:
-        _fmt, width, height = GdkPixbuf.Pixbuf.get_file_info(path)
-    except Exception:
-        width = height = 0
-    if width > 0 and height > 0 and max(width, height) > MAX_PIX:
-        scale = MAX_PIX / float(max(width, height))
-        return GdkPixbuf.Pixbuf.new_from_file_at_scale(
-            path, max(1, int(width * scale)), max(1, int(height * scale)), True)
-    return GdkPixbuf.Pixbuf.new_from_file(path)
+        w, h = int(width), int(height)
+    except (TypeError, ValueError):
+        w = h = 0
+    if w <= 0 or h <= 0:
+        side = int(MAX_AREA ** 0.5)
+        return side, side
+    scale = 1.0
+    if max(w, h) > MAX_PIX:
+        scale = MAX_PIX / float(max(w, h))
+    area = (w * scale) * (h * scale)
+    if area > MAX_AREA:
+        scale *= (MAX_AREA / area) ** 0.5
+    if scale >= 1.0:
+        return w, h
+    return max(1, int(w * scale)), max(1, int(h * scale))
+
+
+def _bounded_pixbuf(path):
+    """Decode without allocating a source-sized pixbuf.
+
+    THE CAP USED TO BE SKIPPED ENTIRELY WHEN THE DIMENSIONS WERE UNKNOWN. A
+    failed get_file_info() became 0x0, 0 failed the `width > 0` test, and the
+    code fell through to an unscaled new_from_file() — so the one file whose
+    header could not be probed was also the one file decoded with no ceiling at
+    all. Deciding the bound from a probe that is allowed to fail is the defect;
+    the loader's own size-prepared signal carries the real dimensions and
+    arrives before any pixels are allocated, so the bound is applied there
+    instead and cannot be skipped."""
+    loader = GdkPixbuf.PixbufLoader()
+
+    def size_prepared(ldr, width, height):
+        want = _fit_budget(width, height)
+        if want != (width, height):
+            ldr.set_size(want[0], want[1])
+
+    loader.connect("size-prepared", size_prepared)
+    try:
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(1 << 16)
+                if not chunk:
+                    break
+                loader.write(chunk)
+    finally:
+        # close() is what completes the decode AND what releases the loader's
+        # own buffers; a partial file must still not leak them.
+        try:
+            loader.close()
+        except Exception:                                         # noqa: BLE001
+            raise
+    pixbuf = loader.get_pixbuf()
+    if pixbuf is None:
+        raise ValueError("no image data in %s" % path)
+    return pixbuf
 
 
 def _pixbuf_any(path):
