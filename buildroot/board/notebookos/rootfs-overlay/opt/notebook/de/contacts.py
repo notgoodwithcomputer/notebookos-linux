@@ -1669,6 +1669,14 @@ class Contacts(nbapp.AppWindow):
                 and ev.keyval in (Gdk.KEY_z, Gdk.KEY_Z)):
             self._undo_delete()
             return True
+        # The File menu prints "Print…    Ctrl+P" from the shared command
+        # registry, and nothing here answered it — an accelerator advertised
+        # on every card and bound by no one. writer.py binds it the same way.
+        if (ev.state & Gdk.ModifierType.CONTROL_MASK
+                and ev.keyval in (Gdk.KEY_p, Gdk.KEY_P)):
+            if self.people:          # the same condition the menu greys on
+                self._print()
+            return True
         return super()._on_key(w, ev)
 
     # ------------------------------------------------------------- menus

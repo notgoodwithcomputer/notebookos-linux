@@ -83,6 +83,9 @@ CHECK_GATES = [
     # Static: every launchable app registered everywhere its neighbours
     # are, in BOTH directions — missing, and stale after a removal.
     "app_registration_check",
+    # Static, both directions: a shortcut printed that nothing answers,
+    # and a key bound that no menu shows. Analyses 35 of 36 handlers.
+    "accelerator_promise_check",
     "frame_pacing_check", "grid_check",
     # §E4 check 5 (no diagonal travel). Separate from grid_check because that
     # one owns the STATIC constants and is edited whenever a sidebar
