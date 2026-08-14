@@ -1180,8 +1180,14 @@ class EbookReader(nbapp.AppWindow):
         self._larger_btn.set_sensitive(reading)
         # Both modes now turn pages: an EPUB chapter is cut into reading pages
         # (see EPUB_PAGE_BLOCKS), so "chapter" would no longer be true.
-        self._prev_btn.set_tooltip_text(_t("Previous page"))
-        self._next_btn.set_tooltip_text(_t("Next page"))
+        self._prev_btn.set_tooltip_text(
+            _t("Previous page") if has_pages and n > 0 else
+            (_t("This is the first page.") if has_pages else
+             _t("No document is open.")))
+        self._next_btn.set_tooltip_text(
+            _t("Next page") if has_pages and n < total - 1 else
+            (_t("This is the last page.") if has_pages else
+             _t("No document is open.")))
         if has_pages:
             self._page_lbl.set_text(_t("Page %d / %d") % (n + 1, total))
         else:

@@ -1443,6 +1443,15 @@ class Illustrator(nbapp.AppWindow):
                 sc.remove_class("disabled")
             else:
                 sc.add_class("disabled")
+        self.del_btn.set_tooltip_text(
+            _t("Delete layer") if self.active != 0 else
+            _t("The Background layer cannot be deleted."))
+        self.down_btn.set_tooltip_text(
+            _t("Send layer back") if self.active > 0 else
+            _t("This layer is already at the back."))
+        self.up_btn.set_tooltip_text(
+            _t("Bring layer forward") if self.active < len(self.layers) - 1 else
+            _t("This layer is already at the front."))
 
         ly = self.layers[self.active]
         # Block the value-changed handler while syncing the slider to the active

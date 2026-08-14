@@ -651,6 +651,17 @@ class MediaViewer(nbapp.AppWindow):
         self._set_sensitive("next", multi)
         self._set_sensitive("play", multi)
         self._set_sensitive("trash", bool(self._media_path))
+        for name, enabled, normal, reason in (
+                ("zoomin", has_img, _t("Zoom in  (+)"), _t("No image is open.")),
+                ("zoomout", has_img, _t("Zoom out  (-)"), _t("No image is open.")),
+                ("rotate", has_img, _t("Rotate right (not saved to the file)"), _t("No image is open.")),
+                ("prev", multi, _t("Previous image  (←)"), _t("There are no other images in this folder.")),
+                ("next", multi, _t("Next image  (→)"), _t("There are no other images in this folder.")),
+                ("play", multi, _t("Start slideshow"), _t("A slideshow needs at least two images in the folder.")),
+                ("trash", bool(self._media_path), _t("Move to Trash  (Delete)"), _t("No file is open."))):
+            button = self._btn.get(name)
+            if button is not None:
+                button.set_tooltip_text(normal if enabled else reason)
         if getattr(self, "_fit_btn", None) is not None:
             self._fit_btn.set_sensitive(has_img)
 
@@ -1337,7 +1348,7 @@ class MediaViewer(nbapp.AppWindow):
                 ctx.add_class("active")
             else:
                 ctx.remove_class("active")
-            btn.set_tooltip_text(_t("Stop slideshow") if on else "Start slideshow")
+            btn.set_tooltip_text(_t("Stop slideshow") if on else _t("Start slideshow"))
         img = self._btn_img.get("play")
         if img is not None:
             try:

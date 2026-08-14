@@ -379,6 +379,8 @@ class Installer(nbapp.AppWindow):
         self.next_btn.get_style_context().add_class("inst-btn")
         self.next_btn.get_style_context().add_class("inst-next")
         self.next_btn.connect("clicked", lambda *_: self._on_next())
+        self.back_btn.set_tooltip_text(_t("This is the first step."))
+        self.next_btn.set_tooltip_text(_t("The system to install is not available."))
         foot.pack_end(self.next_btn, False, False, 0)
         foot.pack_end(self.back_btn, False, False, 0)
         return foot
@@ -1445,6 +1447,7 @@ class Installer(nbapp.AppWindow):
 
         ready, reason = self._install_ready()
         self.next_btn.set_sensitive(ready)
+        self._refresh_footer_tooltips(ready)
         # Keep the footer hint in step with the button whichever way we got
         # here (_validate also sets it, to the same text).
         if hasattr(self, "_foot_hint"):
@@ -1797,7 +1800,27 @@ class Installer(nbapp.AppWindow):
             self.back_btn.show()
             self.next_btn.show()
             self.back_btn.set_sensitive(i > 0)
+            self._refresh_footer_tooltips(self.next_btn.get_sensitive())
         self._validate()
+
+    def _refresh_footer_tooltips(self, next_ready):
+        """Keep wizard navigation explanations paired with sensitivity."""
+        key = self.STEPS[self._step][0]
+        self.back_btn.set_tooltip_text(
+            _t("Back") if self._step > 0 else _t("This is the first step."))
+        if next_ready:
+            self.next_btn.set_tooltip_text(
+                _t("Erase disk and install") if key == "summary" else _t("Next"))
+        elif key == "welcome":
+            self.next_btn.set_tooltip_text(_t("The system to install is not available."))
+        elif key == "target":
+            self.next_btn.set_tooltip_text(_t("Choose a disk to continue."))
+        elif key == "options":
+            self.next_btn.set_tooltip_text(_t("Some installation details need attention."))
+        elif key == "summary":
+            self.next_btn.set_tooltip_text(_t("The installation requirements are not met."))
+        else:
+            self.next_btn.set_tooltip_text(_t("Installation is in progress."))
 
     def _on_next(self):
         # On the Summary step "forward" is the destructive action itself, and
@@ -1863,6 +1886,7 @@ class Installer(nbapp.AppWindow):
             self._opt_hint.set_text(hint)
         if key not in ("summary", "progress", "done"):
             self.next_btn.set_sensitive(ok)
+            self._refresh_footer_tooltips(ok)
         # keep the summary install button honest if we are on it
         if key == "summary":
             self._refresh_summary()
@@ -2140,6 +2164,7 @@ class Installer(nbapp.AppWindow):
             self._log_toggle.set_active(True)
         self.back_btn.show()
         self.back_btn.set_sensitive(True)
+        self._refresh_footer_tooltips(self.next_btn.get_sensitive())
         return False
 
     def _install_done(self):

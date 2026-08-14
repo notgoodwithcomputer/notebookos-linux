@@ -6039,7 +6039,11 @@ class Sequencer(nbapp.AppWindow):
             _cls(st["mute"], "on", tk["muted"])
             _cls(st["solo"], "on", tk["solo"])
             # per-track clear is only meaningful once a clip exists
-            tw["clr"].set_sensitive(bool(tk["clips"]))
+            has_clips = bool(tk["clips"])
+            tw["clr"].set_sensitive(has_clips)
+            tw["clr"].set_tooltip_text(
+                _t("Remove this track's clips") if has_clips else
+                _t("This track has no clips to remove."))
         # status bar summaries
         # every status string is translated HERE, at the point it is applied:
         # refresh() rewrites these labels with a bare set_text(), so returning

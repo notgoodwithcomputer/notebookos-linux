@@ -33,63 +33,10 @@ SELF = os.path.abspath(__file__)
 # (app file, GTK type, control name, defect) -> why it is deliberately carried.
 # Keep this exact: fixed entries are failures until removed, just like additions.
 DEBT = {
-    ("academics.py", "Button", 'Bullet list', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("academics.py", "Button", 'Highlight', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("academics.py", "Button", 'Numbered list', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("academics.py", "Button", 'Paragraph style: Body, Heading, Subheading', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
+    # comics.py had four entries here that were never real: its layer
+    # buttons are icon-only, and the gate was reading their tooltip back
+    # as their own name. Removed with the fix, not with a fix to comics.
     ("burner.py", "Button", 'Burn disc', "no tooltip"):
-        "carries no reason at all; needs a sentence naming the condition",
-    ("calendar.py", "Button", 'Delete calendar', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("comics.py", "Button", 'Bring layer forward', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("comics.py", "Button", 'Delete layer', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("comics.py", "Button", 'Move page up', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("comics.py", "Button", 'Send layer back', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("ebook.py", "Button", 'Next page', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("ebook.py", "Button", 'Previous page', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("illustrator.py", "Button", 'Bring layer forward', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("illustrator.py", "Button", 'Delete layer', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("illustrator.py", "Button", 'Send layer back', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("installer.py", "Button", 'Back', "no tooltip"):
-        "carries no reason at all; needs a sentence naming the condition",
-    ("installer.py", "Button", 'Next', "no tooltip"):
-        "carries no reason at all; needs a sentence naming the condition",
-    ("journal.py", "Button", 'Bullet', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("journal.py", "Button", 'Quote', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("media.py", "Button", 'Move to Trash (Delete)', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("media.py", "Button", 'Next image (→)', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("media.py", "Button", 'Previous image (←)', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("media.py", "Button", 'Rotate right (not saved to the file)', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("media.py", "Button", 'Start slideshow', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("media.py", "Button", 'Zoom in (+)', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("media.py", "Button", 'Zoom out (-)', "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("sequencer.py", "Button", "Remove this track's clips", "tooltip repeats control name"):
-        "tooltip only repeats the label; needs the reason it is off",
-    ("sysmon.py", "Button", 'End Program', "no tooltip"):
-        "carries no reason at all; needs a sentence naming the condition",
-    ("usbwriter.py", "Button", 'Write to the stick', "no tooltip"):
         "carries no reason at all; needs a sentence naming the condition",
 }
 
@@ -123,7 +70,18 @@ def _text(value):
 
 
 def _control_name(widget, Gtk):
-    """Return the control's authored label, falling back to accessibility."""
+    """The control's AUTHORED label, and a name to report it by.
+
+    These must be separate. GTK derives a widget's accessible name from its
+    tooltip when nothing else names it, so an icon-only button whose reason
+    lives in its tooltip reports that reason as its own name — and comparing
+    the two then compares the tooltip with itself. The gate called that
+    "tooltip repeats control name" and flagged the CORRECT fix, on the very
+    control the fix was written for.
+
+    Only an authored label can be repeated. Where there is none, a tooltip
+    cannot be repeating it.
+    """
     label = ""
     if isinstance(widget, Gtk.ToolButton):
         label = _text(widget.get_label())
@@ -139,7 +97,7 @@ def _control_name(widget, Gtk):
         accessible = _text(widget.get_accessible().get_name())
     except Exception:
         accessible = ""
-    return label or accessible or "<unnamed>"
+    return label, (label or accessible or "<unnamed>")
 
 
 def _walk(root, Gtk):
@@ -207,12 +165,15 @@ def probe(name, module_dir):
         if widget.get_sensitive():
             continue
         disabled += 1
-        name_text = _control_name(widget, Gtk)
+        authored, shown = _control_name(widget, Gtk)
         reason = _text(widget.get_tooltip_text())
-        defect = "no tooltip" if not reason else "tooltip repeats control name"
-        if reason and reason.casefold() != name_text.casefold():
+        if not reason:
+            defect = "no tooltip"
+        elif authored and reason.casefold() == authored.casefold():
+            defect = "tooltip repeats control name"
+        else:
             continue
-        findings.append([name + ".py", type(widget).__name__, name_text, defect])
+        findings.append([name + ".py", type(widget).__name__, shown, defect])
 
     off.destroy()
     try:

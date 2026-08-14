@@ -241,6 +241,7 @@ class SystemMonitor(nbapp.AppWindow):
         self.endbtn.add(ebox)
         self.endbtn.connect("clicked", self._end_process)
         self.endbtn.set_sensitive(False)   # enabled only when a row is selected
+        self.endbtn.set_tooltip_text(_t("Select a program to end it."))
         foot.pack_end(self.endbtn, False, False, 0)
         stage.pack_start(foot, False, False, 0)
 
@@ -594,6 +595,8 @@ class SystemMonitor(nbapp.AppWindow):
         # End Program is enabled only while a row is actually selected.
         has = sel.get_selected()[1] is not None
         self.endbtn.set_sensitive(has)
+        self.endbtn.set_tooltip_text(
+            _t("End Program") if has else _t("Select a program to end it."))
         # Dim the icon in step with the button (CSS can't recolour a pixbuf).
         nbicons.set_image(self._end_icon,
             "stopsq", 16, self._END_ICON_ON if has else self._END_ICON_OFF)

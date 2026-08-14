@@ -1189,9 +1189,10 @@ class Calendar(nbapp.AppWindow):
         delbtn.get_style_context().add_class("caldel")
         delbtn.set_valign(Gtk.Align.CENTER)
         delbtn.add(nbicons.image("trash", 14, "#9A9484"))
-        delbtn.set_tooltip_text(_t("Delete calendar"))
-        if len(self.calendars) <= 1:
-            delbtn.set_sensitive(False)
+        can_delete = len(self.calendars) > 1
+        delbtn.set_sensitive(can_delete)
+        delbtn.set_tooltip_text(_t("Delete calendar") if can_delete else
+                                _t("The only calendar cannot be deleted."))
         delbtn.connect("clicked", self._on_delete_cal, name)
         row.pack_end(delbtn, False, False, 0)
         return row

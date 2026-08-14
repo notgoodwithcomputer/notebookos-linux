@@ -2348,6 +2348,7 @@ class Academics(nbapp.AppWindow):
         stylebtn.connect("clicked", lambda *_: self._cycle_style())
         left.pack_start(stylebtn, False, False, 0)
         self._fmt_btns.append(stylebtn)
+        self._style_btn = stylebtn
         left.pack_start(self._sep(), False, False, 10)
 
         b = self._txtbtn("B", "bold")
@@ -2365,17 +2366,20 @@ class Academics(nbapp.AppWindow):
         hi.connect("clicked", lambda *_: self._toggle_tag("highlight"))
         left.pack_start(hi, False, False, 0)
         self._fmt_btns.append(hi)
+        self._highlight_btn = hi
         left.pack_start(self._sep(), False, False, 10)
         blt = self._iconbtn("bullet")
         blt.set_tooltip_text(_t("Bullet list"))
         blt.connect("clicked", lambda *_: self._insert_list("• "))
         left.pack_start(blt, False, False, 0)
         self._fmt_btns.append(blt)
+        self._bullet_btn = blt
         num = self._iconbtn("number")
         num.set_tooltip_text(_t("Numbered list"))
         num.connect("clicked", lambda *_: self._insert_list("1. "))
         left.pack_start(num, False, False, 0)
         self._fmt_btns.append(num)
+        self._number_btn = num
         fbar.pack_start(left, False, False, 0)
 
         right = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
@@ -4160,6 +4164,18 @@ class Academics(nbapp.AppWindow):
         blank canvas never shows a live-looking but inert toolbar."""
         for b in getattr(self, "_fmt_btns", []):
             b.set_sensitive(have)
+            if b is getattr(self, "_style_btn", None):
+                b.set_tooltip_text(_t("Paragraph style: Body, Heading, Subheading")
+                                   if have else _t("Open a lecture to choose a paragraph style."))
+            elif b is getattr(self, "_highlight_btn", None):
+                b.set_tooltip_text(_t("Highlight") if have else
+                                   _t("Open a lecture to highlight text."))
+            elif b is getattr(self, "_bullet_btn", None):
+                b.set_tooltip_text(_t("Bullet list") if have else
+                                   _t("Open a lecture to add a bullet list."))
+            elif b is getattr(self, "_number_btn", None):
+                b.set_tooltip_text(_t("Numbered list") if have else
+                                   _t("Open a lecture to add a numbered list."))
 
     # ---------------- helpers ----------------
     def _sep(self):

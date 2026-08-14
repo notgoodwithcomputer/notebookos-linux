@@ -622,6 +622,14 @@ class UsbWriter(nbapp.AppWindow):
         ready = bool(self.image) and self.selected is not None and not self.busy
         self.go_btn.set_sensitive(ready)
         if self.busy:
+            self.go_btn.set_tooltip_text(_t("Writing is already in progress."))
+        elif not self.image:
+            self.go_btn.set_tooltip_text(_t("Choose an image file first."))
+        elif self.selected is None:
+            self.go_btn.set_tooltip_text(_t("Choose a USB stick first."))
+        else:
+            self.go_btn.set_tooltip_text(_t("Write to the stick"))
+        if self.busy:
             return
         if self.image and self.selected:
             if not _image_fits(self.image["bytes"], self.selected["bytes"]):
@@ -630,6 +638,7 @@ class UsbWriter(nbapp.AppWindow):
                        "larger stick.")
                     % (_fmt_size(self.image["bytes"]), self.selected["size"]))
                 self.go_btn.set_sensitive(False)
+                self.go_btn.set_tooltip_text(_t("The image is too large for this stick."))
             else:
                 msg = _t("Everything on %s (%s, %s) will be erased.") % (
                     self.selected["label"], self.selected["size"],
@@ -718,7 +727,7 @@ class UsbWriter(nbapp.AppWindow):
 
     def _start(self):
         self.busy = True
-        self.go_btn.set_sensitive(False)
+        self._refresh()
         self.pick_btn.set_sensitive(False)
         self.rescan_btn.set_sensitive(False)
         self.prog.set_fraction(0.0)

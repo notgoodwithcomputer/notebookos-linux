@@ -617,10 +617,12 @@ class Journal(nbapp.AppWindow):
         qb.set_tooltip_text(_t("Quote"))
         fbar.pack_start(qb, False, False, 0)
         self._fmt_btns.append(qb)
+        self._quote_btn = qb
         bb = self._iconbtn("bullet", self._bullet)
         bb.set_tooltip_text(_t("Bullet"))
         fbar.pack_start(bb, False, False, 0)
         self._fmt_btns.append(bb)
+        self._bullet_btn = bb
 
         self.save = Gtk.Label()
         self.save.get_style_context().add_class("savestate")
@@ -840,6 +842,12 @@ class Journal(nbapp.AppWindow):
                 btn.set_sensitive(on)
             except Exception:
                 pass
+        if getattr(self, "_quote_btn", None) is not None:
+            self._quote_btn.set_tooltip_text(
+                _t("Quote") if on else _t("Open a journal entry to format a quote."))
+        if getattr(self, "_bullet_btn", None) is not None:
+            self._bullet_btn.set_tooltip_text(
+                _t("Bullet") if on else _t("Open a journal entry to add a bullet."))
 
     def _mark_saved(self, have):
         """Reflect the on-disk truth in the save chip: an open entry is already
