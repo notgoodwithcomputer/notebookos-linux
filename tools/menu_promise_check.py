@@ -47,7 +47,7 @@ SELF = os.path.abspath(__file__)
 # queue empties. Twenty rounds of ten milliseconds is 200ms per item —
 # the same for every item on every run, which is what makes the verdict
 # repeatable.
-SETTLE_ROUNDS = 120
+SETTLE_ROUNDS = 20
 SETTLE_TICK = 0.01
 
 OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
@@ -92,8 +92,20 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      What is actually happening: Zine Print opens a PROGRESS card, and the
 #      export then dismisses it. Sample early and a surface is there; sample
 #      late and it is gone. A progress card is not asking anybody anything —
-#      it is the About-box distinction again — so the longer settle gives
-#      both the stable answer and the correct one.
+#      it is the About-box distinction again.
+#
+#      BUT A LONGER SETTLE IS NOT THE ANSWER, and the full sweep says so.
+#      At 1.2s per item the run took 6m43 and invoked 193 items instead of
+#      342, with violations falling 56 to 36. Each app's probe has a
+#      25-second budget; at 1.2s an app with twenty items exhausts it and the
+#      probe is cut off partway, so the gate quietly SEES LESS. Trading
+#      coverage for stability that way is a bad bargain and an invisible one
+#      — the totals simply drop, and nothing says why.
+#
+#      Reverted to 200ms. The real options are a longer per-app budget, or a
+#      settle applied only where it is needed: an item whose surface an async
+#      worker can dismiss. Measure the budget before raising it; this file
+#      has now been wrong twice by reasoning instead.
 #
 #      screenplay is ledgered at its lower value, so a run that finds two
 #      still fails — deliberately, because pinning the higher number would
