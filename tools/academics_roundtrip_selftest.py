@@ -143,6 +143,51 @@ check("no unexplained keys appear on an assignment", not extra_hw, extra_hw)
 check("an assignment written before `kind` existed reads as ordinary work",
       hw.get("kind") == "work", hw.get("kind"))
 
+# ---- and it must not make any FIELD shorter, either --------------------
+# Same shape as the unknown-key loss above, one level down: the loader sliced
+# room to 40, instructor to 60, an assignment title to 120 and its note to 200,
+# and the next save wrote the shortened model back. Measured before the fix, on
+# one open-and-save: a 300-character title came back 120, a 400-character note
+# came back 200, a 90-character room came back 40. The dialogs already cap what
+# can be TYPED, so the slice protected nothing and only shortened what was
+# already stored — by a newer build, a hand edit, or the board writing beside
+# it. This is the `out[:200]` cap that cost a student sixty assignments, moved
+# from record counts to the contents of a field.
+LONG = {
+    "classes": [{"label": "Physics", "room": "R" * 90,
+                 "instructor": "I" * 120, "meets": [
+                     {"day": 0, "start": "09:00", "end": "10:00",
+                      "room": "M" * 90}]}],
+    "lectures": [],
+    "homework": [{"title": "T" * 300, "cls": 0, "due": "2026-08-11",
+                  "done": False, "note": "N" * 400}],
+    "active": 0,
+}
+with open(STORE, "w") as f:
+    json.dump(LONG, f)
+app2 = academics.Academics()
+pump()
+app2._save_to_disk()
+pump()
+app2.destroy()
+pump()
+with open(STORE) as f:
+    after = json.load(f)
+_hw = (after.get("homework") or [{}])[0]
+_cl = (after.get("classes") or [{}])[0]
+_mt = (_cl.get("meets") or [{}])[0]
+check("a long assignment title survives an open and a save",
+      len(_hw.get("title", "")) == 300, "%d chars" % len(_hw.get("title", "")))
+check("a long assignment note survives it too",
+      len(_hw.get("note", "")) == 400, "%d chars" % len(_hw.get("note", "")))
+check("a long room name is not shortened on the way through",
+      len(_cl.get("room", "")) == 90, "%d chars" % len(_cl.get("room", "")))
+check("nor a long instructor name",
+      len(_cl.get("instructor", "")) == 120,
+      "%d chars" % len(_cl.get("instructor", "")))
+check("nor a room on a single meeting",
+      len(_mt.get("room", "")) == 90, "%d chars" % len(_mt.get("room", "")))
+
 bad = R.count(False)
 print("\n%d checks, %d failed" % (len(R), bad))
 print("RESULT: %s" % ("ALL PASS" if not bad else "%d FAILED" % bad))

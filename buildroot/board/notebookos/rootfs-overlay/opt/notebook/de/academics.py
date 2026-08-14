@@ -1696,7 +1696,7 @@ class Academics(nbapp.AppWindow):
                 end = min(start + 60, 24 * 60 - 1)
             rec = dict(m)          # carry anything this version does not know
             rec.update({"day": day, "start": _hhmm(start), "end": _hhmm(end),
-                        "room": str(m.get("room") or "")[:40]})
+                        "room": str(m.get("room") or "")})
             out.append(rec)
         out.sort(key=lambda m: (m["day"], m["start"]))
         # Every meeting the user entered is kept. This used to end `[:14]`, and
@@ -1750,7 +1750,15 @@ class Academics(nbapp.AppWindow):
             # the same trade _clean_meets makes for a nonsense class time.
             due = _canonical_date(str(h.get("due") or "")) or ""
             rec = dict(h)          # carry anything this version does not know
-            rec.update({"title": title[:120], "cls": cls,
+            # NOT truncated on the way in. The dialogs already cap what can be
+            # TYPED (set_max_length on the entries), so slicing here protected
+            # nothing — it only shortened values that were already stored, by a
+            # store from another release, a hand edit, or the board writing
+            # alongside. And because the next save serialises this model, the
+            # tail was gone for good: the same load-shorten-save shape as the
+            # `out[:200]` cap that once cost a student sixty assignments, moved
+            # from record COUNTS to the contents of a field.
+            rec.update({"title": title, "cls": cls,
                         "due": due,
                         "done": bool(h.get("done")),
                         # Anything that is not the word "exam" is ordinary work,
@@ -1759,7 +1767,7 @@ class Academics(nbapp.AppWindow):
                         "kind": ("exam"
                                  if str(h.get("kind") or "").lower() == "exam"
                                  else "work"),
-                        "note": str(h.get("note") or "")[:200]})
+                        "note": str(h.get("note") or "")})
             out.append(rec)
         # EVERY assignment is kept. This used to end `return out[:200]`, and
         # that cap DESTROYED work with no user action at all: a student with 260
@@ -3422,8 +3430,8 @@ class Academics(nbapp.AppWindow):
                 "label": str(c.get("label") or c.get("name")
                              or "Untitled Class"),
                 "color": color if self._valid_hex(color) else CLASS_COLORS[0],
-                "room": str(c.get("room") or "")[:40],
-                "instructor": str(c.get("instructor") or "")[:60],
+                "room": str(c.get("room") or ""),
+                "instructor": str(c.get("instructor") or ""),
                 # A malformed meeting is SKIPPED, not fatal. The whole-file
                 # bail-out above is right for the notes (a half-restored
                 # notebook is worse than none) but not for a timetable: one
