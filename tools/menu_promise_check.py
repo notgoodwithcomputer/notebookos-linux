@@ -47,7 +47,14 @@ SELF = os.path.abspath(__file__)
 # queue empties. Twenty rounds of ten milliseconds is 200ms per item —
 # the same for every item on every run, which is what makes the verdict
 # repeatable.
-SETTLE_ROUNDS = 20
+# Measured, not guessed. At a 200ms settle the slowest probe (gbasdk) takes
+# 10.5s of a 25s budget; screenplay 4.9s, calculator 3.3s, media 0.9s. A
+# 1.2s settle multiplies the per-item cost sixfold, which is why raising the
+# settle ALONE cut the items invoked from 342 to 193 — probes were being
+# killed partway and the gate quietly saw less. The budget has to move with
+# it.
+PROBE_BUDGET = 90
+SETTLE_ROUNDS = 120
 SETTLE_TICK = 0.01
 
 OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
@@ -102,10 +109,18 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      coverage for stability that way is a bad bargain and an invisible one
 #      — the totals simply drop, and nothing says why.
 #
-#      Reverted to 200ms. The real options are a longer per-app budget, or a
-#      settle applied only where it is needed: an item whose surface an async
-#      worker can dismiss. Measure the budget before raising it; this file
-#      has now been wrong twice by reasoning instead.
+#      THE BUDGET WAS THE MISSING HALF. Timing the probes at 200ms: gbasdk
+#      10.5s of its 25s allowance, screenplay 4.9s, calculator 3.3s, media
+#      0.9s — so the sweep was using under half its budget, and a sixfold
+#      settle simply did not fit. With the settle at 1.2s AND the budget at
+#      90s, the run invokes all 342 items again and takes 8m50 against about
+#      three minutes at 200ms.
+#
+#      Coverage is therefore restored. WHETHER IT IS STABLE IS NOT YET
+#      ESTABLISHED — that needs two full runs compared by TALLY, and one has
+#      been done. Do not read 8m50 and 342 items as success on its own; the
+#      whole point of the change was repeatability, and repeatability is the
+#      one thing a single run cannot show.
 #
 #      screenplay is ledgered at its lower value, so a run that finds two
 #      still fails — deliberately, because pinning the higher number would
@@ -493,7 +508,7 @@ def main():
         try:
             run = subprocess.run([sys.executable, SELF, "--probe", name],
                                  cwd=ROOT, env=env, capture_output=True,
-                                 text=True, timeout=25)
+                                 text=True, timeout=PROBE_BUDGET)
         except subprocess.TimeoutExpired:
             bad += 1
             print("%s: probe blocked or exceeded 25 seconds" % name)
