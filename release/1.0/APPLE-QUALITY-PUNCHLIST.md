@@ -634,3 +634,35 @@ measuring rather than fixing on sight: these apps put their shortcuts on
 the WINDOW's key-press-event, so Escape, Ctrl+S and the tool letters keep
 working with no focus owner. What breaks is text entry and keyboard
 navigation — the person types and nothing appears.
+
+## ON-TARGET, fourth pass (Aug 14 ~18:20) — COMICS LETTERING, the original report
+Driven on the booted image by opening the REAL bubble editor (a bubble
+created exactly as a canvas click creates one, then _bubble_editor) and
+sending keys to the app's own _on_key:
+- Typing e / v / p / b / n / w while the bubble editor is open does NOT
+  switch tools. That is the symptom the user reported on 2.0 — lettering a
+  bubble selected the Eraser mid-word — gone on the real image.
+- Bare Delete while lettering does NOT destroy the bubble being lettered.
+- With the editor CLOSED, 'e' still picks the eraser, so the guard did not
+  cost the shortcuts their function.
+My first attempt at this row PROVED NOTHING and said so: _add_bubble does
+not exist, so no editor opened, the letters correctly switched tools, and a
+careless reading would have recorded a FAIL against a working guard. The
+second attempt asserts the editor is open before typing.
+
+## TASKS — damaged sidecar, VERIFIED but NARROWER than the audit said
+Measured, not taken on report: a damaged tasks-app.json IS preserved —
+tasks-app.json.damaged-<stamp> holds the original bytes, because
+atomic_write_json calls preserve_damaged before replacing. So the audit's
+"the original sidecar bytes are gone" is WRONG.
+WHAT IS REAL: the rich metadata does not survive. A task with a due date,
+a priority and a list comes back as an undated Today item with no project,
+and NOTHING TELLS THE PERSON. _read_meta's own docstring already names
+this outcome ("quietly flattened every task back to an undated Today") for
+the lost-wrapper case it handles; the PARSE-FAILURE case has no such care.
+Tasks' store IS the data, so under the damaged-store doctrine the fix is
+preserve + keep saving + TELL, exactly as ebook. It needs one string pair,
+so it goes to the i18n lane rather than half-landing here. Suggested shape:
+a title naming the tasks, plus a body that CARRIES ITS OWN NOUN — the
+lesson from the ebook pair, where borrowing music's body would have shipped
+wrong gender agreement in six languages.
