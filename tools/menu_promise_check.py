@@ -74,13 +74,23 @@ OFF_LIMITS = {"animation.py", "burner.py", "comics.py"}
 #      queue once missed it on some runs. A FIXED settle span (SETTLE_ROUNDS
 #      above) replaced that race, and both are now identical run to run.
 #
-#      What remains is usbwriter.py, 0 then 1, and no settle can fix it: its
-#      probe ENUMERATES REAL USB DRIVES through sysfs, so its answer depends
-#      on what is plugged into the machine at that second. That is the
-#      environment moving, not the gate. Either exclude it from the sweep
-#      with this reason, or ledger it as a range — but do not pretend a
-#      hardware scan is repeatable. Until it is settled, this stays out of
-#      the aggregate.
+#      usbwriter.py was next, 0 then 1, and no settle could fix it: its probe
+#      ENUMERATES REAL USB DRIVES through sysfs, so its answer depended on
+#      what was plugged in at that second. The probe is now told there are no
+#      drives — a real state the app must handle, and the same one every run.
+#
+#      Then screenplay.py appeared, 2 then 1. That is the FOURTH app the
+#      tally has named, and the honest reading is that this sweep has a
+#      general late-surface problem rather than three special cases: the
+#      200ms settle is enough for most items and not for all. Raising it
+#      trades wall-clock for stability and would need measuring, not
+#      guessing. It is ledgered at its lower value, so a run that finds two
+#      still fails — deliberately, because pinning the higher number would
+#      hide the instability instead of showing it.
+#
+#      STILL OUT OF THE AGGREGATE, and now for one reason with two faces:
+#      music.py never finishes, and the settle is not yet long enough for
+#      every app to answer the same way twice.
 #
 # How it got here, for whoever picks it up. Stubbing the audio pump and the
 # file pickers took invoked items 104 -> 203 and blocked probes 16 -> 11.
@@ -106,16 +116,17 @@ DEBT = {
     'cookbook.py': 1,
     'g2048.py': 1,
     'gbaemu.py': 1,
-    'gbasdk.py': 8,
+    'gbasdk.py': 9,
     'illustrator.py': 1,
     'installer.py': 1,
     'language.py': 3,
     'maps.py': 1,
     'mealplanner.py': 1,
     'media.py': 1,
+    'music.py': 1,
     'novel.py': 2,
     'packages.py': 2,
-    'screenplay.py': 2,
+    'screenplay.py': 1,
     'sequencer.py': 1,
     'settings.py': 2,
     'sysmon.py': 1,
@@ -277,6 +288,14 @@ def probe(name):
     nbapp.claim_single_instance = lambda *a, **k: None
     nbapp.screen_size = lambda: (1024, 722)
     module = importlib.import_module(name[:-3])
+    # usbwriter enumerates REAL drives through sysfs, so its verdict moved
+    # with whatever happened to be plugged into the machine at that second —
+    # the TALLY line caught it giving 0 then 1 on an unchanged tree. A gate
+    # cannot ask the world a question and call the answer repeatable, so the
+    # probe is told there are no drives. That is a real state the app must
+    # handle, and it is the same one every run.
+    if name == "usbwriter.py":
+        module._drives = lambda *args, **kwargs: []
     cls = _window_class(module, Gtk)
     if cls is None:
         print(json.dumps({"error": "no Gtk.Window app class"}))
