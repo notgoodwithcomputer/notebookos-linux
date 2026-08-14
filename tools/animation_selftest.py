@@ -1713,7 +1713,7 @@ def ellipsis_promise_family():
             if not item or item is _nbapp.SEP or not isinstance(item, tuple):
                 continue
             label, action = item[0], item[1]
-            bare = label.split("    ")[0].strip()
+            bare = label.lstrip().split("    ")[0].strip()
             if action is None or bare in HANDOFF:
                 continue
             app._close_prompt()
@@ -2354,8 +2354,12 @@ def accelerator_family():
         for item in app.menu_items(menu):
             if not item or item is _nbapp_sep() or not isinstance(item, tuple):
                 continue
-            if "    " in item[0]:
-                name, accel = item[0].split("    ", 1)
+            # the gap comes after a LABEL; a run of spaces at the START is
+            # the unticked-item padding, not a separator, so strip before
+            # asking whether there is an accelerator at all
+            label = item[0].lstrip()
+            if "    " in label:
+                name, accel = label.split("    ", 1)
                 advertised.append((name.strip(), accel.strip()))
 
     # Esc is the window's, not the document's: outside a prompt this handler

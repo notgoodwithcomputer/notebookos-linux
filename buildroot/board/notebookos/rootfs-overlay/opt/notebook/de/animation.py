@@ -1991,12 +1991,15 @@ class Animation(nbapp.AppWindow):
         helper, six menu items would have been missing from the catalogs with
         every gate green.
 
-        Two spaces, not four: four spaces are how this OS writes the gap
-        before an accelerator, so an unticked item padded with four read as a
-        nameless command bound to a key called 'Round Tip'. F23 caught it.
-        Illustrator pads with four and has the same latent fault.
+        Four spaces measures exactly what a tick plus its space measures,
+        16px, so the words line up in one column. Four is also how this OS
+        writes the gap before an accelerator — but that gap comes AFTER a
+        label, and a run of spaces at the START of one is padding. A reader
+        that splits before stripping turns an unticked item into a nameless
+        command bound to a key called 'Round Tip'; F23 caught exactly that,
+        and the readers were what needed fixing.
         """
-        return ('\u2713 ' if on else '  ') + text
+        return ('\u2713 ' if on else '    ') + text
 
     def _set_shape(self, button, shape):
         if button.get_active():
@@ -2648,11 +2651,11 @@ class Animation(nbapp.AppWindow):
                 (self._ticked(self.symy, _t('Mirror Top and Bottom')),
                  press(flip['symy']) if 'symy' in flip else None),
                 nbapp.SEP,
-                ('  ' + _t('Add Palette Colour'),
+                ('    ' + _t('Add Palette Colour'),
                  self._palette_add
                  if (self.color not in self.doc.palette
                      and len(self.doc.palette) < 16) else None),
-                ('  ' + _t('Remove Palette Colour'),
+                ('    ' + _t('Remove Palette Colour'),
                  self._palette_remove if self.doc.palette else None),
                 (self._ticked(self.doc.palette_only, _t('Draw with Palette Only')),
                  press(lock) if lock is not None else None),

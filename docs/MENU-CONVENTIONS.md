@@ -60,6 +60,14 @@ remove the item rather than wiring it to the autosave.
 ## 3. Accelerators are part of the label
 
 Written with FOUR spaces before the key, e.g. `Close    Esc`, `Save    Ctrl+S`.
+
+The gap comes AFTER a label. A run of spaces at the START of a label is
+padding, not a separator: an item that carries its own state is written
+`"✓ " + label` when on and `"    " + label` when off, four spaces being
+exactly the width of a tick plus its space, so the words stay in one column.
+Anything reading a label for its accelerator must strip the leading padding
+before it splits, or an unticked item parses as a nameless command bound to a
+key named after itself.
 If an app binds a key, the menu item must show it — a shortcut nobody can
 discover is not a feature. Conversely, never print an accelerator the app does
 not actually bind.
