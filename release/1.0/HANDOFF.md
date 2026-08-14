@@ -1908,3 +1908,34 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   than a fourth session's opinion. Both apps are now HONEST under the
   current contract either way, so this is not blocking release; it is a
   coherence debt with a gate on each side of it.
+
+- **2026-08-14 (apple-quality) · ILLUSTRATOR AUDIT: what was fixed, and the
+  four findings left with reasons.** Save draft-name clobber fixed
+  (ce9aa2d8). The rest, recorded rather than taken:
+  (1) NEW DRAWING USES A CONFIRM AND HAS NO UNDO — _reset_document clears
+  both stacks, so Ctrl+Z cannot bring the drawing back. The audit calls
+  this a direct breach of "destruction gets undo, never confirmation". It
+  is a REAL gap, but note the history: an earlier session examined this
+  exact confirm during the confirm-retirement sweep, found that undo is
+  genuinely wiped, and deliberately kept the dialog as HONEST rather than
+  delete a confirm that was telling the truth. So the open work is
+  "implement a document-state undo frame for New", after which the confirm
+  retires — not "delete the confirm", which would leave the app silently
+  destructive. Sizeable, and it belongs to whoever takes illustrator next.
+  (2) DAMAGED illustrator.json (the recent-colour store) is caught broadly,
+  returns [], and the next paint writes fresh state over the original —
+  the read-side rewrite class, in a low-value store. Fix shape is the
+  house one: parse failure ⇒ read-only session for that store.
+  (3) MEMORY: layers are unbounded at ~16MiB each on a 2048² canvas, the
+  byte trim counts only _undo_stack (redo is frame-capped but not
+  byte-capped), and _trim_history deliberately keeps the newest frame past
+  the 96MiB ceiling — so one flip on a many-layer document can pin an
+  arbitrarily large generation. Wants MEASURING before changing: the
+  numbers above are static arithmetic, not observed peaks, and this app's
+  undo is load-bearing.
+  (4) Visibility and opacity changes push no history frame, so Ctrl+Z after
+  toggling a layer undoes an unrelated older edit.
+  NOT A DEFECT, and my brief's fault: the audit reports "PDF export is
+  absent". I wrote "PNG/PDF export" into the brief from memory; Illustrator
+  only ever offered PNG. Adding PDF export is a FEATURE, not a bug fix, and
+  should not be smuggled in under an audit finding.
