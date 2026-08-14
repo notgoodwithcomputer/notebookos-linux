@@ -1999,3 +1999,32 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   file), so its window-level Left/Right cannot be stolen from a focused
   field. That is the REASON it is safe, which the earlier sweep recorded
   as a verdict without the reason.
+
+- **2026-08-14 (apple-quality) · CORRECTION TO MY OWN 7ec82325: "the
+  reader's failure surface was English in sixteen languages" IS FALSE.**
+  I claimed nine notice strings shipped untranslated because
+  `_show_message` hands its arguments to `set_text()` and so "bypasses the
+  construction-time walk". nbi18n patches the SETTERS themselves
+  (nbi18n.py:883-897 — Label.set_text/set_markup/set_label, Button
+  .set_label, Widget.set_tooltip_text and eight more), so a bare catalog
+  key handed to a setter at runtime is looked up on the way through.
+  MEASURED both ways, against the code as it stood BEFORE my commit: under
+  NB_LANG=fr the card already read "Ce fichier ne se trouve plus a cet
+  endroit." Those strings were translating the whole time.
+  WHERE THE ERROR CAME FROM, because this is the interesting part: an
+  existing comment on `_show_empty` asserted exactly that mechanism, and I
+  took it as established rather than measuring a claim I could have checked
+  in two minutes. It was wrong, it convinced me, and my commit message then
+  restated it — so a false explanation had propagated twice before anybody
+  measured it. A peer building the gate I filed hit it from the other side:
+  their first version flagged 61 sites and every one was a false positive.
+  The comment is corrected in place so it stops recruiting people.
+  WHAT IS ACTUALLY BROKEN is narrower and real, and is the peer's find
+  (b347321c): a string SUBSTITUTED before it reaches the setter arrives as
+  text that is no longer a catalog key, recoverable only via the format
+  table, which needs 3+ characters of literal anchor. Five sites, four
+  keys — video's "of %s" was English in all seventeen. Gated by
+  tools/runtime_translation_check.py, which passes on ebook.
+  THE _t() CALLS STAY: explicit is better, and the string a translator has
+  to find should be visible at the call site. They were never the fix they
+  were advertised as.

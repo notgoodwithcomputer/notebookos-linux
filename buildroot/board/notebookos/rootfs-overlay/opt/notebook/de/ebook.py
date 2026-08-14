@@ -1060,10 +1060,23 @@ class EbookReader(nbapp.AppWindow):
             action=True)
 
     def _show_empty(self):
-        # _t throughout: _show_message hands its arguments straight to
-        # set_text(), so these strings — all four of them already translated in
-        # all 17 catalogs — were the one screen in the app that stayed English
-        # in every language, and it is the screen the reader sees FIRST.
+        # _t throughout — but NOT for the reason this comment used to give.
+        # It said _show_message "hands its arguments straight to set_text()",
+        # so an unwrapped literal stayed English. MEASURED, and it is false:
+        # nbi18n patches Gtk.Label.set_text itself (nbi18n.py:883-897), so a
+        # bare catalog key handed to a setter at runtime is looked up on the
+        # way through. Checked under NB_LANG=fr against the code as it was
+        # before these _t() calls existed: the card already read "Ce fichier ne
+        # se trouve plus a cet endroit."
+        #
+        # The _t() calls are kept because they are explicit and cost nothing,
+        # and because the string a translator must find should be visible at
+        # the call site. What is NOT true is that omitting one leaves English
+        # on screen. The shape that genuinely defeats nbi18n is a string
+        # SUBSTITUTED before it reaches the setter: the arriving text is no
+        # longer a catalog key, and it is recoverable only through the format
+        # table, which needs three-plus characters of literal anchor.
+        # tools/runtime_translation_check.py is the gate for that.
         self._title_lbl.set_text(_t("No document"))
         self._subtitle_lbl.set_text("")
         self._show_message(
