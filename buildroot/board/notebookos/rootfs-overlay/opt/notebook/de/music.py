@@ -272,6 +272,17 @@ class Music(nbapp.AppWindow):
         self._open_arg_file()
         # fill in any track length we have not read yet, in the background
         self._start_length_scan()
+        if not getattr(self, "_store_load_ok", True):
+            # THE READ-ONLY SESSION HAS TO BE SAID OUT LOUD. Playlists that
+            # could not be read leave the sidebar empty and every later write
+            # refused — and _save() returns BEFORE it attempts anything, so
+            # there is not even a failed write to report. Someone can spend an
+            # evening sorting an album into playlists, close the app, and find
+            # none of it, having been told nothing at any point.
+            #
+            # Deferred to idle because __init__ is still building the window
+            # the card has to sit inside.
+            GLib.idle_add(self._say_store_unreadable)
 
     def _open_arg_file(self):
         """Play a track handed in as sys.argv[1] (the Finder opens audio files
@@ -2864,6 +2875,19 @@ class Music(nbapp.AppWindow):
             entry.select_region(0, -1)
         except Exception:
             pass
+
+    def _say_store_unreadable(self):
+        """Say why the playlists are missing, once, at open.
+
+        A card and not _flash: this is not a passing status, it is a condition
+        that lasts the whole session, and a line that fades after four seconds
+        is the wrong shape for "nothing you do here will be kept"."""
+        self._confirm(
+            _t("Your playlists could not be read"),
+            _t("They were kept, and nothing changed here will be saved over "
+               "them."),
+            _t("Continue"), lambda: None)
+        return False
 
     def _confirm(self, title, message, ok_label, on_yes):
         # house-style destructive confirmation; the primary action is the one

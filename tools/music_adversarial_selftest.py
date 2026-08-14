@@ -122,6 +122,60 @@ def damaged_store_check():
           repr(getattr(app, "_save_error", "")) + repr(posted))
 
 
+def unreadable_notice_check():
+    """A store that could not be read leaves the sidebar empty and every later
+    write refused — and _save() returns BEFORE attempting anything, so there is
+    not even a failed write to report. Someone can spend an evening sorting
+    albums into playlists, close the app, and find none of it, having been told
+    nothing at any point. Novel had the same silence and it is fixed there."""
+    app = bare()
+    said = []
+    app._confirm = lambda title, body, ok, cb: said.append((title, body, ok))
+    app._say_store_unreadable()
+    check("an unreadable playlist store is explained, not left silent",
+          len(said) == 1, repr(said))
+    check("the card says the playlists could not be read",
+          bool(said) and "could not be read" in said[0][0], repr(said))
+    check("...and that they were kept",
+          bool(said) and "kept" in said[0][1], repr(said))
+    check("...and that nothing here will overwrite them",
+          bool(said) and "saved over" in said[0][1], repr(said))
+
+    # The notice belongs to the damaged case only, and the CALL is what has to
+    # be gated — the card cannot gate itself. Checked structurally: an `elif`
+    # is an If nested in the previous If's orelse, so a naive walk counts one
+    # call twice, once guarded and once not.
+    import ast
+    tree = ast.parse(open(music.__file__, encoding="utf-8").read())
+
+    def mentions(node, name):
+        # Both spellings of "reads this flag": self._flag, and the
+        # getattr(self, "_flag", default) form this codebase uses wherever a
+        # half-constructed window might not carry it yet. Matching only the
+        # attribute node would report the guard missing on the guarded code.
+        for n in ast.walk(node):
+            if isinstance(n, ast.Attribute) and n.attr == name:
+                return True
+            if isinstance(n, ast.Constant) and n.value == name:
+                return True
+        return False
+
+    sites = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        for branch in ("body", "orelse"):
+            for stmt in getattr(node, branch):
+                if isinstance(stmt, (ast.If, ast.For, ast.While, ast.Try)):
+                    continue
+                if mentions(stmt, "_say_store_unreadable"):
+                    sites.append(branch == "body"
+                                 and mentions(node.test, "_store_load_ok"))
+    check("the notice has exactly one call site", len(sites) == 1, repr(sites))
+    check("...and it is reached only when the store could not be read",
+          bool(sites) and sites[0], repr(sites))
+
+
 def shuffle_exhaustion_check():
     tracks = [{"title": x} for x in "ABCD"]
     app = bare()
@@ -268,6 +322,7 @@ def late_tag_view_check():
 
 if __name__ == "__main__":
     damaged_store_check()
+    unreadable_notice_check()
     shuffle_exhaustion_check()
     destructive_undo_check()
     sort_key_check()

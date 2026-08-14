@@ -130,8 +130,15 @@ tree = ast.parse(open(os.path.join(DE, "novel.py"), encoding="utf-8").read())
 
 
 def mentions(node, name):
-    return any(isinstance(n, ast.Attribute) and n.attr == name
-               for n in ast.walk(node))
+    # Both spellings of "reads this flag": self._flag, and the
+    # getattr(self, "_flag", default) form this codebase uses wherever a
+    # half-constructed window might not carry it yet.
+    for n in ast.walk(node):
+        if isinstance(n, ast.Attribute) and n.attr == name:
+            return True
+        if isinstance(n, ast.Constant) and n.value == name:
+            return True
+    return False
 
 
 call_sites = []
