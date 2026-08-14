@@ -5316,7 +5316,17 @@ class Animation(nbapp.AppWindow):
                 peaks = array.array('h')
                 peaks.frombytes(base64.b64decode(sound.get('peaks', '')))
                 pairs = len(peaks) // 2
-                cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
+                # A muted take is drawn quiet. Mute silences the track in
+                # playback AND in the exported film, and it was signalled
+                # only by whether a three-pixel circle at the clip's far
+                # right was filled or hollow — an end that scrolls out of
+                # view on any clip longer than the sheet. The body stays
+                # green, because grey there already means the file is
+                # missing; it is the WAVE that goes quiet.
+                if sound.get('mute'):
+                    cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)
+                else:
+                    cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)
                 for column in range(max(1, int(width))):
                     pair = min(pairs - 1, int(column * pairs / max(1, width)))
                     low = peaks[pair * 2] / 32768

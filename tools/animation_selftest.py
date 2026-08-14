@@ -7399,6 +7399,104 @@ def scene_strip_reach_family():
     shutil.rmtree(scratch)
 
 
+def muted_take_family():
+    """A muted take is drawn quiet, so you can see which track is silent.
+
+    Mute silences a track in playback AND in the exported film, and it was
+    signalled only by whether a three-pixel circle at the clip's far right
+    was filled or hollow — an end that scrolls out of view on any clip
+    longer than the sheet. Two clips, one silent, looked identical.
+
+    The body stays green: grey there already means the file is missing. It
+    is the WAVE that goes quiet."""
+    if not gtk_available():
+        skip("F68 a muted take", "no display")
+        return
+
+    home = tempfile.mkdtemp(prefix="animation-mute-")
+    path = os.path.join(home, "line.wav")
+    with wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        handle.writeframes(array.array("h", (
+            int(28000 * math.sin(index / 11.0)) for index in range(48000 * 3)
+        )).tobytes())
+
+    def ink_in_rows(module, muted):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+        app.doc.scenes[0]["length"] = 96
+        app.sheet = module.Sheet(app.doc, 0)
+        samples = module.decode_samples(path)
+        step = max(1, len(samples) // 512)
+        values = []
+        for offset in range(0, len(samples), step):
+            block = samples[offset:offset + step]
+            values.extend((min(block), max(block)))
+        peaks = base64.b64encode(array.array("h", values).tobytes()).decode("ascii")
+        app.doc.scenes[0]["sounds"][0] = {
+            "path": path, "start": 0, "in_smp": 0, "out_smp": 0,
+            "mute": muted, "peaks": peaks, "duration_smp": len(samples),
+            "_peak_token": 0}
+        holder = Gtk.OffscreenWindow()
+        body = app.get_child()
+        app.remove(body)
+        holder.add(body)
+        holder.set_size_request(1024, 722)
+        holder.show_all()
+        for _ in range(300):
+            if not Gtk.events_pending():
+                break
+            Gtk.main_iteration_do(False)
+        allocation = app.timeline.get_allocation()
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                     max(allocation.width, 1),
+                                     max(allocation.height, 1))
+        app._draw_timeline(app.timeline, cairo.Context(surface))
+        surface.flush()
+        data = bytes(surface.get_data())
+        stride = surface.get_stride()
+        full = sum(1 for y in range(surface.get_height())
+                   for x in range(surface.get_width())
+                   if (data[y * stride + x * 4 + 2],
+                       data[y * stride + x * 4 + 1],
+                       data[y * stride + x * 4]) == (26, 25, 22))
+        app._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(app, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(app, timer, None)
+        return full
+
+    from gi.repository import Gtk
+
+    loud = ink_in_rows(animation, False)
+    quiet = ink_in_rows(animation, True)
+    check("F68 a live take is drawn in the film's ink", loud > 400, loud)
+    check("F68 and a muted one is visibly quieter than it",
+          quiet < loud * 0.6, (loud, quiet))
+
+    graded, scratch = module_mutant("F68-mute-drawn-as-loud", [
+        ("                if sound.get('mute'):\n"
+         "                    cr.set_source_rgb(154 / 255, 148 / 255, 132 / 255)\n"
+         "                else:\n"
+         "                    cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)",
+         "                cr.set_source_rgb(26 / 255, 25 / 255, 22 / 255)"),
+    ])
+    same = ink_in_rows(graded, True)
+    mutant("F68 a muted take drawn as loud as a live one is caught",
+           same >= loud * 0.6, (loud, same))
+    shutil.rmtree(scratch)
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -7445,6 +7543,7 @@ for _family in (
         transport_family,
         shape_tools_family,
         scene_strip_reach_family,
+        muted_take_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
