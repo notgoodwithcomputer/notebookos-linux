@@ -97,10 +97,24 @@ def pump(n=400):
         i += 1
 
 
-def pump_build(app, timeout=240):
+def pump_build(app, timeout=240, what="a build"):
     """Builds now run OFF the GTK thread (_build_async): drive the loop
     until the worker lands its result, the way the live window does. The
-    assertions after a build are unchanged — only the waiting is new."""
+    assertions after a build are unchanged — only the waiting is new.
+
+    A build that never lands is reported HERE, BY NAME. It used to return
+    False and every one of the twelve call sites ignored it, so a landing
+    path that stopped clearing _building showed up as a later assertion
+    failing on an empty list — with the real cause, "no result ever
+    arrived", named nowhere. Worse, each subsequent build then waited out
+    the full timeout, so the suite went quiet for minutes and a batch runner
+    reads that as a flake and re-runs it. A check whose failure mode is
+    "somebody eventually notices the wall clock" has stopped reporting, in
+    the same way the four suites that were green BECAUSE of a defect had:
+    in both cases the verdict stops being about the code.
+
+    The timeout stays long because a real gcc build here takes 60-120s under
+    load; it is the SILENCE on expiry that was wrong, not the ceiling."""
     import time as _t
     deadline = _t.monotonic() + timeout
     while _t.monotonic() < deadline:
@@ -114,6 +128,9 @@ def pump_build(app, timeout=240):
                 GLib.MainContext.default().iteration(False)
             return True
         _t.sleep(0.02)
+    check("%s landed rather than leaving the suite waiting" % what, False,
+          "nothing delivered in %ds and _building is still set — the result "
+          "never came back through the main loop" % timeout)
     return False
 
 
@@ -2515,7 +2532,7 @@ _hidden = []
 _pl.hide = lambda: _hidden.append(1)
 
 _pl._new_project()
-_pl._file_play(); pump_build(_pl)
+_pl._file_play(); pump_build(_pl, what="the play build")
 pump()
 check("a game with no object or room does not try to play",
       not _launched, str(_launched))
@@ -2526,7 +2543,7 @@ check("...and does not hide behind an emulator that never opened",
 _pl._file_example()
 _bad = gbabuild.build_rom
 gbabuild.build_rom = lambda *a, **k: (False, None, "deliberate failure")
-_pl._file_play(); pump_build(_pl)
+_pl._file_play(); pump_build(_pl, what="the play build")
 pump()
 gbabuild.build_rom = _bad
 check("a game that does not compile stays visible", not _hidden and not _launched)
@@ -2535,7 +2552,7 @@ check("...and keeps the log so Build Details can explain",
 
 # A good build hands off, with the ROM as the argument.
 gbabuild.build_rom = lambda m, o, **k: (True, os.path.join(o, "game.gba"), "ok")
-_pl._file_play(); pump_build(_pl)
+_pl._file_play(); pump_build(_pl, what="the play build")
 pump()
 gbabuild.build_rom = _bad
 gbabuild.build_rom = _real_build
