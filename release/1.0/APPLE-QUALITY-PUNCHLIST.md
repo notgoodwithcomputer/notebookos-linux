@@ -89,6 +89,27 @@ with the commit that closes them.
   (burner/writer/ebook/illustrator/nbicons_data/fonts/.config/kbuild/
   xorg/desktop.config/.gitignore/their suites) — they land their own.
 
+## ON-TARGET MATRIX, 2.2-consumer (Aug 13 ~22:30-22:45)
+PASSED on the booted image: bell left of clock; __pycache__ gone;
+Govorimo gone (34 items); Comics fit 26% + colour above fold + BUBBLE
+EDITOR visible/focused/typing + full Esc ladder (palette→card→app);
+GBA Build & Play first in the Build menu + UI ALIVE mid-compile (menu
+opened over "Compiling…"); nbgame re-embed caught vbam's window swap
+(log: "found via pid").
+OPEN (one lifecycle thread, logs on disk):
+- Run 1: game launched, embedded, RAN (audio underrun, battery saved),
+  then exited cleanly ~seconds in, cause unpinned; suspects: the
+  Ctrl+Esc grab (log says bare keycode [9]) or the Finder-return event.
+- FINDER RE-PRESENTED ITSELF OVER THE COMPILING SDK when the previous
+  emulator process exited — the launch-continuity return must check
+  whether another app took the foreground. Filmed: m4b-w12 22:44.
+- Run 2 (Ctrl+R): still "Compiling…" at 3.5 min under full-system TCG
+  load when the session closed — verify completion + D-pad next boot.
+- nbdiacritics: under slow/injected key timing the hold-palette opened
+  mid-word and the following letters LEAKED to the app's shortcut
+  ladder (Eraser got selected while typing in the bubble editor).
+  Palette-open letters must replay to the focused text widget.
+
 ## DECISIONS FOR THE USER
 - D-close: Animation now matches Comics for unbound films (silent close,
   recovery restores). Bound films still ask. OK?
