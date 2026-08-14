@@ -244,6 +244,57 @@ def main():
           len(w2.said) == 1 and "could not be opened for rendering"
           in w2.said[0][3])
 
+    # ---- a shelf that cannot be read is not an empty shelf.
+    # _load_state used to treat "no file" and "file that will not parse" as the
+    # same branch, so a damaged store opened on an empty library and the next
+    # page turn wrote that emptiness over twenty books' reading positions.
+    import json as _json
+
+    def _reader_with_store(text):
+        d = _tf.mkdtemp(prefix="ebook-store-")
+        path = _os.path.join(d, "ebook.json")
+        if text is not None:
+            open(path, "w").write(text)
+        real = ebook.CONFIG_PATH
+        ebook.CONFIG_PATH = path
+        w = cls.__new__(cls)
+        w._books = []
+        w._open_path = None
+        w._state_read_only = False
+        try:
+            cls._load_state(w)
+        finally:
+            ebook.CONFIG_PATH = real
+        return w, path
+
+    w, path = _reader_with_store('{"books": [] this is not json')
+    check("a store that will not parse starts a read-only session",
+          w._state_read_only is True)
+
+    # ...and read-only means the bytes stay exactly where the reader left them.
+    before = open(path).read()
+    real = ebook.CONFIG_PATH
+    ebook.CONFIG_PATH = path
+    try:
+        w._books = [{"path": "/x", "title": "T", "fmt": "PDF"}]
+        cls._save_state(w)
+    finally:
+        ebook.CONFIG_PATH = real
+    check("...and nothing is written over the damaged store",
+          open(path).read() == before)
+    check("...which is still at its own path, not renamed aside",
+          _os.path.exists(path)
+          and not [n for n in _os.listdir(_os.path.dirname(path))
+                   if ".damaged-" in n])
+
+    w2, _ = _reader_with_store(None)
+    check("a first run is NOT read-only", w2._state_read_only is False)
+
+    w3, _ = _reader_with_store('{"books": [{"path": "/a", "title": "A", '
+                               '"fmt": "PDF"}]}')
+    check("a shelf that reads fine is not read-only",
+          w3._state_read_only is False and len(w3._books) == 1)
+
     print("RESULT: " + ("ALL PASS" if all(results) else "SOME FAILED"))
     sys.exit(0 if all(results) else 1)
 

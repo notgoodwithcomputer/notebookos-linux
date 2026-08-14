@@ -112,25 +112,6 @@ def _holds_books(data):
     return False
 
 
-def _quarantine(path):
-    """Move a store this app could not make sense of aside, under the same
-    <name>.damaged-<timestamp> name nbapp.preserve_damaged uses. Never raises.
-
-    nbapp quarantines any store that fails to PARSE, and does it for us on every
-    write. It deliberately cannot cover the case here: valid JSON of the wrong
-    shape parses perfectly, and only this app knows the shape is not a shelf."""
-    try:
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        dest = "%s.damaged-%s" % (path, stamp)
-        n = 2
-        while os.path.exists(dest):
-            dest = "%s.damaged-%s-%d" % (path, stamp, n)
-            n += 1
-        os.replace(path, dest)
-    except OSError:
-        pass
-
-
 # ------------------------------------------------------------- EPUB parsing
 def _epub_localname(tag):
     """Namespace-stripped, lower-cased XML tag name (EPUB opf/container use
@@ -671,10 +652,10 @@ class EbookReader(nbapp.AppWindow):
         # (or None). Both are restored from disk so the shelf is never fabricated.
         self._books = []
         self._open_path = None
-        # Set by _load_state when the file on disk plainly holds books that this
-        # loader could not adopt; the first _save_state moves it aside instead of
-        # replacing it. See _load_state's LAST RESORT note.
-        self._quarantine_pending = False
+        # Set by _load_state when the store on disk exists but could not be
+        # read. The session then persists NOTHING: the reader's records stay
+        # exactly where they are, at the path they would look for.
+        self._state_read_only = False
         self._load_state()
 
         self.content.pack_start(self._reading_bar(), False, False, 0)
@@ -736,17 +717,27 @@ class EbookReader(nbapp.AppWindow):
         try:
             with open(CONFIG_PATH, encoding="utf-8") as fh:
                 data = json.load(fh)
+        except FileNotFoundError:
+            # First run. Nothing to read and nothing at risk.
+            return
         except Exception:
-            # First run (no file) or bytes that do not parse. An unparseable
-            # store is quarantined by nbapp.atomic_write_json before the next
-            # save replaces it, so those bytes are never lost.
+            # A file that EXISTS and will not parse is a different thing
+            # entirely, and this used to be the same branch as first-run: the
+            # reader opened on an empty shelf and the next page turn wrote a
+            # new store over the old one. The bytes survived under a
+            # .damaged- name nobody would find, so someone could lose their
+            # place in twenty books and be shown a blank library with no
+            # explanation. Novel, Music, Workout and Animation all take the
+            # other path — read-only, and say so — and the reader was simply
+            # the one that did not.
+            self._state_read_only = True
             return
         if isinstance(data, list):
             data = {"books": data}
         elif not isinstance(data, dict):
             # Valid JSON, but a scalar — some other file, or a repair gone
             # wrong. Nothing to read, and nothing may overwrite it either.
-            self._quarantine_pending = True
+            self._state_read_only = True
             return
         books = self._as_books(data.get("books"))
         if not books:
@@ -790,7 +781,11 @@ class EbookReader(nbapp.AppWindow):
         # it — only this app knows the shape is not a shelf. Move it aside on
         # the way past instead, the way cookbook.py and language.py do.
         if not self._books and _holds_books(data):
-            self._quarantine_pending = True
+            # The file plainly holds books and none were adopted. Refusing to
+            # write is better than moving it aside and starting fresh: the
+            # records stay exactly where the reader left them, at the path
+            # they would look for.
+            self._state_read_only = True
 
     # The reading generation is `self._nav`; `_doc_gen` stays as its documented
     # name (Article III §3) so a reader of the constitution — and the
@@ -809,14 +804,13 @@ class EbookReader(nbapp.AppWindow):
 
     def _save_state(self):
         """Persist the shelf and open book under $NB_HOME (best effort)."""
+        if getattr(self, "_state_read_only", False):
+            # The store on disk could not be read, so this session does not
+            # write: the shelf on screen is empty because loading FAILED, and
+            # saving it would replace twenty books' worth of reading positions
+            # with that emptiness. The reader is told on the message card.
+            return
         try:
-            # A store that PARSED but was not a shelf is moved aside here,
-            # immediately before the write that would otherwise replace it — the
-            # same moment nbapp picks for the files it can detect, so there is
-            # never a window in which the reader has no file at all.
-            if getattr(self, "_quarantine_pending", False):
-                self._quarantine_pending = False
-                _quarantine(CONFIG_PATH)
             nbapp.atomic_write_json(
                 CONFIG_PATH, {"books": self._books, "open": self._open_path},
                 ensure_ascii=False, indent=2)
@@ -1023,7 +1017,12 @@ class EbookReader(nbapp.AppWindow):
         """Repaint the reading surface for the open book, or the empty-state."""
         book = self._book_by_path(self._open_path) if self._open_path else None
         if book is None:
-            self._show_empty()
+            # An unreadable store and an empty shelf look the same on screen
+            # and are not the same thing.
+            if getattr(self, "_state_read_only", False):
+                self._show_damaged_store()
+            else:
+                self._show_empty()
             return
         self._title_lbl.set_text(book["title"])
         # Show the author when we have it (EPUB metadata), else the format.
@@ -1033,7 +1032,7 @@ class EbookReader(nbapp.AppWindow):
         if not os.path.isfile(book["path"]):
             self._show_message(
                 book["fmt"], book["title"], self._short_path(book["path"]),
-                "This file is no longer at that location.")
+                _t("This file is no longer at that location."))
             return
         if book["fmt"] == "PDF":
             self._open_pdf(book)
@@ -1042,7 +1041,23 @@ class EbookReader(nbapp.AppWindow):
         else:
             self._show_message(
                 book["fmt"], book["title"], self._short_path(book["path"]),
-                "This document format is not supported.")
+                _t("This document format is not supported."))
+
+    def _show_damaged_store(self):
+        """The shelf could not be read, so this session will not write.
+
+        Shown INSTEAD of the empty state, because they look identical and mean
+        opposite things: one is a reader with no books yet, the other is a
+        reader whose twenty books are still on disk and temporarily out of
+        reach. Saying nothing would leave the second one looking like the
+        first, and then quietly refusing to remember anything."""
+        self._title_lbl.set_text(_t("No document"))
+        self._subtitle_lbl.set_text("")
+        self._show_message(
+            _t("READER"), _t("Your library could not be read"), "",
+            _t("The books were kept, and nothing changed here will be "
+               "saved over them."),
+            action=True)
 
     def _show_empty(self):
         # _t throughout: _show_message hands its arguments straight to
@@ -1594,7 +1609,7 @@ class EbookReader(nbapp.AppWindow):
         if not POPPLER_OK:
             self._show_message(
                 "PDF", book["title"], self._short_path(book["path"]),
-                "The PDF engine is unavailable in this build.")
+                _t("The PDF engine is unavailable in this build."))
             return
         try:
             uri = GLib.filename_to_uri(os.path.abspath(book["path"]), None)
@@ -1606,12 +1621,12 @@ class EbookReader(nbapp.AppWindow):
         except Exception:
             self._show_message(
                 "PDF", book["title"], self._short_path(book["path"]),
-                "This PDF could not be opened for rendering.")
+                _t("This PDF could not be opened for rendering."))
             return
         if npages <= 0:
             self._show_message(
                 "PDF", book["title"], self._short_path(book["path"]),
-                "This PDF has no pages to render.")
+                _t("This PDF has no pages to render."))
             return
         self._pdf_doc = doc
         self._mode = "pdf"
@@ -1671,8 +1686,8 @@ class EbookReader(nbapp.AppWindow):
                 self._show_message(
                     book["fmt"], book["title"],
                     self._short_path(book["path"]),
-                    "This file is no longer at that location." if gone
-                    else "This PDF could not be opened for rendering.")
+                    _t("This file is no longer at that location.") if gone
+                    else _t("This PDF could not be opened for rendering."))
                 return
         self._pdf_relayout()
         # a fresh page returns the reader to the top of the viewport
@@ -1862,10 +1877,10 @@ class EbookReader(nbapp.AppWindow):
         self._title_lbl.set_text(_t("No document"))
         self._subtitle_lbl.set_text("")
         self._show_message(
-            "READER", "Unsupported format",
-            "%s can't be opened. Supported formats: EPUB, PDF."
+            _t("READER"), _t("Unsupported format"),
+            _t("%s can't be opened. Supported formats: EPUB, PDF.")
             % os.path.basename(path),
-            "Choose an EPUB or PDF file.")
+            _t("Choose an EPUB or PDF file."))
 
     def _add_book(self, path, title, fmt, author=""):
         """Insert a book at the front of the shelf, de-duplicating by path so
