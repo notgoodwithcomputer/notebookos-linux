@@ -564,3 +564,22 @@ STILL NOT VERIFIED ON TARGET, and why — so nobody records these as done:
   the fix. Host suite covers it with 4 red-proved checks.
 - EBOOK damaged-library notice: needs a shell to plant a damaged store.
   Same gate. Host suite covers it with 5.
+
+**The leaked-timer class is empty, and the reason is architectural.** Swept
+every GLib.timeout_add/idle_add in de/. Two shapes looked wrong and neither
+is. (1) Sources STORED on self but seemingly never removed: gbaemu's launch
+idle and packages' flash timer both are removed — through a local
+(`tid = self._x; self._x = None; GLib.source_remove(tid)`), which a naive AST
+walk cannot follow. (2) Sources whose id is DISCARDED entirely, so nothing
+could ever cancel them: 41 of those, 10 repeating. They are all safe, because
+`nbapp.run` connects destroy to Gtk.main_quit — one app, one process, so a
+window closing ENDS the process and every timer with it. The repeating ones
+that live in processes which do NOT exit (shell, splash, panel/widgets,
+desktopbg) are session-lifetime by design. Sequencer's export tick guards on
+_closed anyway, and Composer's playback tick dies with the player its destroy
+handler clears.
+WORTH KNOWING BEFORE ANYONE "FIXES" THIS: settings.py has no _closed gate and
+its print-test poll repeats for up to 90 seconds, which reads as a leak until
+you follow the process lifetime. It is not one. If this OS ever grows a
+second window inside one process, this class stops being empty — that is the
+condition to re-check, not the code.
