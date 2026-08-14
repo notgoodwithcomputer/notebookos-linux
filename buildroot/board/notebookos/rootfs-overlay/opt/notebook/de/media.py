@@ -50,6 +50,7 @@ import sys
 import time
 
 import nbapp
+import nbjobs
 import nbpicker
 import nbicons
 import nbmotion
@@ -271,6 +272,20 @@ def _pixbuf_any(path):
 THUMB_W, THUMB_H = 110, 60
 
 
+def _thumbnail_fast(path):
+    """A thumbnail from GdkPixbuf's own scaling loader, or None.
+
+    NO FALLBACK, deliberately: this is the one called from an idle callback on
+    the GTK thread, where the only affordable decode is the one that takes
+    milliseconds. A None here means "not cheaply", not "not at all" — the
+    caller hands those to a worker."""
+    try:
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(
+            path, THUMB_W, THUMB_H, True)
+    except Exception:                                             # noqa: BLE001
+        return None
+
+
 def _thumbnail(path):
     """A THUMB_W x THUMB_H thumbnail for `path`, or None if nothing can read it.
 
@@ -347,7 +362,15 @@ class MediaViewer(nbapp.AppWindow):
         self._strip_imgs = {}          # image path -> its thumbnail Gtk.Image
         self._thumb_cache = {}         # image path -> decoded thumbnail pixbuf
         self._thumb_queue = []         # image paths still awaiting a lazy decode
+        self._thumb_slow = []          # paths whose thumbnail needs a transcode
         self._thumb_idle_id = 0        # GLib idle source doing the decode, or 0
+
+        # Where a slow decode runs. Closed in _on_destroy, so a transcode still
+        # running when the window goes cannot call back into dead widgets.
+        self.jobs = nbjobs.JobOwner(name="media")
+        # Bumped on every _show, so a decode that lands after the person has
+        # moved on to another picture knows to stay off the stage.
+        self._decode_gen = 0
 
         # -- video engine state (all inert until a video is opened) --
         self._player = None            # the playbin pipeline, or None
@@ -928,8 +951,19 @@ class MediaViewer(nbapp.AppWindow):
         return btn
 
     def _thumb_tick(self):
-        """Decode one queued thumbnail per idle pass, so a large folder fills the
-        strip without ever blocking the GTK main loop."""
+        """Decode one queued thumbnail per idle pass, so a large folder fills
+        the strip a cell at a time instead of all at once.
+
+        AN IDLE PASS IS STILL THE MAIN THREAD. This used to claim the strip
+        filled "without ever blocking the GTK main loop", which GLib.idle_add
+        does not buy: it defers the work, it does not move it. One cell at a
+        time is what keeps that honest — a format GdkPixbuf reads decodes in
+        milliseconds, so the pause between frames is invisible.
+
+        The exception is a format that needs the transcode fallback, and that
+        one must not run here: a 25-second ffmpeg cap is not something an idle
+        callback may spend, and a folder of them spent it once per cell. Those
+        are collected and decoded together in a worker instead."""
         if not self._thumb_queue:
             self._thumb_idle_id = 0
             return False
@@ -938,21 +972,64 @@ class MediaViewer(nbapp.AppWindow):
         if img is not None:
             pb = self._thumb_cache.get(path)
             if pb is None:
-                pb = _thumbnail(path)
-                if pb is not None:
-                    self._thumb_cache[path] = pb
-            try:
-                if pb is not None:
+                pb = _thumbnail_fast(path)
+            if pb is not None:
+                self._thumb_cache[path] = pb
+                try:
                     img.set_from_pixbuf(pb)
-                else:
-                    # nothing could read the file — a faint glyph reads as
-                    # "no preview" instead of an empty, broken-looking cell
+                except Exception:
+                    pass
+            else:
+                # Either nothing can read it, or it needs the transcode — which
+                # cannot be told apart without paying for the transcode. The
+                # faint glyph reads as "no preview" instead of an empty,
+                # broken-looking cell, and the worker replaces it if the
+                # fallback succeeds.
+                try:
                     nbicons.set_image(img, "media", 22, "#C9C4B6")
-            except Exception:
-                pass
+                except Exception:
+                    pass
+                self._thumb_slow.append(path)
         if self._thumb_queue:
             return True
         self._thumb_idle_id = 0
+        self._start_slow_thumbs()
+        return False
+
+    def _start_slow_thumbs(self):
+        """Decode the cells that need the transcode fallback, in one worker.
+
+        One job for the whole batch, not one per cell: the fallback shells out
+        to ffmpeg or rsvg-convert, and a folder of WebPs would otherwise start
+        a dozen of them at once on a machine that has better uses for its
+        cores. REPLACE, so re-opening a folder abandons the previous batch
+        rather than queueing behind it."""
+        paths, self._thumb_slow = self._thumb_slow, []
+        if not paths or self._closed:
+            return
+
+        def work(job):
+            for path in paths:
+                job.checkpoint()
+                pixbuf = _thumbnail(path)
+                if pixbuf is not None:
+                    GLib.idle_add(self._deliver_thumb, path, pixbuf)
+            return len(paths)
+
+        self.jobs.start("thumbs", work, policy=nbjobs.REPLACE)
+
+    def _deliver_thumb(self, path, pixbuf):
+        """Put one worker-decoded thumbnail into its cell, if that cell is
+        still on screen — the strip may have been rebuilt since."""
+        if self._closed:
+            return False
+        self._thumb_cache[path] = pixbuf
+        img = self._strip_imgs.get(path)
+        if img is not None:
+            try:
+                img.set_from_pixbuf(pixbuf)
+            except Exception:
+                pass
         return False
 
     def _cancel_thumbs(self):
@@ -963,6 +1040,7 @@ class MediaViewer(nbapp.AppWindow):
                 pass
             self._thumb_idle_id = 0
         self._thumb_queue = []
+        self._thumb_slow = []
 
     def _highlight_strip(self):
         """Mark the current file's thumbnail selected (signage-red), clearing the
@@ -1075,23 +1153,25 @@ class MediaViewer(nbapp.AppWindow):
 
         # image path — never needs the video engine
         self._stop_video()
+        self._decode_gen += 1
         try:
-            pixbuf = _pixbuf_any(path)
-        except Exception:
-            self._orig_pixbuf = None
-            self._zoom = None
-            self._stop_slideshow()
-            # same voice as the video failure below: what happened, then a way on
-            self._show_notice(
-                "This file cannot be opened",
-                "The file may be damaged, or saved in a format Notebook OS "
-                "does not read. Try another file.")
-            self._fill_info(path, None)
-            self._set_zoom(None)
-            self._update_controls()
-            self._rebuild_strip() if user_caused else self._rebuild_strip(False)
+            pixbuf = _oriented(_bounded_pixbuf(path))
+        except Exception:                                         # noqa: BLE001
+            # Nothing in GdkPixbuf reads this one, so it needs the CLI
+            # fallback — rsvg-convert or ffmpeg, a whole transcode, capped at
+            # 25 seconds. That ran HERE, on the GTK thread: one click on a WebP
+            # or an SVG and the window stopped repainting, stopped scrolling
+            # and could not be closed until the transcode finished or the cap
+            # expired. The formats a person is least likely to expect trouble
+            # from were the ones that froze the viewer.
+            self._decode_in_background(path, user_caused)
             return
 
+        self._present_image(path, pixbuf, user_caused)
+
+    def _present_image(self, path, pixbuf, user_caused):
+        """Put a decoded image on the stage. Split out of _show so the slow
+        decode path can reach the same ending from a worker's callback."""
         self._orig_pixbuf = pixbuf
         self._fit_mode = True           # a freshly opened image fits the stage
         self._last_alloc = (0, 0)       # force a re-fit for the new image
@@ -1100,6 +1180,49 @@ class MediaViewer(nbapp.AppWindow):
         self._fill_info(path, pixbuf)
         self._update_controls()
         self._rebuild_strip() if user_caused else self._rebuild_strip(False)
+
+    def _image_failed(self, path, user_caused):
+        """Nothing on this machine could decode `path`."""
+        self._orig_pixbuf = None
+        self._zoom = None
+        self._stop_slideshow()
+        # same voice as the video failure below: what happened, then a way on
+        self._show_notice(
+            "This file cannot be opened",
+            "The file may be damaged, or saved in a format Notebook OS "
+            "does not read. Try another file.")
+        self._fill_info(path, None)
+        self._set_zoom(None)
+        self._update_controls()
+        self._rebuild_strip() if user_caused else self._rebuild_strip(False)
+
+    def _decode_in_background(self, path, user_caused):
+        """Transcode and decode `path` off the GTK thread, then show it.
+
+        REPLACE, not REJECT: holding an arrow key down walks the folder faster
+        than a transcode finishes, and each new picture makes the one before it
+        pointless. Queueing them would make the viewer lag further behind the
+        person the longer they browsed."""
+        generation = self._decode_gen
+        self._show_notice(_t("Opening %s") % os.path.basename(path), "")
+
+        def work(_job):
+            return _pixbuf_any(path)
+
+        def done(pixbuf):
+            # Two ways to be stale: the window is gone, or the person has
+            # already asked for a different picture.
+            if self._closed or generation != self._decode_gen:
+                return
+            self._present_image(path, pixbuf, user_caused)
+
+        def failed(_error):
+            if self._closed or generation != self._decode_gen:
+                return
+            self._image_failed(path, user_caused)
+
+        self.jobs.start("decode", work, on_done=done, on_error=failed,
+                        policy=nbjobs.REPLACE)
 
     def _show_notice(self, title, sub):
         self._notice_title.set_text(title)
@@ -1743,6 +1866,10 @@ class MediaViewer(nbapp.AppWindow):
         # set_state(NULL), or already queued behind this destroy handler, must
         # see a closed owner and do nothing.
         self._closed = True
+        try:
+            self.jobs.close()
+        except Exception:                                         # noqa: BLE001
+            pass
         self._stop_slideshow()
         self._stop_video()
         self._cancel_thumbs()

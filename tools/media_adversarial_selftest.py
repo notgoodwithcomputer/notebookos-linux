@@ -13,6 +13,18 @@ import media  # noqa: E402
 passed = failed = 0
 
 
+def pump():
+    """Run the queued GLib callbacks. nbjobs does its work on a thread but
+    DELIVERS through the main loop, so a display-free suite that only joins the
+    thread sees no callback at all — and every "nothing was delivered" check
+    then passes for the wrong reason."""
+    ctx = media.GLib.main_context_default()
+    for _ in range(200):
+        if not ctx.pending():
+            break
+        ctx.iteration(False)
+
+
 def check(name, condition, detail=""):
     global passed, failed
     if condition:
@@ -223,8 +235,18 @@ def huge_decode_check():
 
 class NoticeViewer:
     _display = media.MediaViewer._display
+    # The refusal now arrives through the worker: a file GdkPixbuf cannot read
+    # might be corrupt OR might just need the transcode, and the two are not
+    # distinguishable without attempting it. The double carries the real
+    # background path so the check still exercises the app's own code.
+    _decode_in_background = media.MediaViewer._decode_in_background
+    _image_failed = media.MediaViewer._image_failed
 
     def __init__(self):
+        self._closed = False
+        self._decode_gen = 0
+        self.jobs = media.nbjobs.JobOwner(name="notice-test")
+        self._present_image = lambda *args: None
         self._media_path = None
         self._orig_pixbuf = object()
         self._zoom = 1
@@ -246,9 +268,13 @@ def refusal_checks():
             fh.write(blob)
         viewer = NoticeViewer()
         viewer._display(path)
+        viewer.jobs.join()
+        pump()
+        titles = [n[0] for n in viewer.notices]
         check(label + " image produces an honest visible error",
-              viewer.notices and viewer.notices[0][0] ==
-              "This file cannot be opened", repr(viewer.notices))
+              "This file cannot be opened" in titles, repr(viewer.notices))
+        check(label + " image says what it is doing before it refuses",
+              titles and titles[0].startswith("Opening"), repr(titles))
 
     refused = {".heic", ".heif", ".avif"}
     check("NOT-A-DEFECT unsupported HEIF/AVIF stays out of Open patterns",
@@ -318,9 +344,105 @@ def refusal_checks():
           "the collision-renamed sidecar")
 
 
+def offthread_decode_check():
+    """A format GdkPixbuf cannot read used to be transcoded on the GTK thread —
+    rsvg-convert or ffmpeg, capped at 25 seconds — so one click on a WebP or an
+    SVG froze the window until it finished."""
+    import threading
+    import types
+
+    app = media.MediaViewer.__new__(media.MediaViewer)
+    app._closed = False
+    app._decode_gen = 0
+    app.jobs = media.nbjobs.JobOwner(name="media-test")
+    notices = []
+    app._show_notice = lambda title, sub: notices.append(title)
+    presented = []
+    app._present_image = lambda path, pb, uc: presented.append((path, pb))
+    app._image_failed = lambda path, uc: presented.append((path, None))
+
+    main_ident = threading.get_ident()
+    seen = {}
+    real_any = media._pixbuf_any
+    media._pixbuf_any = lambda path: (
+        seen.__setitem__("ident", threading.get_ident()) or FakePixbuf())
+    try:
+        app._decode_gen += 1
+        app._decode_in_background("/tmp/slow.webp", True)
+        app.jobs.join()
+        pump()
+    finally:
+        media._pixbuf_any = real_any
+    check("the decoded picture reaches the stage",
+          [p for p, _ in presented] == ["/tmp/slow.webp"], repr(presented))
+    check("a transcoded format is decoded off the GTK thread",
+          seen.get("ident") not in (None, main_ident),
+          "transcode ran on the calling thread")
+    check("the viewer says what it is doing while it decodes",
+          any("slow.webp" in n for n in notices), repr(notices))
+
+    # Browsing past a slow picture must not let its decode land later, on top
+    # of whatever the person is looking at by then.
+    app2 = media.MediaViewer.__new__(media.MediaViewer)
+    app2._closed = False
+    app2._decode_gen = 0
+    app2.jobs = media.nbjobs.JobOwner(name="media-test-2")
+    app2._show_notice = lambda title, sub: None
+    landed = []
+    app2._present_image = lambda path, pb, uc: landed.append(path)
+    app2._image_failed = lambda path, uc: landed.append(None)
+    media._pixbuf_any = lambda path: FakePixbuf()
+    try:
+        app2._decode_gen += 1
+        app2._decode_in_background("/tmp/superseded.webp", True)
+        app2._decode_gen += 1          # the person moved on
+        app2.jobs.join()
+        pump()
+    finally:
+        media._pixbuf_any = real_any
+    check("a decode the person moved past does not reach the stage",
+          landed == [], repr(landed))
+
+    # A closed window must not be called back into either.
+    app3 = media.MediaViewer.__new__(media.MediaViewer)
+    app3._closed = False
+    app3._decode_gen = 1
+    app3.jobs = media.nbjobs.JobOwner(name="media-test-3")
+    app3._show_notice = lambda title, sub: None
+    after_close = []
+    app3._present_image = lambda path, pb, uc: after_close.append(path)
+    app3._image_failed = lambda path, uc: after_close.append(None)
+    media._pixbuf_any = lambda path: FakePixbuf()
+    try:
+        app3._decode_in_background("/tmp/closing.webp", True)
+        app3._closed = True
+        app3.jobs.join()
+        pump()
+    finally:
+        media._pixbuf_any = real_any
+    check("a decode landing after the window closed touches nothing",
+          after_close == [], repr(after_close))
+
+    # The idle thumbnail pass must never be the thing that pays for a
+    # transcode: _thumbnail_fast has no fallback at all.
+    src = os.path.join(HOME, "notathumb.webp")
+    with open(src, "wb") as fh:
+        fh.write(b"not an image")
+    fell_back = []
+    real_decode = media._decode_to_png
+    media._decode_to_png = lambda path: fell_back.append(path)
+    try:
+        fast = media._thumbnail_fast(src)
+    finally:
+        media._decode_to_png = real_decode
+    check("the idle thumbnail pass never runs the transcode fallback",
+          fast is None and fell_back == [], repr(fell_back))
+
+
 if __name__ == "__main__":
     fallback_and_orientation_checks()
     huge_decode_check()
     refusal_checks()
+    offthread_decode_check()
     print("\n%d/%d checks passed" % (passed, passed + failed))
     raise SystemExit(1 if failed else 0)
