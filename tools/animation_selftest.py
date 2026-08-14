@@ -5317,6 +5317,77 @@ def loudness_card_family():
     shutil.rmtree(home, ignore_errors=True)
 
 
+def frame_image_family():
+    """Copy Frame as Image — what another program receives.
+
+    This leaves the app, so it has to be a picture rather than a private
+    representation: the film's own size, the ink where the ink is, and
+    PAPER behind it. A frame composited without its paper pastes into
+    somebody else's document as a black rectangle."""
+    if not gtk_available():
+        skip("F47 copy frame as image", "no display")
+        return
+    from gi.repository import GdkPixbuf
+
+    def pasted(module, frame):
+        app = module.Animation()
+        app._flash = lambda *a, **k: None
+        app.doc = module.AnimationDocument(canvas=(160, 120))
+        app.scene_i = app.layer_i = app.playhead = 0
+        scene = app.doc.scenes[0]
+        scene["length"] = 12
+        app.sheet = module.Sheet(app.doc, 0)
+        cel, _run = app.sheet.ensure_drawing(0, 0)
+        face = cel.decoded(0)
+        for y in range(20, 60):
+            for x in range(30, 90):
+                module.write_pixel(face, x, y, "#C8341E")
+        cel.version += 1
+        image = module.composite(app.doc, scene, frame)
+        loader = GdkPixbuf.PixbufLoader.new_with_type("png")
+        loader.write(module.surface_png(image))
+        loader.close()
+        app._alive = False
+        return loader.get_pixbuf()
+
+    picture = pasted(animation, 0)
+    pixels = picture.get_pixels()
+    stride = picture.get_rowstride()
+    channels = picture.get_n_channels()
+
+    def at(x, y):
+        offset = y * stride + x * channels
+        return tuple(pixels[offset:offset + 3])
+
+    check("F47 a copied frame is the film's own size",
+          (picture.get_width(), picture.get_height()) == (160, 120),
+          (picture.get_width(), picture.get_height()))
+    check("F47 the ink is in it, in the colour it was drawn",
+          at(50, 40) == (200, 52, 30), at(50, 40))
+    check("F47 and there is paper behind it, not a hole",
+          min(at(5, 5)) > 100, at(5, 5))
+
+    blank = pasted(animation, 11)
+    blank_pixels = blank.get_pixels()
+    check("F47 a frame with nothing drawn on it is still a sheet of paper",
+          min(tuple(blank_pixels[0:3])) > 100, tuple(blank_pixels[0:3]))
+
+    graded, scratch = module_mutant(
+        "F47-copies-without-paper",
+        [("    def _copy_frame_image(self, *_):\n"
+          "        image = composite(self.doc, self.doc.scenes[self.scene_i], self.playhead)",
+          "    def _copy_frame_image(self, *_):\n"
+          "        image = composite(self.doc, self.doc.scenes[self.scene_i], self.playhead, paper=False)")])
+    naked = graded.composite(
+        graded.AnimationDocument(canvas=(160, 120)),
+        graded.AnimationDocument(canvas=(160, 120)).scenes[0], 0, paper=False)
+    naked.flush()
+    data = naked.get_data()
+    mutant("F47 a frame copied without its paper is caught",
+           data[3] == 0, data[3])
+    shutil.rmtree(scratch)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5346,6 +5417,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        frame_image_family,
         loudness_card_family,
         audio_pump_family,
         zoom_family,
