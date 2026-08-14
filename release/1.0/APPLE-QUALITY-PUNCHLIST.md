@@ -618,16 +618,16 @@ dismissing any card the keyboard belonged to nothing until the person
 clicked back into the page. Novel's capture/restore idiom applied; red-
 proved; comics 106/106.
 
-UNMEASURED, NOT FINDINGS — animation.py, illustrator.py, sequencer.py.
-A grep for the restore put all three on a list with comics, but it only
-knew identifier names and cannot tell a real restore from an absent one;
-comics was confirmed only by driving the window. Each needs the same
-three-line probe before anyone touches it:
-
-    win = App(); win.show_all(); pump()
-    before = win.get_focus()
-    win.<its own prompt>(...); pump(); win.<its own close>(); pump()
-    after = win.get_focus()          # after is before, and not None
+MEASURED AND CLOSED — this replaces the "UNMEASURED" note that stood here.
+All three were driven through their own real prompts (none of them share a
+prompt API: animation takes rows and a callback, illustrator takes
+(label, style, callback) triples and closes via _close_saveprompt,
+sequencer opens through _confirm):
+  animation    focus returns to the invoker      OK, never broken
+  sequencer    focus returns to the invoker      OK, never broken
+  illustrator  before=Button after=None          BROKEN -> fixed ee2c69dc
+So half the grep's list was wrong, and fixing on its say-so would have
+meant two unnecessary changes to working code.
 
 NOTE THE IMPACT IS NARROWER THAN IT LOOKS, which is why this is worth
 measuring rather than fixing on sight: these apps put their shortcuts on
