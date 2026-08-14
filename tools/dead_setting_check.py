@@ -243,8 +243,16 @@ def shell_readers():
             continue
         # `.get("tz_posix")` / `["tz_posix"]` inside the inline python, and a
         # bare quoted key for anything reaching in with a different tool.
-        for m in re.finditer(r"""["']([a-z][a-z0-9_]{2,})["']""", text):
-            keys.add(m.group(1))
+        #
+        # DOTS AND BACKSLASHES BELONG IN THE PATTERN. Settings keys are dotted
+        # ("sound.volume"), and a shell reader gets at them with sed, where the
+        # dot must be escaped — `"sound\.volume"`. A pattern of [a-z0-9_] matches
+        # neither form, so every dotted key read from a shell script looked
+        # unread: this reported sound.volume, sound.capture and sound.muted as
+        # write-only while session.sh had been restoring all three at boot since
+        # 559f829a. The escape is stripped so both spellings land on one key.
+        for m in re.finditer(r"""["']([a-z][a-z0-9_.\\]{2,})["']""", text):
+            keys.add(m.group(1).replace("\\", ""))
     return keys
 
 
