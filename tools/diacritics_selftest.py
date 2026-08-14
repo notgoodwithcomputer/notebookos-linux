@@ -184,8 +184,8 @@ def test_escape_and_arrows():
 
     e.set_text("e"); e.set_position(1)
     p._on_press(win, Ev(Gdk.KEY_e, "e")); pump(90)
-    got = p._on_press(win, Ev(Gdk.KEY_z, "z"))
-    check("an unrelated key is NOT swallowed (typing continues)", got is False)
+    got = p._on_press(win, Ev(Gdk.KEY_BackSpace))
+    check("a non-printable key is NOT swallowed", got is False)
     check("...and it dismisses the palette", p._open is False)
     win.destroy()
 
@@ -230,6 +230,88 @@ def test_autorepeat():
     check("a key with no accents clears the tracked hold", p._held is None)
     pump(90)
     check("no palette after typing through a hold", p._open is False)
+    win.destroy()
+
+
+def test_palette_printable_replay():
+    print("\nHOLD — printable replay while the palette is open")
+    nbdiacritics.HOLD_MS = 40
+
+    e, win = entry_host()
+    p = nbdiacritics.DiacriticsPicker(win)
+    p._on_press(win, Ev(Gdk.KEY_e, "e")); e.set_text("e"); e.set_position(1)
+    pump(90)
+    if not p._open:
+        check("palette replay into Entry is consumed and inserted once", False,
+              "[not reached: palette did not open]")
+    else:
+        got = p._on_press(win, Ev(Gdk.KEY_a, "a"))
+        check("palette replay into Entry is consumed and inserted once",
+              got is True and e.get_text() == "ea",
+              "return=%r text=%r" % (got, e.get_text()))
+    win.destroy()
+
+    tv = Gtk.TextView()
+    win = make_host(tv)
+    buf = tv.get_buffer()
+    p = nbdiacritics.DiacriticsPicker(win)
+    p._on_press(win, Ev(Gdk.KEY_e, "e")); buf.insert_at_cursor("e")
+    pump(90)
+    if not p._open:
+        check("palette replay into TextView is consumed and inserted once", False,
+              "[not reached: palette did not open]")
+    else:
+        got = p._on_press(win, Ev(Gdk.KEY_o, "o"))
+        txt = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        check("palette replay into TextView is consumed and inserted once",
+              got is True and txt == "eo",
+              "return=%r text=%r" % (got, txt))
+    win.destroy()
+
+    e, win = entry_host("e")
+    p = nbdiacritics.DiacriticsPicker(win)
+    p._on_press(win, Ev(Gdk.KEY_e, "e")); pump(90)
+    if not p._open:
+        check("Ctrl chord closes palette without being consumed", False,
+              "[not reached: palette did not open]")
+    else:
+        got = p._on_press(win, Ev(Gdk.KEY_a, "a",
+                                  Gdk.ModifierType.CONTROL_MASK))
+        check("Ctrl chord closes palette without being consumed",
+              got is False and p._open is False,
+              "return=%r open=%r" % (got, p._open))
+    win.destroy()
+
+    e, win = entry_host()
+    p = nbdiacritics.DiacriticsPicker(win)
+    p._on_press(win, Ev(Gdk.KEY_e, "e")); e.set_text("e"); e.set_position(1)
+    pump(90)
+    if not p._open:
+        check("replayed key starts a fresh hold without double typing", False,
+              "[not reached: first palette did not open]")
+    else:
+        got = p._on_press(win, Ev(Gdk.KEY_a, "a"))
+        replayed = e.get_text()
+        repeated = p._on_press(win, Ev(Gdk.KEY_a, "a"))
+        check("replayed key starts a fresh hold without double typing",
+              got is True and repeated is True and p._open
+              and p._base == "a" and e.get_text() == "ea",
+              "replay=%r repeat=%r open=%r base=%r before=%r after=%r" %
+              (got, repeated, p._open, p._base, replayed, e.get_text()))
+    win.destroy()
+
+    e, win = entry_host("e")
+    p = nbdiacritics.DiacriticsPicker(win)
+    p._on_press(win, Ev(Gdk.KEY_e, "e")); pump(90)
+    if not p._open:
+        check("missing replay target is not consumed", False,
+              "[not reached: palette did not open]")
+    else:
+        p._target = None
+        got = p._on_press(win, Ev(Gdk.KEY_a, "a"))
+        check("missing replay target is not consumed",
+              got is False and p._open is False and e.get_text() == "e",
+              "return=%r open=%r text=%r" % (got, p._open, e.get_text()))
     win.destroy()
 
 
@@ -373,6 +455,7 @@ def main():
     test_hold_opens()
     test_escape_and_arrows()
     test_autorepeat()
+    test_palette_printable_replay()
     test_eligibility()
     test_textview_and_guard()
     test_teardown_and_wiring()

@@ -4221,8 +4221,14 @@ class GbaSdk(nbapp.AppWindow):
         GLib.child_watch_add(proc.pid, self._emulator_exited)
 
     def _emulator_exited(self, _pid, _status):
+        # The SDK is still open and about to take the screen back, so the
+        # app-active flag must SURVIVE this exit. A bare unlink here told the
+        # Finder's flag monitor the screen was free the moment a played game
+        # ended, and it mapped itself over the SDK (filmed on target while a
+        # build was running). Recounting keeps the flag while any registered
+        # app — this one — is alive, and reaps the dead emulator's marker.
         try:
-            os.unlink(nbapp.APP_FLAG)
+            nbapp.refresh_app_flag()
         except Exception:                                   # noqa: BLE001
             pass
         self.show()

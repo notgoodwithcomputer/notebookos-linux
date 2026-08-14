@@ -141,12 +141,14 @@ class GameSession:
         # give the stage a moment to map (matchbox floats the dialog), then launch
         GLib.timeout_add(250, self._launch)
 
-    def stop(self):
+    def stop(self, why="external"):
         """End the game (used by every exit route: Ctrl+Esc grab, the stage key
-        handler, the Exit button, and external close)."""
+        handler, the Exit button, and external close). `why` names the route in
+        the log — when a game ends before the player asked it to, the log must
+        say which of the four exits fired (or none: vbam died on its own)."""
         if self._done:
             return
-        self._log("exit requested")
+        self._log("exit requested (%s)" % why)
         if self.proc is not None and self.proc.poll() is None:
             try:
                 self.proc.terminate()
@@ -213,7 +215,7 @@ class GameSession:
         exit_btn.set_relief(Gtk.ReliefStyle.NONE)
         exit_btn.get_style_context().add_class("gameexit")
         exit_btn.set_can_focus(False)          # never steal keys from the game
-        exit_btn.connect("clicked", lambda *_: self.stop())
+        exit_btn.connect("clicked", lambda *_: self.stop("exit button"))
         bar.pack_end(exit_btn, False, False, 0)
         box.pack_start(bar, False, False, 0)
 
@@ -249,7 +251,8 @@ class GameSession:
         if ev.keyval in (Gdk.KEY_Escape,):
             ctrl = bool(ev.state & Gdk.ModifierType.CONTROL_MASK)
             if ctrl or not self._embedded:
-                self.stop()
+                self.stop("stage Ctrl+Esc" if ctrl else
+                          "stage Esc before embed")
                 return True
         # Any OTHER key arriving HERE while a game is embedded means the X
         # input focus is on the stage, not the game — the player is pressing
@@ -504,8 +507,13 @@ class GameSession:
         try:
             while self._x.XPending(self._grab_dpy) > 0:
                 self._x.XNextEvent(self._grab_dpy, ctypes.byref(ev))
-                if ev.type == KeyPress and ev.keycode in self._esc_codes:
-                    self.stop()          # Ctrl+Esc -> quit the game
+                # The grab is registered for Ctrl+Esc only, but once a passive
+                # grab activates, EVERY key event until the release reaches
+                # this connection — so check the event itself, not just the
+                # keycode: a bare-Esc event must never end a running game.
+                if (ev.type == KeyPress and ev.keycode in self._esc_codes
+                        and ev.state & ControlMask):
+                    self.stop("Ctrl+Esc grab")
         except Exception:
             pass
         return True

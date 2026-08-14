@@ -3395,6 +3395,35 @@ check("and a valid 16-bit WAV still imports",
 _wapp.destroy()
 pump()
 
+# ---- play hand-off return: the flag survives the emulator's exit ----------
+# Filmed on target (2.2-consumer): when a played game's process exited, the
+# SDK dropped the shared app-active flag outright — the Finder's flag monitor
+# read "screen free" and mapped itself over the still-open IDE. The exit path
+# must RECOUNT the registered apps instead: the SDK itself is alive, so the
+# flag stays (Finder and widget column stay down) and the dead emulator's
+# marker is reaped.
+section("play hand-off return")
+_ph_app = app()
+pump()
+with open(os.path.join(nbapp._APP_DIR, str(os.getpid())), "w") as _fh:
+    _fh.write("gbasdk\n")
+with open(os.path.join(nbapp._APP_DIR, "99999999"), "w") as _fh:
+    _fh.write("gbaemu\n")
+open(nbapp._APP_FLAG, "w").close()
+_ph_app._emulator_exited(99999999, 0)
+check("the app-active flag survives a played game's exit while the SDK is open",
+      os.path.exists(nbapp._APP_FLAG))
+check("the dead emulator's marker is reaped by the same recount",
+      not os.path.exists(os.path.join(nbapp._APP_DIR, "99999999")))
+_ph_app.destroy()
+pump()
+for _leftover in (nbapp._APP_FLAG,
+                  os.path.join(nbapp._APP_DIR, str(os.getpid()))):
+    try:
+        os.remove(_leftover)
+    except OSError:
+        pass
+
 print("\n%d/%d checks passed" % (sum(RESULTS), len(RESULTS)))
 if FAILED:
     print("\nFAILED:")

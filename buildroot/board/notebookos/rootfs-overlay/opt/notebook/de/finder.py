@@ -1179,13 +1179,32 @@ class Finder(Gtk.Window):
 
     def _sync_app_flag(self):
         # Reconcile visibility with the app-active flag: hide while a launched
-        # app owns the screen, reappear when it exits.
+        # app owns the screen, reappear when it exits. The flag is a HINT with
+        # several writers (nbapp, the shell, the GBA SDK's play hand-off), so
+        # before REAPPEARING check what is actually running — acting on the
+        # bare file mapped the Finder over a still-open app when a finished
+        # game's exit dropped the flag (filmed on target: the SDK was mid-
+        # build when the Finder presented itself over it).
         try:
             active = os.path.exists(nbapp.APP_FLAG)
             if active and self.get_visible():
                 self.hide()
             elif not active and not self.get_visible():
+                if self._other_apps_running():
+                    # An app still holds the screen: the flag was dropped in
+                    # error. Heal it — the widget column watches the same
+                    # file — and stay hidden; that app's real exit re-fires
+                    # this monitor.
+                    try:
+                        open(nbapp.APP_FLAG, "w").close()
+                    except Exception:
+                        pass
+                    return
                 self.show_all()
+                self.present()
+                # same swrast first-paint nudges as the child-watch return
+                GLib.timeout_add(200, self._nudge)
+                GLib.timeout_add(600, self._nudge)
         except Exception:
             pass
 

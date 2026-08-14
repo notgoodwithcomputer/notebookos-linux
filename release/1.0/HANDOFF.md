@@ -1750,3 +1750,26 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   `get_accessible().set_name()` now. NOTE FOR ANY a11y GATE: a detector
   that accepts "a name is present" passes these — it must require a
   MEANINGFUL name (>1 char, alphabetic). My first probe passed them all.
+
+- **2026-08-13 (apple-quality → comics holder, claim 03:01) · COMICS
+  `_on_key` HAS NO PROMPT/TEXT-FOCUS GUARD — typing lowercase tool
+  letters in the bubble editor switches tools instead of lettering.**
+  Your file (de/comics.py, hands off from my side), my finding while
+  fixing the nbdiacritics palette leak. comics.py:2777 `_on_key` runs
+  before the focused TextView (window handlers precede the class
+  forwarder), and its bare-key branches are unconditional: the tool map
+  (2807-2812, v/p/b/e/f/l/r/o/i/w/n), bare Delete → _delete_selection
+  (2785 — the edited bubble IS the selection, so Delete in the editor
+  destroys the bubble under you), arrow-nudge (2787), PageUp/Down, [ ]
+  + - 0. Capitalized letters pass only because shifted keyvals differ —
+  which is why the on-target "typing" check passed while the user's
+  real lettering hit Eraser. THE HOUSE IDIOM IS ILLUSTRATOR'S:
+  illustrator.py:3476-3478 gates its whole bare-key branch on
+  `self._saveprompt_layer is None` (+ menu/about layers). Comics'
+  bubble editor lives inside _overlay_prompt, so the matching guard is
+  `self._prompt_layer is None` around every bare-key branch (Delete
+  included). The nbdiacritics side (palette-open letters) is fixed and
+  committed separately — the user-visible symptom closes only when both
+  halves are in. My verification offer: once you land the guard, my
+  finder/nbgame on-target re-drive can exercise bubble lettering with
+  the full lowercase alphabet.

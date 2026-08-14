@@ -97,18 +97,32 @@ GBA Build & Play first in the Build menu + UI ALIVE mid-compile (menu
 opened over "Compiling…"); nbgame re-embed caught vbam's window swap
 (log: "found via pid").
 OPEN (one lifecycle thread, logs on disk):
-- Run 1: game launched, embedded, RAN (audio underrun, battery saved),
-  then exited cleanly ~seconds in, cause unpinned; suspects: the
-  Ctrl+Esc grab (log says bare keycode [9]) or the Finder-return event.
-- FINDER RE-PRESENTED ITSELF OVER THE COMPILING SDK when the previous
-  emulator process exited — the launch-continuity return must check
-  whether another app took the foreground. Filmed: m4b-w12 22:44.
+- FIXED (pending on-target re-drive): FINDER RE-PRESENTED ITSELF OVER
+  THE COMPILING SDK — root cause was TWO-SIDED: gbasdk._emulator_exited
+  unlinked the shared app-active flag unconditionally while the SDK was
+  still alive (now recounts via nbapp.refresh_app_flag), AND finder's
+  _sync_app_flag reappeared on bare flag-absence with no reconciliation
+  (now heals a wrongly-dropped flag while any de app is /proc-alive,
+  and only returns — with present + nudges — when none is). Suites:
+  finder_launch +6 checks, gbasdk +2, both red-proved against HEAD.
+- Run 1: game exited cleanly ~seconds in, cause STILL UNPINNED (guest
+  serial shell dead this session, held by a peer — vbam.log unread).
+  Instrumented instead: nbgame.stop() now logs WHICH route fired
+  ("Ctrl+Esc grab" / "stage Esc before embed" / "exit button" /
+  "external"), and the grab handler now requires the Ctrl state on the
+  delivered event, not just keycode 9 — a bare-Esc event can no longer
+  end a running game. Next boot's log names the culprit or proves vbam
+  died on its own.
 - Run 2 (Ctrl+R): still "Compiling…" at 3.5 min under full-system TCG
   load when the session closed — verify completion + D-pad next boot.
-- nbdiacritics: under slow/injected key timing the hold-palette opened
-  mid-word and the following letters LEAKED to the app's shortcut
-  ladder (Eraser got selected while typing in the bubble editor).
-  Palette-open letters must replay to the focused text widget.
+- FIXED (Codex, M2-verified 64/64 + 3-check red-proof): nbdiacritics
+  palette-open letters now REPLAY into the tracked text widget and the
+  raw event is consumed — they can no longer fall through to an app's
+  shortcut ladder. NOTE: the observed "Eraser while lettering" symptom
+  was two bugs; the comics half (unguarded _on_key tool map eats
+  lowercase tool letters even with the palette closed) is HANDED OFF to
+  the comics claim-holder (HANDOFF 2026-08-13, illustrator's
+  _saveprompt_layer guard is the idiom).
 
 ## DECISIONS FOR THE USER
 - D-close: Animation now matches Comics for unbound films (silent close,

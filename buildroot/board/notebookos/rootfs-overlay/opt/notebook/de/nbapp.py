@@ -951,6 +951,17 @@ def _refresh_app_flag():
         pass
 
 
+def refresh_app_flag():
+    """Recount the registered apps and set/clear the app-active flag to match.
+
+    For a launcher reaping a child it spawned (the SDK's play hand-off, the
+    Finder's child watch): bare os.unlink(APP_FLAG) there is wrong whenever
+    any OTHER registered app is still alive — the launcher itself, usually —
+    because the desktop and the Finder treat a missing flag as "the screen is
+    free" and map themselves over the app still holding it."""
+    _refresh_app_flag()
+
+
 def _register_app(win=None):
     try:
         os.makedirs(_APP_DIR, exist_ok=True)

@@ -142,5 +142,124 @@ areas = [z._zoom_rect(t)[2] * z._zoom_rect(t)[3]
          for t in (0.0, 0.25, 0.5, 0.75, 1.0)]
 check("the card only ever grows", all(b > a for a, b in zip(areas, areas[1:])))
 
+# 9. return continuity: the flag monitor's reappear path must check what is
+#    actually RUNNING, not just the flag file. A finished game's exit used to
+#    drop the shared app-active flag while the GBA SDK was still open — the
+#    Finder's monitor read "screen free" and mapped itself over the IDE
+#    (filmed on target, 2.2-consumer). The reappear path now heals a wrongly
+#    dropped flag while any app is alive, and only returns when none is.
+import subprocess
+
+
+class _FlagStand(object):
+    _sync_app_flag = finder.Finder._sync_app_flag
+    _other_apps_running = finder.Finder._other_apps_running
+
+    def __init__(self, visible):
+        self.visible = visible
+        self.hides = 0
+        self.shows = 0
+        self.presents = 0
+
+    def get_visible(self):
+        return self.visible
+
+    def hide(self):
+        self.hides += 1
+        self.visible = False
+
+    def show_all(self):
+        self.shows += 1
+        self.visible = True
+
+    def present(self):
+        self.presents += 1
+
+    def _nudge(self):
+        return False
+
+
+def _wait_cmdline(pid, needle, tries=100):
+    """Popen's child exists before exec fills /proc/<pid>/cmdline; wait for
+    the script path to appear so the scan below cannot race the exec."""
+    for _ in range(tries):
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as fh:
+                if needle.encode() in fh.read():
+                    return True
+        except OSError:
+            return False
+        time.sleep(0.05)
+    return False
+
+
+fake_de = tempfile.mkdtemp(prefix="finder-launch-fakede-")
+sleeper = os.path.join(fake_de, "fakeapp.py")
+with open(sleeper, "w") as fh:
+    fh.write("import time\ntime.sleep(300)\n")
+infra = os.path.join(fake_de, "finder.py")   # an excluded infrastructure name
+with open(infra, "w") as fh:
+    fh.write("import time\ntime.sleep(300)\n")
+
+real_de_dir = finder.DE_DIR
+flag = nbapp.APP_FLAG
+finder.DE_DIR = fake_de
+procs = []
+try:
+    try:
+        os.remove(flag)
+    except OSError:
+        pass
+
+    p = subprocess.Popen([sys.executable, sleeper])
+    procs.append(p)
+    _wait_cmdline(p.pid, sleeper)
+    st = _FlagStand(visible=False)
+    st._sync_app_flag()
+    check("a dropped flag with an app still running is healed, not obeyed",
+          os.path.exists(flag))
+    check("...and the Finder stays hidden rather than mapping over it",
+          st.shows == 0 and st.presents == 0)
+    p.terminate()
+    p.wait()
+
+    try:
+        os.remove(flag)
+    except OSError:
+        pass
+    p2 = subprocess.Popen([sys.executable, infra])
+    procs.append(p2)
+    _wait_cmdline(p2.pid, infra)
+    st = _FlagStand(visible=False)
+    st._sync_app_flag()
+    check("desktop infrastructure never counts as an app owning the screen",
+          st.shows == 1)
+    p2.terminate()
+    p2.wait()
+
+    try:
+        os.remove(flag)
+    except OSError:
+        pass
+    st = _FlagStand(visible=False)
+    st._sync_app_flag()
+    check("with nothing running the dropped flag returns the Finder",
+          st.shows == 1 and st.presents == 1)
+    check("returning does not invent a flag", not os.path.exists(flag))
+
+    open(flag, "w").close()
+    st = _FlagStand(visible=True)
+    st._sync_app_flag()
+    check("a fresh flag still hides a visible Finder", st.hides == 1)
+    os.remove(flag)
+finally:
+    finder.DE_DIR = real_de_dir
+    for p in procs:
+        try:
+            p.kill()
+            p.wait()
+        except Exception:
+            pass
+
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(len(FAILS))

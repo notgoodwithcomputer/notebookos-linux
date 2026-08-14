@@ -304,8 +304,44 @@ class DiacriticsPicker:
         if kv in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
             self._commit(self._sel)
             return True
-        # Anything else: dismiss and let the keystroke through, so typing
-        # straight past an unwanted palette just works.
+        # A bare printable key must not fall through to the app window's
+        # shortcut handlers. Replay it directly into the widget for which the
+        # palette opened, then consume the raw event. Modified/non-printable
+        # keys still fall through so accelerators and editing keys keep working.
+        ch = ev.string or ""
+        modified = ev.state & (Gdk.ModifierType.CONTROL_MASK
+                               | Gdk.ModifierType.MOD1_MASK
+                               | Gdk.ModifierType.SUPER_MASK)
+        if len(ch) == 1 and ch.isprintable() and not modified:
+            tgt = self._target       # _close() deliberately clears this
+            self._close()
+            if tgt is None or not isinstance(tgt, Gtk.Widget):
+                return False
+            try:
+                if tgt.get_toplevel() is not self.win:
+                    return False
+                if isinstance(tgt, Gtk.TextView):
+                    tgt.get_buffer().insert_at_cursor(ch)
+                elif isinstance(tgt, Gtk.Editable):
+                    pos = tgt.get_position()
+                    # PyGObject's Gtk.Editable override takes (text, position),
+                    # not the C API's explicit byte-length argument.
+                    tgt.set_position(tgt.insert_text(ch, pos))
+                else:
+                    return False
+            except Exception:
+                return False
+
+            # The replay is the new key's immediate plain-character press.
+            # Track it just as _on_press would so a repeat/continued hold opens
+            # its palette without allowing another copy into the text widget.
+            if self._eligible(ev, ch):
+                self._held = (kv, ch)
+                self._hold_src = GLib.timeout_add(
+                    HOLD_MS, self._on_hold_elapsed)
+            return True
+
+        # Anything else: dismiss and let the keystroke through.
         self._close()
         return False
 
