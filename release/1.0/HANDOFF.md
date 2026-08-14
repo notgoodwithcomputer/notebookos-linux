@@ -2178,3 +2178,24 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   user's machine — refuse everything, or degrade? Fail-closed is the right
   instinct for a trust gate and the wrong one for a machine with no network
   and no way to re-fetch. That is a judgement for the owner, in the open.
+
+- **2026-08-14 (apple-quality) · A GUEST SHELL ON THE CURRENT TREE, without
+  an ISO respin.** `tools/run-desktop.sh` passes `$NB_XAPPEND` straight
+  onto the kernel command line (line 62), so
+  `NB_WORK=/tmp/x NB_GL=0 NB_XAPPEND=nbdebug tools/run-desktop.sh --headless`
+  boots the CURRENT buildroot/output/target with debugshell.sh active and
+  gsh answering. Verified: gsh returned GSH_OK and grepped the guest's own
+  comics.py for the focus fix (3 hits). That matters because the
+  --debug-shell path added by the ebook/media lane boots an ISO, and any
+  ISO right now predates today's work — this route tests the tree you are
+  actually editing. It also means on-target checks needing FILE SETUP (a
+  planted damaged store, a large image for the decode ceilings, an
+  existing film for video's export-cancel) are no longer blocked on a
+  respin that would sweep in the security lane's in-flight work.
+  ONE TRAP, paid for: do not push a file in by chunking base64 through
+  gsh. A ~1KB probe at 180 bytes per command wedged the tty part way and
+  the session stopped answering the sentinel — the failure then looks
+  exactly like "you forgot nbdebug", because a shell-less tty and a
+  confused one both just echo. Use a shared path instead: the rootfs is a
+  local ext4 image, so write the file into it BEFORE boot, or mount it
+  read-only afterwards, rather than typing it down a serial line.
