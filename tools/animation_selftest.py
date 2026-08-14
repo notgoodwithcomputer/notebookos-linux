@@ -5169,6 +5169,148 @@ def audio_pump_family():
     shutil.rmtree(scratch)
 
 
+def loudness_card_family():
+    """The loudness card's live lane, and the slider that drives it.
+
+    This is the card someone tunes a whole dialogue take with: drag a
+    threshold, watch which mouth answers quiet, mid and loud. The lane is
+    the only feedback there is, so it has to redraw as the sliders move and
+    it has to be showing the slots it claims to."""
+    if not gtk_available():
+        skip("F46 the loudness lane", "no display")
+        return
+    from gi.repository import Gdk, Gtk
+
+    home = tempfile.mkdtemp(prefix="animation-loudlane-")
+    tone = os.path.join(home, "speech.wav")
+    with wave.open(tone, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        # THREE levels, not two. The thresholds are a fraction of the
+        # clip's LOUDEST moment, so a signal that only ever sits at the
+        # extremes gives the same answer for any thresholds at all — which
+        # is what made the first version of this check, and its mutant,
+        # agree with everything.
+        hush = array.array("h", [200] * 24000)
+        middle = array.array("h", [4000] * 24000)
+        loud = array.array("h", [12000] * 24000)
+        handle.writeframes((hush + middle + loud + hush).tobytes())
+
+    app = animation.Animation()
+    app._flash = lambda *a, **k: None
+    app.doc = animation.AnimationDocument(canvas=(160, 120))
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 0
+    scene = app.doc.scenes[0]
+    scene["length"] = 48
+    stat = os.stat(tone)
+    sound_row = {"path": tone, "start": 0, "in_smp": 0, "out_smp": 0,
+                 "mute": False, "peaks": "",
+                 "sig": [stat.st_size, int(stat.st_mtime)],
+                 "duration_smp": stat.st_size // 2, "_peak_token": 0}
+    scene["sounds"][0] = dict(sound_row)
+    scene["layers"][0]["mouth_slots"] = [app.doc.add_cel("Mouth %d" % i).id
+                                         for i in range(3)]
+    app.sheet = animation.Sheet(app.doc, 0)
+    app._refresh_lists()
+    child = app.get_child()
+    app.remove(child)
+    stage = Gtk.OffscreenWindow()
+    stage.set_size_request(1024, 722)
+    stage.add(child)
+    stage.show_all()
+    for _ in range(40):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+
+    app._mouth_loudness_prompt()
+    opened = app._prompt_layer is not None
+    for _ in range(80):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+    lanes = [w for w in getattr(app, "_prompt_previews", [])
+             if not hasattr(w, "_wobble_surface")]
+    # third time this trap: a preview scales itself by its own ALLOCATION,
+    # and an unallocated one draws the same degenerate smudge whatever it
+    # is asked to show. Wait for a real size, then insist on one.
+    for _ in range(120):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        if lanes and lanes[0].get_allocation().width > 1:
+            break
+    if lanes and lanes[0].get_allocation().width <= 1:
+        wanted = lanes[0].get_preferred_size()[1]
+        lanes[0].size_allocate(
+            Gdk.Rectangle(0, 0, max(64, wanted.width), max(8, wanted.height)))
+    scales = []
+    _find_widgets(app._prompt_layer,
+                  lambda w: isinstance(w, Gtk.Scale), scales)
+    check("F46 the card opens with a lane and two thresholds",
+          opened and lanes and len(scales) == 2, (opened, len(lanes), len(scales)))
+
+    def lane_bytes(state):
+        widget = lanes[0]
+        allocation = widget.get_allocation()
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                     max(2, allocation.width),
+                                     max(2, allocation.height))
+        app._draw_mouth_preview(widget, cairo.Context(surface), state)
+        surface.flush()
+        return bytes(surface.get_data())
+
+    shy = lane_bytes({"quiet": 0.02, "loud": 0.10})
+    strict = lane_bytes({"quiet": 0.40, "loud": 0.90})
+    check("F46 the lane shows a different answer for different thresholds",
+          shy != strict)
+
+    # and the slider actually writes what the lane reads
+    scales[0].set_value(0.33)
+    app._prompt_float_changed(scales[0], app._prompt_state, "quiet")
+    check("F46 dragging a threshold is what changes the state the lane uses",
+          abs(app._prompt_state["quiet"] - 0.33) < 1e-6,
+          app._prompt_state.get("quiet"))
+
+    low = app._mouth_preview_slots(0.02, 0.10)
+    high = app._mouth_preview_slots(0.40, 0.90)
+    check("F46 raising the thresholds moves the mouths, not just the picture",
+          low != high and len(set(low)) > 1, (sorted(set(low)), sorted(set(high))))
+    app._close_prompt()
+
+    app._alive = False
+    for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+        source = getattr(app, timer, None)
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+            setattr(app, timer, None)
+    shutil.rmtree(home, ignore_errors=True)
+
+    # A mutant that only inspects the sabotaged TEXT proves nothing; run it.
+    graded, scratch = module_mutant(
+        "F46-thresholds-ignored",
+        [("    def _mouth_preview_slots(self, quiet, loud):",
+          "    def _mouth_preview_slots(self, quiet, loud):\n"
+          "        quiet, loud = .10, .45")])
+    deaf = graded.Animation()
+    deaf._flash = lambda *a, **k: None
+    deaf.doc = graded.AnimationDocument(canvas=(160, 120))
+    deaf.scene_i = deaf.layer_i = deaf.playhead = 0
+    other = deaf.doc.scenes[0]
+    other["length"] = 48
+    other["sounds"][0] = dict(sound_row)
+    other["layers"][0]["mouth_slots"] = [deaf.doc.add_cel("M%d" % i).id
+                                         for i in range(3)]
+    deaf.sheet = graded.Sheet(deaf.doc, 0)
+    same = (deaf._mouth_preview_slots(0.02, 0.10) ==
+            deaf._mouth_preview_slots(0.40, 0.90))
+    mutant("F46 a lane that ignores the thresholds is caught", same)
+    deaf._alive = False
+    shutil.rmtree(scratch)
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -5198,6 +5340,7 @@ def _isolated(family):
 
 for _family in (
         dialog_limits_family,
+        loudness_card_family,
         audio_pump_family,
         zoom_family,
         compaction_family,
