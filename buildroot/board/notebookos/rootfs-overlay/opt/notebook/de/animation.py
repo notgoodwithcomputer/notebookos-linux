@@ -1366,6 +1366,7 @@ class Animation(nbapp.AppWindow):
         elif os.path.exists(STORE_FILE):
             self.doc, self._store_read_only, self._reports = load_store(STORE_FILE)
             remembered = self.doc._extra.pop('doc_path', None)
+            unsaved = bool(self.doc._extra.pop('doc_dirty', False))
             if remembered and not self._store_read_only:
                 resolved = _resolve_path(remembered)
                 if os.path.exists(resolved):
@@ -1373,9 +1374,13 @@ class Animation(nbapp.AppWindow):
                     # the title is how a person knows WHICH film they are in
                     self.set_title(_t('Animation') + ' - ' +
                                    os.path.basename(resolved))
+                    self._doc_dirty = unsaved
             self._restore_session(self.doc._extra.pop('session', None))
         self.sheet = Sheet(self.doc)
         self._build()
+        if self.doc_path and self._doc_dirty:
+            # carried across the restart, so Ctrl+S is an obvious thing to do
+            self.save_chip.set_text(_t('Not saved to file'))
         for scene in self.doc.scenes:
             for sound in scene['sounds']:
                 if sound and os.path.exists(sound.get('path', '')) and \
@@ -5520,6 +5525,10 @@ class Animation(nbapp.AppWindow):
             payload = self.doc.serial()
             payload['doc_path'] = (_portable_path(self.doc_path)
                                    if self.doc_path else None)
+            # ...and whether that film has work the file has not seen. Left
+            # out, a restart brought the document back under its own name
+            # with a clean chip while the file on disk was the older version.
+            payload['doc_dirty'] = bool(self._doc_dirty)
             # Where the person was working, not merely what they were
             # working on (Article III §3). Dropping a film-maker back at
             # scene 1 frame 0 of a twenty-scene film loses their place.
@@ -5533,7 +5542,15 @@ class Animation(nbapp.AppWindow):
             nbapp.atomic_write_json(STORE_FILE, payload)
             self._dirty = False
             self._save_error = None
-            self.save_chip.set_text(_t('Saved %s') % time.strftime('%H:%M'))
+            # What just reached the disk is the RECOVERY store, not the
+            # film. With a document bound, saying "Saved 02:53" while
+            # couch.anim is still the older version put the status bar in
+            # flat contradiction with the close guard, which says in the
+            # same breath that changes to couch.anim are not saved.
+            # writer.py already draws this distinction; the words are its.
+            self.save_chip.set_text(
+                _t('Not saved to file') if (self.doc_path and self._doc_dirty)
+                else _t('Saved %s') % time.strftime('%H:%M'))
         except Exception as e:
             self._save_error = e
             self.save_chip.set_text(nbapp.save_failure_reason(e, STORE_FILE))

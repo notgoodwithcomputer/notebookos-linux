@@ -6529,6 +6529,118 @@ def mouth_loudness_cache_family():
     shutil.rmtree(home, ignore_errors=True)
 
 
+def save_chip_family():
+    """The chip says what happened to the FILM, not to the safety net.
+
+    Autosave writes the recovery store every couple of seconds. With a
+    document bound, it then said "Saved 02:53" while couch.anim on disk was
+    still the older version — so the status bar and the close guard
+    contradicted each other in the same window, one saying saved and the
+    other saying changes to couch.anim are not saved.
+
+    And the store did not carry the fact, so a restart brought the film back
+    under its own name with a clean chip over a stale file. writer.py had
+    already met and fixed both; the words here are its."""
+    if not gtk_available():
+        skip("F59 the save chip", "no display")
+        return
+
+    home = tempfile.mkdtemp(prefix="animation-chip-")
+    store = os.path.join(home, "animation.json")
+
+    def running(module, path=None):
+        was = module.STORE_FILE
+        module.STORE_FILE = store
+        try:
+            app = module.Animation()
+        finally:
+            module.STORE_FILE = was
+        app._flash = lambda *a, **k: None
+        if path is not None:
+            app.doc_path = path
+        return app
+
+    def quiet(app):
+        app._alive = False
+        for timer in ("_save_timer", "_flash_timer", "_prompt_preview_timer"):
+            source = getattr(app, timer, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(app, timer, None)
+
+    def chip(app):
+        return app.save_chip.get_text()
+
+    film = os.path.join(home, "couch.anim")
+
+    # unbound: the recovery store IS the film's only home, so saying it was
+    # saved is the truth
+    loose = running(animation)
+    loose._mark_dirty()
+    loose.STORE_FILE = store
+    was = animation.STORE_FILE
+    animation.STORE_FILE = store
+    loose._autosave()
+    animation.STORE_FILE = was
+    check("F59 an unbound film that autosaves says it was saved",
+          chip(loose).startswith(animation._t("Saved")), chip(loose))
+    quiet(loose)
+
+    # bound with work the file has not seen: the chip must not claim saved
+    bound = running(animation, film)
+    animation.save_document(bound.doc, film)
+    bound._doc_dirty = False
+    bound._mark_dirty()
+    was = animation.STORE_FILE
+    animation.STORE_FILE = store
+    bound._autosave()
+    check("F59 a bound film with unsaved work does not claim to be saved",
+          chip(bound) == animation._t("Not saved to file"), chip(bound))
+    bound._save()
+    bound._autosave()
+    animation.STORE_FILE = was
+    check("F59 and says so once the film itself is written",
+          chip(bound).startswith(animation._t("Saved")), chip(bound))
+    quiet(bound)
+
+    # the fact survives a restart, or the next session opens over a stale file
+    again = running(animation, film)
+    again._doc_dirty = True
+    was = animation.STORE_FILE
+    animation.STORE_FILE = store
+    again._autosave()
+    animation.STORE_FILE = was
+    quiet(again)
+    restarted = running(animation)
+    carried = (restarted.doc_path == film and restarted._doc_dirty and
+               chip(restarted) == animation._t("Not saved to file"))
+    check("F59 a restart brings back the film AND the fact it is unsaved",
+          carried, (restarted.doc_path == film, restarted._doc_dirty,
+                    chip(restarted)))
+    quiet(restarted)
+
+    graded, scratch = module_mutant("F59-chip-always-says-saved", [
+        ("            self.save_chip.set_text(\n"
+         "                _t('Not saved to file') if (self.doc_path and self._doc_dirty)\n"
+         "                else _t('Saved %s') % time.strftime('%H:%M'))",
+         "            self.save_chip.set_text(_t('Saved %s') % time.strftime('%H:%M'))"),
+    ])
+    louder = running(graded, film)
+    louder._doc_dirty = True
+    was = graded.STORE_FILE
+    graded.STORE_FILE = store
+    louder._autosave()
+    graded.STORE_FILE = was
+    mutant("F59 a chip that says saved over a stale film is caught",
+           chip(louder).startswith(graded._t("Saved")), chip(louder))
+    quiet(louder)
+    shutil.rmtree(scratch)
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def _isolated(family):
     """Run one family with the recovery store moved aside.
 
@@ -6566,6 +6678,7 @@ for _family in (
         recolour_family,
         raw_frame_family,
         mouth_loudness_cache_family,
+        save_chip_family,
         chrome_never_ships_family,
         more_spec_laws_family,
         spec_law_family,
