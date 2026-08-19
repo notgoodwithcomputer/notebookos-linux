@@ -154,6 +154,30 @@ privilege separation — the campaign's central strategic choice (Decision D1).
 - **F7 — untrusted-input parsing is unmitigated.** No fuzzing harness, no
   sandbox around the parsers of Section 4 item 1. This is F-anything's root
   cause and the primary structural risk, not a point bug.
+- **F8 — root could switch off any userspace policy. FIXED in config
+  (2026-08-14), boot check pending.** Found while building the walled garden
+  (`docs/APP-TRUST.md`): `CONFIG_MODULE_SIG` unset (root inserts arbitrary
+  kernel code), `CONFIG_KEXEC=y` with no `KEXEC_SIG` (root boots an unsigned
+  kernel — Secure Boot verified only the first one), and no
+  `SECURITY_LOCKDOWN_LSM` (nothing restrains root from those interfaces at
+  all). Any one of them makes app signing decorative, which is why L0 of the
+  app-trust work had to precede the app-side work. Now: lockdown LSM early and
+  forced to integrity, module signing forced (SHA-256), `KEXEC`/`KEXEC_FILE`
+  off, LoadPin enforcing, `IO_STRICT_DEVMEM` on, `PROC_KCORE`/`DEBUG_FS`/
+  `USER_NS` off.
+- **F9 — seccomp is not available on this kernel, and D1's interim containment
+  has to be Landlock-only.** `kernel/seccomp.c` needs
+  `bpf_prog_create_from_user()`/`bpf_prog_destroy()` from `net/core/filter.c`,
+  and **the no-internet fork deleted that file** with the internet stack
+  (`net/core/Makefile` is now a hand-written minimal socket substrate); a
+  second, smaller break sits above it in `include/linux/filter.h`. So classic
+  BPF left with the network stack, and syscall filtering costs restoring
+  `filter.c` into a fork that removed it on purpose. **Landlock is unaffected**
+  (LSM + filesystem, no BPF) and is enabled. D1 chose "seccomp/landlock around
+  the parsers" as the stepping stone to privilege separation: read that as
+  Landlock, confining *what an app can open* — the right axis for the primary
+  threat — with nothing constraining *which syscalls* a compromised parser can
+  make.
 
 ## 7. Roadmap
 
