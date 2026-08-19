@@ -8,4 +8,4 @@
 #
 # The helper needs an X display and the session's authority to talk to the
 # server, so it is run through a small wrapper that finds them.
-ACTION=="change", SUBSYSTEM=="drm", RUN+="/opt/notebook/display-hotplug.sh"
+ACTION=="change", SUBSYSTEM=="drm", ENV{HOTPLUG}=="1", RUN+="/opt/notebook/display-hotplug.sh"

@@ -1,0 +1,5 @@
+# Xorg's MatchIsPointer covers relative mice and absolute devices alike. Tag
+# only pointer-class event devices that actually expose absolute axes, so the
+# evdev compatibility rule can fix VM/fallback tablets without taking ordinary
+# mice away from libinput.
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", ATTRS{capabilities/abs}=="*[37bBfF]", ENV{ID_INPUT.tags}="notebook-absolute-pointer"
