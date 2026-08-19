@@ -2250,3 +2250,281 @@ Neither is mine and I have not touched them. Flagging because both are `*_selfte
   code paths are pure Python/GTK with no guest-specific behaviour. What is
   missing is the belt-and-braces confirmation on the image, which this
   campaign has repeatedly shown to be worth having.
+
+- **2026-08-16 ~14:45 (apple-quality-2) · CHECKPOINT — real-use drive lane
+  in flight, and how to resume it.** New host harness tools/appdrive.py
+  (memory: appdrive-harness). Three Workflow runs fan out one drive agent
+  per shipped surface (batch1 wf_0dc3698f-e7e: tasks calendar journal
+  contacts bills cookbook writer music media video; batch2 wf_70218e10-24a:
+  calculator settings novel screenplay academics accounting mealplanner
+  ebook illustrator sequencer; batch3 wf_006232ad-fbc: language workout
+  packages g2048 gbaemu sysmon installer usbwriter burner shell widgets
+  login firstrun). Drive reports (structured findings) land in each run's
+  journal.jsonl under ~/.claude/projects/.../subagents/workflows/<run>/;
+  scratch (scripts, shots) under scratchpad/drives/<app>/. As of 14:45:
+  batch1 8/10 drives done, batch2 5/10, batch3 starting; NO verify/fix has
+  run yet (concurrency is 2 per run, drives queue first). To cut verify
+  cost ~10x, edited copies of the three scripts (per-APP batched verify
+  agent instead of per-finding) are at scratchpad/wf-batch{1,2,3}.js: stop
+  a run once its drives finish and relaunch with {scriptPath, resumeFromRunId}
+  — the drive agents are cached (identical prompts) and only verify+fix run.
+  FIXED IN TREE THIS SESSION (all uncommitted by agreement with the finder
+  sweep session; each red-proved; see APPLE-QUALITY-PUNCHLIST "REAL-USE
+  DRIVE LANE" section): Writer caret RecursionError; Calendar toggle
+  RecursionError; UNDO ATE ADDITIONS (nbapp checkpoint pushes the on-screen
+  state; tools/undo_baseline_selftest.py); ABOUT/GET INFO NEVER DREW
+  (nbtransitions.present_card: layer.show, move-not-put, measure shown);
+  close-veto trap → nbapp.close_unsaved_card in writer/cookbook/journal/
+  contacts; media Opening-card delayed 220ms; nbvideo preroll 12s;
+  mealplanner junk-day save crash; screenplay re-added confirms removed;
+  music flash timer; suites repaired (music_adversarial, video_playback,
+  store_damage proxy + debt prune, media_adversarial, 4 close suites,
+  writer_format fake). Gates green at 14:15: store_damage, undo,
+  undo_completeness, writing_apps, stable_surface, notify, packages_*,
+  settings_prefs, splash, present_card, construct_all 36/0.
+  ON-TARGET OWED at the next respin: About + Get Info (grow path), the
+  close card, Writer formatting, Undo-after-delete in Tasks/Calendar.
+  3.0-nomaps (built 12:44 from this tree) SHIPS the Writer RecursionError,
+  the dead About and the undo data loss — do not hand it out.
+
+- **2026-08-17 ~12:30 (apple-quality-2) · THE DRIVE LANE, ITS TOOLING, AND
+  WHERE TO PICK IT UP.** Three Workflow runs (scripts at
+  scratchpad/wf-batch{1,2,3}.js, run ids wf_0dc3698f-e7e / wf_70218e10-24a /
+  wf_006232ad-fbc) drive one agent per shipped surface with
+  **tools/appdrive.py**, hand every finding to a per-app skeptic told to
+  REFUTE it, then run a per-app fix agent. Resume any of them with
+  `Workflow({scriptPath, resumeFromRunId})` — drives and verifies replay from
+  cache, so only the unfinished fix agents cost anything.
+  33 surfaces driven, **214 findings confirmed** (14 DATA_LOSS), 19 refuted.
+  NEW TOOLING THIS SESSION, all of it reusable:
+    * `tools/appdrive.py` — drive a real app on the host (real key ladder,
+      real menus, synchronous shots, reopen). Four traps are in memory
+      ([[appdrive-harness]]); CJK and TextView presses work now.
+    * `tools/mkstick.sh` + `NB_QEMU_EXTRA=-drive…-device usb-storage` — get
+      FILES into a TCG guest (proven: it automounts and shows in Finder's
+      Devices). This is what the Aug-14 handoff called closed.
+    * `tools/qmp.py` honours NB_WORK; `guestdrive.py` gained `wheel` and
+      `rclick`. `type` still drops ':' (send-key has no shifted colon).
+    * `tools/target_app_sweep.py` — launch EVERY shipped app on the guest
+      from the Finder and shot it (trust gate, single instance, fonts and
+      software paint are things construct_all cannot see). Written, not yet
+      run: it wants the post-wave rootfs.
+    * New gates: cross_app_contract (Tasks<->Calendar<->board through the
+      real apps, with an in-suite mutant), focus_ring_modality, undo_baseline,
+      and *_realuse suites for writer/calendar/tasks/settings.
+  ENDGAME, in order, once the fix agents finish: (1) `python3
+  tools/run_all_gates.py` (744 gates; a baseline run is going now, log at
+  scratchpad/gates-baseline.log); (2) collect every fix agent's `new_strings`
+  plus `i18n_coverage_check` and write ONE fragment under
+  release/1.0/i18n-fragments/ then `i18n_merge.py … --apply` (068-drive-lane
+  is done: 2 strings, catalogs now 3939x17). NOTE novel's fix dropped the
+  ellipsis from "Delete Chapter…"/"Delete Part…", so those two need a
+  `--rename OLD=NEW` rather than a new key; (3) rm the buildroot images +
+  `make` (the overlay does NOT trigger a rebuild), verify by grepping
+  output/target; (4) boot a private guest and run the app sweep + the
+  headline on-target rows; (5) `mkrelease.sh --iso-only` and
+  `iso_boot_check.py`. Release pre-flight is already green: signing key
+  present, trust manifest 76/76, shipped_binaries PASS, 36 GB free.
+
+- **2026-08-17 ~14:10 (apple-quality-2) · FOR THE FINDER SESSION, who has
+  signed off: your crumb fold guard was right, and the sliver still came
+  back.** ≤2 pills never fold (correct — a "…" pill is nearly as wide as
+  "Home"), but "Home › Applications" needs 162px and the crumb scroller only
+  got 123 at the default 775px window: the search entry's NATURAL width (172)
+  takes the slack from the one child that expands, the scroller anchors right
+  to keep the current folder visible, and the root pill is cut mid-letter —
+  "Hidden | Actions | e | Applications" on the first screen every user sees.
+  Seen on target, reproduced offscreen. Fixed in finder.py by making the
+  search field yield (width_chars=10, floor 130 → crumb 165). Your
+  finder_crumb_fold_selftest now also measures the SCROLLER (value == 0 and
+  page >= natural at 775/1024/1280) — it had only read the widget tree, which
+  genuinely held both pills at full width while 19px of one was visible.
+  Red-proved by reverting the search width.
+
+- **2026-08-17 ~16:2x (apple-quality-2) · CHECKPOINT: batches 1 and 2 are
+  COMPLETE (60/60 agents, 0 errors); batch 3 has 6 fix agents left**
+  (installer, burner, shell panel, board, login, firstrun — its drives and
+  verifies are done, so `Workflow({scriptPath: scratchpad/wf-batch3.js,
+  resumeFromRunId: 'wf_006232ad-fbc'})` resumes just those).
+  26 apps fixed, 209 fixes, every app's own suites green (388 suite runs
+  across two batches; the only red was a suite the Codex batch left behind
+  that contradicted a tracked gate, now deleted).
+  DONE SINCE THE LAST CHECKPOINT, all red-proved: the .bak permissions leak
+  (nbapp), the focus ring being on for the mouse OS-wide (nbapp), About/Get
+  Info never drawing (nbtransitions), undo eating additions (nbapp), the
+  breadcrumb sliver returning by another route (finder), 20 gates that passed
+  while the aggregate recorded DID NOT RUN, oem_install's skipped
+  password-verify made real, and the DURABLE FLOOR for New/Open in novel,
+  screenplay and (by its own agent) sequencer. Catalogs are at 3970 x17 and
+  every i18n gate is clean; fragments 068-072 in release/1.0/i18n-fragments/.
+  THE ENDGAME, unchanged and in order: finish batch 3 → one more catalog pass
+  for its strings (sequencer/usbwriter already have 6 waiting) → full
+  `run_all_gates` → rm buildroot images + make → boot a private guest and run
+  `tools/target_app_sweep.py` (it is also the proof that the new GDK
+  dispatcher hook did not break input on the machine) → `mkrelease.sh
+  --iso-only` + `iso_boot_check.py`.
+
+- **2026-08-17 ~20:30 (apple-quality-2) · CHECKPOINT: the wave is COMPLETE and
+  the gate run is triaged.** Batch 3 finished all 39 agents (login and First
+  Run were retried after losing agents to limits). The 768-gate run came back
+  at **24 reds**, and every one is now accounted for:
+  * 13 were gates that were DEAF, not failing — suites exiting 0 with no
+    terminal verdict (sequencer's 158 checks, rail_measured's 24, grid_e4_rest,
+    widgets_timezone, tofu_sweep, data_stress_sweep) plus i18n_check, whose
+    clean 17x3999 run was read as partial coverage because its hidden-app SKIP
+    lines had no ALLOWED_SKIPS entry.
+  * 4 were real defects: media's `_do_trash` reaching an unguarded
+    `_thumb_cache`; undo_completeness measuring the shared guestrun Trash
+    instead of diffing it; one new usbwriter string; a stale video DEBT row.
+  * `menu_promise_check` was reported TIMEOUT while working the whole time —
+    it constructs 32 apps and invokes all 348 enabled menu items, 8m55s
+    measured, against a 300s default. It has its own 1200s entry now, and with
+    the time it needs it is honestly red (see below).
+  * The four OS-wide checks (anchored_term, button_contrast,
+    accelerator_promise, disabled_reason) are ALL GREEN, each closed by
+    finding out which side was wrong: two of them were the CHECK lying about
+    the apps (accelerator_promise could not see a negated modifier;
+    anchored_term matched the ordinary noun "music" as the app name), and two
+    were real defects in the apps.
+  * `transition_pacing_probe` went from 18 of 35 measured to **35 of 35
+    answered, RESULT: GREEN**, and found a media crossfade running at twice
+    the PAGE budget plus two aggregations where a FAIL could not turn the gate
+    red.
+  * A new gate, `tools/text_contrast_check.py`, grades every text node in 43
+    surfaces (not just labels inside buttons, which is all the old one could
+    see): 262 failing rules → **0**, including journal's 1.75:1 date column.
+
+  STILL RUNNING at this checkpoint: the menu_promise ratchet + its remaining
+  violations (its first agent died to an API 500 mid-flight; the tree state is
+  compiling and silent_refusal_check is already PASS), and the second-pass
+  regression drive's calculator + illustrator + skeptic (the other four of six
+  landed, and they found the biggest defects of the day — Video's Play had
+  been a silent slideshow for **every clip ever made**, because
+  `_play_clip_live` read a `path` key no clip has ever carried, and the suite
+  that certified playback was building its fixture in the shape of the bug).
+
+  THE ENDGAME, unchanged: those agents land → full `run_all_gates` → rm
+  buildroot images + make → boot a private guest and run
+  `tools/target_app_sweep.py` (still the only proof that the GDK dispatcher
+  hook did not break input on the machine) → `mkrelease.sh --iso-only` +
+  `iso_boot_check.py`.
+
+- **2026-08-17 ~22:45 (apple-quality-2) · CHECKPOINT: the second full gate run
+  came back 772/784, and every one of the 12 is closed or explained.**
+  Real defects among them: `tasks._fit_title` reached `self.view` from a
+  size-allocate handler (getattr, like the calendar/journal/music stores);
+  `music._on_add_clicked`'s new verbatim-naming helper raised inside the
+  handler's own try because the suite's fake Gtk had no `Label`, so the popup
+  never opened and the swallow hid it; `destructive_action_check` carried a
+  ledger row for `nbnotify.clear_all` that no longer matches anything (the tray
+  now spans two spools). Gates that were DEAF, now with terminal verdicts:
+  `login_realuse_selftest`, `accelerator_promise_check` (it printed a bare
+  "PASS" — the gate went quiet at the exact moment it started protecting
+  something). Instrument fixes: `boot_surface_selftest` hard-coded /dev/sdb1
+  and this machine HAS one mounted, so the real automount.sh took its
+  already-mounted exit and 25 checks failed on correct code — it now picks a
+  device name free on the machine and says which; and `automount.sh` itself no
+  longer spins twenty times when mkdir fails for a reason that is not "taken"
+  (a read-only /media meant a stick silently never appeared).
+  i18n is at **4035 keys x 17** — fragments 076, 078, 079 added the contacts
+  export refusal, the Export as Audio picker title (derived from each catalog's
+  own "Export as Audio…"), and the 8 late strings other lanes left untranslated
+  (calendar's end-before-start message, firstrun's keyboard-changed notice,
+  login's two, settings' four). All four i18n gates and voice_check are clean.
+
+  **THE TWO ON-TARGET FINDINGS ARE THE IMPORTANT PART OF THIS CHECKPOINT** —
+  see the punchlist section "ON TARGET, Aug 17 21:30–22:15". The sweep that is
+  supposed to prove the image was reporting 29/29 PAINTED while nothing had
+  opened, and underneath it the Finder could not be typed into at all because
+  the X input focus sat on GTK's 1x1 group-leader window. Both are fixed; the
+  Finder fix is IN THE TREE BUT NOT YET IN AN IMAGE, so the next build must be
+  followed by: boot, click the Finder's search box, type — and only then run
+  `tools/target_app_sweep.py`, which will now refuse to run if the launcher is
+  not there.
+
+- **2026-08-18 ~00:10 (apple-quality-2) · THE MACHINE ITSELF IS FIXED AND
+  PROVEN ON TARGET.** The image now boots to a Finder you can type in. The
+  chain took five rebuilds because each attempt taught something:
+  the click never bubbled (a GtkEntry stops it) → the dispatcher was never
+  armed in finder/widgets/shell (each installs its own stylesheet, so none
+  reached `nbapp.install_css`) → `Gdk.Window.focus()` and `xdotool
+  windowactivate` are both ignored (matchbox advertises `_NET_ACTIVE_WINDOW`
+  and does not implement it) → **the desktop board's `set_accept_focus(True)`
+  had made it the window manager's focused client for the whole session.**
+  The board declines the keyboard now; verified on the built image by typing
+  "cal" into the Finder and watching the list filter to Calculator and
+  Calendar.
+
+  `tools/target_app_sweep.py` was rewritten in the same pass, because it had
+  been reporting `29/29 ALL PAINTED` while nothing opened. It now (a) refuses
+  to run unless the search field answers typing, (b) clears the box with
+  select-all rather than a fixed count of backspaces (the old count left
+  characters behind until the box read "Cookbookntactslendarlculator…"),
+  (c) probes with "zqxv" not "zzzz" (a repeated letter is a press-and-hold to
+  nbdiacritics and opens the accent palette), (d) judges each app by the
+  MENU BAR NAMING IT rather than by the picture changing (typing in the search
+  box changes the picture too), and (e) requires each app to CLOSE before the
+  next row, because Esc only leaves the pane in several apps and the shot
+  labelled "illustrator" was Academics, still open from three rows earlier.
+
+  REMAINING: read the sweep's per-app shots (they carry the app name in the
+  menu bar), then `tools/mkrelease.sh --iso-only` + `tools/iso_boot_check.py`.
+  Everything else in this session's endgame is done: the full gate run is at
+  772/784 with every one of the 12 closed or explained, catalogs are 4035 x 17
+  with all i18n gates clean, and the tree compiles and constructs all 36.
+
+- **2026-08-18 ~00:45 (apple-quality-2) · THE RELEASE IS BUILT AND PROVEN ON
+  THE IMAGE ITSELF.**
+
+  `release/notebookos-1.0.iso` — 904M, sha256
+  `1144724136901e2e8fb2f1723b506926c6aa05695a9ada0cc8b42e70a091200b`
+  (`notebookos-1.0.img` beside it, sha256 `c498b9d2…`).
+  `iso_boot_check`: **8/8, RESULT: BOOTABLE**, including a real signed ESP
+  (`partition type=0xef`, shim + Debian grub + MOK-signed kernel) — the Secure
+  Boot re-master ran clean this time.
+
+  Booted from that ISO under OVMF and driven by hand, end to end:
+  UEFI → GRUB → live-init → squashfs → overlay → switch_root → desktop;
+  the Finder is on screen with all 29 apps; typing "nov" into its search box
+  filters to Novel; double-clicking opens **Novel** (the app that segfaulted
+  this afternoon on the Pango version gap); typing into it lands —
+  "The lighthouse keeper counted seven ships.", 6 words, chip green at "Saved
+  00:41".
+
+  One thing was learned the hard way at the very end: the first `--iso-only`
+  run produced an ISO the gate REFUSED to publish (no EFI System partition),
+  because `/tmp` — a 16G tmpfs shared with every guest on the box — ran out
+  mid-re-master and the failure was a warning inside a long log.
+  `tools/mkiso.sh` now chooses the largest of `$TMPDIR`, `/var/tmp` and `/tmp`,
+  prints which it took and how much room it has, and dies with a readable
+  message below 6 GB.
+
+  STILL OPEN, in priority order, for whoever picks this up:
+  1. `tools/target_app_sweep.py` — now honest (it caught its own predecessor's
+     "29/29 ALL PAINTED" lie) but still red: every app it opens is the same one,
+     because the typed name is not reaching the search box inside the loop even
+     though the preflight proves typing works. The fix is almost certainly to
+     wait for the Finder to come back after the previous app closes before
+     clicking; a retry-and-verify loop is already in place and needs tuning.
+  2. Sequencer audio on real hardware (does Music play while Sequencer does not?
+     — see the punchlist section).
+  3. `i18n_readback_selftest` needs its measured cost recorded; it now has a
+     1200s ceiling in run_all_gates but the box was never quiet enough to time
+     it cleanly.
+
+- **2026-08-18 ~12:40 (apple-quality-2) · THE SHIPPING ARTEFACT IS
+  `release/notebookos-1.0-stable.iso`, AND IT CARRIES EVERYTHING.**
+  A second lane rebuilt at 12:16 (Finder multi-select copy/paste across
+  windows, the installer's Update path, catalogs to 4079×17), which supersedes
+  my 00:27 `notebookos-1.0.iso`. Verified rather than assumed: extracted
+  `live/rootfs.squashfs` from that ISO and read the shipped modules —
+  `widgets.py` declines the keyboard (`set_accept_focus(False)`; the one
+  `(True)` hit is inside the comment explaining why), `nbapp.py` carries the
+  click-to-focus dispatcher rule, `finder.py` has `_claim_focus` ×3 and arms
+  `track_input_modality`, `widgets.py` and `shell.py` arm it too, the panel
+  declines focus, and `novel.py` takes its font from the widget's own Pango
+  context (the segfault fix).
+  Then booted that exact ISO under OVMF and drove it by hand: the Finder types
+  ("writ" → USB Writer, Writer), Writer opens and takes a sentence
+  ("The lighthouse keeper counted seven ships."). sha256
+  `4081a6583e5f9d215afddcf2158f401fdb93000b477de95e95a1384b59e2ba08`.

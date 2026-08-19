@@ -714,3 +714,1023 @@ is measured directly on the real widget tree (comics_selftest,
 illustrator_selftest, both red-proved). Observing focus on target would
 need code running inside the app's own process; QMP cannot see it. Said
 plainly rather than counted as more than it is.
+
+## REAL-USE DRIVE LANE (Aug 16, apple-quality-2) — the host harness, and what it found first
+
+New instrument: **tools/appdrive.py** drives the REAL app on the host under
+guestrun (real key ladder, real in-window menus, synchronous shots at
+1024x740, reopen in the same home). Four traps it took to make a key land
+are in memory (appdrive-harness). Fan-out in flight: one drive agent per
+shipped app → an independent skeptic per finding → a per-app fix agent with
+a red-proved named check; results land below as they come.
+
+FIXED IN TREE (uncommitted by agreement with the finder-sweep session; each
+red-proved; commit per app once the sweep lands):
+- **Writer RecursionError on every caret move through formatted text**
+  (writer.py `_flag`): the Aug-15 Codex edit made the format buttons
+  ToggleButtons and mirrored caret state with plain set_active, which emits
+  "clicked" and ran the edit handler; entering bold text toggled bold off,
+  the toolbar re-synced, toggled it back… writer_selftest hung 400s on it,
+  and writer_format_selftest hid it with an inert fake Button. Fix:
+  nbapp.set_active_quietly for real ToggleButtons. New
+  tools/writer_realuse_selftest.py (8 checks; sabotage → 'moving the caret
+  through bold text raises nothing' RED). Shipping in 3.0-nomaps (built
+  from this tree at 12:44) — Writer is broken for formatted text there.
+- **Calendar RecursionError on the sidebar toggle** (calendar.py
+  `_on_toggle_cal_clicked`): negated the model and pushed it back with
+  set_active; after any path re-showed a hidden calendar without
+  rebuilding the row (quick-add, dialog Save, Academics mirror, View menu)
+  the next click ping-ponged to RecursionError. Fix: `_set_cal_on(name,
+  on)` — one place, row toggle mirrored quietly, five call sites. New
+  tools/calendar_realuse_selftest.py (9 checks; sabotage → 5 RED).
+- music.py: `_play_track`/destroy left `_flash_timer` holding a fired
+  source; now cleared wherever the serial bumps (audit medium).
+- Suites repaired to the tree's real contracts (not laundered):
+  music_adversarial (its `_save` fakes returned None; the app now rolls a
+  FALSY save back, so a stand-in must say True; NoneRow fakes needed hide),
+  video_playback (spy on `open_async`, the call the editor makes now).
+Batch-1 suites otherwise ALL GREEN on the tree (142 suites).
+
+AUDIT (read-only, Codex Aug-15 diff, my 11 files) — still to act on:
+- media.py `_show` routes EVERY image through `_decode_in_background` +
+  an "Opening %s" notice → stage flips to the notice per arrow key /
+  slideshow step (flicker on virgl, visible pause on TCG). Measure.
+- nbvideo.py `open_async` treats a >3s preroll as failure → video.py marks
+  `_live_failed` and stays on still frames until Stop; sync `open()` now
+  raises on a rejected seek where it used to play from 0. TCG regression?
+- writer/cookbook/journal (contacts while editing): delete-event VETOED
+  while the autosave fails → on a full/read-only disk the window cannot be
+  closed, only killed; the reason is one status flash. UX trap.
+- music `_load` now QUARANTINES on partial shape faults (was read-only);
+  the visible store can shrink to the subset that parsed with zero user
+  action (data survives in the .damaged sidecar). Design regression?
+- (14:1x) **Meal Planner crashed on the first save after opening a store
+  with a junk day** (mealplanner.py `_serialize_store`: a date key whose
+  value was not a dict came through the first pass verbatim and the second
+  pass called `.pop` on it — str has no .pop). store_damage "one day is
+  junk" was `(crash)`. Fix: a non-dict under a date key is replaced by the
+  live day's slots. store_damage ALL PASS; 9 mealplanner suites green.
+- (14:1x) **Screenplay: the Codex edit RE-INTRODUCED the "discard unsaved
+  changes?" confirmation on New and Open** that 8ddfd945 retired (undo,
+  never confirmation) — and broke writing_apps_selftest with it (a
+  headless confirm answers Cancel, so Open silently refused). Removed both
+  calls; the undo checkpoints stay. writing_apps 115/115.
+- (14:0x) store_damage_selftest's flush proxy was stale: bills/workout/
+  mealplanner grew a timer-only `_on_destroy`, so the harness "closed"
+  without ever saving and reported the untouched not-json file as a
+  missing quarantine (kept 0/3, aside=NONE) — no data was ever lost.
+  Explicit ACTION_SAVERS now. Also pruned 4 stale PRESERVE_DEBT rows
+  (journal/calendar/cookbook/tasks now carry unknown keys — the ratchet
+  said so). Gate: ALL PASS. undo/writing_apps/stable_surface/notify/
+  packages_*/settings_prefs/splash all green on the tree at 14:15.
+- (14:4x) **A window you could not close** (writer/cookbook/journal/
+  contacts): the Codex delete-event guards vetoed close while the store
+  write failed, with no card and no way out — on a full or read-only disk
+  the app could only be killed. New shared **nbapp.close_unsaved_card(win,
+  exc, path)**: the papertone "Not saved" card (reason a person can act
+  on + "Closing now loses the writing since the last save…", Cancel
+  focused, danger "Close Without Saving") — the shape Screenplay/Novel
+  already had, now one implementation. All four apps record the failing
+  exception and offer the card; the four Codex close suites now assert the
+  card is OFFERED and that choosing to close really closes. Rendered and
+  looked at (/tmp/card.png). Zero new strings.
+- (14:3x) **Media: every image no longer flashes "Opening…"** — the stage
+  holds the previous picture until the next is ready; the card appears
+  only if a decode outlasts NOTICE_AFTER_MS (220 ms), cancelled by done/
+  failed/newer request/destroy. Measured with the harness: a small photo
+  swap never shows the card; a 6000x4000 PNG shows it at ~220 ms and lands
+  the picture after. media_adversarial re-pinned to that contract (an
+  instant refusal is ONE card; a slow one says Opening first). 11 media
+  suites green.
+- (15:0x) **UNDO ATE EVERYTHING ADDED SINCE THE LAST RECORDED STEP — the
+  worst find of the lane so far, and it predates Codex.** Tasks: type three
+  tasks, delete one by mistake, Ctrl+Z → ZERO tasks, written to disk. Same
+  in Calendar (quick-add three, delete one, undo → none) and by construction
+  in every app whose additions never touch() the history: nbapp.UndoHistory
+  only recorded a state on touch() (typing) or checkpoint()+commit(), so
+  the newest recorded state was the one from launch and Undo of a later
+  Delete restored THAT. The undo-law conversion (delete without confirm)
+  made the exposure worse. FIX at the primitive: checkpoint() pushes the
+  on-screen state (unlabelled, deduped) before the edit it brackets, so
+  Undo lands exactly one step back from what the person saw. New
+  tools/undo_baseline_selftest.py drives the REAL Tasks and Calendar (add
+  3 / delete 1 / Ctrl+Z → 3) — sabotage → both RED by name. undo,
+  undo_completeness, nbapp_datasafety and 9 app undo suites stay green.
+  Found by drive agents tasks F1 and calendar F1 (and calendar F2, contacts
+  C2 look like the same root; the verify pass will say).
+- (15:0x) nbvideo: async preroll limit 3 s → 12 s (PREROLL_LIMIT_MS). The
+  old sync open waited 3 s and carried on; treating 3 s as failure on the
+  software path turned a slow-to-decode clip into still frames until Stop.
+- (15:2x) **ABOUT AND GET INFO DREW NOTHING — in every app, since the
+  foundations landing 15d4b7ee (Aug 13).** nbtransitions.present_card put
+  the scrim, the grow frame and the card into a Gtk.Fixed layer, added the
+  layer as an overlay… and never show()ed the layer — a visible child under
+  a hidden parent maps nothing. Every drive agent reported "About does
+  nothing visible / positioned at 0,0 / Gtk-CRITICAL gtk_fixed_put" and
+  filed it as a harness artefact; it is real. Three defects in one
+  presenter, all fixed in nbtransitions.py: (1) `layer.show()`; (2) the
+  card was positioned with a SECOND `layer.put` — a Gtk-CRITICAL no-op —
+  so it stayed at (0,0): now `layer.move`; (3) it was MEASURED HIDDEN (GTK
+  reports 0x0), so the paper frame always grew to the 340x220 fallback
+  around a 247x110 About revealed top-left inside it: shown for the
+  measurement, hidden again before any paint. Also: a box handed in
+  unshown is show_all'd (About's own box never was — an empty frame). Four
+  new checks in present_card_selftest, each sabotage → RED by name;
+  finder_confirm_card / finder_info_card / getinfo_apps / about_origin
+  green. Rendered and looked at: About now centred with name + version.
+  ON-TARGET OWED: About + Get Info at the next respin (grow motion path).
+
+### ON TARGET, Aug 17 06:05-06:20 (private guest /tmp/nb-aq2, current tree rootfs)
+Rootfs rebuilt from the tree (rm images + make; layer.show and
+close_unsaved_card grep-verified in output/target), booted headless TCG at
+1280x800 with a FAT "USB stick" attached (new tools/mkstick.sh +
+NB_QEMU_EXTRA usb-storage) — **the stick route WORKS**: it enumerates,
+automounts, and shows in Finder's Devices as FIXTURES with an eject glyph.
+That unblocks the three owed file-fixture rows from the Aug-14 HANDOFF.
+  * Calendar > About: the card now appears CENTRED with "Calendar / Notebook
+    OS" (before the fix nothing appeared at all). Esc closes it.
+  * Calendar sidebar toggle: hide Personal, quick-add an event (calendar
+    re-shows), click the toggle again → hides cleanly, no recursion.
+  * Tasks: type three tasks, right-click > Delete task on the middle one,
+    Ctrl+Z → ONLY the deleted task comes back, the other two survive.
+  * Desktop board reflects the Calendar event (TODAY 09:00 …).
+Harness notes: guestdrive `type` drops ':' (send-key has no shifted colon —
+"Dentist 10:00" arrived as "Dentist 1000"; a harness gap, not the app);
+guestdrive gained `wheel` and `rclick`; qmp.py now honours NB_WORK.
+SEEN, NOT FIXED (decisions):
+  * After ANY key press in a window, every button you then CLICK draws the
+    2px accent-red focus ring (GTK3 keeps focus-visible sticky once the
+    keyboard has been used; the theme comment's "a mouse user never sees a
+    ring" holds only until the first keystroke). On target the clicked
+    calendar row wore a red rectangle. Design call: keep (accessibility) or
+    scope the ring to keyboard navigation via a `:focus(visible)`-equivalent.
+  * Finder toolbar shows a breadcrumb pill labelled "." between Actions and
+    Applications (the root crumb?) — finder is the sweep session's file;
+    told them.
+
+## THE DRIVE LANE'S LEDGER (Aug 17 ~12:00) — 33 surfaces driven, 25 verified
+
+Every shipped app plus the desktop panel, the board and the login screen was
+driven by an agent using tools/appdrive.py the way a person does, then EVERY
+finding was handed to an independent skeptic told to REFUTE it (fresh home,
+own reproduction script, "already fixed in the tree" counts as refuted).
+
+**214 findings CONFIRMED** so far: 14 DATA_LOSS, 55 WRONG_ANSWER, 42 BROKEN,
+35 HOLLOW, 68 VISUAL. 19 were refuted — mostly "already fixed in the tree"
+(the undo class, the calendar toggle) or harness artefacts, which is the
+verify pass doing its job.
+
+Worst confirmed, by app (the fix agents are working these now):
+  * writer 13 (2 DATA_LOSS: typing in a table cell never marks the document
+    dirty so File > New discards it; Ctrl+Z in a cell deletes the table)
+  * video 13, Media Viewer 12 (Delete during a decode trashes the NEXT file)
+  * cookbook 12, calculator 12 (Escape on Graph/Table closes the whole app)
+  * sequencer 12 (2 DATA_LOSS), novel 11 (New/Open replace an unsaved
+    manuscript with no confirm and overwrite recovery)
+  * contacts 10 (2 DATA_LOSS: the ★ button and Ctrl+Z discard the open form)
+  * academics 9, calendar 8 (all 8 fixed), meal planner 8, journal 7,
+    music 7, accounting 7, ebook 7, illustrator 7 (2 DATA_LOSS),
+    bills 6, screenplay 6 (Save As .fountain drops the title silently),
+    tasks 5 (all 5 fixed), settings 5
+  * batch 3 (language, workout, packages, 2048, gbaemu, sysmon, installer,
+    usbwriter, burner, shell panel, board, login) drove 100+ findings; their
+    verify pass is running now.
+- (12:1x) **THE FOCUS RING WAS ON FOR THE MOUSE, OS-WIDE — and the comment
+  that said otherwise was certified by a blind instrument.** Papertone draws
+  a 2px accent ring wherever GTK asks; GTK asks when the toplevel's
+  `focus-visible` is set, and that property DEFAULTS TO TRUE and GTK3 never
+  lowers it. So from the first frame every control focused by CLICK wore the
+  keyboard ring (seen on target: a red rectangle round Calendar's sidebar
+  row). The theme's own comment claims "a mouse user never sees a ring —
+  verified: all 28 apps render pixel-identically with this rule added": that
+  verification used OFFSCREEN renders, where the window is never active, so
+  `has_visible_focus()` was False in every one and NO ring could have drawn
+  either way — the instrument could not see what it certified (another entry
+  for [[instrument-reports-not-code]]). FIX: nbapp.note_input_modality() +
+  track_input_modality() install one GDK dispatcher hook (from install_css,
+  so every app inherits it): a button press or touch lowers focus-visible for
+  that window, a key press raises it — rings return on the same keystroke
+  that needs them. Guarded so it can never take input down (every event is
+  handed on whatever happens). New tools/focus_ring_modality_selftest.py,
+  9 checks, sabotage → 4 RED by name. construct_all 36/0, segment_row,
+  present_card, nbapp_datasafety, undo_baseline all still green.
+
+### FIRST RUN (de/firstrun.py) — driven Aug 17 12:0x (its drive agent died twice on limits)
+The OEM new-owner screen, driven host-side with every system write redirected
+into a scratch tree (OEM_MARKER/HOSTNAME_FILE/USER_NAME_FILE/SHADOW/XKB_CONF
+repointed; host-affecting commands blocked). It is in good shape:
+  * The form reads right at 1280x800 (Name, Computer name, Language, Keyboard,
+    Password, Password again, Show password, start-without-a-password, Finish)
+    and every validation message is specific and true: empty password →
+    "Choose a password, or tick the box below to start without one."; mismatch
+    → "The two passwords are different."; a bad computer name → "Use letters,
+    digits and - for the name."
+  * A clean run writes /etc/hostname, /etc/notebookos-user, the XKB conf and
+    $NB_HOME/.config/notebook/locale.json ({"lang","keyboard"} — nbi18n's own
+    key names), leaves root LOCKED when no password was chosen, and clears the
+    marker LAST. Verified by reading every file back.
+  * PASSWORD HASHING WORKS ON THE IMAGE, checked by content rather than
+    assumed: output/target ships python3.11 WITH `_crypt` (crypt.py +
+    _crypt.cpython-311.so) and /usr/bin/openssl as the fallback. The
+    docstring's "openssl is NOT in the image" is stale (the walled garden put
+    it there); harmless, since crypt is tried first.
+  * ALL 18 OFFERED KEYBOARDS RESOLVE against the image's own xkb tree —
+    every layout has a symbols file and every variant (jp kana) is defined in
+    it. So no one can pick a keyboard the server will reject.
+FOR THE USER — a latent dead end, measured but NOT changed:
+  `write_keyboard()` returns False when the LIVE `setxkbmap` fails even though
+  the boot-time conf was written, and `apply()` then refuses to set the
+  password AND keeps the marker. The screen says "This could not be saved:
+  Keyboard. Try again." and pressing Finish again does exactly the same thing
+  — setup can never complete. tools/firstrun_keyboard_password_selftest.py
+  pins that guard deliberately ("a failed live keyboard switch must block
+  password mutation"), and its reasoning is sound: a password typed on one
+  layout while another is persisted can lock the owner out. I did NOT rewrite
+  it, because the trigger is unreachable on this image (above) and the guard
+  is somebody's considered decision. DECISION: if a live switch ever does
+  fail, should setup (a) finish with no password and say so, (b) keep the
+  screen but say which way out to take, or (c) stay as it is? (b) is the
+  smallest honest change.
+- (12:2x) **NEW GATE: tools/cross_app_contract_selftest.py** — the contracts
+  BETWEEN apps, which no per-app suite can see ([[who-writes-it-last]]).
+  calendar.json is written by Tasks' Add-event rail, written by Calendar, and
+  read by both plus the desktop board: three programs, one flat list. The
+  suite drives the REAL Tasks, then opens the REAL Calendar on the SAME home
+  and looks for what Tasks wrote, adds one from the Calendar side, finds it
+  back in Tasks' rail, then opens the board and checks all three show. 11
+  checks incl. an in-suite MUTANT (a Calendar on a different home must NOT
+  see the event, so the contract checks can go red). ALL PASS — the triangle
+  survived both apps being rewritten by different agents this morning, which
+  is exactly the moment it could have broken silently.
+
+### TWO GATED CONTRACTS THAT DISAGREE — New/Open on a document with no file
+(Aug 17 ~13:00) Screenplay: this morning I REMOVED the confirm the Aug-15
+Codex batch had added to File > New and File > Open, citing 8ddfd945 ("undo
+replaces confirmation"), because writing_apps_selftest went red — a headless
+worker cannot answer a dialog, so Open silently refused. Two UNTRACKED suites
+from that same batch (screenplay_replace_confirm_selftest,
+screenplay_replace_status_selftest) pin the confirm and are now RED.
+I was too quick. **Undo does not survive a close.** For a script or manuscript
+that has no file yet, the recovery store IS the only copy, and New/Open
+overwrite it: undo can put the document back while the window is open, and
+nothing can once it has closed. That is precisely novel's F3 — "File > New /
+Ctrl+N and File > Open replace an unsaved manuscript with no confirmation and
+overwrite the recovery store; close and reopen and the book is gone" — which
+the independent verifier CONFIRMED as DATA_LOSS. Writer, meanwhile, has always
+confirmed (_confirm_discard).
+So the OS currently holds three different answers for the same act, and the
+undo law's premise fails exactly where the data matters most.
+DECISION NEEDED (one decision, three apps): either
+  (a) New/Open confirm when the document is unsaved and has no file — Writer's
+      shape, and what the Codex batch reached for; or
+  (b) no confirm, but New/Open PRESERVE the outgoing document (keep the
+      recovery snapshot aside, the way a damaged store is quarantined) so a
+      close cannot lose it — the undo law with a durable floor, and the better
+      experience of the two.
+I have NOT flipped screenplay again: novel's fix agent is deciding the same
+question right now, and whatever lands there, screenplay and writer must match
+it — along with the two untracked suites and writing_apps_selftest (whose
+worker must ANSWER the dialog rather than being the reason to delete it).
+
+### THE RELEASE GATE WAS DEAF TO 20 OF ITS OWN SUITES (Aug 17 ~13:00)
+A full `run_all_gates` (744 gates) recorded **34 reds, and most were not
+failures at all**: the runner refuses to read success into a zero exit with no
+recognised terminal verdict — rightly, because a suite that dies half way also
+prints PASS lines and also exits 0 under `sys.exit(len(FAILS))`. Twenty suites
+were passing while the aggregate filed them as DID NOT RUN, i.e. protecting
+nothing:
+  animation (its ending was `TALLY total=377 passed=307 failed=0` — a WORK
+  COUNT, not a report), automount_concurrency, desktop_recovery_shape,
+  hidpi_icon, journal_close_recovery, journal_structural_save, locale_write,
+  messaging_honesty, nbicons, oem_install, osk_lifecycle,
+  pinyin_unknown_punctuation, present_card, sleep_lock_order,
+  stable_surface_safety, settings_blank_durability, xclipd, xtabletd,
+  toggle_fuzz_check — and **construct_all_host**, the gate that catches an app
+  crashing on launch.
+Each now ends with `RESULT: ALL PASS` / `RESULT: FAILED`. Two more were skip
+cases, and a skip is not coverage: `oem_install` skipped "…and the chosen
+password verifies" because Python 3.13 dropped `crypt` on this host — so the
+one assertion proving a new owner can SIGN IN was inert on the machine that
+runs the gates. It now verifies through openssl (present here AND in the image,
+and firstrun's own fallback), so it really runs. `xclipd`'s skip (a clipboard
+manager already owns the developer's display) is now DECLARED in
+run_all_gates.ALLOWED_SKIPS rather than silently swallowing the suite.
+REAL failures found in the same run, both from today's fix wave:
+  * **toyfont_check 1 BROKEN — calculator.py drew text with cairo's toy API**
+    (new graph axis labels). Read every show_text site in the file: there is
+    exactly one and its content is format_number() = "%.12g"/"%.Nf" — ASCII
+    digits, minus, point, exponent. Recorded as a reasoned KEEP beside
+    sequencer's ruler numerals, with the reading that justifies it.
+  * i18n_check / i18n_coverage / i18n_source_coverage / jargon_sweep are red
+    on strings the in-flight fixes introduced (bills, contacts, novel) — one
+    catalog fragment closes them once the wave lands.
+STILL OWNED BY IN-FLIGHT AGENTS (do not touch until their fix lands):
+  board, cookbook_verbatim, g2048_win_persistence, gbaemu_storage,
+  illustrator_recent_shape, mealplanner_cookbook, novel_title, sequencer,
+  widgets_timezone, writer_new_durability, screenplay_replace_*,
+  contacts_save_failure_actions (FAIL), workout (FAIL), disabled_reason_check
+  (installer's new ToggleButtons have no tooltips), accelerator_promise_check
+  (writer advertises Ctrl+C/V/X it does not consume).
+- (13:2x) **EVERY APP'S `.bak` WAS WORLD-READABLE while its store was 0600.**
+  nbapp.preserve_damaged keeps one previous-good copy of a store before it is
+  overwritten — and wrote it with a plain `open(path + ".bak", "w")`, which
+  takes the umask (0644 here), while atomic_write_json gives the store itself
+  0600 through _keep_mode. A full copy of a private journal, address book or
+  ledger sat beside the protected file, readable by every account on the
+  machine — the one file nobody thinks to look at being the open one. Handed
+  over by NOVEL's fix agent (its F12) as OS-wide and outside its edit scope;
+  taken here. The .bak now carries the STORE's own mode in both directions
+  (a store its owner deliberately opened up keeps a matching .bak — forcing
+  0600 would be the mirror mistake _keep_mode exists to avoid). Two new checks
+  in nbapp_datasafety_selftest (44 total): reverting the fix reds "a private
+  store's .bak is private too (never the umask's 0644)" by name.
+- (14:0x) **THE BREADCRUMB SLIVER CAME BACK, and I helped cause it.** This
+  morning I measured a 2-pill trail folding at the Finder's default 775px
+  width and handed that to the finder session; they guarded `_fold_leading`
+  so a ≤2-pill trail never folds — correctly reasoned (a "…" pill is nearly
+  as wide as "Home", so folding wins no width). But the trail STILL does not
+  fit at 775: "Home › Applications" needs 162px and the crumb scroller was
+  allocated 123, because the search entry's natural width (172) took the
+  slack from the one child that expands. The scroller then anchored right to
+  keep the current folder visible and cut the root pill mid-letter, so the
+  first screen every user sees read **"Hidden | Actions | e | Applications"**
+  — the exact sliver 52672195 removed, by another route. Seen ON TARGET in
+  the 14:00 boot, then reproduced on the host.
+  FIX (measurement, not taste): the search entry takes width_chars=10 and a
+  130px floor, so the crumb gets 165 ≥ 162 and nothing scrolls. A search
+  field is a control that can shrink; a path is content that cannot.
+  The existing finder_crumb_fold_selftest could not see any of this — it
+  reads the widget tree, and the row genuinely HELD both pills at full width
+  while the scroller showed 19px of one. It now also measures the scroller
+  (value == 0 and page >= natural) at all three sizes; reverting the search
+  width reds "every pill of Home > Applications is fully visible at 775x715
+  (no mid-letter sliver)" by name.
+- (15:0x) **The confirm-vs-undo contradiction is RESOLVED, one way.** The
+  tracked gate tools/confirm_undo_adversarial_selftest.py names
+  `self._confirm_replace("New Script")` and `..."Open Script"` in its
+  CASES["screenplay"] FORBIDDEN list — the exact calls the Aug-15 Codex batch
+  re-added and I removed this morning. Novel's fix agent hit the same wall
+  from the other side (its F3, declined: "DOCUMENTED DECISION … CASES['novel']
+  forbids 'Discard this manuscript?'"). So option (a) — confirm before New/Open
+  — is not available without reversing a campaign decision and reding a
+  tracked gate. The two UNTRACKED suites the batch left behind
+  (screenplay_replace_confirm_selftest, screenplay_replace_status_selftest)
+  pinned the opposite and were red; they are deleted, because two gates that
+  can never both be green is not a ratchet, it is a coin toss.
+  WHAT REMAINS TRUE, and is now the ONLY path: undo does not survive a close,
+  so New/Open on an unsaved, unbound document still loses it — novel F3,
+  CONFIRMED DATA_LOSS by an independent verifier. The fix has to be a DURABLE
+  FLOOR rather than a question: keep the outgoing text where the person can
+  find it. Doing that next in novel (the app the finding names), then
+  screenplay; writer already confirms and is not exposed.
+- (15:3x) **THE DURABLE FLOOR, in Novel: File > New / Open can no longer lose
+  an unsaved book.** With a confirm forbidden by a tracked gate and undo
+  unable to survive a close, the answer is neither a question nor a warning:
+  before New or Open replaces an unsaved, UNBOUND manuscript that holds
+  something, the app writes it into Documents as a real manuscript under its
+  own title ("Winter Ships 2026-08-17 1424.json") and posts a notification
+  saying where it went. A bound manuscript is untouched (already on disk); an
+  empty one writes nothing. Undo still puts the book back on screen — the file
+  is what makes CLOSING survivable.
+  The message goes to the notification centre and NOT the save chip: measured,
+  the next autosave rewrote the chip within a second, and — the stronger
+  reason — the chip describes the manuscript ON SCREEN, so putting the
+  outgoing book's fate there recreates the exact confusion
+  novel_realuse_selftest pins ("a new manuscript carries its own save state,
+  not the last one's"). That check caught my first attempt; its expectation
+  was right and mine was wrong.
+  New tools/novel_new_open_floor_selftest.py, 10 checks (New, Open, empty,
+  already-bound, the notification, and that the kept file holds what was on
+  SCREEN rather than what was opened); sabotaging _keep_outgoing reds six of
+  them by name. 17 novel suites green. Strings "Kept as %s in Documents" and
+  "Manuscript kept" are in the catalogs (fragment 071), 17x.
+  STILL OWED: the same floor in screenplay (same exposure, same shape).
+- (15:4x) **...and the same floor in Screenplay**, which had the identical
+  exposure (unsaved + unbound + New/Open overwrite screenplay.json). Same
+  shape: write the outgoing pages into Documents under the script's own title,
+  post "Script kept" to the notification centre, leave a bound or empty script
+  alone. tools/new_open_floor_selftest.py (renamed from the novel-only one)
+  now covers BOTH apps in 14 checks. screenplay_open_metadata's Probe learned
+  the new contract (it opens onto a bare stand-in, so there is nothing to
+  keep). 12 screenplay suites green; string "Script kept" in the catalogs
+  (fragment 072).
+  WRITER is NOT exposed: it still confirms (_confirm_discard), which its own
+  gate allows.
+- OWED, blocked on an agent still editing the file: **sequencer re-added three
+  retired confirms** in the Aug-15 batch — `_t("New project?")`,
+  `_t("Open this project?")`, `_t("Shorten to %s?")` — and the tracked gate
+  confirm_undo_adversarial_selftest is RED on all three. Same shape as
+  screenplay's, same resolution: drop the confirms (the law) AND lay the floor
+  (New/Open keep the outgoing project in Documents), because sequencer has the
+  same unsaved+unbound exposure. Do it the moment its fix agent lands.
+- OWED (menu_promise_check, after the wave's menu changes): academics
+  "New Class…", "Add an Assignment…", "Edit Class…" and cookbook
+  "Move to Category…" are flagged "promises to ask but acts at once", and
+  academics "New Lecture" / journal "New Entry" / cookbook "Cut" as "asks with
+  no ellipsis". The second group is at least partly the gate's own false
+  positive — it counts a REBUILT overlay child as a card appearing, and an app
+  that rebuilds its page after an action therefore reads as having asked
+  (journal's fix agent reported the same conclusion independently). I tried
+  the obvious narrowing (ignore the overlay's base child) and MEASURED it
+  worse: 4 apps flagged became 27, so it was reverted. The first group cannot
+  be that false positive — it is the opposite direction — and wants a look at
+  each label. Both are for the next pass; the probe also needs Gtk.Dialog.run
+  patched, or it hangs on a modal (it reports "probe blocked" for music).
+- (16:0x) CLOSED, by sequencer's own fix agent: the three re-added confirms are
+  gone (confirm_undo_adversarial_selftest is PASS again) and it laid the SAME
+  durable floor novel and screenplay got — its notification reads "Project
+  kept". Three apps, one answer, arrived at independently: New/Open never
+  asks, and never loses what it replaces.
+- (Aug 17, evening) **CATALOGS CLOSED for the whole wave.** Every string the
+  241-fix wave introduced is translated into all 17 languages: fragments
+  068 (calendar/calculator), 069 (academics, accounting, bills, contacts,
+  cookbook, illustrator, language, media, novel, music), 070 (the four menu
+  labels novel and cookbook changed — the two novel ones took the existing
+  translation minus its ellipsis rather than inventing a second wording),
+  071 (novel's floor), 072 (screenplay's floor) and 073 (burner, installer,
+  sequencer, usbwriter — 26 strings, including the installer's shutdown
+  instruction and every Disc Burner refusal). Catalogs: 3999 keys x 17.
+  i18n_check clean, i18n_coverage FULLY COVERED, i18n_source_coverage PASS,
+  catalog_script PASS. The Serbian half of fragment 068 had to be
+  transliterated: I wrote it in Cyrillic and this project's sr catalog is
+  LATIN — the same defect a previous session transliterated away for 52
+  values, caught here by catalog_script_check.
+- (18:2x) **THE BOARD SUITE WAS RUNNING HALF OF ITSELF, AND THE HALF IT SKIPPED
+  HELD SEVEN REAL FAILURES.** board_selftest exited silently at check 61 of
+  103 with status 0 and no output at all: it reloads nbapp three times (to
+  re-pin screen_size per panel), so nbapp.claim_single_instance's in-process
+  registry was EMPTY in the fresh module while the previous incarnation still
+  held the flock — the process took its own lock for a rival copy and
+  os._exit(0)'d, and block-buffered stdout went with it. The aggregate filed
+  it as DID NOT RUN; the board's own fix agent ran it and saw a clean exit.
+  FIX in nbapp: the lock file now carries the holder's pid, so a blocked
+  flock is compared against our own — same process, same claim, return
+  instead of exiting. (The peer's earlier `me in _INSTANCE_LOCKS` guard was
+  right and could not survive a module reload.)
+  WHAT THE OTHER 42 CHECKS SAID, once they could run: the pinned column
+  needed 1004px of a 998px panel at 1920x1080 and laid a tile 18px BELOW the
+  bottom edge — a regression from this morning's board fixes, which correctly
+  replaced Tasks' and the calendar's hand-rolled headers with the shared
+  builder (that is what stopped "2 / 10 done" rendering as "…") and thereby
+  made both cards taller than the row budget's model of them. _HEAD_PX now
+  errs HIGH (46 against a measured 39) with the reasoning written down: a row
+  fewer is a row you can still reach, a row too many is one you cannot.
+  board_selftest 103/103; every widgets suite green; media_adversarial 35/35.
+
+## THE FINAL GATE RUN, TRIAGED (Aug 17 ~17:30–18:30)
+
+The 768-gate run finished at **24 reds**. Every one was triaged; none of them
+were "the code is fine, the gate is noisy" — they split three ways.
+
+**A. Gates that were DEAF, not passing (13).** A suite that exits 0 while
+printing only per-check lines is reported DID NOT RUN, because a suite that
+dies half way prints those lines too. Terminal verdicts added to
+`sequencer_selftest` (158 checks that nobody was reading), `rail_measured_check`
+(24), `grid_e4_rest_check` (4), `widgets_timezone_selftest`, `tofu_sweep`, and
+`data_stress_sweep` — the last of which said `RESULT: no stored field pushes an
+app off the panel`, prose the runner cannot grade, now `RESULT: PASS — …`.
+`i18n_check` was deaf for a different reason: its hidden-app SKIP lines had no
+`ALLOWED_SKIPS` entry, so a clean 17×3999 run was read as partial coverage.
+Declared, keyed to the same HIDDEN_APPS list the other two skip rules use.
+
+**B. Real defects (4).**
+- `media.py:_do_trash` reached `self._thumb_cache` unguarded — the same
+  fixture-contract regression the calendar/journal/music stores took. A
+  housekeeping line must not be what raises. `getattr(self, "_thumb_cache", {})`.
+- `undo_completeness_selftest` asserted the Trash held **exactly one** file of
+  that name. NB_HOME is shared across guestrun invocations, so it was measuring
+  the harness — and the "(1) (2) (3)" names it tripped over were the app doing
+  the right thing, never overwriting something already trashed. It now diffs
+  against a pre-snapshot.
+- `voice_check`: one NEW string, usbwriter's `A USB drive is plugged in but
+  cannot be identified, so it is not offered.` — ledgered as `allow` with its
+  reason, because with a stick in the port `No USB drive is plugged in.` is
+  FALSE and the person blames the stick, the port or the machine.
+- `silent_refusal_check`: the `video.py:_menu_add_transition` DEBT row went
+  STALE — the gate now resolves that guard to the item's own `has_clip and k>0`
+  gating. Ratcheted down rather than carried.
+
+**C. Reported TIMEOUT, but working the whole time (1).**
+`menu_promise_check` constructs 32 apps and INVOKES all 348 enabled menu items.
+Measured cost here: **8m55s**, against the 300s default. A timeout reported as a
+failure is a lie about the code; it now has its own entry (1200s). With the time
+it needs it is honestly RED: 55 violations in 5 apps, plus `music.py: probe
+blocked or exceeded 90 seconds` — a menu item that can block the UI thread for
+90s is a shipping defect, not a harness artefact, and is being driven now.
+
+Left running at the end of this triage: the four OS-wide check failures
+(`anchored_term`, `button_contrast` — 13 labels under 3.0:1, worst 2.61:1 —
+`accelerator_promise`, `disabled_reason`), the menu_promise + silent_refusal
+app work, `transition_pacing_probe` coverage (18 of 35 transitions measured; all
+18 in band), and a second-pass regression drive of the six apps that took the
+most fixes in the wave.
+
+### THE FOUR OS-WIDE CHECKS, CLOSED (Aug 17 ~18:00–19:30)
+
+- **`anchored_term_check`** — the two findings were on OPPOSITE sides. `ja` was
+  the CHECK over-anchoring: `A music CD needs a blank CD-R` is the ordinary
+  noun used attributively, and the catalog keeps the two senses apart on
+  purpose (`音楽` the audio, `ミュージック` the Places row) — the key `Music CD`
+  was ALREADY `音楽 CD` and had never been flagged. The anchor list now carries
+  a NAME-vs-common-noun field and a `standalone()` predicate, so a name matches
+  only where English spells it as one. `zh` was a REAL catalog defect, and the
+  hand-sweep found a second one no frame could ever have reached (the GBA SDK
+  empty state): the *folder* `Documents` was written `文稿`, the word that
+  catalog uses for the content noun — exactly the one-word-two-things collision
+  this gate exists for. Net: 969 → **1105** mentions checked. The gate got
+  stronger, not looser.
+- **`button_contrast_check`** — all 13 labels were the same tone, `#9A9484`
+  (`muted-2`, spec'd for "placeholder text, disabled marks"), used as text a
+  person must read. Cookbook's placeholders → `muted-3 #8A857A` (3.55:1, still
+  quieter than the value they stand in for); novel's chapter disc and video's
+  shot numbers → `muted #6E695E`, because their grounds fill with `@select
+  #EAE3D2` under hover/selection, where `muted-3` falls back to 2.87:1 — the
+  number was faintest exactly when you reach for it. **Now 0 under 3.0:1.**
+- **`accelerator_promise_check`** — the DEBT tail was a red herring; six
+  findings above it were the failure, and TWO of them were the check LYING
+  about the apps: it flattened the enclosing `if`-chain to text, so
+  `not (ev.state & CONTROL_MASK)` read as *Ctrl+*. Media was reported as
+  binding chords it explicitly REFUSES, and four such false rows were already
+  sitting in the ledger. Fixed with real modifier polarity (boolean-tree walk
+  tracking `not`/`else` arms). Writer's Ctrl+A/C/V/X were then PROVEN by
+  driving the real window — buffer as witness, clipboard as witness — so the
+  check now understands that a focused GtkTextView answering the registry's own
+  edit commands IS a binding, gated three ways so a renamed row or a repointed
+  callback cannot claim it. DEBT 37 → 29, and `tools/writer_clipboard_selftest.py`
+  now asserts what nothing in the repo asserted.
+- **`disabled_reason_check`** — 9 findings across burner and installer. Both
+  now DERIVE sensitivity from the reason (`set_reason(btn, text)`), so a
+  disabled control cannot exist without one. Installer's step rail says "This
+  step opens when the step before it is finished." and, once a run has begun,
+  "The installation has started. Steps cannot be reopened."; burner's Burn/Move
+  buttons name the condition that actually holds. 12 new strings, 17 catalogs,
+  3999 → **4011** keys, merged through the fragment path (074-disabled-reasons).
+
+### MOTION PACING: 18 → 35 OF 35 ANSWERED, AND TWO GATES THAT COULD NOT GO RED
+
+`transition_pacing_probe` measured 18 of 35 transitions; 10 had no driver.
+Six drivers written (splash lift, app picker, video selection, maps view,
+media surface, ebook chapter), two resolved as Gtk.Revealer-owned
+(`configured-verified` read from the app's own declared token by AST, not
+re-typed from the helper), one as genuinely continuous (`system.boot-session`
+is a `GLib.timeout_add(70)` easing toward a 0.9 cap it never passes, bounded
+only by MAX_MS=30000 — there is no end state to time).
+
+It found:
+- **the media surface swap ran at 400ms, twice the PAGE budget** — it faded out
+  for a full token AND in for a full token, where every other content
+  replacement in the OS splits one token end to end. `media_motion_selftest`
+  had pinned the WRONG contract; it now asserts both halves and their sum.
+- **a `configured-verified` FAIL could not turn the gate red** — the aggregate
+  only consulted `measured` rows, so all 8 configured rows could print FAIL
+  under a green RESULT. `motion_inventory_check.pacing_problems` had the same
+  hole. Both fixed; every current row passes.
+- **`--apply` rewrote the whole inventory file** (indent/ASCII churn: 1289+/1172−
+  for a measurement update). Now 146+/29−, measurements only.
+
+**OWNER DECISION — `finder.selection-change`.** The inventory declared a
+highlight TRAVELLING between rows, tokened SELECT. That motion does not exist
+in the code; what ships is the theme's 90ms colour ease on `treeview.view`. I
+called it: **selection feedback is FEEDBACK, not SELECT — friction belongs to
+commitment, not to moving a selection**, and a custom travelling highlight over
+a cell-renderer TreeView is not work I want landed days before a release. The
+entry now declares the motion the app actually performs, at the token that
+describes it, with the band NOT widened and no exemption. It is verified by
+reading the duration out of **GTK's own parse** of the shipped theme (display
+independent, unlike constructing a widget, which aborts without a display), and
+red-proved through a new `NB_THEME_CSS` override so a proof never mutates the
+shipped theme. Evidence recorded in the entry's note: on a realized widget with
+a frame clock the rule DOES interpolate (3 intermediate values over ~40–57ms,
+with a Gtk.Button in the same rule as the control, so the negative case could
+not be vacuous); what remains unproven is that a per-ROW change eases, because
+GTK3 paints TreeView rows through cell renderers against a saved context. The
+entry stays `partial` for exactly that reason, and says what would have to
+change to build the travelling highlight.
+
+**`RESULT: GREEN — every eligible transition measured in band`**, 35 of 35
+answered (24 measured from a real frame trace, 9 configured-verified, 2
+continuous-untraced, 0 unanswered).
+
+### BATCH 3 CLOSED — the wave is complete (Aug 17 ~19:45)
+
+All 39 agents of the third drive/verify/fix batch finished: language, workout,
+packages, 2048, GBA emulator, System Monitor, installer, USB writer, Disc
+Burner, desktop panel, desktop board, **login** and **First Run** — the last two
+had each lost an agent to a limit earlier in the day and were retried to
+completion. Worst of what the batch fixed, in its own words:
+
+- **Disc Burner: every burn died before the first track.** `_step` polled
+  `job.cancelled()`, but `nbjobs.Job.cancelled` is a **property** — calling it
+  raised `TypeError` on the worker, which `_burn_error` then mapped to the
+  generic "The disc was not written." Both poll sites fixed.
+- **2048: the About card did not block the game.** The modal guard read
+  `self._about_layer`, a name nothing in the tree ever assigns (nbapp stores
+  `_about_card`/`_about_close`), so it was permanently falsy: arrow keys slid
+  tiles and spawned new ones behind the card.
+- **Language: the word bank graded a correctly built sentence as WRONG** when
+  the phrase repeats a word and the learner took one duplicate tile back —
+  `chosen.remove(word)` drops the FIRST copy while the screen loses the tapped
+  one. 9 shipped phrases have a repeated tile. It cost a heart, too.
+- **Packages: Escape closed the whole app** instead of clearing the search box.
+- **Desktop panel: the fullscreen-video watch was never scheduled** at all.
+- **Desktop board: the Tasks summary and the calendar day drew as a bare "…"** —
+  two hand-rolled copies of a header that `_card_shell` had already had fixed.
+- **System Monitor: re-sorting pushed the PROCESSOR column off the right edge.**
+- **USB Writer: the outcome sentence was overwritten inside the same callback**
+  that produced it, so a finished/stopped/failed write said nothing.
+- **Login: "Show password" selected the whole field**, so the next keystroke
+  replaced the password (reproduced in 5 of 6 fresh processes).
+- **First Run: "start without a password" left the disabled fields looking live.**
+
+## THE CONTRAST GATE COULD ONLY SEE BUTTONS (Aug 17 ~19:00–20:30)
+
+`button_contrast_check` measures real rendered labels — but only labels INSIDE
+BUTTONS. Everything else a person reads was ungraded, and the tone that failed
+in three apps (`#9A9484` muted-2, spec'd for "placeholder text, disabled marks")
+was being used as ordinary text across the OS.
+
+**New gate: `tools/text_contrast_check.py`.** It constructs 43 surfaces, each in
+its own subprocess, settles the 90ms transition, and measures the colours GTK
+COMPUTES — never the hex in the source — in three passes: RESTING (labels,
+per-markup-run colours, entry text AND placeholder, TextView text, every
+TreeView cell per column per row with the model's own foreground applied,
+column headers, menus, tab labels, header bars, popovers), REACHED FOR (hover
+and selection really set on the widget that can take them), and DECLARED (for
+rules the walk never reached, a real widget tree carrying the real classes and
+ancestors). Dead CSS and unprobeable selectors are counted and printed, never
+silently skipped. Bars: **4.5:1** small readable text (WCAG AA 1.4.3), 3.0:1
+large/heavy, 3.0:1 genuine placeholders (a stated departure — held at the
+1.4.11 perceivability floor, because a placeholder at body contrast makes an
+empty field look filled), 3.0:1 marks set in text, 1.5:1 disabled ink. Placeholder
+and disabled are never inferred from a CLASS NAME (a name is a claim a rename
+can silence) but from `get_placeholder_text()`, `is_sensitive()`, and an
+evidence table where each row cites the line of code that proves it.
+
+**It found two bugs in itself, both by counting.** `walk()` held `id()` in a
+`seen` set without holding a reference, so PyGObject reused freed wrapper
+addresses and live subtrees tested as already-seen — novel measured 23 nodes
+instead of 90, differently each run. And `button_contrast_check`'s import put
+the real `de/` at `sys.path[0]`, so its `--selfcheck` imported the UNSABOTAGED
+app and reported that the gate stayed green on unreadable text: the gate was
+right, the harness was lying.
+
+**The repaint: 262 failing rules over 698 nodes → 0.** 119 rule edits in 22
+files by the sweep agent, then the remaining **81 rules across the 13 files it
+was forbidden to touch** (they had live owners) applied here once those agents
+landed — every anchor matched exactly once. Worst single case: journal's
+`.datebox.active .dbwd` at **1.75:1**, the least readable text in the OS.
+Both documented traps were live code: `gbasdk .runbtn` set `color` on the
+BUTTON so the OS's one red action drew ink-on-red at 3.32:1, and novel and
+calendar were using `@select` as their HOVER fill — the exact collapse `@hover`
+was added to the palette to undo.
+
+Two things the sweep left as owner decisions rather than patching:
+1. **The saved-state dot** `@ok #7FA98C` is 2.55:1 on paper and appears in nine
+   modules. It is exempt today under "a mark its own label also spells out"
+   (it always sits inside "● Saved 18:13"). To make it clear 1.4.11 on its own
+   the change is `#7FA98C → #4F7A3A` in **all nine at once** — fragmenting one
+   state signal across nine apps is worse than the dot.
+2. **GTK3 cannot separate placeholder ink from disabled ink** — it draws an
+   entry's placeholder in the insensitive colour. Installer's disabled tone put
+   its "Name" placeholder at 2.16:1; the placeholder was dropped (the field
+   already carries a visible label).
+
+## THE ELLIPSIS RATCHET WENT TO ZERO (Aug 17 ~21:30)
+
+`menu_promise_check`'s DEBT ledger held **55 allowed violations across 24 apps**
+at HEAD. It is now **empty**, and the sweep measures **0 violations across 32
+apps / 347 invoked items**. 51 of those 55 were slack — apps fixed long ago
+whose ceilings were never lowered, which is headroom a regression can climb
+back into without turning anything red. The last four were closed here:
+
+- **calculator `Variables…` → `Variables`** (real): the dialog lists stored
+  variables under a single Close button. Nothing to answer, so nothing to
+  promise. The ellipsis stays on `Function Catalog…` and `Display Mode…`, which
+  do ask.
+- **settings `Backup`, video `Add Title Card` / `Add Credits`** were the
+  INSTRUMENT, not the apps: a fifth evidence defect convicted an item whenever
+  an attribute *whose name contains "card" or "prompt"* came to hold something
+  — settings' own "Where to copy it" section box, video's lazily-built pixbuf
+  cache. Retired as evidence.
+- And that heuristic was **hiding a real one**: exactly one item was PASSING on
+  it — **contacts `New Contact…`**, which appends the person, selects it, enters
+  edit mode and calls `_save()` (on disk before a field is typed) and never asks
+  anything. Now `New Contact`, which is also what MENU-CONVENTIONS §2B prints
+  for a single-store app.
+
+Two stale ratchets fell out of the same pass: `silent_refusal_check` was red on
+a row for `illustrator._show_all_layers` whose menu gating now repeats the
+method's guard word for word (pruned, with a red-proof that the row is only
+safe while that gating stands), and **`menu_promise_check_selftest` was red AND
+vacuous** — it stubbed `subprocess.run` while the parent had moved to capturing
+into files, so every case read an empty file and reported "probe failed"; worse,
+the blanket stub also answered `tracked()`'s `git ls-files`, so a probe
+reporting a violation returned `NOT YET COMMITTED … RESULT: PASS`.
+
+**Still open, and now being worked:** the probe replaces every attribute
+starting with `_flash`, and thirteen apps keep a non-callable there
+(`music._flash_serial`, `packages._flash_serial`, `cookbook._flash_until`), so
+the next comparison raises and the item is never judged — cookbook loses 6 of
+its 18 candidates. A "0 violations" that quietly skips items is the shape this
+codebase keeps getting burned by, so the fix must also COUNT and NAME what it
+still cannot judge.
+
+## THE HOST RENDERS ON A DIFFERENT PANGO THAN THE IMAGE (Aug 17 ~20:30)
+
+**Novel segfaulted on launch on the real image.** No traceback, no window, exit
+status 0 — which is exactly why every gate stayed green and every host-side
+test passed. Measured on target with `faulthandler`:
+
+    novel.py:742 in _sync_placeholder_position → :636 _editor → :254 __init__
+
+`Gtk.StyleContext.get_property("font", state)` hands back a
+`PangoFontDescription` that is **not safe to touch on the Pango the image ships
+(1.50.14)** — even `.to_string()` on it segfaults, let alone `get_metrics()`.
+The host builds against **1.56.3**, where the same call is harmless. That
+version gap is the whole reason it shipped: every host-side gate exercises 1.56.
+Fixed by taking the font from the widget's own Pango context
+(`get_pango_context().get_font_description()`), which is both safe and the font
+GTK actually renders with.
+
+Two latent instances of the same family were found with it: `calendar.py` and
+`login.py` both passed `None` as `get_metrics`' language argument, and Pango
+1.50 carries no `(nullable)` annotation there, so PyGObject hands the C function
+a NULL it dereferences. **A segfault in login.py is an unusable machine.**
+
+This is a new entry for the gate-blind-spot ledger, and the widest one yet: a
+host-side suite cannot see a defect that only exists at the shipped library's
+version. The only instrument that catches this class is running the app ON THE
+IMAGE — which is what `tools/target_app_sweep.py` is for, and why it stays in
+the endgame.
+
+Also closed in that pass: **Calendar could not record an event's real length.**
+The dialog offered a four-item DURATION picker (30 min / 1 / 2 / 3 hours), so a
+09:15–10:45 meeting could not be written down at all and anything off those four
+lengths was filed as the nearest one that was. Replaced with an explicit
+Starts / Ends pair on the same half-hour grid (plus a closing 21:00 slot);
+the stored record has always carried `start` and `end`, so nothing below the UI
+changed. Ending before the start is refused inline rather than silently swapped,
+changing the start nudges the end along, and reopening rounds the end UP so
+editing can never quietly shorten what was written.
+
+### STILL OPEN — sequencer playback on real hardware
+
+On the guest the engine reaches PLAYING, accepts buffers, raises no bus error,
+and `nbsynth` renders genuinely non-silent audio — but the mixdown produced
+~2.3s of audio in ~3s of wall clock (**14 underruns in 3 seconds**), which is
+what "no sound" sounds like. That guest is TCG software emulation (~10x slow),
+so the starvation cannot be attributed from here. The renderer already drops
+effects rather than the sound when it runs behind (`_render_loop`'s
+`overloaded`/`bypassed` path, after 40 low-queue blocks) and the status line
+says so. The ALSA-muted hypothesis is CLOSED: `session.sh` unmutes Master,
+Speaker and PCM at 85–90% on every login.
+**It needs one observation on the real machine: does Music play while Sequencer
+does not?** If yes, it is renderer speed and the fix is a deeper prime or an
+earlier effects bypass; if neither plays, it is the mixer or the card.
+
+## THE SECOND-PASS DRIVE, AND WHAT THE SKEPTIC FOUND UNDERNEATH IT (Aug 17 ~21:00)
+
+Six apps that took the most fixes in the wave were driven again, then an
+independent skeptic tried to REFUTE every claim with its own scripts and its own
+sabotage. It confirmed all eight of the highest-stakes findings — and found
+work nobody had reported.
+
+**The worst defect of the day: Video's Play had never streamed anything.**
+`_play_clip_live` read `clip.get("path")`, and no clip has ever carried one —
+`_new_clip()` stores `media`, an index into the bin. So Play was a silent
+slideshow for **every clip ever made**, and the wave's whole new async-preroll
+apparatus was unreachable code. **The suite that certified playback was
+building its fixture in the shape of the bug** (`{"kind":"video","path":…}`, a
+clip the app cannot produce) — as was the failure-fallback suite. Both repaired
+and now red on the unfixed app.
+
+Also confirmed: a still with an effect or a caption vanished from the preview
+(`-ss 0.000` before `-i` on a single-frame input decodes nothing and exits 0);
+Contacts lost the open form to File ▸ Import vCard and dropped Role from every
+exported vCard; Sequencer lost a take to Escape and lost a second take to
+File ▸ New after Save As; Calculator got four arithmetic answers wrong
+(`1/x` after `=`, `±` then `×`, a Fix-0 store, and a paste after `=`);
+Illustrator saved layer opacities and reopened them at 100% with a green
+"Saved" chip over a file that said 55; Media emptied the whole viewer when a
+film was trashed from a folder of photographs.
+
+### The skeptic's own findings — none of which anyone had reported
+
+- **A FAKE RED-PROOF.** `confirm_undo_adversarial_selftest`'s PASS-MUTANT block
+  read `caught = all(phrase in (source + "\n" + phrase) …)` — true whatever the
+  guard does. Proved by killing the guard AND restoring a retired confirm into
+  `sequencer.py`: the suite printed PASS for every phrase. Repaired to one named
+  predicate both halves call; dead-guard now gives 9 FAILs. (It is still a
+  literal-substring grep, so it remains blind to a REWORDING — which is exactly
+  how "Clear this track's takes?" walked back in past a green gate.)
+- **The durable floor had a hole I left in it.** `_keep_outgoing` in novel and
+  screenplay returned early on `if self.doc_path` — "it has a file, so it is
+  already on disk" — which stopped being true the moment the writer typed one
+  more sentence after Save. File ▸ New then replaced the model AND the recovery
+  store, and those words existed nowhere. FIXED in both: novel asks the file
+  itself (`_file_behind()` compares the content the serializer writes, minus the
+  two view-state keys, and treats any read problem as behind), screenplay uses
+  the `_file_dirty` flag `_touch` maintains. `tools/new_open_floor_selftest.py`
+  is now 21 checks; with the guards reverted in a scratch tree, 4 go red naming
+  the lost work. `tools/appdrive.py` gained `NB_DRIVE_DE` so a red-proof can
+  point the driver at a scratch copy instead of mutating a release tree.
+- **A picker title could not find its own translation.** nbpicker uppercases the
+  title; nbi18n's upper-case fallback tries `capitalize()` and `title()`, and
+  neither reaches a key spelled `Export to PDF` ("Export to pdf" / "Export To
+  Pdf"). Fixed with a case-folded index consulted **only where the fold names
+  exactly one key**, so it can never pick between two entries —
+  `tools/i18n_uppercase_fallback_selftest.py` pins both the recovery and the
+  refusal to guess. `Export as Audio` had no key at all; added to all 17
+  catalogs, each derived from that catalog's own `Export as Audio…`.
+- **The notice about a disk that will not take a write could not be written.**
+  Every message that matters most is posted by an app whose config directory is
+  exactly what just refused — and the spool lived inside it, so `post()`
+  returned "" and the person was told nothing. There is now a second spool on
+  the temp filesystem, keyed by NB_HOME so sessions never read each other's
+  tray, and every reader merges the two (`load`, `prune`, `clear_all`, and the
+  key the panel polls once a second). `tools/notify_unwritable_home_selftest.py`
+  makes the spool genuinely unwritable — proving the state first, so the suite
+  cannot be vacuous — and 6 of its 14 checks go red without the fallback.
+- **Still open, handed on:** tasks.py draws the person's own list names through
+  the interface catalog ("Home" → "Accueil" on a French install) while the store
+  correctly holds what was typed — the same defect novel had, and only 10 of 76
+  modules call `nbi18n.set_verbatim`. An OS-wide sweep of that class is running.
+
+## ON TARGET, Aug 17 21:30–22:15 — THE SWEEP WAS LYING, AND THE FINDER HAD NO KEYBOARD
+
+Two findings, and the first one hid the second for an hour.
+
+**1. `target_app_sweep` reported `29/29 apps painted · RESULT: ALL PAINTED`
+while not one app had opened.** The sweep types into the Finder's search field
+at a measured position and double-clicks the first row; its only verdict is
+"the framebuffer changed". On that boot the desktop board was covering the
+Finder (an older matchbox in that rootfs did not carry the
+`0004-desktop-widget-column-below-windows` patch), so every click landed on the
+BOARD — which opened its own app — and every row read PAINTED. The screenshots
+prove it: `19-novel.png` is a bare desktop, `24-system-monitor.png` is the
+widget board. FIXED: the sweep now proves the launcher is there before it
+sweeps — it types into the search field and requires the screen to answer,
+refusing to run otherwise — and each app's verdict is measured against the
+FINDER screen rather than the first shot, because "the desktop" IS the Finder
+over the board and an app that never opened leaves exactly that. Entered as
+gate blind-spot shape 28.
+
+**2. The Finder's search box cannot be typed into on the real machine.**
+Measured on the current image, where the Finder IS visible over the board:
+`_NET_ACTIVE_WINDOW` and `xdotool getwindowfocus` both name **0x…003, a 1×1
+window at (-1,-1)** — GTK's group-leader window for the Finder process, not the
+Finder's toplevel. Clicking the window does not move the focus (matchbox does
+not activate a DIALOG on click), so every keystroke goes nowhere: the search
+box keeps its placeholder, and the board's first card wears the keyboard focus
+ring instead. Mouse works — rows select, double-click launches — and a launched
+app DOES get focus (`xdotool getwindowfocus getwindowname` → `calculator.py`),
+so this is the Finder alone. Proved by forcing it: `xdotool windowfocus
+0x1e00007` and the same keystrokes land ("cal" appears in the box with a caret).
+FIXED in `de/finder.py`: the window asks for the keyboard itself
+(`get_window().focus()`) 900ms after start and on every button press, guarded
+on `get_visible()` so a hidden Finder can never pull focus off the app in front
+of it.
+
+Both were invisible to every host-side gate: the host has no matchbox, no
+group-leader race, and appdrive gives the window focus itself.
+
+## THE PERSON'S OWN WORDS RAN THROUGH THE INTERFACE CATALOG — 33 APPS (Aug 17, late)
+
+`nbi18n` translates the widget tree, which is right for chrome and wrong for
+content. Only 10 of 76 modules called `set_verbatim`. A full sweep found it in
+**33 apps** and fixed every one; two lookup behaviours had widened the blast
+radius far beyond exact matches: `_lookup` re-cases UPPER strings, so
+`.upper()` was never protection (Finder's title strip, Academics' class header,
+Cookbook's kicker, Journal's month heading all bit), and **single letters are
+catalog keys** — `B`, `I`, `M`, `S` are the Bold/Italic toolbar glyphs — so
+Contacts' alphabetical divider drew `Ж` for the "B" section in Russian and
+Animation's mouth badge `M` became `Б`.
+
+**Four cases where widget text had become DATA** (each red-proved):
+- **accounting** read the date back out of its own label. `_date_lookup`
+  rewrites month names inside date-shaped strings, so on French the row was
+  stored as `"17 août"` **and `_iso_for()` could not parse it, so the ISO date
+  was empty** — a ledger row reaching the CSV and the PDF with no date at all.
+- **language** rebuilt the word-bank answer from `button.get_label()` and
+  graded against it: on French a correctly built sentence assembled as
+  `['is','big']`, costing a heart and the skill's crown.
+- **screenplay** compared its status chip against the ENGLISH markup while the
+  widget held the translated one, so "Exported PDF" stuck forever in all 17
+  non-English languages, hiding the real save state.
+- **novel**'s chapter list re-translated on every REBUILD; the known fix only
+  covered the typing path.
+
+Also fixed: the desktop board (every card), every notification's title and body
+in the panel, Finder's breadcrumb and USB volume labels, the installer's
+computer and account names **on the last screen before an irreversible erase**,
+the login greeting, ebook's entire book text, and 20 more.
+
+Two techniques worth keeping: a `ComboBoxText` row is not a widget, so
+`set_verbatim` cannot reach it — `combo.append(None, text)` is unpatched, fills
+the same column and reads back exactly; and `set_tooltip_markup` is unpatched
+where `set_tooltip_text` is not, but because `nbapp._name_hook` fills a missing
+ACCESSIBLE NAME from the tooltip, each helper sets the accessible name itself,
+or the fix would have traded a translated tooltip for an anonymous control.
+
+The new gate `tools/user_content_verbatim_selftest.py` drives 27 apps twice in
+the same language — once with a made-up name the catalog cannot know, once with
+a catalog word — and requires the COUNT of widgets showing it to match. Counting
+is load-bearing: the first version asked only "is it on screen somewhere" and a
+sabotaged Tasks passed, because the header still showed the name one row above
+the broken sidebar. Apps that persist are closed and reopened on the same Home,
+so the assertion is about what a person sees next time. **54 checks, 0 failed.**
+
+### THE FIX THAT DID NOT TAKE, AND THE ONE THAT DID (Aug 17 ~23:00)
+
+The first Finder-focus fix — `get_window().focus()` on a window-level
+`button-press-event` — **did not work on the rebuilt image**, and the reason is
+worth keeping: a `GtkEntry` STOPS the button press, so it never bubbles up to
+the toplevel handler. Clicking the search box was exactly the case that could
+not reach it.
+
+The rule belongs one layer down, in the GDK dispatcher `nbapp.track_input_modality`
+already installs for the focus-ring modality — the one place that sees every
+event before any widget does. **Clicking a window now gives it the keyboard**,
+OS-wide: on any button or touch press, if that toplevel is not active, its GDK
+window asks for the focus. The window manager on this machine never does it
+(matchbox activates what it maps and does not move focus for a click on a
+DIALOG it did not activate — which is every window this OS opens), and every
+app already gets focus at launch, so for them the call is a no-op. The startup
+`_claim_focus` timer in `de/finder.py` stays as the belt to that braces: the
+board maps after the Finder and used to end up holding the keyboard from boot.
+
+### ROOT CAUSE, MEASURED: THE DESKTOP BOARD HELD THE KEYBOARD ALL SESSION
+
+Three app-side fixes failed before the real cause was found, and each failure
+was informative:
+
+1. `get_window().focus()` on a window-level `button-press-event` — **never
+   ran**: a `GtkEntry` stops the press, so it never bubbles to the toplevel.
+2. The same call from `nbapp`'s GDK dispatcher (which sees every event first)
+   — **never ran either**: the Finder, the board and the panel each install
+   their OWN stylesheet and so never reached `nbapp.install_css`, where the
+   dispatcher is armed. That is now fixed on all three (with
+   `tools/input_rules_armed_selftest.py` to keep it that way), and it means the
+   focus-ring modality rule had been missing on those three surfaces too.
+3. With the dispatcher armed, `Gdk.Window.focus()` STILL did nothing — and so
+   did `xdotool windowactivate`. matchbox advertises `_NET_ACTIVE_WINDOW` in
+   `_NET_SUPPORTED` and ignores it.
+
+The cause was one line in `de/widgets.py`: **`self.set_accept_focus(True)` on
+the desktop board.** The board maps last, so matchbox made it the focused
+client and re-asserted focus onto it after every click — `xdotool
+getwindowfocus getwindowname` answered `nb-desktop-widgets` whatever was
+clicked, and even a direct `XSetInputFocus` was taken back on the next press.
+Proved by killing the board on the running guest (the Finder appeared and
+worked) and then by flipping the flag on the guest and restarting the board:
+focus moved to `finder.py` immediately and the search box typed `calcal`.
+
+The board now declines the keyboard. The cost is stated in the code and in
+`board_selftest` (whose assertion is now the reverse of what it was): the
+board's cards cannot be reached by Tab. They stay clickable, they keep their
+accessible names, and every app they open is fully keyboard-driven — which is
+the trade a desktop backdrop should make. A window that is furniture must not
+hold the keyboard for the whole session.
+
+### WHAT THE REWRITTEN SWEEP NOW SAYS (Aug 18 ~00:15) — AND THE ONE THING LEFT
+
+With the launcher working and the sweep judging by the MENU BAR rather than by
+the picture, the run is honest and it is **RED**: `22/29 painted, RESULT:
+FAILED`. Reading the shots is what settles it — every "painted" frame carries
+the same name, **Academics**. So the search text is not reaching the box during
+the loop (it does at preflight: "zqxv" filtered the list and the probe passed),
+and the double-click therefore always lands on the same row of the unfiltered
+list. The seven "no change" rows are the ones where the double-click hit
+nothing at all.
+
+That is an instrument problem, not an app problem, and the app-level facts it
+was built to check are already established by hand on this same image: the
+Finder is on screen at boot, its search box types and filters, apps open from
+it, apps close, and the desktop comes back. **The next step for this file is to
+make the loop re-focus the search entry the way the preflight does** (the
+preflight clicks and types immediately; the loop clicks after an app has just
+closed, and the click almost certainly lands before the Finder is back) — then
+re-run and read the names again. Do not delete the check: it is now the only
+instrument in the tree that can tell an app that opened from a picture that
+changed, and it caught its own predecessor's 29/29 lie.
+
+### THE ISO REFUSED TO PUBLISH ITSELF, AND IT WAS RIGHT (Aug 18 ~00:30)
+
+`mkrelease --iso-only` ended with **`RESULT: NOT BOOTABLE — DO NOT SHIP`**, on
+one check of eight: *a nonempty in-image EFI System partition (type 0xEF) is
+declared* — the image carried only `0xee`, the GPT protective entry.
+
+Cause, from the log: **`/tmp` ran out of space** (it is a 16G tmpfs shared with
+every build and guest on this box, and my own QEMU work dirs were holding 4.5G
+of it). The Secure Boot re-master extracts the WHOLE ISO and writes a second
+one; its copies failed one at a time —
+`cp: error copying '…/sb/efi.img' … No space left on device` — the re-master
+was abandoned with a warning, and what came out was the UNSIGNED grub-mkrescue
+ISO with no ESP. The gate caught it and refused to publish, which is exactly
+the behaviour that keeps a broken image out of a release.
+
+Hardened `tools/mkiso.sh`: it now picks the larger of `$TMPDIR`, `/var/tmp` and
+`/tmp`, PRINTS which it chose and how much room it has, and **dies with a
+readable message if there is less than 6 GB** rather than silently producing an
+ISO that cannot boot a UEFI machine. A warning that only appears in the middle
+of a 900-line build log is not a report.

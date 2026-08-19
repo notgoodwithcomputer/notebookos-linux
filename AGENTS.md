@@ -1,10 +1,7 @@
-\## Delegating to Claude Code
+## Agent tooling
 
-For multi-file edits and refactors, delegate by running:
+Do not use Claude Code or run `ccp` for any task in this repository.
 
-ccp "\<detailed task description>"
-
-It writes files directly and prints a summary. Prefer one large, fully
-
-specified prompt over several small ones — each \`ccp` call is a fresh session.
-
+Perform investigation, edits, refactors, and validation with the current agent's
+local tools. If orchestration is requested, use only built-in sub-agents and keep
+their work isolated from unrelated changes made by parallel sessions.
