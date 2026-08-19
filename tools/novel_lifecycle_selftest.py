@@ -18,6 +18,7 @@ dict carried title, parts, chapters, active and doc_path, so _restore's
 window closed, came back blank, and one 900ms debounce later the copy on disk
 was blank too.
 """
+import errno
 import os
 import sys
 import tempfile
@@ -134,6 +135,27 @@ def main():
     check(parse({"chapters": []}) is None and parse("nonsense") is None,
           "a document that is not a manuscript is still refused")
 
+    # JSON booleans are not indices. Python's bool subclasses int, so a bare
+    # isinstance(value, int) check used to read true as index 1, selecting the
+    # second chapter and filing a chapter into the second part. Autosave then
+    # wrote those accidental choices back as numeric indices.
+    indexed = document(
+        active=True,
+        parts=[{"name": "One"}, {"name": "Two"}],
+        chapters=[
+            {"num": "1", "title": "First", "body": "one",
+             "ranges": {}, "part": True},
+            {"num": "2", "title": "Second", "body": "two",
+             "ranges": {}, "part": 1},
+        ])
+    st = parse(indexed)
+    check(st["active"] == 0,
+          "JSON true cannot select the second chapter")
+    check(st["chapters"][0]["part"] == 0,
+          "JSON true cannot file a chapter under the second part")
+    check(st["chapters"][1]["part"] == 1,
+          "a real numeric part index still loads unchanged")
+
     # Exporting over yesterday's PDF must not destroy it when the render
     # fails. Novel rendered straight onto the destination, so a layout or
     # cairo failure part-way through truncated the previous export moments
@@ -150,7 +172,12 @@ def main():
     app._set_save_error = lambda *a, **k: None
     app._prepare_render = lambda: 1
     app._draw_page = lambda *a, **k: None
-    app.save_lbl = type("L", (), {"set_markup": lambda *a, **k: None})()
+    # The chip the export writes into, kept so what it SAYS can be read back.
+    chip = []
+    app.save_lbl = type("L", (), {"set_markup": lambda _s, m: chip.append(m)})()
+    app._recovery_dirty = False
+    app._save_error = None
+    app._store_read_only = False
 
     real_simple_pdf = novel.nbprint.simple_pdf
 
@@ -180,6 +207,33 @@ def main():
         novel.nbprint.simple_pdf = real_simple_pdf
     check(open(dest, "rb").read() == b"%PDF new",
           "a successful export still replaces the file")
+    check(bool(chip) and "Exported" in chip[-1],
+          "a successful export says so")
+
+    # "Exported" is written into the ONE place that states whether the book is
+    # saved, so it may only be said when the book actually is. A manuscript
+    # whose recovery store cannot be written — a full disk, or a store that was
+    # kept aside because it could not be read — had its red "Not saved"
+    # replaced by a green "Exported" the moment a PDF was written, at the one
+    # moment the writer most needs to know the book itself is not saved.
+    novel.nbprint.simple_pdf = lambda path, *a, **k: open(
+        path, "wb").write(b"%PDF new")
+    try:
+        app._recovery_dirty = True
+        app._save_error = OSError(errno.ENOSPC, "disk full")
+        app._write_export_pdf(dest)
+        check(bool(chip) and "Exported" not in chip[-1]
+              and "Not saved" in chip[-1],
+              "an export does not claim the manuscript is safe when it is not")
+        app._recovery_dirty = False
+        app._save_error = None
+        app._store_read_only = True
+        app._write_export_pdf(dest)
+        check(bool(chip) and "Exported" not in chip[-1],
+              "...nor when the store was quarantined and will not be written")
+    finally:
+        novel.nbprint.simple_pdf = real_simple_pdf
+        app._store_read_only = False
 
     print()
     if FAILED:
@@ -188,6 +242,7 @@ def main():
             print("  - %s" % f)
         return 1
     print("novel lifecycle selftest: OK")
+    print("RESULT: PASS")
     return 0
 
 

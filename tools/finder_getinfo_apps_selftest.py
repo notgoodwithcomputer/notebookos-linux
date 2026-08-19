@@ -219,4 +219,5 @@ check("APP-INFO-OVERLAP repeated Get Info closes the existing card first",
       and "close()" in src)
 
 print("\n%d checks, %d failed" % (CHECKS, len(FAILS)))
+print("RESULT: %s" % ("FAILED" if FAILS else "PASS"))
 sys.exit(1 if FAILS else 0)

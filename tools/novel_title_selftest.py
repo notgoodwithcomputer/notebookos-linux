@@ -96,6 +96,24 @@ def main():
     check("ch[\"title\"] = first" not in source,
           "body edits cannot overwrite chapter title content")
 
+    labels = novel.Novel.__new__(novel.Novel)
+    labels.parts = [{"name": ""}, {"name": "Winter"}]
+    real_t = novel._t
+    try:
+        novel._t = lambda value: {
+            "Part %s": "Parte %s", "Chapter %s": "Capítulo %s"
+        }.get(value, value)
+        check(labels._part_label(1) == "PARTE 2 — Winter",
+              "part labels translate their template and keep names verbatim")
+        check(labels._display_chapter_title(
+                  {"num": "3", "title": "Chapter 3"}) == "Capítulo 3",
+              "generated chapter titles translate")
+        check(labels._display_chapter_title(
+                  {"num": "3", "title": "My Chapter"}) == "My Chapter",
+              "user chapter titles remain verbatim")
+    finally:
+        novel._t = real_t
+
     with tempfile.TemporaryDirectory(prefix="novel-damage-") as td:
         path = os.path.join(td, "novel.json")
         damaged = b'{"chapters":[{"title":"irreplaceable"}'
@@ -137,7 +155,11 @@ def main():
     if FAILURES:
         print("NOVEL TITLE SELFTEST: %d FAILED" % len(FAILURES))
         return 1
+    # Terminal verdict for the release runner (run_all_gates SUCCESSWORD): a
+    # stream of PASS lines with a zero exit is not a report it will trust —
+    # a suite that dies half way prints those too.
     print("NOVEL TITLE SELFTEST: all pass")
+    print("RESULT: ALL PASS")
     return 0
 
 

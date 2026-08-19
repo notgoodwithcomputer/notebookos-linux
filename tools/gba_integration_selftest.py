@@ -375,6 +375,16 @@ problems = gbabuild.check_project(proj)
 ok(not problems, "a project using every feature reports no problems",
    "; ".join(problems[:4]))
 
+bad_colour = kitchen_sink()
+bad_colour["rooms"][0]["bg"] = "#GGGGGG"
+colour_problems = gbabuild.check_project(bad_colour)
+ok(any("background colour" in problem and "#RRGGBB" in problem
+       for problem in colour_problems),
+   "a malformed room colour is reported before build",
+   "; ".join(colour_problems[:4]))
+ok(gbabuild._rgb15("#GGGGGG", 0x1234) == 0x1234,
+   "malformed hexadecimal colour safely uses its fallback")
+
 c = gbabuild.generate_c(proj)
 for name, needle in (
         ("sprites", "nb_Sprite nb_sprites[]"),

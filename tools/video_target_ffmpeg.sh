@@ -10,18 +10,23 @@
 # be checked without booting anything.
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-T="$ROOT/buildroot/output/target"
+T="${NB_FFMPEG_TARGET:-$ROOT/buildroot/output/target}"
 LD="$T/lib64/ld-linux-x86-64.so.2"
 if [ ! -x "$LD" ]; then
     echo "echo 'no target loader at $LD — build the target first' >&2; false"
     exit 1
 fi
-D=$(mktemp -d)
 for t in ffmpeg ffprobe; do
     if [ ! -x "$T/usr/bin/$t" ]; then
         echo "echo 'no $t in the target image' >&2; false"
         exit 1
     fi
+done
+
+# Allocate only after the full preflight. A partial Buildroot output used to
+# leak one wrapper directory on every failed invocation.
+D=$(mktemp -d)
+for t in ffmpeg ffprobe; do
     cat > "$D/$t" <<EOF
 #!/bin/sh
 exec "$LD" --library-path "$T/usr/lib:$T/lib" "$T/usr/bin/$t" "\$@"

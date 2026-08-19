@@ -42,6 +42,8 @@ def writer_document_damage(root):
     w._deserialize = lambda doc: setattr(w, "loaded", doc)
     w._is_writer_store = writer.Writer._is_writer_store
     w._apply_page_geometry = lambda: None
+    # Open now returns the desk to the top of the new page.
+    w._scroll_to_top = lambda: None
     w._push_history = lambda: None
     w._clear_save_chip = lambda: None
     w._update_status = lambda: None

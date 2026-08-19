@@ -144,6 +144,10 @@ def main():
               (len(_FAILS), _CHECKS[0]))
         return 1
     print("PASS  measured rail conformance: %d checks" % _CHECKS[0])
+    # Terminal verdict for the release runner: a zero exit with only
+    # per-check lines is read as DID NOT RUN (run_all_gates SUCCESSWORD),
+    # because a suite that dies half way prints those lines too.
+    print("RESULT: ALL PASS")
     return 0
 
 

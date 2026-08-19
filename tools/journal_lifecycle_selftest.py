@@ -110,4 +110,5 @@ check(win._save_timer is None and win._count_timer is None
       "destroy clears all deferred source IDs")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

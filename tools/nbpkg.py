@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 import sys
 import tarfile
 import tempfile
@@ -143,6 +144,102 @@ def verify(pkg: str, pub: str) -> int:
     return 0
 
 
+def _validated_files(manifest, payloads, target):
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(files, list):
+        raise ValueError("invalid file list")
+    out, seen = [], set()
+    for entry in files:
+        if not isinstance(entry, dict) or not isinstance(entry.get("dest"), str):
+            raise ValueError("invalid file entry")
+        dest = entry["dest"].lstrip("/")
+        if not dest or ".." in dest.split("/") or dest in seen:
+            raise ValueError("unsafe or duplicate destination")
+        try:
+            mode = int(entry.get("mode", "0644"), 8)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("invalid file mode")
+        digest = entry.get("sha256")
+        if mode < 0 or mode > 0o7777 or digest not in payloads:
+            raise ValueError("invalid file mode or payload")
+        seen.add(dest)
+        full = os.path.join(target, dest)
+        target_real = os.path.realpath(target)
+        parent_real = os.path.realpath(os.path.dirname(full) or target)
+        try:
+            contained = os.path.commonpath((target_real, parent_real)) == target_real
+        except ValueError:
+            contained = False
+        if not contained:
+            raise ValueError("destination escapes target")
+        out.append((full, payloads[digest], mode))
+    return out
+
+
+def _publish_transaction(outputs):
+    staged, committed = [], []
+    try:
+        for path, data, mode in outputs:
+            directory = os.path.dirname(path) or "."
+            os.makedirs(directory, exist_ok=True)
+            fd, draft = tempfile.mkstemp(prefix=".%s." % os.path.basename(path),
+                                         suffix=".nbpkg-tmp", dir=directory)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.chmod(draft, mode)
+            except Exception:
+                try:
+                    os.unlink(draft)
+                except OSError:
+                    pass
+                raise
+            staged.append((path, draft))
+        for path, draft in staged:
+            backup = None
+            if os.path.exists(path):
+                fd, backup = tempfile.mkstemp(
+                    prefix=".%s." % os.path.basename(path),
+                    suffix=".nbpkg-backup", dir=os.path.dirname(path) or ".")
+                os.close(fd)
+                os.unlink(backup)
+                os.replace(path, backup)
+            try:
+                os.replace(draft, path)
+            except Exception:
+                if backup is not None:
+                    os.replace(backup, path)
+                raise
+            committed.append((path, backup))
+    except Exception:
+        for path, backup in reversed(committed):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            if backup is not None:
+                try:
+                    os.replace(backup, path)
+                except OSError:
+                    pass
+        raise
+    else:
+        for _path, backup in committed:
+            if backup is not None:
+                try:
+                    os.unlink(backup)
+                except OSError:
+                    pass
+    finally:
+        for _path, draft in staged:
+            try:
+                os.unlink(draft)
+            except OSError:
+                pass
+
+
 def install(pkg: str, target: str, pub: str) -> int:
     # VERIFY FIRST — nothing touches the target until the signature and every
     # hash pass (spec order is the security).
@@ -151,30 +248,39 @@ def install(pkg: str, target: str, pub: str) -> int:
     except Exception as e:
         print(f"REFUSED: {e} — nothing was written")
         return 1
-    # Atomic-ish: write every file, then the registry entry last, so a
-    # half-install is never registered.
-    written = []
-    for entry in manifest["files"]:
-        dest = entry["dest"].lstrip("/")
-        if ".." in dest.split("/"):
-            print(f"REFUSED: unsafe dest {entry['dest']!r}")
-            return 1
-        full = os.path.join(target, dest)
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        tmp = full + ".nbpkg-tmp"
-        with open(tmp, "wb") as f:
-            f.write(payloads[entry["sha256"]])
-        os.chmod(tmp, int(entry.get("mode", "0644"), 8))
-        os.replace(tmp, full)
-        written.append(dest)
+    try:
+        outputs = _validated_files(manifest, payloads, target)
+        app = manifest.get("app")
+        if not isinstance(app, dict) or not all(isinstance(app.get(k), str)
+                                                and app.get(k)
+                                                for k in ("module", "display")):
+            raise ValueError("invalid app registration")
+    except Exception as e:
+        print(f"REFUSED: {e} — nothing was written")
+        return 1
     # Data-driven registration (no source edit): the installer appends to a
     # registry Finder/Packages read. app = {display, module, kind, icon}.
     reg_path = os.path.join(target, "opt", "notebook", "de",
                             "installed_apps.json")
-    os.makedirs(os.path.dirname(reg_path), exist_ok=True)
+    if any(path == reg_path for path, _data, _mode in outputs):
+        print("REFUSED: package payload collides with installer registry")
+        return 1
+    damaged_registry = None
+    old_registry = None
     try:
-        reg = json.load(open(reg_path, encoding="utf-8"))
+        with open(reg_path, "rb") as f:
+            old_registry = f.read()
+        reg = json.loads(old_registry.decode("utf-8"))
+    except FileNotFoundError:
+        reg = {}
     except Exception:
+        if old_registry is None:
+            print("REFUSED: existing app registry is unreadable — nothing was written")
+            return 1
+        damaged_registry = old_registry
+        reg = {}
+    if not isinstance(reg, dict):
+        damaged_registry = old_registry
         reg = {}
     reg[manifest["app"]["display"]] = {
         "module": manifest["app"]["module"],
@@ -182,12 +288,19 @@ def install(pkg: str, target: str, pub: str) -> int:
         "version": manifest["version"],
         "service": manifest.get("service"),
     }
-    tmp = reg_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(json.dumps(reg, indent=1, sort_keys=True) + "\n")
-    os.replace(tmp, reg_path)
+    outputs.append((reg_path,
+                    (json.dumps(reg, indent=1, sort_keys=True) + "\n").encode(),
+                    0o644))
+    if damaged_registry is not None:
+        outputs.append(("%s.damaged-%d" % (reg_path, time.time_ns()),
+                        damaged_registry, 0o600))
+    try:
+        _publish_transaction(outputs)
+    except Exception as e:
+        print(f"REFUSED: install failed ({e}) — previous files restored")
+        return 1
     print(f"INSTALLED: {manifest['name']} {manifest['version']} — "
-          f"{len(written)} files, registered {manifest['app']['display']}")
+          f"{len(manifest['files'])} files, registered {manifest['app']['display']}")
     return 0
 
 

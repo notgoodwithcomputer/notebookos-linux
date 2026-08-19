@@ -30,6 +30,7 @@ def fixture_drives(system=frozenset(), usb=frozenset(("sdb",)),
     usbwriter._listdir = lambda p: sorted(sizes) if p == "/sys/block" else []
     usbwriter._read = lambda p, default="": (
         "1" if p.endswith("/removable") and p.split("/")[-2] in removable
+        else "SERIAL-" + p.split("/")[3] if p.endswith("/device/serial")
         else sizes.get(p.split("/")[-2], default) if p.endswith("/size")
         else default)
     usbwriter._is_usb = lambda name: name in usb
@@ -86,7 +87,8 @@ check("512-BYTE-REMAINDER-REFUSED", not image_fits(4608, 4096))
 
 # The confirmed snapshot must still name an offered USB target immediately
 # before open. No block node is opened by this suite.
-d = {"name": "sdb", "node": "/dev/sdb", "bytes": 8192}
+d = {"name": "sdb", "node": "/dev/sdb", "bytes": 8192,
+     "identity": "device/serial:SERIAL-sdb"}
 old_drives = usbwriter._drives
 try:
     usbwriter._drives = lambda: []
@@ -95,8 +97,17 @@ try:
     usbwriter._drives = lambda: [dict(d)]
     check("UNCHANGED-TARGET-STILL-SAFE",
           getattr(usbwriter, "_target_still_safe", lambda _d: False)(d))
+    replacement = dict(d, identity="device/serial:DIFFERENT-STICK")
+    usbwriter._drives = lambda: [replacement]
+    check("SAME-NODE-SAME-SIZE-REPLACEMENT-REFUSED",
+          not usbwriter._target_still_safe(d))
+    no_identity = {k: v for k, v in d.items() if k != "identity"}
+    usbwriter._drives = lambda: [dict(no_identity)]
+    check("TARGET-WITHOUT-STABLE-IDENTITY-REFUSED",
+          not usbwriter._target_still_safe(no_identity))
 finally:
     usbwriter._drives = old_drives
 
 print("%d checks, %d failed" % (len(checks), len(failed)))
+print("RESULT: %s" % ("FAILED" if failed else "PASS"))
 raise SystemExit(bool(failed))

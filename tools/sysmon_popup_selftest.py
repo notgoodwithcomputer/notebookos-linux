@@ -180,4 +180,5 @@ if calls:
           isinstance(args[0], FakeMenu) and args[0].shown)
 
 print("OVERALL: " + ("PASS" if ok else "FAIL"))
+print("RESULT: " + ("PASS" if ok else "FAIL"))
 sys.exit(0 if ok else 1)

@@ -31,6 +31,7 @@ Traps this tool exists to encode, each paid for once:
 import argparse
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -75,6 +76,22 @@ def gdb_read(pid, exprs, timeout=45):
     return out
 
 
+def _stop_process(proc):
+    """Stop and reap the emulator child owned by this invocation."""
+    if proc.poll() is None:
+        proc.kill()
+    # kill() only requests termination. wait() is what releases the process
+    # table entry and closes Popen's child-side bookkeeping on every path.
+    proc.wait()
+
+
+def _cleanup_run(proc, work):
+    try:
+        _stop_process(proc)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def run_rom(rom, seconds, shot=None):
     vb = find_vbam()
     if not vb:
@@ -83,9 +100,11 @@ def run_rom(rom, seconds, shot=None):
     proc = subprocess.Popen([vb, "--no-opengl", rom], env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     report = {"rom": rom, "seconds": seconds}
+    work = tempfile.mkdtemp(prefix="gbarun-")
+    oam_bin = os.path.join(work, "oam.bin")
+    oam_data = b""
     try:
         time.sleep(seconds)
-        oam_bin = os.path.join(tempfile.mkdtemp(prefix="gbarun-"), "oam.bin")
         state = gdb_read(proc.pid, [
             ("dispcnt", "%04x", '*(unsigned short*)((char*)ioMem+0x00)'),
             ("ie",      "%04x", '*(unsigned short*)((char*)ioMem+0x200)'),
@@ -112,14 +131,16 @@ def run_rom(rom, seconds, shot=None):
             if os.path.exists(auto):
                 os.replace(auto, shot)
                 report["shot"] = shot
+        if os.path.exists(oam_bin):
+            with open(oam_bin, "rb") as fh:
+                oam_data = fh.read()
     finally:
-        proc.kill()
+        _cleanup_run(proc, work)
     report.update(state)
     visible = []
-    if os.path.exists(oam_bin):
-        data = open(oam_bin, "rb").read()
-        for k in range(0, min(len(data), 1024), 8):
-            a0, a1, a2 = struct.unpack_from("<HHH", data, k)
+    if oam_data:
+        for k in range(0, min(len(oam_data), 1024), 8):
+            a0, a1, a2 = struct.unpack_from("<HHH", oam_data, k)
             # OBJ_HIDE is attr0 bit9 with bit8 clear; anything else is drawn
             # (regular, affine, or affine-double-size).
             if (a0 & 0x0300) != 0x0200:

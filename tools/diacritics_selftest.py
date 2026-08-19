@@ -36,6 +36,12 @@ from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 
 import nbdiacritics  # noqa: E402
 
+# The bare-window fallback is a separate toplevel. It must select the opaque
+# system visual before show/realize or compositor hardware can paint it black.
+with open(nbdiacritics.__file__, encoding="utf-8") as _source:
+    _popup_source = _source.read()
+assert "pop.set_visual(screen.get_system_visual())" in _popup_source
+
 PASS, FAIL = [], []
 
 

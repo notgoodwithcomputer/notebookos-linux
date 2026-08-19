@@ -86,4 +86,5 @@ finally:
     shutil.rmtree(root, ignore_errors=True)
 
 print("7 checks, %d failed" % len(failed))
+print("RESULT: %s" % ("FAILED" if failed else "PASS"))
 raise SystemExit(bool(failed))

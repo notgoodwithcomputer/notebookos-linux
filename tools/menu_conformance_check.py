@@ -48,7 +48,7 @@ STD = ("File", "Edit", "View")
 # for a defect that never moved in substance (four apps hit this in one run
 # as the app lanes edited above their Print items). The violation's identity
 # is "this file shows this menu item with the wrong accelerator", not "at
-# line N"; the count carries the two-of-a-kind cases (terminal's two Esc
+# line N"; the count carries the two-of-a-kind cases (an app's two Esc
 # Close items) that a plain set would have collapsed. Both-direction ratchet:
 # more findings than the count is a regression, fewer is a stale entry to
 # prune.
@@ -61,7 +61,13 @@ DEBT = {
     ("maps.py", "registry-accelerator", "Zoom In: shown '', registry 'Ctrl+Plus'"): 1,
     ("maps.py", "registry-accelerator", "Zoom Out: shown '', registry 'Ctrl+Minus'"): 1,
     ("packages.py", "registry-accelerator", "Find: shown '', registry 'Ctrl+F'"): 1,
-    ("packages.py", "registry-ellipsis", "Find: shown ellipsis True, registry False"): 1,
+    # ("packages.py", "registry-ellipsis", "Find: …") was here. FIXED, not
+    # pruned to be rid of it: menu_promise_check drove the item and found it
+    # raises nothing at all -- _focus_search shows the Installed view and puts
+    # the caret in the search box already on screen -- so the ellipsis was
+    # promising a card twice over, once against rule 1 and once against the
+    # registry's own wording. The label is now "Find", which every catalog
+    # already carries.
     # Animation's New… genuinely asks (the canvas-preset + fps card; size and
     # speed are fixed at creation), so the ellipsis is the honest label per
     # MENU-CONVENTIONS rule 1 — a deliberate deviation from the registry's
@@ -70,12 +76,7 @@ DEBT = {
     ("screenplay.py", "registry-accelerator", "Print: shown '', registry 'Ctrl+P'"): 1,
     ("sequencer.py", "registry-accelerator", "Zoom In: shown '+', registry 'Ctrl+Plus'"): 1,
     ("sequencer.py", "registry-accelerator", "Zoom Out: shown '−', registry 'Ctrl+Minus'"): 1,
-    ("terminal.py", "registry-accelerator", "Close: shown '', registry 'Esc'"): 2,
-    ("terminal.py", "registry-accelerator", "Copy: shown 'Ctrl+Shift+C', registry 'Ctrl+C'"): 1,
-    ("terminal.py", "registry-accelerator", "Paste: shown 'Ctrl+Shift+V', registry 'Ctrl+V'"): 1,
-    ("terminal.py", "registry-accelerator", "Select All: shown 'Ctrl+Shift+A', registry 'Ctrl+A'"): 1,
     ("music.py", "context-subset", "'Add to playlist'"): 1,
-    ("sequencer.py", "title-case", "'No microphone or input found'"): 1,
 }
 
 checks = 0
@@ -143,10 +144,41 @@ def command_call(node):
 def labels_in_menu_method(fn):
     """Resolved (line,label,cid,separator) entries from returns/list literals."""
     out, seen = [], set()
+    local_lists = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.List):
+            for target in n.targets:
+                if isinstance(target, ast.Name):
+                    local_lists.add(target.id)
+    # Backward slice the local containers whose contents can reach Return.
+    # Scratch/preview lists are implementation detail, not visible menu rows.
+    returned_lists = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Return) and n.value is not None:
+            returned_lists.update(x.id for x in ast.walk(n.value)
+                                  if isinstance(x, ast.Name)
+                                  and x.id in local_lists)
+    changed = True
+    while changed:
+        changed = False
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Name):
+                targets = [t.id for t in n.targets if isinstance(t, ast.Name)]
+                if any(t in returned_lists for t in targets) \
+                        and n.value.id in local_lists \
+                        and n.value.id not in returned_lists:
+                    returned_lists.add(n.value.id); changed = True
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                    and n.func.attr == "extend" \
+                    and isinstance(n.func.value, ast.Name) \
+                    and n.func.value.id in returned_lists and n.args \
+                    and isinstance(n.args[0], ast.Name) \
+                    and n.args[0].id in local_lists \
+                    and n.args[0].id not in returned_lists:
+                returned_lists.add(n.args[0].id); changed = True
     for n in ast.walk(fn):
         candidates = []
         if isinstance(n, ast.Return): candidates = [n.value]
-        elif isinstance(n, (ast.List, ast.Tuple)): candidates = [n]
         for root in candidates:
             if not isinstance(root, (ast.List, ast.Tuple)): continue
             for item in root.elts:
@@ -168,6 +200,36 @@ def labels_in_menu_method(fn):
                     else: continue
                 else: continue
                 if row not in seen: seen.add(row); out.append(row)
+        # A very common readable construction is ``rows=[]`` followed by
+        # conditional ``rows.append((label, action))``. Treat those literal or
+        # registry-backed rows exactly like rows written in the return list;
+        # source-substring/list-literal-only scanning otherwise silently drops
+        # visible actions from every wording check.
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name)
+                and n.func.value.id in returned_lists and n.args):
+            args = []
+            if n.func.attr in ("append", "prepend"):
+                args = [n.args[0]]
+            elif n.func.attr == "extend" and isinstance(n.args[0], (ast.List, ast.Tuple)):
+                args = n.args[0].elts
+            for item in args:
+                cid = command_call(item)
+                if cid:
+                    row = (item.lineno, REG[cid][0], cid, False)
+                elif isinstance(item, (ast.List, ast.Tuple)) and item.elts:
+                    label = literal(item.elts[0])
+                    if label == "-":
+                        row = (item.lineno, "-", None, True)
+                    elif isinstance(label, str):
+                        row = (item.lineno, label, None, False)
+                    else:
+                        continue
+                else:
+                    continue
+                if row not in seen:
+                    seen.add(row)
+                    out.append(row)
     return sorted(out)
 
 
@@ -229,10 +291,16 @@ def app_findings(path):
             if accel in shortcuts:
                 found.append(violation(path, line, "duplicate-accelerator", "%s also at line %d" % (accel, shortcuts[accel])))
             else: shortcuts[accel] = line
+        candidates = []
+        known_case_bad = False
         if not cid:
             shown_name = parts[0]
             candidates = [(key, row) for key, row in REG.items()
-                          if row[0].split(GAP)[0].rstrip("…") == shown_name.rstrip("…")]
+                          if row[0].split(GAP)[0].rstrip("…").casefold()
+                          == shown_name.rstrip("…").casefold()]
+            known_case_bad = bool(candidates) and all(
+                row[0].split(GAP)[0].rstrip("…") != shown_name.rstrip("…")
+                for _key, row in candidates)
             expected_shortcuts = {row[1] for _key, row in candidates}
             expected_ellipsis = {row[0].split(GAP)[0].endswith("…") for _key, row in candidates}
             if candidates and len(expected_shortcuts) == 1:
@@ -259,8 +327,8 @@ def app_findings(path):
                  "of", "on", "or", "the", "to"}
         # Ignore scalar choice values that happen to live in helper lists in
         # menu_items; a menu action is conventionally multi-word/capitalised.
-        if words and words[0][0].isupper() and any(
-                w[0].islower() for w in words[1:] if w not in minor):
+        if known_case_bad or (words and words[0][0].isupper() and any(
+                w[0].islower() for w in words[1:] if w not in minor)):
             found.append(violation(path, line, "title-case", repr(label)))
     # Separator shape for each literal list, conservatively across source order.
     for a, b in zip(entries, entries[1:]):
@@ -281,6 +349,7 @@ def main():
     # Apps withheld by finder.HIDDEN_APPS have no reachable menus; skip them
     # VISIBLY and resume the moment they unhide (same doctrine as
     # i18n_check/i18n_coverage_check). Parsed from source, never imported.
+    hidden_files = set()
     try:
         _tree = ast.parse(open(os.path.join(DE, "finder.py"),
                                encoding="utf-8").read())
@@ -297,6 +366,7 @@ def main():
             _p = os.path.join(DE, _hf)
             if _p in files:
                 files.remove(_p)
+                hidden_files.add(_hf)
                 print("SKIP %s (hidden app — menus unreachable; resumes on "
                       "unhide)" % _hf)
     except (OSError, SyntaxError, AttributeError, TypeError):
@@ -321,14 +391,23 @@ def main():
         if c > allowed:
             fn, rule, detail = key
             new.append((fn, a_line[key], rule, detail, c - allowed))
+    # A hidden app's debt is SUSPENDED, not stale. Its file was skipped above,
+    # so of course it produced no findings — calling that stale would demand
+    # the ledger be pruned on every hide and written back on every unhide, and
+    # a pruned row is a known violation forgotten at exactly the moment nobody
+    # is watching the app. Held instead, and reported so it stays legible.
+    suspended = sorted(key for key in DEBT if key[0] in hidden_files)
     stale = sorted(key for key, allowed in DEBT.items()
-                   if counts.get(key, 0) < allowed)
+                   if key[0] not in hidden_files and counts.get(key, 0) < allowed)
     for (fn, line, rule, detail, over) in new:
         print("FAIL NEW   %s:%d [%s] %s%s" % (fn, line, rule, detail,
               "" if over == 1 else "  (x%d over debt)" % over))
     for (fn, rule, detail) in stale:
         print("FAIL STALE %s [%s] %s — fewer than the %d in debt; prune it"
               % (fn, rule, detail, DEBT[(fn, rule, detail)]))
+    for (fn, rule, detail) in suspended:
+        print("HELD  %s [%s] %s — debt kept while the app is hidden"
+              % (fn, rule, detail))
     print("%d checks" % checks)
     print("RESULT: %s" % ("PASS" if not new and not stale else
                           "FAILED: %d new, %d stale" % (len(new), len(stale))))

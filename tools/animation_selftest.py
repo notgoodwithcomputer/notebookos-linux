@@ -5826,15 +5826,19 @@ def streaming_family():
 
     # the regression this guards against is an exporter that keeps what it
     # has already written — the whole film resident at the end
+    # (the exporter now stages frames in a sibling temp dir and moves them in
+    # at the end, so a cancelled export leaves no half folder; the mutant
+    # targets that shape)
     graded, scratch = module_mutant("F51-export-keeps-every-frame", [
         ("def export_png_frames(doc, frames, directory, cancel=None, progress=None):\n"
-         "    os.makedirs(directory, exist_ok=True)",
+         "    parent = os.path.dirname(os.path.abspath(directory)) or '.'",
          "def export_png_frames(doc, frames, directory, cancel=None, progress=None):\n"
-         "    os.makedirs(directory, exist_ok=True)\n    _held = []"),
-        ("        composite(doc, scene, frame).write_to_png(tmp)",
-         "        _made = composite(doc, scene, frame)\n"
-         "        _held.append(_made)\n"
-         "        _made.write_to_png(tmp)"),
+         "    _held = []\n"
+         "    parent = os.path.dirname(os.path.abspath(directory)) or '.'"),
+        ("            composite(doc, scene, frame).write_to_png(target)",
+         "            _made = composite(doc, scene, frame)\n"
+         "            _held.append(_made)\n"
+         "            _made.write_to_png(target)"),
     ])
     spilled, hoarded, _made = stream(graded)
     mutant("F51 an exporter that holds the whole film is caught",
@@ -7524,7 +7528,30 @@ def _isolated(family):
             os.replace(aside, animation.STORE_FILE)
 
 
+def recovery_session_family():
+    """One damaged location field must not prevent a healthy film opening."""
+    app = animation.Animation.__new__(animation.Animation)
+    app.doc = animation.AnimationDocument()
+    app.scene_i = app.layer_i = app.playhead = app.view_origin = 7
+    app.tool = app.previous_tool = "pencil"
+    app.color = "#1A1916"
+    app.size = 3
+    app.column_width = 6
+    app.onion = 0
+    app.zoom = 1
+    app._fitted = False
+    try:
+        app._restore_session({"scene": "not a scene", "frame": [],
+                              "layer": {}, "origin": float("inf")})
+        restored = (app.scene_i, app.playhead, app.layer_i, app.view_origin)
+    except Exception as exc:
+        restored = exc
+    check("recovery ignores malformed location fields instead of aborting launch",
+          restored == (0, 0, 0, 0), restored)
+
+
 for _family in (
+        recovery_session_family,
         dialog_limits_family,
         streaming_family,
         damage_scan_family,
@@ -7631,4 +7658,16 @@ if MUTANTS:
     print("MUTANTS-CAUGHT " + "; ".join(MUTANTS))
 if UNCAUGHT_MUTANTS:
     print("MUTANTS-UNCAUGHT " + "; ".join(UNCAUGHT_MUTANTS))
+# A TERMINAL VERDICT, not just a tally. run_all_gates deliberately refuses to
+# read success into a suite that exits 0 while saying nothing it recognises
+# ("zero exit with no assertion or success evidence"), and "failed=0" inside a
+# TALLY line is a work count, not a report: this suite ran green for months
+# while the release gate recorded it as DID NOT RUN, i.e. as protecting
+# nothing. Say the outcome in words.
+if FAILS or UNCAUGHT_MUTANTS:
+    print("RESULT: FAILED (%d failed, %d mutants uncaught)"
+          % (len(FAILS), len(UNCAUGHT_MUTANTS)))
+else:
+    print("RESULT: ALL PASS (%d checks, %d mutants caught)"
+          % (len(PASSES), len(MUTANTS)))
 sys.exit(min(255, len(FAILS) + len(UNCAUGHT_MUTANTS)))

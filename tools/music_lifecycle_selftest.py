@@ -152,10 +152,13 @@ class FakeMusic(object):
     """Only the attributes the lifecycle methods touch."""
 
     def __init__(self, closed=False, loaded="/home/user/Music/a.mp3",
-                 poll_id=0):
+                 poll_id=0, flash_timer=0):
         self._closed = closed
         self._loaded_path = loaded
         self._poll_id = poll_id
+        self._flash_timer = flash_timer
+        self._flash_serial = 0
+        self._flashing = False
         self._playing = True
         self._player = FakePlayer(self)
         self.advanced = []
@@ -288,7 +291,7 @@ check("MUTANT: unguarded _start_poll DOES arm a source after close",
 #    teardown already sees a closed window. Checked twice: once by running it
 #    (the pipeline records the flag as it saw it), once on the source order.
 GLibStub.reset()
-w = FakeMusic(closed=False, poll_id=99)
+w = FakeMusic(closed=False, poll_id=99, flash_timer=88)
 on_destroy(w)
 check("destroy leaves the window closed", w._closed is True,
       "_closed was never set")
@@ -296,10 +299,11 @@ check("pipeline teardown saw _closed already True",
       w._player.closed_when_torn_down is True,
       "the pipeline was stopped while _closed was still False: a bus message "
       "dispatched during teardown would be treated as live")
-check("destroy drops the loaded track and the poll source",
-      w._loaded_path is None and w._poll_id == 0 and GLibStub.removed == [99],
-      "loaded=%r poll=%r removed=%r"
-      % (w._loaded_path, w._poll_id, GLibStub.removed))
+check("destroy drops the loaded track and owned timer sources",
+      w._loaded_path is None and w._poll_id == 0 and
+      w._flash_timer == 0 and GLibStub.removed == [88, 99],
+      "loaded=%r flash=%r poll=%r removed=%r"
+      % (w._loaded_path, w._flash_timer, w._poll_id, GLibStub.removed))
 
 
 def stmt_index(fn_node, needle):
@@ -326,4 +330,5 @@ check("_closed is assigned before every teardown statement in the source",
 print("\n%d/%d checks passed" % (sum(RESULTS), len(RESULTS)))
 if FAILED:
     print("FAILED: " + ", ".join(FAILED))
+print("RESULT: %s" % ("FAILED" if FAILED else "PASS"))
 sys.exit(1 if FAILED else 0)

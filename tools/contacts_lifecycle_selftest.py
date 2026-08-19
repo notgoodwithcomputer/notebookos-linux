@@ -86,4 +86,5 @@ check(events == [("commit", True), ("finish", True), ("save", True)],
       "close commits the edit, drops blank new card, and saves exactly once")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

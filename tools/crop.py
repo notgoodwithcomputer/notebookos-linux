@@ -6,7 +6,9 @@ changed the pixels it was meant to.
     crop.py IN.png OUT.png X Y W H [ZOOM]
     crop.py IN.png --px X Y            # print the RGB at one pixel
 """
+import os
 import sys
+import tempfile
 import gi
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GdkPixbuf  # noqa: E402
@@ -20,6 +22,28 @@ def px(path, x, y):
     print("(%d,%d) = rgb(%d,%d,%d)  #%02X%02X%02X"
           % (x, y, data[off], data[off + 1], data[off + 2],
              data[off], data[off + 1], data[off + 2]))
+
+
+def _save_png(pb, out):
+    directory = os.path.dirname(os.path.abspath(out))
+    mode = os.stat(out).st_mode & 0o7777 if os.path.exists(out) else 0o644
+    fd, tmp = tempfile.mkstemp(prefix=".crop-", suffix=".png", dir=directory)
+    os.close(fd)
+    try:
+        pb.savev(tmp, "png", [], [])
+        if not os.path.getsize(tmp):
+            raise OSError("PNG encoder produced an empty file")
+        os.chmod(tmp, mode)
+        with open(tmp, "rb") as fh:
+            os.fsync(fh.fileno())
+        os.replace(tmp, out)
+        tmp = None
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
 
 
 def main():
@@ -37,7 +61,7 @@ def main():
     if zoom != 1.0:
         sub = sub.scale_simple(int(w * zoom), int(h * zoom),
                                GdkPixbuf.InterpType.NEAREST)
-    sub.savev(out, "png", [], [])
+    _save_png(sub, out)
     print("%s  %dx%d -> %s" % (src, sub.get_width(), sub.get_height(), out))
     return 0
 

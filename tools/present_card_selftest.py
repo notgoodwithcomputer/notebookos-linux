@@ -99,6 +99,42 @@ def test_instant_equivalence():
     _still(body)
 
 
+def test_card_actually_shows():
+    """The card must be ON SCREEN, centred on its own size, with its content.
+
+    Three ways it silently was not (2026-08-16, found by the real-use drives
+    reporting "About does nothing visible" in every app): the Fixed layer was
+    never show()n (a visible child under a hidden parent), the card was
+    positioned with a second gtk_fixed_put (a Gtk-CRITICAL no-op, so it
+    stayed at 0,0), and it was measured hidden (GTK says 0x0 for a hidden
+    widget) so the paper frame always grew to the 340x220 fallback around
+    a much smaller card revealed top-left inside it."""
+    def body():
+        win, ov = _overlay()
+        content = Gtk.Label(label="About me")          # deliberately unshown
+        card, _close = nbt.present_card(
+            ov, content, (10.0, 10.0, 20.0, 20.0), css_class="finderinfo")
+        pump()
+        layer = card.get_parent()
+        check("shows: the layer itself is visible and mapped",
+              layer is not None and layer.get_visible() and layer.get_mapped())
+        check("shows: the content handed in is revealed, not just its holder",
+              content.get_visible() and card.get_visible())
+        x = layer.child_get_property(card, "x")
+        y = layer.child_get_property(card, "y")
+        check("shows: the card is placed at its centred target, not left at 0,0",
+              x > 0 and y > 0, "x=%r y=%r" % (x, y))
+        nat = card.get_preferred_size()[1]
+        # centred on the REAL size: a small label card in a 400x300 host lands
+        # well right of where a 340-wide fallback would (x = 30)
+        check("shows: measured on the card's real size, not the 340x220 fallback",
+              nat.width < 300 and x > 60,
+              "nat=%dx%d x=%r" % (nat.width, nat.height, x))
+        win.destroy()
+        pump()
+    _still(body)
+
+
 def test_close_retract():
     def body():
         win, ov = _overlay()
@@ -159,6 +195,7 @@ def test_headless():
 
 def main():
     test_instant_equivalence()
+    test_card_actually_shows()
     test_close_retract()
     test_article_b()
     test_headless()
@@ -168,6 +205,9 @@ def main():
         for f in FAILURES:
             print("  FAIL", f)
         return 1
+    # "RESULT:" first, so the release runner has a verdict it recognises
+    # (run_all_gates SUCCESSWORD); the descriptive line follows.
+    print("RESULT: ALL PASS")
     print("PASS present_card: %d checks (Article B, instant-equivalence, "
           "retract, headless)" % n)
     return 0

@@ -65,12 +65,24 @@ class _Stand(object):
 tmp = tempfile.mkdtemp(prefix="finder-launch-beacon-")
 beacon = os.path.join(tmp, "%d.mapped" % os.getpid())
 
-# 1. beacon present -> step aside, stop polling
-open(beacon, "w").close()
+# 1. matching birth-token beacon -> step aside, stop polling
+real_dir_for_watch = nbapp._APP_DIR
+nbapp._APP_DIR = tmp
+with open(beacon, "w") as fh:
+    fh.write(nbapp._proc_start_token(os.getpid()) + "\n")
 st = _Stand(beacon, os.getpid(), time.monotonic() + 8)
 check("beacon present: steps aside and stops",
       st._launch_watch() is False and st.stepped == 1 and not st.flashed)
 os.remove(beacon)
+
+# A stale file for a reused PID is not a first map by the current process.
+with open(beacon, "w") as fh:
+    fh.write("wrong-birth-token\n")
+st = _Stand(beacon, os.getpid(), time.monotonic() + 8)
+check("stale reused-PID beacon does not hide Finder",
+      st._launch_watch() is True and st.stepped == 0)
+os.remove(beacon)
+nbapp._APP_DIR = real_dir_for_watch
 
 # 2. process died before mapping -> stay put, retract the card, say so
 st = _Stand(beacon, 99999999, time.monotonic() + 8)
@@ -154,12 +166,19 @@ import subprocess
 class _FlagStand(object):
     _sync_app_flag = finder.Finder._sync_app_flag
     _other_apps_running = finder.Finder._other_apps_running
+    _init_app_flag_seen = finder.Finder._init_app_flag_seen
 
     def __init__(self, visible):
         self.visible = visible
         self.hides = 0
         self.shows = 0
         self.presents = 0
+        # A real window reads the flag AS IT OPENS. Call the SHIPPED method
+        # that does it rather than repeating the read here: writing
+        # `self._app_flag_seen = os.path.exists(...)` in this fixture made the
+        # stand-in supply the very behaviour under test, and deleting the fix
+        # from finder.py left the suite green — a check that could not fail.
+        self._init_app_flag_seen()
 
     def get_visible(self):
         return self.visible
@@ -194,7 +213,11 @@ def _wait_cmdline(pid, needle, tries=100):
 
 
 fake_de = tempfile.mkdtemp(prefix="finder-launch-fakede-")
-sleeper = os.path.join(fake_de, "fakeapp.py")
+# The stand-in app is named after a REAL entry in the launch registry: what
+# counts as an app is membership of finder.APP_MODULES, so an invented name
+# ("fakeapp") is correctly not one, and standing in with it would test the
+# opposite of the contract.
+sleeper = os.path.join(fake_de, "writer.py")
 with open(sleeper, "w") as fh:
     fh.write("import time\ntime.sleep(300)\n")
 infra = os.path.join(fake_de, "finder.py")   # an excluded infrastructure name
@@ -247,11 +270,89 @@ try:
           st.shows == 1 and st.presents == 1)
     check("returning does not invent a flag", not os.path.exists(flag))
 
+    # 10. hiding follows the flag's TRANSITION, not its mere presence. Every
+    #     Finder window is its own process (the menu bar's New Finder Window
+    #     runs finder.py again), so a window opened while an app was already up
+    #     read the flag on its startup reconcile and hid itself about half a
+    #     second after it appeared — reported from the desk as "new Finder
+    #     windows close upon opening".
     open(flag, "w").close()
     st = _FlagStand(visible=True)
-    st._sync_app_flag()
-    check("a fresh flag still hides a visible Finder", st.hides == 1)
+    st._sync_app_flag()                    # this window's FIRST look
+    check("a flag already set when a window opens does not close it",
+          st.hides == 0)
+    st._sync_app_flag()                    # ...and not on the next tick either
+    check("...nor on any later tick while nothing has changed", st.hides == 0)
+
     os.remove(flag)
+    st = _FlagStand(visible=True)
+    st._sync_app_flag()                    # first look: no flag, none seen
+    open(flag, "w").close()
+    st._sync_app_flag()                    # an app TAKES the screen
+    check("an app launched while the Finder is up still hides it", st.hides == 1)
+    os.remove(flag)
+
+    #     ...and the same when the app wins the race. A window's first look at
+    #     the flag is its startup reconcile half a second in, or the monitor
+    #     event — whichever lands first. Launch an app inside that half second
+    #     and the FIRST look was the flag going UP, which the old code read as
+    #     "already set when I opened" and refused to act on. Every later look
+    #     then saw no transition, so the window never hid at all: it sat over
+    #     the app for the rest of its life. Reported from the desk as "Finder
+    #     windows are staying open over apps".
+    st = _FlagStand(visible=True)          # opened with NO app running
+    open(flag, "w").close()
+    st._sync_app_flag()                    # an app takes the screen FIRST look
+    check("an app that launches before the window's first look still hides it",
+          st.hides == 1)
+    st._sync_app_flag()
+    check("...and it does not thrash back into view on the next tick",
+          st.hides == 1 and st.shows == 0)
+    os.remove(flag)
+
+    # 11. what counts as "an app owning the screen" is the LAUNCH REGISTRY, not
+    #     a hand-written list of the session's own processes. That list read
+    #     "finder, widgets, shell, xflushd" while session.sh runs four more
+    #     daemons for the whole session (desktopbg, nbmediakeys, xclipd,
+    #     xtabletd), so the scan answered "an app is running" forever: the flag
+    #     was re-created on every reconcile and never dropped, the Finder could
+    #     not come back after hiding, and every window opened after that was
+    #     hidden as it mapped. The names are read from session.sh rather than
+    #     copied, so the check cannot fall behind the session the way the code
+    #     it guards did. Check 9's fake app is the positive control that proves
+    #     this scan can still say yes.
+    import re
+
+    session_sh = os.path.join(
+        REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/session.sh")
+    with open(session_sh, encoding="utf-8") as fh:
+        daemons = sorted(set(re.findall(r"/opt/notebook/de/([a-z0-9_]+)\.py",
+                                        fh.read())))
+    check("session.sh's own de/*.py processes were found to test against",
+          len(daemons) >= 8)
+
+    alive = []
+    for mod in daemons:
+        script = os.path.join(fake_de, mod + ".py")
+        with open(script, "w") as fh:
+            fh.write("import time\ntime.sleep(300)\n")
+        proc = subprocess.Popen([sys.executable, script])
+        procs.append(proc)
+        if _wait_cmdline(proc.pid, script):
+            alive.append(mod)
+    check("...and every one of them is really running for this check",
+          sorted(alive) == daemons)
+    st = _FlagStand(visible=False)
+    check("no process session.sh starts counts as an app owning the screen: "
+          + ", ".join(daemons), not st._other_apps_running())
+
+    app_script = os.path.join(fake_de, "calculator.py")   # a real APP_MODULES name
+    with open(app_script, "w") as fh:
+        fh.write("import time\ntime.sleep(300)\n")
+    app_proc = subprocess.Popen([sys.executable, app_script])
+    procs.append(app_proc)
+    check("...while a real app among them still does",
+          _wait_cmdline(app_proc.pid, app_script) and st._other_apps_running())
 finally:
     finder.DE_DIR = real_de_dir
     for p in procs:

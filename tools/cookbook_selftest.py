@@ -33,6 +33,12 @@ DE = os.path.abspath(os.path.join(HERE, "..", "buildroot", "board", "notebookos"
 if DE not in sys.path:
     sys.path.insert(0, DE)
 
+# cookbook.py resolves both its store and export directory at import time.
+# Isolate those globals before importing it so this test can never read or
+# write the caller's real Cookbook library or Documents folder.
+TEST_HOME = tempfile.mkdtemp(prefix="cookbook-home-")
+os.environ["NB_HOME"] = TEST_HOME
+
 import cookbook  # noqa: E402
 
 RECIPE = {"title": "Grandma's stew", "cat": "Dinner", "desc": "Sunday",
@@ -116,6 +122,23 @@ def main():
         run_case(root, "empty library", EMPTY_LIB, 0, False)
         run_case(root, "good library", GOOD_LIB, 2, False)
 
+        # A newer build may add top-level metadata this version does not use.
+        # Opening and autosaving must not silently downgrade that store.
+        forward = dict(GOOD_LIB, sync={"revision": 7, "device": "kitchen"})
+        cfg = os.path.join(root, "forward_metadata")
+        os.makedirs(cfg)
+        path = os.path.join(cfg, "cookbook.json")
+        with open(path, "w") as fh:
+            json.dump(forward, fh)
+        cookbook.COOKBOOK_FILE = path
+        app = cookbook.Cookbook.__new__(cookbook.Cookbook)
+        app._load_state()
+        app._save_state()
+        with open(path) as fh:
+            saved = json.load(fh)
+        check("unknown top-level metadata survives autosave",
+              saved.get("sync") == forward["sync"])
+
         # The guard itself, stated directly: it has to be able to go red, and
         # it has to stay green on a legitimately empty cookbook.
         print("guard")
@@ -171,6 +194,7 @@ def main():
               open(dest, "rb").read() == b"%PDF new")
     finally:
         shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(TEST_HOME, ignore_errors=True)
 
     print("\n%s  (%d check%s failed)"
           % ("FAIL" if failures else "PASS", len(failures),

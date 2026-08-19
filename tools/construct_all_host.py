@@ -22,13 +22,17 @@ from gi.repository import Gtk
 import nbapp
 nbapp._APP_DIR = os.path.join(os.environ["NB_HOME"], "nb-apps")
 os.makedirs(nbapp._APP_DIR, exist_ok=True)
-# The app list is DERIVED from finder.APP_MODULES — the same table the desktop
-# uses to launch things — so coverage can never silently drift from what a user
-# can actually double-click. A hardcoded list did drift: language/maps/
+# The app list is DERIVED from finder.APP_MODULES minus HIDDEN_APPS — the same
+# visible set the desktop lets a user launch — so coverage cannot silently
+# drift from what a user can actually double-click. APP_MODULES deliberately
+# retains withheld/unfinished apps for identity and package bookkeeping; those
+# are not part of this stable-surface construct gate. A hardcoded list did
+# drift: language/maps/
 # gbasdk/gbaemu were all launchable but never launch-crash tested, while the
 # summary line still read like full coverage.
 import finder as _finder
-APPS = sorted(set(_finder.APP_MODULES.values())) + [
+APPS = sorted({module for name, module in _finder.APP_MODULES.items()
+               if name not in _finder.HIDDEN_APPS}) + [
         # Finder itself is not in APP_MODULES (the desktop starts it directly).
         "finder",
         # Desktop / session-start components — NOT apps, but they construct a
@@ -61,4 +65,8 @@ for name in APPS:
         import traceback
         print("CRASH   %-12s %s: %s" % (name, type(e).__name__, str(e)[:90]))
 print("CONSTRUCT: %d ok, %d crashed" % (ok, fail))
+# A terminal verdict the release runner recognises (run_all_gates SUCCESSWORD).
+# Without it the aggregate recorded this gate as DID NOT RUN -- the check that
+# catches an app crashing on construct was protecting nothing there.
+print("RESULT: %s" % ("ALL PASS" if not fail else "FAILED (%d crashed)" % fail))
 sys.exit(1 if fail else 0)

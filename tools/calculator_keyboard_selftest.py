@@ -72,13 +72,14 @@ def pump():
         Gtk.main_iteration()
 
 
-def press_key(app, name, ctrl=False):
+def press_key(app, name, ctrl=False, state=None):
     """One real key press through the real handler."""
     kv = Gdk.keyval_from_name(name)
     ev = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
     ev.keyval = kv
-    ev.state = (Gdk.ModifierType.CONTROL_MASK if ctrl
-                else Gdk.ModifierType(0))
+    ev.state = (state if state is not None else
+                (Gdk.ModifierType.CONTROL_MASK if ctrl
+                 else Gdk.ModifierType(0)))
     ev.string = ""
     ev.window = app.get_window()
     handled = app._on_key_calc(app, ev)
@@ -136,6 +137,12 @@ def main():
     got = eval(C._expand_percent("2*(3+10%)"), {"__builtins__": {}}, {})
     check("a percentage inside a group uses that group's value (6.6)",
           abs(got - 6.6) < 1e-9, repr(got))
+    got = eval(C._expand_percent(".5%"), {"__builtins__": {}}, {})
+    check("a leading-decimal percentage remains valid",
+          abs(got - .005) < 1e-12, repr(got))
+    got = eval(C._expand_percent("200+.5%"), {"__builtins__": {}}, {})
+    check("a leading-decimal relative percentage uses the left operand",
+          abs(got - 201.0) < 1e-9, repr(got))
 
     if not Gtk.init_check()[0]:
         print("SKIP GTK interaction checks: no display connection")
@@ -228,6 +235,21 @@ def main():
           "%r, %r" % (took, shown(app)))
     check("an unowned F5 key falls through", press_key(app, "F5") is False)
 
+    # Unowned modifier chords must also fall through.  They used to continue
+    # into the single-letter variable rule, so Ctrl+A typed A and Alt+Z typed Z
+    # while the person was invoking an application/desktop shortcut.
+    press_key(app, "Delete")
+    type_it(app, "12")
+    before = shown(app)
+    took = press_key(app, "a", ctrl=True)
+    check("unowned Ctrl+letter falls through without editing",
+          took is False and shown(app) == before,
+          "%r, %r" % (took, shown(app)))
+    took = press_key(app, "z", state=Gdk.ModifierType.MOD1_MASK)
+    check("Alt+letter falls through without editing",
+          took is False and shown(app) == before,
+          "%r, %r" % (took, shown(app)))
+
     # ---- the on-screen keypad reaches the same place the keyboard does ----
     # _on_press is a one-line wrapper, which is exactly the sort of thing that
     # is assumed to work and then quietly stops being wired to anything.
@@ -287,12 +309,19 @@ def main():
         "BackSpace in a formula box never edits the expression",
         "Delete in a formula box never fires AC",
         "Return in a formula box never evaluates",
-        "the keypad works again once the box loses focus")
+        "Ctrl+C in a formula box belongs to the entry",
+        "Ctrl+V in a formula box belongs to the entry",
+        "the keypad works again once the box loses focus and it is on screen")
+    # Typed on the HOME page, where the keypad is: on the Graph page the
+    # keypad is not on screen at all and the window handler rightly declines
+    # every typing key, so a digit pressed there no longer reaches a display
+    # nobody can see (it used to, and Up/Down recalled the tape over the
+    # graph's own arrows).
+    press_key(app, "Delete")
+    type_it(app, "12")
     app._switch_view("graph")
     pump()
     ys = getattr(app, "y_entries", None)
-    press_key(app, "Delete")
-    type_it(app, "12")
     if not ys:
         not_reached("no graph Y entries on this build", *graph_checks)
     else:
@@ -312,9 +341,12 @@ def main():
             check(graph_checks[4],
                   press_key(app, "Return") is False
                   and shown(app).strip() == "12", repr(shown(app)))
+            check(graph_checks[5], press_key(app, "c", ctrl=True) is False)
+            check(graph_checks[6], press_key(app, "v", ctrl=True) is False)
             app.set_focus(None)
+            app._switch_view("home")     # ...and back where the keypad is
             pump()
-            check(graph_checks[5],
+            check(graph_checks[7],
                   press_key(app, "3") is True
                   and shown(app).strip() == "123", repr(shown(app)))
     press_key(app, "Delete")

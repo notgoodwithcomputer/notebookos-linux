@@ -79,6 +79,25 @@ NOT_UI = re.compile(
     r"|^\*?\.?[a-z0-9_-]+\.(json|txt|log|png|conf|ini|css)$"   # a file glob
 )
 
+TEXT_CALLS = {"set_text", "set_label", "set_markup", "set_tooltip_text",
+              "set_placeholder_text", "set_title", "_t", "_flash"}
+
+
+def static_text(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = static_text(node.left), static_text(node.right)
+        return left + right if left is not None and right is not None else None
+    if isinstance(node, ast.JoinedStr):
+        return "".join(value.value if isinstance(value, ast.Constant)
+                       and isinstance(value.value, str) else "X"
+                       for value in node.values)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+            and node.func.attr == "format":
+        return static_text(node.func.value)
+    return None
+
 
 def ui_strings(path):
     """(line, text) for string literals that plausibly reach the screen."""
@@ -98,6 +117,22 @@ def ui_strings(path):
                     and isinstance(body[0].value.value, str):
                 docs.add(id(body[0].value))
     out = []
+    seen = set()
+    # Evaluate complete visible expressions before scanning their component
+    # literals. Otherwise "frame" + "buffer" launders "framebuffer" because
+    # the first half resembles a lowercase identifier.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if name not in TEXT_CALLS:
+            continue
+        text = static_text(node.args[0])
+        if text is not None and len(text) >= 2 and not NOT_UI.match(text):
+            row = (node.lineno, text)
+            if row not in seen:
+                seen.add(row)
+                out.append(row)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
@@ -109,7 +144,10 @@ def ui_strings(path):
         # CSS blocks are not prose
         if "{" in text and "}" in text and (";" in text or ":" in text):
             continue
-        out.append((node.lineno, text))
+        row = (node.lineno, text)
+        if row not in seen:
+            seen.add(row)
+            out.append(row)
     return out
 
 

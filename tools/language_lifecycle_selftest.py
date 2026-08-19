@@ -92,4 +92,5 @@ finally:
     language.GLib.source_remove = real_remove
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

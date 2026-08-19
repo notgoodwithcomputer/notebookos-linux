@@ -26,6 +26,7 @@ Exit status is the number of failures.
 """
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -157,6 +158,26 @@ check("the ones kept are the NEWEST",
 mutant("the cap is doing the capping",
        len(kept) == nbnotify.MAX_KEEP + 12)
 
+# A machine whose RTC was corrected backwards must not spend days deleting
+# every new notification behind a full set of future-dated records.
+wipe()
+real_time = nbnotify.time.time
+try:
+    nbnotify.time.time = lambda: 4_000_000.0
+    for n in range(nbnotify.MAX_KEEP):
+        nbnotify.post("future %d" % n)
+    nbnotify.time.time = lambda: 1_000_000.0
+    corrected = nbnotify.post("after clock correction")
+    kept = [n for n in os.listdir(nbnotify.SPOOL) if n.endswith(".json")]
+    check("clock rollback keeps the newly posted notification",
+          corrected + ".json" in kept)
+    check("clock rollback retention remains bounded",
+          len(kept) == nbnotify.MAX_KEEP, len(kept))
+    check("the retained corrected-clock notification is visible",
+          any(r["title"] == "after clock correction" for r in nbnotify.load()))
+finally:
+    nbnotify.time.time = real_time
+
 wipe()
 nid = nbnotify.post("x" * 4000, "y" * 9000, app="burner", app_name="Disc Burner")
 rec = nbnotify.load()[0]
@@ -165,6 +186,13 @@ check("a runaway title is capped at post time",
 check("...and so is a runaway body",
       len(rec["body"]) == nbnotify.MAX_BODY, len(rec["body"]))
 mutant("the caps are applied", len(rec["title"]) == 4000)
+
+class BrokenText:
+    def __str__(self):
+        raise RuntimeError("conversion failed")
+
+check("unprintable notification input is dropped without raising",
+      nbnotify.post(BrokenText(), body=BrokenText()) == "")
 
 print("--- 5. dismissal cannot reach outside the spool -------------------")
 wipe()
@@ -194,7 +222,19 @@ check("...and the two real messages are untouched", len(nbnotify.load()) == 2)
 mutant("the id check is what refuses it",
        nbnotify._record_path(absolute) is not None)
 
-check("dismissing one removes exactly one", nbnotify.dismiss(b))
+fsynced_modes = []
+real_fsync = nbnotify.os.fsync
+def recording_fsync(fd):
+    fsynced_modes.append(os.fstat(fd).st_mode)
+    return real_fsync(fd)
+nbnotify.os.fsync = recording_fsync
+try:
+    dismissed = nbnotify.dismiss(b)
+finally:
+    nbnotify.os.fsync = real_fsync
+check("dismissing one removes exactly one", dismissed)
+check("a reported dismissal is durable in the spool directory",
+      any(stat.S_ISDIR(mode) for mode in fsynced_modes), fsynced_modes)
 left = nbnotify.load()
 check("...and leaves the other alone",
       len(left) == 1 and left[0]["title"] == "first", left)
@@ -218,6 +258,93 @@ check("...and the older two stay read", len(nbnotify.load()) == 3)
 mutant("the read mark is what silences them",
        nbnotify.unread_count(nbnotify.load()) == 3)
 
+# NaN is valid to Python's permissive JSON decoder, but it is not an ordered
+# timestamp: `anything > NaN` is always false.  A damaged read marker must not
+# make the notification badge stay empty forever.
+with open(nbnotify.SEEN_FILE, "w", encoding="utf-8") as fh:
+    fh.write('{"at": NaN}')
+check("a non-finite read mark cannot hide every notification",
+      nbnotify.unread_count() == 3, nbnotify.unread_count())
+
+# The marker itself can be written while the RTC is ahead, then the clock can
+# correct backwards. New notifications must not stay hidden for the whole gap.
+wipe()
+real_time = nbnotify.time.time
+nbnotify.time.time = lambda: real_time() + 86400
+try:
+    nbnotify.mark_seen()
+finally:
+    nbnotify.time.time = real_time
+nbnotify.post("after clock correction", app="calendar", app_name="Calendar")
+check("a future read mark cannot hide arrivals after clock rollback",
+      nbnotify.unread_count() == 1, nbnotify.unread_count())
+
+# Reproduce a sender landing while the tray's directory read is in flight.
+# It is too late for the rows this opening decided to show, so it must remain
+# unread and light the bell after the card closes.
+wipe()
+nbnotify.post("already there", app="burner", app_name="Disc Burner")
+real_load = nbnotify.load
+def arrival_during_load():
+    rows = real_load()
+    time.sleep(0.002)
+    nbnotify.post("arrived during open", app="video", app_name="Video Editor")
+    return rows
+nbnotify.load = arrival_during_load
+try:
+    shown = nbnotify.open_tray()
+finally:
+    nbnotify.load = real_load
+check("opening shows the snapshot that was actually loaded",
+      [row["title"] for row in shown] == ["already there"], shown)
+check("an arrival during that load remains unread",
+      nbnotify.unread_count() == 1, nbnotify.unread_count())
+
+# A laptop can boot with an RTC ahead of reality and then correct backwards.
+# A row the tray visibly showed must not remain unread until wall time catches
+# up with its old timestamp.
+wipe()
+real_time = nbnotify.time.time
+nbnotify.time.time = lambda: real_time() + 86400
+try:
+    nbnotify.post("from the future", app="calendar", app_name="Calendar")
+finally:
+    nbnotify.time.time = real_time
+check("a future-stamped arrival starts unread", nbnotify.unread_count() == 1)
+# A read-only/full config directory cannot truthfully clear the visible count.
+real_mark_seen = nbnotify.mark_seen
+nbnotify.mark_seen = lambda *_args, **_kw: False
+try:
+    failed_items, marked = nbnotify.open_tray(with_status=True)
+finally:
+    nbnotify.mark_seen = real_mark_seen
+check("tray opening exposes a failed seen-marker write", marked is False)
+check("failed seen persistence leaves the displayed rows unread",
+      nbnotify.unread_count(failed_items) > 0)
+shown = nbnotify.open_tray()
+check("opening visibly returns the future-stamped row",
+      [row["title"] for row in shown] == ["from the future"], shown)
+check("a displayed row is marked read after a backward clock correction",
+      nbnotify.unread_count() == 0, nbnotify.unread_count())
+
+# Combine the rollback case with the arrival race: a scalar future watermark
+# would incorrectly clear the normal-time row that was not in the snapshot.
+real_load = nbnotify.load
+def arrival_behind_future():
+    rows = real_load()
+    nbnotify.post("unseen normal-time arrival", app="video",
+                  app_name="Video Editor")
+    return rows
+nbnotify.load = arrival_behind_future
+try:
+    shown = nbnotify.open_tray()
+finally:
+    nbnotify.load = real_load
+check("future-row opening still shows only its loaded snapshot",
+      [row["title"] for row in shown] == ["from the future"], shown)
+check("a concurrent undisplayed normal-time arrival remains unread",
+      nbnotify.unread_count() == 1, nbnotify.unread_count())
+
 print("--- 7. the poll key changes only when the tray does ---------------")
 wipe()
 nbnotify.post("one", app="burner", app_name="Disc Burner")
@@ -234,6 +361,23 @@ nbnotify.mark_seen()
 check("so does opening the tray", nbnotify.state_key() != k3)
 check("the key never opens a record",
       "at" not in str(nbnotify.state_key()))
+wipe()
+first = nbnotify.post("replace me", app="burner", app_name="Disc Burner")
+stamp = os.stat(nbnotify.SPOOL)
+same_tick = nbnotify.state_key()
+nbnotify.dismiss(first)
+nbnotify.post("replacement", app="video", app_name="Video Editor")
+os.utime(nbnotify.SPOOL, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+check("same-count replacement moves the key even at identical mtime",
+      nbnotify.state_key() != same_tick)
+nbnotify.mark_seen(1)
+seen_stamp = os.stat(nbnotify.SEEN_FILE)
+seen_before = nbnotify.state_key()
+nbnotify.mark_seen(2)
+os.utime(nbnotify.SEEN_FILE,
+         ns=(seen_stamp.st_atime_ns, seen_stamp.st_mtime_ns))
+check("atomic seen-marker replacement moves the key at identical mtime",
+      nbnotify.state_key() != seen_before)
 mutant("the key is not simply constant",
        nbnotify.state_key() == k1)
 
@@ -325,8 +469,19 @@ else:
     check("opening it clears the mark", panel._bell_unread is False)
 
     def rows_of(p):
-        return [c for c in p._menu.get_child().get_children()
-                if "nbn-row" in c.get_style_context().list_classes()]
+        # each message is now a Box holding the message button (nbn-row) and
+        # a separate dismiss cross (nbn-x), so walk the card rather than read
+        # its direct children
+        out = []
+
+        def walk(w):
+            if "nbn-row" in w.get_style_context().list_classes():
+                out.append(w)
+            if isinstance(w, Gtk.Container):
+                for c in w.get_children():
+                    walk(c)
+        walk(p._menu.get_child())
+        return out
 
     rows = rows_of(panel)
     check("every message has a row", len(rows) == 3, len(rows))
@@ -337,9 +492,11 @@ else:
           all("Open" in (r.get_tooltip_text() or "") for r in rows))
     full_w = panel._menu_rect[2]
 
-    # The cross inside a row dismisses that row and nothing else.
-    cross = [c for c in rows[1].get_child().get_children()
-             if isinstance(c, Gtk.Button)][0]
+    # The cross beside a row dismisses that row and nothing else. (It is a
+    # SIBLING of the message button now, not a button nested inside one — a
+    # button inside a button is two clickable things under one pointer.)
+    cross = [c for c in rows[1].get_parent().get_children()
+             if "nbn-x" in c.get_style_context().list_classes()][0]
     cross.emit("clicked")
     pump()
     check("the cross removes one message", len(nbnotify.load()) == 2)

@@ -162,11 +162,17 @@ check("sequencer: Undo names the action it takes back",
       [l for l, _a in seq.menu_items("Edit")][0]
       == "Undo Arm All Tracks    Ctrl+Z")
 # The item was renamed "Clear All Takes…" -> "Remove Every Clip…" (function
-# first, per the UI text mandate) and this check kept naming the old label, so
-# it failed on a menu that is correct. The contract being guarded is the
-# ELLIPSIS — a destructive item that stops to ask carries one.
-check("sequencer: Remove Every Clip carries the house ellipsis",
-      "Remove Every Clip…" in [l for l, _a in seq.menu_items("Track")])
+# first, per the UI text mandate), and then the ellipsis came OFF: commit
+# 8ddfd945 retired the "are you sure?" in favour of undo, and
+# confirm_undo_adversarial_selftest now FORBIDS that confirm by name. An
+# ellipsis promises a dialog, so an item that no longer asks must not carry
+# one — that is the contract here, and it is the opposite of what this check
+# asserted while the app was already right.
+_track = [l for l, _a in seq.menu_items("Track")]
+check("sequencer: Remove Every Clip is offered", "Remove Every Clip" in _track,
+      str(_track))
+check("sequencer: ...and promises no dialog, because undo is the contract",
+      "Remove Every Clip…" not in _track, str(_track))
 # The shipped wording is "Not saved to a file" (sequencer._update_proj), and
 # that is the key present in all 17 catalogs. "No project saved yet" was an
 # earlier draft and exists nowhere in the tree any more.
@@ -182,8 +188,12 @@ vid._menu_add_title()
 check("video: Undo names the action it takes back",
       [l for l, _a in vid.menu_items("Edit")][0]
       == "Undo Add Title Card    Ctrl+Z")
-check("video: Delete Clip carries the house ellipsis",
-      "Delete Clip…" in [l for l, _a in vid.menu_items("Clip")])
+# Same law, same retirement: video's delete is undoable ("Undo Delete Clip"),
+# so the label must not promise a card that no longer appears.
+_clip = [l for l, _a in vid.menu_items("Clip")]
+check("video: Delete Clip is offered", "Delete Clip" in _clip, str(_clip))
+check("video: ...and promises no dialog, because undo is the contract",
+      "Delete Clip…" not in _clip, str(_clip))
 
 # ------------------------------------------------------------------ catalogs
 # "Clear Conversation…" / "Clear conversation?" were BitChat chrome. BitChat

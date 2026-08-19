@@ -20,7 +20,6 @@ import calculator  # noqa: E402
 import contacts  # noqa: E402
 import finder  # noqa: E402
 import sequencer  # noqa: E402
-import terminal  # noqa: E402
 import writer  # noqa: E402
 
 passed = failed = skipped = mutants = 0
@@ -228,17 +227,9 @@ with_fake_gtk(writer, gtk_clip, lambda: [writer.Writer._clip(w, op)
 check("NOT-A-DEFECT-WRITER-DELEGATES-SELECTION-AND-TARGETS",
       [op[0] for op in ops] == ["copy", "checkpoint", "cut", "checkpoint", "paste"])
 
-term_ops = []
-vte = SimpleNamespace(copy_clipboard_format=lambda fmt: term_ops.append(("copy", fmt)),
-                      paste_clipboard=lambda: term_ops.append(("paste",)))
-t = SimpleNamespace(term=vte, _refocus=lambda: None)
-terminal.Terminal._term_copy(t); terminal.Terminal._term_paste(t)
-check("NOT-A-DEFECT-TERMINAL-DELEGATES-VTE-CLIPBOARD",
-      [op[0] for op in term_ops] == ["copy", "paste"])
-
 print("LEDGER NOT-A-DEFECT novel/screenplay/journal: Gtk.TextView native clipboard; multiline is document content")
 print("LEDGER NOT-A-DEFECT music/video: no copy/cut/paste handler")
 print("LEDGER NOT-A-DEFECT illustrator: image-only producer; text consumers negotiate foreign type")
-print("RESULT %d PASS, %d PASS-MUTANT, %d SKIP, %d FAIL" %
-      (passed, mutants, skipped, failed))
+print("RESULT: %s — %d PASS, %d PASS-MUTANT, %d SKIP, %d FAIL" %
+      ("PASS" if not failed else "FAILED", passed, mutants, skipped, failed))
 raise SystemExit(1 if failed else 0)

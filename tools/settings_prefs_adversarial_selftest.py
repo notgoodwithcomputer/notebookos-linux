@@ -26,6 +26,7 @@ try:
     p = Pane()
     p._settings = {"blank_timeout": 300, "kbd_delay": 250,
                    "kbd_rate": 30, "display_scale": "1.5",
+                   "display_resolution": "1366x768",
                    "future_setting": "keep"}
     check("RECENT-PREFS-SAVE-LEAVES-SETTINGS-PROCESS", p._save_settings())
     disk = json.load(open(settings.CFG_FILE))
@@ -45,6 +46,32 @@ try:
           "kbd_repeat" in done and any(c[:3] == ["xset", "r", "rate"] for c in calls))
     check("DISPLAY-SCALE-REACHES-SESSION-SCOPE",
           "display_scale" in done and any("--scale" in c for c in calls))
+    check("DISPLAY-RESOLUTION-REACHES-SESSION-SCOPE",
+          "display_resolution" in done and any("--mode" in c for c in calls))
+
+    # The failing xrandr must stay installed across BOTH the resolution and
+    # the scale probe. Restoring the real `run` between them (a) let apply_all
+    # run a genuine `xrandr --scale 1.5` against the developer's own monitor —
+    # a real, visible display change from a unit test — and (b) meant the
+    # scale never saw the failure it is meant to prove is reported honestly.
+    nbprefs.run = lambda _cmd, timeout=4: (1, "cannot find mode")
+    failed_done = dict(nbprefs.apply_all({"display_resolution": "1366x768"}))
+    check("FAILED-RESOLUTION-IS-NOT-REPORTED-AS-APPLIED",
+          "display_resolution" not in failed_done)
+    failed_done = dict(nbprefs.apply_all({"display_scale": "1.5"}))
+    nbprefs.run = real_run
+    check("FAILED-SCALE-IS-NOT-REPORTED-AS-APPLIED",
+          "display_scale" not in failed_done)
+
+    nbprefs.run = lambda _cmd, timeout=4: (1, "no X server")
+    failed_done = dict(nbprefs.apply_all({"blank_timeout": 300,
+                                          "kbd_delay": 250,
+                                          "kbd_rate": 30}))
+    nbprefs.run = real_run
+    check("FAILED-BLANKING-IS-NOT-REPORTED-AS-APPLIED",
+          "blank_timeout" not in failed_done)
+    check("FAILED-REPEAT-IS-NOT-REPORTED-AS-APPLIED",
+          "kbd_repeat" not in failed_done)
 
     # PASS-MUTANT: a Settings-only write makes no session command calls.
     mutant_calls = []                 # mutant saves JSON and stops there
@@ -52,5 +79,6 @@ try:
 finally:
     shutil.rmtree(home, ignore_errors=True)
 
-print("6 checks, %d failed" % len(failed))
+print("11 checks, %d failed" % len(failed))
+print("RESULT: %s" % ("FAILED" if failed else "PASS"))
 raise SystemExit(bool(failed))

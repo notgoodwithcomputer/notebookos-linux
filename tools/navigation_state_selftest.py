@@ -107,3 +107,4 @@ if __name__ == "__main__":
     safe_state_contract()
     wiring_contract()
     print("navigation state selftest: OK")
+    print("RESULT: PASS")

@@ -58,6 +58,19 @@ FAMILY_BY_LANG = {
     "ko": {"HANGUL": "KOREAN", "CJK": "KOREAN"},
 }
 
+EXPECTED = {
+    "de": "LATIN", "el": "GREEK", "eo": "LATIN", "es": "LATIN",
+    "fr": "LATIN", "hi": "DEVANAGARI", "it": "LATIN",
+    "ja": "JAPANESE", "ko": "KOREAN", "nl": "LATIN", "pl": "LATIN",
+    "pt": "LATIN", "ru": "CYRILLIC", "sr": "LATIN", "tr": "LATIN",
+    "yi": "HEBREW", "zh": "CHINESE",
+}
+
+# Mathematical letter-symbols intentionally shared by every catalog.  Keep
+# this explicit rather than treating every isolated foreign letter as a
+# symbol: Serbian's one-letter words are real prose and must still be checked.
+LETTER_SYMBOLS = {"π"}
+
 
 def script_of(ch, lang):
     if not ch.isalpha():
@@ -111,7 +124,16 @@ def main(argv):
                 letters.update(scripts_in(v, lang))
         if not letters:
             continue
-        primary = letters.most_common(1)[0][0]
+        primary = EXPECTED[lang]
+        total_letters = sum(letters.values())
+        expected_letters = letters[primary]
+        # Never let a wholly corrupted catalog redefine the language's script
+        # by majority. Acronyms are tolerated below, but real prose must have
+        # a substantial authored presence in its declared family.
+        if expected_letters < 20 or expected_letters * 4 < total_letters:
+            dominant = letters.most_common(1)[0][0]
+            findings.append((lang, primary, dominant, "<catalog>",
+                             "expected script is nearly or entirely absent"))
 
         # Latin inside a non-Latin catalog is product vocabulary (PDF, GBA, kB)
         # and never a finding. Anything else is a second alphabet.
@@ -119,8 +141,9 @@ def main(argv):
         for k, v in cat.items():
             if not isinstance(v, str):
                 continue
-            for sc in scripts_in(v, lang, minrun=2):
-                if sc == primary or sc == "LATIN":
+            checked = "".join(" " if ch in LETTER_SYMBOLS else ch for ch in v)
+            for sc in scripts_in(checked, lang, minrun=1 if lang == "sr" else 2):
+                if sc == primary or (primary != "LATIN" and sc == "LATIN"):
                     continue
                 offenders.append((sc, k, v))
                 break
@@ -145,7 +168,7 @@ def main(argv):
             print("(-v lists every one)")
         print("RESULT: %d value(s) in the wrong alphabet" % len(findings))
         return 1
-    print("RESULT: every catalog is written in one alphabet")
+    print("RESULT: PASS — every catalog is written in one alphabet")
     return 0
 
 

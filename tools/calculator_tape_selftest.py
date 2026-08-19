@@ -35,6 +35,14 @@ class Calc:
     _remember = C.Calculator._remember
     evaluate = C.Calculator.evaluate
     _fail = C.Calculator._fail
+    # evaluate() answers through _answer(), which remembers the NUMBER
+    # beside the text a display mode renders it as. A stub that borrows
+    # evaluate must borrow that too, or every case in this file dies with
+    # AttributeError before a single check is counted -- which is exactly
+    # what it did, and a suite that CRASHES reports no verdict at all.
+    _answer = C.Calculator._answer
+    _answer_value = C.Calculator._answer_value
+    _continued_answer = C.Calculator._continued_answer
     _TAPE_MAX = C.Calculator._TAPE_MAX
 
     def __init__(self):

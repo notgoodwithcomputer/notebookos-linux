@@ -25,6 +25,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 ACCEL_SH = os.path.join(
     os.path.dirname(_HERE), "buildroot", "board", "notebookos",
     "rootfs-overlay", "opt", "notebook", "accel.sh")
+XFLUSHD = os.path.join(os.path.dirname(ACCEL_SH), "de", "xflushd.py")
 
 # What this image ACTUALLY ships, verified against
 # output/target/usr/lib/dri after the Mesa rebuild. Kept here as the realistic
@@ -118,7 +119,19 @@ def main():
             failures += (not ok)
             print("%s  %-40s expect %s got %s" % (
                 "ok  " if ok else "FAIL", label, expected, got))
-    print("\n%d/%d passed" % (len(CASES) - failures, len(CASES)))
+    with open(XFLUSHD, encoding="utf-8") as fh:
+        flush_src = fh.read()
+    fallback_ok = "renderD128" not in flush_src.split("_accel =", 1)[-1]
+    failures += not fallback_ok
+    print("%s  xflushd runs when acceleration is unknown" %
+          ("ok  " if fallback_ok else "FAIL"))
+    force_ok = ('accel == "1" and os.environ.get("NB_XFLUSHD_FORCE") '
+                '!= "1"' in flush_src)
+    failures += not force_ok
+    print("%s  compositor failure can force xflushd under acceleration" %
+          ("ok  " if force_ok else "FAIL"))
+    total = len(CASES) + 2
+    print("\n%d/%d passed" % (total - failures, total))
     return 1 if failures else 0
 
 

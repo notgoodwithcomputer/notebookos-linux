@@ -542,6 +542,63 @@ for term, expect in (("hdma", "c14"), ("fixed point", "c04"),
     ok(any(term in v for v in hay.values()), "search finds: " + term)
     ok(term in hay.get(expect, ""), "%r is in %s" % (term, expect))
 
+# Drive the real search handler without constructing GTK. A zero-result query
+# replaces the article body; the next matching query must replace that stale
+# empty message too, rather than only repopulating the sidebar.
+class _SearchEntry:
+    def __init__(self, text): self.text = text
+    def get_text(self): return self.text
+
+
+class _SearchPane:
+    topics = [gbahelp.Topic("one", "Alpha", "Test", [gbahelp.P("first")]),
+              gbahelp.Topic("two", "Beta", "Test", [gbahelp.P("second")])]
+    _by_id = {t.tid: t for t in topics}
+    _current = "one"
+
+    def __init__(self):
+        self.filled = []
+        self.shown = []
+        self.empty = []
+
+    def _fill_list(self, rows): self.filled.append([t.tid for t in rows])
+    def show_topic(self, tid): self._current = tid; self.shown.append(tid)
+    def _render_empty(self, q): self.empty.append(q)
+
+
+_search_probe = _SearchPane()
+gbahelp.HelpPane._on_search(_search_probe, _SearchEntry("missing"))
+gbahelp.HelpPane._on_search(_search_probe, _SearchEntry("beta"))
+ok(_search_probe.empty == ["missing"] and _search_probe.shown == ["two"],
+   "a match replaces the stale no-results article",
+   "empty=%r shown=%r" % (_search_probe.empty, _search_probe.shown))
+gbahelp.HelpPane._on_search(_search_probe, _SearchEntry(""))
+ok(_search_probe.filled[-1] == ["one", "two"]
+   and _search_probe.shown[-1] == "two",
+   "clearing search restores all topics and readable content",
+   "filled=%r shown=%r" % (_search_probe.filled, _search_probe.shown))
+
+
+class _FakeList:
+    def __init__(self): self.selected = None
+    def get_selected_row(self): return self.selected
+    def select_row(self, row): self.selected = row
+
+
+class _FakeScroll:
+    def get_vadjustment(self): return None
+
+
+row = object()
+sync_probe = _SearchPane()
+sync_probe._topic_rows = {"two": row}
+sync_probe._list = _FakeList()
+sync_probe._bsc = _FakeScroll()
+sync_probe._render = lambda _topic: None
+gbahelp.HelpPane.show_topic(sync_probe, "two")
+ok(sync_probe._current == "two" and sync_probe._list.selected is row,
+   "showing a rebuilt search result selects its matching sidebar row")
+
 print("\n%s  (%d failed)" % ("FAILURES: " + ", ".join(FAIL) if FAIL
                              else "all checks pass", len(FAIL)))
 sys.exit(1 if FAIL else 0)

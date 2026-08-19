@@ -542,6 +542,41 @@ for junk in ("", "2026-02-30", "next tuesday", None, 7):
     check("fmt_due(%r) is empty rather than invented" % (junk,),
           bills.fmt_due(junk) == "", bills.fmt_due(junk))
 
+# Transient status callbacks are owned and cannot outlive the Bills window.
+class _Status:
+    def __init__(self): self.text = ""
+    def set_text(self, text): self.text = text
+
+
+_app = bills.Bills.__new__(bills.Bills)
+_app.status = _Status()
+_app._flash_id = 0
+_app._flash_timer = 0
+_app._closed = False
+_refreshes = []
+_app._refresh_status = lambda: _refreshes.append(True)
+_timers, _removed = [], []
+_real_timeout = bills.GLib.timeout_add_seconds
+_real_remove = bills.GLib.source_remove
+bills.GLib.timeout_add_seconds = lambda _delay, callback: (_timers.append(callback) or len(_timers))
+bills.GLib.source_remove = lambda source_id: _removed.append(source_id) or True
+try:
+    _app._flash("Paid")
+    _app._flash("Undone")
+    check("a newer bill status replaces the prior restore timer",
+          _removed == [1] and _app._flash_timer == 2,
+          (_removed, _app._flash_timer))
+    _app._on_destroy()
+    check("closing Bills cancels its live status timer",
+          _removed == [1, 2] and _app._flash_timer == 0 and _app._closed,
+          (_removed, _app._flash_timer))
+    _timers[-1]()
+    check("a dispatched status callback after close is inert",
+          not _refreshes, _refreshes)
+finally:
+    bills.GLib.timeout_add_seconds = _real_timeout
+    bills.GLib.source_remove = _real_remove
+
 bad = R.count(False)
 print("\n%d checks, %d failed" % (len(R), bad))
 print("all checks passed" if not bad else "RESULT: %d FAILED" % bad)

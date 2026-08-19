@@ -637,6 +637,16 @@ def test_smooth_fraction(m, t, clock):
           bar.get_fraction() == 1.0, str(bar.get_fraction()))
     check("smooth_fraction on a None bar is safe", t.smooth_fraction(None, 0.5) == 0)
 
+    # Non-finite worker/media values are indeterminate, never completion.
+    for invalid in (float("nan"), float("inf"), float("-inf")):
+        bar = FakeBar(); bar.set_fraction(0.4)
+        rejected = []
+        result = t.smooth_fraction(
+            bar, invalid, on_done=lambda ok: rejected.append(ok))
+        check("non-finite progress is rejected without painting completion",
+              result == 0 and bar.get_fraction() == 0.4 and rejected == [False],
+              "%r / %r / %r" % (invalid, bar.get_fraction(), rejected))
+
     # Destroy mid-glide: no callback fires, no driver leaks.
     bar = FakeBar()
     after = []
@@ -873,8 +883,10 @@ def main():
         print("FAIL (%d):" % len(FAILURES))
         for f in FAILURES:
             print("  - %s" % f)
+        print("RESULT: FAILED")
         return 1
     print("PASS")
+    print("RESULT: PASS")
     return 0
 
 

@@ -350,6 +350,21 @@ def fresh_app(Q):
     return Q.Sequencer()
 
 
+def damaged_model_tests():
+    """A bad inner track field costs itself, not the whole recovered song."""
+    import sequencer as Q
+    app = Q.Sequencer.__new__(Q.Sequencer)
+    app.length = Q.DEFAULT_LEN
+    app._take_damage = []
+    try:
+        restored = app._norm_track(0, {"name": "Voice", "clips": 7})
+    except Exception as exc:
+        restored = exc
+    check("a scalar saved clip collection does not abort project recovery",
+          isinstance(restored, dict) and restored["name"] == "Voice"
+          and restored["clips"] == [], repr(restored))
+
+
 def lay_take(app, ti, s, e, wav=None, off=0.0):
     """Put a clip on a lane the way a finished take does, and select it."""
     c = app.clip_make_for_test(s, e, wav, off) if hasattr(
@@ -955,6 +970,23 @@ def app_tests():
     check("a reopened project is looked at whole, not at somebody else's zoom",
           app2.zoom == Q.ZOOM_FIT and app2.view_start == 0.0)
 
+    print("sequencer — newer nested project metadata")
+    newer = app._serialize()
+    newer["tracks"][0]["channel_strip"] = {"colour": "amber", "bus": 2}
+    newer["tracks"][0]["clips"][0]["transcript"] = {"text": "count in"}
+    app_newer = fresh_app(Q)
+    app_newer._apply(json.loads(json.dumps(newer)))
+    newer_saved = app_newer._serialize()
+    check("unknown track metadata survives a reopen and save",
+          newer_saved["tracks"][0].get("channel_strip")
+          == {"colour": "amber", "bus": 2})
+    check("unknown clip metadata survives a reopen and save",
+          newer_saved["tracks"][0]["clips"][0].get("transcript")
+          == {"text": "count in"})
+    copied = Q.clip_copy(app_newer.tracks[0]["clips"][0])
+    check("copying a clip for an edit keeps its newer metadata",
+          copied.get("transcript") == {"text": "count in"})
+
     print("sequencer — projects written by older versions")
     legacy = {"version": 2, "bpm": 100, "length": 60.0, "master": 90,
               "snap": 0.125,
@@ -1214,6 +1246,7 @@ def main():
     home = tempfile.mkdtemp(prefix="nbseq-selftest-")
     os.environ["NB_HOME"] = home
     try:
+        damaged_model_tests()
         synth_tests()
         app_tests()
         recorder_tests()
@@ -1224,6 +1257,10 @@ def main():
     print("\n%d checks passed, %d failed" % (PASS[0], len(FAIL)))
     for f in FAIL:
         print("  FAILED: %s" % f)
+    # Terminal verdict for the release runner: a zero exit with only
+    # per-check lines is read as DID NOT RUN (run_all_gates SUCCESSWORD),
+    # because a suite that dies half way prints those lines too.
+    print("RESULT: %s" % ("FAILED" if FAIL else "ALL PASS"))
     return 1 if FAIL else 0
 
 

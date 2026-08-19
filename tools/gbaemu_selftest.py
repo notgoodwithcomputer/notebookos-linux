@@ -35,7 +35,7 @@ import tempfile
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
 
 HOME = tempfile.mkdtemp(prefix="gbaemu-selftest-")
 for d in (".config/notebook", "Documents", "Desktop", "Games/old",
@@ -86,6 +86,11 @@ def fake_rom(path, size=64 * 1024):
     d = bytearray(size)
     d[0:4] = b"\x2e\x00\x00\xea"                  # b start
     d[4:0xA0] = gbabuild.NINTENDO_LOGO
+    # A game is identified by its cartridge BYTES (renaming a ROM keeps its
+    # save-slot memory), so two fixtures must be two different cartridges:
+    # stamp the header's 12-byte game title from the file name.
+    title = os.path.splitext(os.path.basename(path))[0].encode("ascii", "replace")
+    d[0xA0:0xAC] = title[:12].ljust(12, b"\0")
     with open(path, "wb") as fh:
         fh.write(d)
     return path
@@ -102,6 +107,13 @@ def fake_gb(path, size=32 * 1024):
 def app():
     w = gbaemu.GbaEmu()
     pump()
+    # the first library scan runs off the GTK thread now (nbjobs); wait for
+    # the worker and let its result land before the checks look at _roms
+    w._jobs.join(30)
+    pump()
+    for _ in range(20):
+        pump()
+        GLib.usleep(20000)
     w._alerts = []
     w._launched = []
     w._alert = lambda heading, body: w._alerts.append((heading, body))

@@ -84,6 +84,8 @@ def main():
               % d["name"])
         check(d["node"] == "/dev/" + d["name"],
               "offered device %s has a matching node" % d["name"])
+        check(bool(d.get("identity")),
+              "offered device %s has a stable serial/WWID identity" % d["name"])
     if not offered:
         print("(no USB drive plugged in; the per-device checks had nothing "
               "to run against)")

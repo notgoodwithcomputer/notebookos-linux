@@ -262,7 +262,9 @@ with tempfile.TemporaryDirectory(prefix="nb-noreplace-paste-") as root:
     win._taken = lambda path: False
     win._paste()
 
-    check(win._clipboard == (src, True),
+    # The clipboard holds a LIST now (Finder copies and cuts whole selections),
+    # and a refused item is kept per item rather than all-or-nothing.
+    check(win._clipboard == ([src], True),
           "a refused cut/paste keeps the cut on the clipboard")
     check(win.undo is None, "a refused cut/paste installs no Undo")
     with open(src, encoding="utf-8") as fh:
@@ -339,6 +341,10 @@ with tempfile.TemporaryDirectory(prefix="nb-noreplace-trash-") as root:
     model = SelectedModel("notes.txt", src)
     win = finder.Finder.__new__(finder.Finder)
     win._selected_iter = lambda: (model, object())
+    # Trash and the clipboard now act on the SELECTION, not on one row,
+    # so the stub answers the list helper too. Same fixture, same
+    # assertions -- only the door the code comes in through moved.
+    win._selected_paths = lambda: [model.path]
     win.abspath = lambda path: path
     win._trash_dir = lambda: trash
     win._origins_dir = lambda: origins
@@ -370,4 +376,5 @@ with tempfile.TemporaryDirectory(prefix="nb-noreplace-trash-") as root:
 
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

@@ -52,8 +52,16 @@ class StyleContext:
 class Button:
     def __init__(self):
         self.ctx = StyleContext()
+        self.checked = False
     def get_style_context(self):
         return self.ctx
+    def set_active(self, value):
+        self.checked = bool(value)
+    def get_active(self):
+        # the app mirrors state through nbapp.set_active_quietly, which reads
+        # the current state first (a no-op when it already matches), exactly
+        # as a real Gtk.ToggleButton would be asked
+        return self.checked
 
 
 class Combo:
@@ -82,6 +90,7 @@ def bare():
     w = writer.Writer.__new__(writer.Writer)
     w.buf = Gtk.TextBuffer()
     w._pending = set()
+    w._pending_para = {}
     w._loading = False
     w._restoring = False
     w._syncing = False
@@ -126,7 +135,8 @@ def whole(w, name, a, b):
 
 
 def active(w, name):
-    return "on" in w._fmt_btns[name].ctx.classes
+    button = w._fmt_btns[name]
+    return "on" in button.ctx.classes and button.checked
 
 
 def attr_kinds(attrs):

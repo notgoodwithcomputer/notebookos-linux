@@ -18,11 +18,12 @@ from unittest import mock
 APPS = (
     "video music media ebook maps language workout mealplanner cookbook "
     "contacts tasks journal novel writer screenplay sequencer illustrator "
-    "calendar g2048 finder packages sysmon terminal calculator nbgame "
+    "calendar g2048 finder packages sysmon calculator nbgame "
     "usbwriter settings"
 ).split()
 ROOT = Path(__file__).resolve().parents[1]
 DE = ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"
+sys.path.insert(0, str(DE))
 OLD = {"Save failed", "Write failed"}
 
 
@@ -142,6 +143,10 @@ def main():
     ok = inventory() and run_live()
     if len(sys.argv) > 1 and sys.argv[1] == "--live":
         ok = pass_mutant() and ok
+    # Terminal verdict for the release runner: a stream of PASS lines with a
+    # zero exit is not a report it will trust (a suite that dies half way
+    # prints those too). See tools/run_all_gates.py SUCCESSWORD.
+    print("RESULT: %s" % ("ALL PASS" if ok else "FAILED"))
     return 0 if ok else 1
 
 

@@ -92,6 +92,10 @@ with tempfile.TemporaryDirectory(prefix="nb-dangling-trash-") as root:
     win._inflight = set()
     model = SelectedModel("shortcut", source)
     win._selected_iter = lambda: (model, object())
+    # Trash and the clipboard now act on the SELECTION, not on one row,
+    # so the stub answers the list helper too. Same fixture, same
+    # assertions -- only the door the code comes in through moved.
+    win._selected_paths = lambda: [model.path]
     win.abspath = lambda path: path
     win._trash_dir = lambda: trash
     win._origins_dir = lambda: origins
@@ -115,6 +119,10 @@ with tempfile.TemporaryDirectory(prefix="nb-dangling-trash-") as root:
 
     restore_model = SelectedModel(moved_name, moved)
     win._selected_iter = lambda: (restore_model, object())
+    # Trash and the clipboard now act on the SELECTION, not on one row,
+    # so the stub answers the list helper too. Same fixture, same
+    # assertions -- only the door the code comes in through moved.
+    win._selected_paths = lambda: [restore_model.path]
     win._restore_selected()
     check(os.path.islink(source) and not os.path.lexists(moved),
           "Put Back restores a dangling link as an entry")
@@ -129,6 +137,10 @@ def duplicate_window_with_undo(root, selected):
     win._inflight = set()
     model = SelectedModel(os.path.basename(selected), selected)
     win._selected_iter = lambda: (model, object())
+    # Trash and the clipboard now act on the SELECTION, not on one row,
+    # so the stub answers the list helper too. Same fixture, same
+    # assertions -- only the door the code comes in through moved.
+    win._selected_paths = lambda: [model.path]
     win.abspath = lambda path: path
     win.get_mapped = lambda: False
     win._flash_status = lambda text, *args: setattr(win, "status", text)
@@ -271,4 +283,5 @@ with tempfile.TemporaryDirectory(prefix="nb-newfolder-plain-") as root:
 
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

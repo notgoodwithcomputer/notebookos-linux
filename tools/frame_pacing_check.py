@@ -165,22 +165,42 @@ def _is_self_queue_draw(call):
             and call.func.value.id == "self")
 
 
-def _is_window_class(classdef):
+def _base_names(classdef):
+    names = []
+    for base in classdef.bases:
+        if isinstance(base, ast.Attribute):
+            names.append(base.attr)
+        elif isinstance(base, ast.Name):
+            names.append(base.id)
+    return names
+
+
+def _is_window_class(classdef, known=()):
     """True when `self` in this class is the app WINDOW — a full
     self.queue_draw() there repaints the whole screen. A DrawingArea/Box/
     small-widget subclass invalidating itself is the correct F1 scope, so
     those are NOT window classes."""
-    bases = []
-    for b in classdef.bases:
-        if isinstance(b, ast.Attribute):
-            bases.append(b.attr)
-        elif isinstance(b, ast.Name):
-            bases.append(b.id)
+    bases = _base_names(classdef)
     small = ("DrawingArea", "Box", "EventBox", "Fixed", "Overlay", "Grid",
              "Bin", "Frame", "ScrolledWindow", "Revealer", "Layout")
     if any(b in small for b in bases):
         return False
-    return any(b in ("AppWindow", "Window", "ApplicationWindow") for b in bases)
+    roots = {"AppWindow", "Window", "ApplicationWindow"} | set(known)
+    return any(b in roots for b in bases)
+
+
+def _window_classes(tree):
+    """Resolve local subclasses transitively to a GTK/app window root."""
+    classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    known = set()
+    changed = True
+    while changed:
+        changed = False
+        for cls in classes:
+            if cls.name not in known and _is_window_class(cls, known):
+                known.add(cls.name)
+                changed = True
+    return known
 
 
 def _run_static():
@@ -197,8 +217,9 @@ def _run_static():
             tree = ast.parse(src)
         except SyntaxError:
             continue
+        window_classes = _window_classes(tree)
         for cls in ast.walk(tree):
-            if not isinstance(cls, ast.ClassDef) or not _is_window_class(cls):
+            if not isinstance(cls, ast.ClassDef) or cls.name not in window_classes:
                 continue
             for call in ast.walk(cls):
                 if _is_self_queue_draw(call):
@@ -230,6 +251,7 @@ def main():
               % (len(_FAILS), n))
         return 1
     print("\nPASS  frame pacing: %d checks (dynamic bands + static repaint)" % n)
+    print("RESULT: PASS")
     return 0
 
 

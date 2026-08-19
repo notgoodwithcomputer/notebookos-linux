@@ -18,14 +18,14 @@ R=[]
 def chk(n, ok, d=""):
     R.append(ok); print("%s %s%s" % ("PASS" if ok else "FAIL", n, "" if ok else "  <- %s"%(d,)))
 chk("transport handle exists", hasattr(w,"_vctl"))
-w._video.show(); w._vfull=False
-w._enter_video_fullscreen(); pump()
+w._video.show(); w._stage_full=False
+w._enter_stage_fullscreen(); pump()
 chk("entering fullscreen hides the transport", not w._vctl.get_visible(), "visible")
 w._on_fs_motion(w, None); pump()
 chk("mouse movement brings it back", w._vctl.get_visible())
 w._fs_conceal(); pump()
 chk("it hides again on its own", not w._vctl.get_visible())
-w._exit_video_fullscreen(); pump()
+w._exit_stage_fullscreen(); pump()
 chk("leaving fullscreen restores it", w._vctl.get_visible())
 chk("no stray timer left running", getattr(w,"_vctl_hide_timer",None) is None)
 print("\nRESULT: " + ("ALL PASS" if all(R) else "SOME FAILED"))

@@ -50,7 +50,8 @@ CODES = _codes()
 # them with a name, a number or a date. Anything NOT on this list that carries
 # an edge space is reported as the padding bug.
 CONCAT_OK = {
-    " (copy)", " (hidden)", " +%d more", " File", " copy %d", " · added ",
+    " (copy)", " (hidden)", " +%d more", " File", " and ", " copy %d",
+    " · added ", ", ",
     "About ", "Balance ", "Battery ", "Chapter ", "Controller ready: ",
     "Lecture ", "Mounted: ", "Next ", "Opened ", "Photo: ", "Previous ",
     "Printed: ", "Saved ", "Saved  ·  ", "Written at ",
@@ -280,14 +281,20 @@ def check_menu_paths(cats):
     problems = 0
     for lang, cat in sorted(cats.items()):
         for key, val in cat.items():
-            if "\u25b8" not in val:
-                continue
-            for m in MENU_PATH.finditer(val):
-                word = m.group(1)
-                shown = cat.get(word)
-                if shown and shown != word:
-                    print("MENU PATH  %s  message says %r, the menu bar says "
-                          "%r" % (lang, word, shown))
+            # The English key tells us WHICH canonical menu the sentence
+            # references. Searching the translation for English menu words
+            # only caught untranslated paths; an arbitrary wrong synonym was
+            # invisible. Require the catalog's own menu label before the arrow.
+            for m in MENU_PATH.finditer(key):
+                menu_key = m.group(1)
+                shown = cat.get(menu_key)
+                if not shown:
+                    continue
+                expected = re.compile(r"(?<!\w)%s\s*\u25b8" %
+                                      re.escape(shown), re.I)
+                if not expected.search(val):
+                    print("MENU PATH  %s  message does not name %r before "
+                          "the arrow" % (lang, shown))
                     problems += 1
     return problems
 

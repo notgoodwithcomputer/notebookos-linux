@@ -19,10 +19,13 @@ of Get-Printer-Attributes response a driverless printer returns in the field.
 """
 
 import argparse
+import errno
 import os
 import socket
+import stat
 import struct
 import sys
+import tempfile
 import threading
 
 # ---- IPP tags ---------------------------------------------------------------
@@ -144,6 +147,29 @@ FORMATS = ["application/pdf", "image/urf", "image/pwg-raster", "image/jpeg",
            "application/octet-stream"]
 
 
+def _save_document(path, doc):
+    directory = os.path.dirname(os.path.abspath(path))
+    mode = os.stat(path).st_mode & 0o7777 if os.path.exists(path) else 0o644
+    fd, tmp = tempfile.mkstemp(prefix=".mock-ipp-", dir=directory)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as fh:
+            fd = -1
+            fh.write(doc)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+
+
 def printer_attrs():
     a = b""
     a += attr(TAG_CHARSET, "attributes-charset", "utf-8")
@@ -231,12 +257,13 @@ class Printer:
     def print_job(self, attrs, doc):
         with self.lock:
             jid = self.next_id
+            if self.save_path:
+                # Capture is part of accepting the job. Never report success
+                # while leaving a partial/failed test artifact behind.
+                _save_document(self.save_path, doc)
             self.next_id += 1
             self.jobs[jid] = {"polls": 0, "attrs": attrs, "size": len(doc)}
             self.received.append(doc)
-        if self.save_path:
-            with open(self.save_path, "wb") as fh:
-                fh.write(doc)
         return jid
 
     def job_state(self, jid):
@@ -334,13 +361,16 @@ def read_http_request(conn, buf):
             n = int(line.split(b";")[0], 16)
             if n == 0:
                 while len(buf) < 2:
-                    buf += conn.recv(65536)
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        raise EOFError("connection closed in chunk terminator")
+                    buf += chunk
                 buf = buf[2:]
                 break
             while len(buf) < n + 2:
                 chunk = conn.recv(65536)
                 if not chunk:
-                    break
+                    raise EOFError("connection closed in chunk body")
                 buf += chunk
             body += buf[:n]
             buf = buf[n + 2:]
@@ -348,7 +378,7 @@ def read_http_request(conn, buf):
     while len(buf) < clen:
         chunk = conn.recv(65536)
         if not chunk:
-            break
+            raise EOFError("connection closed in HTTP body")
         buf += chunk
     body, buf = buf[:clen], buf[clen:]
     return path, body, buf
@@ -382,6 +412,32 @@ def handle(conn, pr, paths, log):
         conn.close()
 
 
+def _prepare_socket(path):
+    """Clear a refused stale Unix socket; never unlink other/live objects."""
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(mode):
+        raise FileExistsError("refusing to replace non-socket path: %s" % path)
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        probe.connect(path)
+    except OSError as exc:
+        if exc.errno in (errno.ECONNREFUSED, errno.ENOENT):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            return
+        raise
+    finally:
+        probe.close()
+    raise OSError(errno.EADDRINUSE, "live Unix socket already has a listener",
+                  path)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--socket", required=True)
@@ -407,10 +463,7 @@ def main():
         logfh.write("mock: %s\n" % msg)
         logfh.flush()
 
-    try:
-        os.unlink(args.socket)
-    except OSError:
-        pass
+    _prepare_socket(args.socket)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(args.socket)
     os.chmod(args.socket, 0o666)

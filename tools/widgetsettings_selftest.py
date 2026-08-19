@@ -146,6 +146,21 @@ def main():
           "...and the one chosen takes the free slot")
     check(len(board_sees()) == SLOTS, "...with the board still exactly full")
 
+    # The preview changes immediately, but the desktop is another process and
+    # sees only widgets.json. A failed write therefore has to remain visible.
+    real_write = widgetsettings.nbapp.atomic_write_json
+    widgetsettings.nbapp.atomic_write_json = lambda *_a, **_k: (_ for _ in ()).throw(
+        OSError(28, "No space left on device"))
+    try:
+        w._after_change()
+    finally:
+        widgetsettings.nbapp.atomic_write_json = real_write
+    check(bool(w._save_error) and w.status.get_text() == w._save_error,
+          "a failed board-settings write remains visible in the status strip")
+    w._after_change()
+    check(not w._save_error,
+          "a later successful board-settings write clears the failure")
+
     # MOVING GOES ALONG THE BOARD, NOT ALONG THE STORED ORDER. Those are
     # different lists as soon as anything is switched off: swapping with the
     # neighbouring entry in `order` can swap with a tile that is not on the

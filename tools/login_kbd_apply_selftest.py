@@ -69,11 +69,15 @@ class _Machine:
     `applied` records what setxkbmap was ASKED for, so a refusal is told apart
     from never having tried."""
 
-    def __init__(self, saved, remembered="", loads=True):
+    def __init__(self, saved, remembered="", loads=True, live=""):
         self.saved = saved
         self.remembered = remembered
         self.loads = loads
         self.applied = []
+        # what the X server says is loaded ("" = it cannot say). The screen
+        # asks this when the saved layout is showing, because session.sh may
+        # have fallen back to US; here it must never be the developer's host.
+        self.live = live
 
     def keyboard(self):
         return self.saved
@@ -87,12 +91,15 @@ class _Machine:
 
     def __enter__(self):
         self._i18n, self._apply = login.nbi18n, nbkeyboard.apply
+        self._live = nbkeyboard.live_code
         login.nbi18n = self
         nbkeyboard.apply = self._do_apply
+        nbkeyboard.live_code = lambda *a, **k: self.live
         return self
 
     def __exit__(self, *_e):
         login.nbi18n, nbkeyboard.apply = self._i18n, self._apply
+        nbkeyboard.live_code = self._live
         return False
 
     def _do_apply(self, code, timeout=10):
@@ -197,5 +204,7 @@ print()
 if FAILURES:
     print("LOGIN KEYBOARD APPLY SELFTEST: %d checks, %d FAILED"
           % (CHECKS[0], len(FAILURES)))
+    print("RESULT: FAIL")
     sys.exit(1)
 print("LOGIN KEYBOARD APPLY SELFTEST: %d checks, all pass" % CHECKS[0])
+print("RESULT: PASS")

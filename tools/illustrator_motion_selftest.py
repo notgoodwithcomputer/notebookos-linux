@@ -46,6 +46,10 @@ if gtk_ok:
     app.del_btn = Gtk.Button()
     app.down_btn = Gtk.Button()
     app.up_btn = Gtk.Button()
+    # The + is one of the header buttons _rebuild_layers now keeps in step: it
+    # goes insensitive at the layer ceiling (MAX_LAYERS), because a layer that
+    # cannot be written and read back must not be offered.
+    app.add_btn = Gtk.Button()
     app.op_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
     app._op_handler = app.op_scale.connect("value-changed", lambda *_: None)
     app.op_val = Gtk.Label()

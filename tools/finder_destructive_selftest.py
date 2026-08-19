@@ -100,5 +100,7 @@ print()
 if failures:
     print("FINDER DESTRUCTIVE SELFTEST: %d checks, %d FAILED" %
           (checks, len(failures)))
+    print("RESULT: FAIL")
     raise SystemExit(1)
 print("FINDER DESTRUCTIVE SELFTEST: %d checks, all pass" % checks)
+print("RESULT: PASS")

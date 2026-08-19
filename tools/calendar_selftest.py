@@ -140,5 +140,24 @@ cal._extend_series(date.today() - timedelta(days=365))
 check("a run already past the horizon is not extended",
       dates_of(cal, "Standing order") == kept)
 
+# ---------------------------------------------------------------- new event
+# A NEW event opens at 09:00, and it must stay 09:00 when the grid changes.
+# The default used to be the literal index 2, which was 09:00 only while the
+# day started at 08:00. HOURS now spans 00:00..23:00 so a 06:30 train has a
+# row -- and that literal silently became 01:00: every New Event card offered
+# the middle of the night. Derived from HOURS here, so the check fails if the
+# default is ever spelled as a bare index again.
+_c = cal_app.Calendar.__new__(cal_app.Calendar)
+_c._new_event_hour = None
+_idx = cal_app.Calendar._start_index(_c, None)
+_slots = cal_app.Calendar._time_slots(_c)
+check("a new event opens at 09:00, whatever hour the grid starts at",
+      _slots[_idx] == "09:00", "%r (index %d, grid starts %r)"
+      % (_slots[_idx], _idx, _slots[0]))
+_c._new_event_hour = 14
+check("...and a slot click still seeds the hour that was clicked",
+      _slots[cal_app.Calendar._start_index(_c, None)] == "14:00")
+
 print("\n%d/%d checks passed" % (sum(RESULTS), len(RESULTS)))
+print("RESULT: %s" % ("PASS" if all(RESULTS) else "FAIL"))
 sys.exit(0 if all(RESULTS) else 1)

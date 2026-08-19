@@ -30,6 +30,26 @@ INSTALL_EFI="${INSTALL_EFI:-$ROOT/boot-work/BOOTX64.EFI}"
 INIT_SRC="${INIT_SRC:-$ROOT/tools/live/init.sh}"
 OUTDIR="${OUTDIR:-$ROOT/release}"
 ISO="${ISO:-$OUTDIR/notebookos-${VER}.iso}"
+# THE WORK DIR NEEDS ROOM, AND /tmp IS A tmpfs HERE (16G, shared with every
+# other build on the box). The Secure Boot re-master extracts the WHOLE ISO and
+# writes a second one, so it needs several GB; when /tmp ran short the copies
+# failed one by one, the re-master was abandoned with a warning, and what came
+# out was an UNSIGNED ISO with no EFI System partition -- caught only by the
+# final boot check refusing to publish it. Prefer a caller's TMPDIR, else the
+# largest of /var/tmp and /tmp, and say which was chosen and how much it holds.
+_iso_free_mb() { df -Pm "$1" 2>/dev/null | awk 'NR==2 {print $4}'; }
+if [ -z "${TMPDIR:-}" ]; then
+    _vt="$(_iso_free_mb /var/tmp)"; _t="$(_iso_free_mb /tmp)"
+    if [ "${_vt:-0}" -gt "${_t:-0}" ]; then TMPDIR=/var/tmp; else TMPDIR=/tmp; fi
+fi
+_free="$(_iso_free_mb "$TMPDIR")"
+echo "[mkiso] work dir on $TMPDIR (${_free:-?} MiB free)"
+if [ "${_free:-0}" -lt 6000 ]; then
+    echo "[mkiso] ERROR: $TMPDIR has ${_free:-?} MiB free; the Secure Boot" >&2
+    echo "        re-master needs about 6 GB. Set TMPDIR to a filesystem" >&2
+    echo "        with room and run again." >&2
+    exit 1
+fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/nbiso.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -300,6 +320,78 @@ SBCFG
       say "     WARNING: Secure Boot step failed; the ISO is unchanged and still boots"
   fi
 fi
+
+# ---- 5c. bundle add-on map packs INTO the ISO ---------------------------
+# $MAP_PACKS is a space-separated list of .nbm2 packs (no spaces in the paths)
+# to carry inside the image, so the machine has real maps out of the box — live
+# and installed alike — instead of a pack the user has to copy across by hand.
+#
+# They go in as plain ISO9660 files under /maps, and deliberately NOT into the
+# rootfs overlay. The ISO carries the root TWICE — once as live/rootfs.squashfs
+# and once as install/rootfs.tar — so anything in the overlay is stored twice,
+# and North America at 2.7 GB would cost 5.4 GB. Stored once at /maps it is
+# read by both paths: de/maps.py scans the mounted medium in the live session,
+# and the installer copies the packs onto the disk it installs to.
+#
+# Done LAST, on the finished ISO, for two reasons. The Secure Boot step above
+# extracts the whole image into a temporary tree and builds a new one, so a
+# pack sitting inside it would be several GB of tmpfs churn per build for bytes
+# that never change. And it leaves a proven boot path alone: this step takes an
+# ISO that already boots and only adds files to it.
+#
+# `-boot_image any replay` re-creates the boot equipment recorded in the input
+# image (El Torito BIOS + UEFI, the isohybrid MBR, the GPT). Without it xorriso
+# DISCARDS El Torito and quietly produces an unbootable image — measured, not
+# assumed. So the result is CHECKED before it replaces anything, and a failure
+# keeps the ISO that already works rather than shipping one that might not.
+if [ -n "${MAP_PACKS:-}" ]; then
+    MAPARGS=()
+    MAPBYTES=0
+    for _pk in $MAP_PACKS; do
+        if [ -f "$_pk" ]; then
+            MAPARGS+=( -map "$_pk" "/maps/$(basename "$_pk")" )
+            MAPBYTES=$(( MAPBYTES + $(stat -c%s "$_pk") ))
+        else
+            say "     WARNING: map pack not found, not bundled: $_pk"
+        fi
+    done
+    if [ "${#MAPARGS[@]}" -gt 0 ]; then
+        say "5c/6 bundling $(( MAPBYTES / 1024 / 1024 )) MiB of map packs at /maps"
+        # Staged beside the finished ISO, not under $WORK: $WORK is a tmpfs, and
+        # the result is the ISO plus every bundled pack. Here the replace is a
+        # rename on the same filesystem instead of a multi-GB copy out of RAM.
+        MAPPED="${ISO}.maps.tmp"
+        rm -f "$MAPPED"
+        if xorriso -indev "$ISO" -outdev "$MAPPED" \
+                   -boot_image any replay \
+                   "${MAPARGS[@]}" \
+                   -commit >/dev/null 2>"$WORK/maps.log"
+        then
+            if python3 "$ROOT/tools/iso_boot_check.py" "$MAPPED" \
+                   >"$WORK/mapboot.log" 2>&1
+            then
+                mv -f "$MAPPED" "$ISO"
+                say "     bundled; boot records verified intact after the re-master"
+            else
+                cat "$WORK/mapboot.log" >&2
+                rm -f "$MAPPED"
+                say "     WARNING: adding the packs cost the image a boot record."
+                say "     KEEPING the ISO without them — it boots, it just has no maps."
+            fi
+        else
+            cat "$WORK/maps.log" >&2
+            rm -f "$MAPPED"
+            say "     WARNING: could not add the map packs; ISO left without them"
+        fi
+    fi
+fi
+
+# Every path reaches this point: with or without maps, and whether or not the
+# optional Secure Boot re-master ran.  Do not publish a mountable-looking ISO
+# whose hybrid boot records were lost by any earlier step.
+say "6/6 verifying final BIOS, UEFI and USB boot records"
+python3 "$ROOT/tools/iso_boot_check.py" "$ISO" \
+    || die "final ISO is not bootable — refusing to publish it"
 
 SZ="$(du -h "$ISO" | cut -f1)"
 say "done: $ISO ($SZ)"

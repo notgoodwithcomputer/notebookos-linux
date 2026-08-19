@@ -42,6 +42,14 @@ def function(file, name, globs):
 
 
 class Sink:
+    # `editing` is not decoration: Contacts' import/export handlers now commit
+    # an open form before they touch the disk (a vCard written mid-edit used to
+    # carry the values from BEFORE the edit, and an import replaced the form on
+    # a different person's card). A stand-in for those handlers has to answer
+    # the same question the real window does, or the error path under test
+    # dies on the fixture instead of on the error.
+    editing = False
+
     def __init__(self): self.messages = []
     def _flash(self, text, *a, **k): self.messages.append(str(text))
     def _flash_status(self, text, *a, **k): self.messages.append(str(text))
@@ -104,10 +112,19 @@ def test_missing_media_fallback_and_nonzero_are_not_defects():
 
 def test_valid_wrong_content_vcard_is_not_defect():
     s = Sink(); s.active=0; s.people=[]; s._save=lambda:None; s._rebuild_list=lambda:None; s._rebuild_detail=lambda:None
+    # The import now protects an open form first: it commits the edit and drops
+    # an untouched New Contact rather than replacing the form on someone else's
+    # card. Both are part of the handler under test, so the stand-in answers
+    # them the way an idle window would.
+    s._commit_edits=lambda: True; s._finish_new_card=lambda: None
     with tempfile.NamedTemporaryFile("w", suffix=".json") as fixture:
         fixture.write('{"course": true}'); fixture.flush()
         picker=types.SimpleNamespace(open_file=lambda *a, **k:fixture.name)
-        fn=method("contacts.py", "Contacts", "_import_vcard", {"nbpicker":picker, "DOCS_DIR":"/tmp", "parse_vcards":lambda _x:[], "_t":lambda x:x})
+        # _import_vcard now reads through read_vcard_text (a size-capped
+        # reader) and snapshots the book with copy — both must exist in the
+        # extracted method's globals or the NameError reads as "Import failed"
+        fn=method("contacts.py", "Contacts", "_import_vcard", {"nbpicker":picker, "DOCS_DIR":"/tmp", "parse_vcards":lambda _x:[], "_t":lambda x:x,
+                                                              "read_vcard_text":lambda p: open(p, encoding="utf-8-sig").read(), "copy":__import__("copy")})
         fn(s)
     clean(s.messages); assert s.messages == ["No contacts found"]
 
@@ -134,6 +151,7 @@ def main():
         print("PASS-MUTANT test_print_nonzero_screenplay_real_handler")
     else:
         failed += 1; print("FAIL test_print_nonzero_screenplay_real_handler mutant survived")
+    print("RESULT: %s" % ("FAILED" if failed else "PASS"))
     return failed
 
 

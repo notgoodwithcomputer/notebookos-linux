@@ -60,6 +60,27 @@ class OSKCoreTests(unittest.TestCase):
         state.toggle_page(); self.assertEqual(state.page, "symbols")
         state.toggle_page(); self.assertEqual(state.page, "letters")
 
+    def test_editing_controls_do_not_consume_one_shot_shift(self):
+        state = osk.KeyboardState()
+        state.tap_shift()
+        self.assertEqual(state.control_intent(osk.SPECIAL["backspace"]),
+                         (osk.SPECIAL["backspace"], False))
+        self.assertEqual(state.shift, 1)
+        self.assertEqual(state.control_intent(osk.SPECIAL["enter"]),
+                         (osk.SPECIAL["enter"], False))
+        self.assertEqual(state.shift, 1)
+        self.assertEqual(state.intent(24), (24, True))
+        self.assertEqual(state.shift, 0)
+
+    def test_direct_printable_consumes_only_one_shot_shift(self):
+        state = osk.KeyboardState()
+        state.shift = 1
+        self.assertTrue(state.consume_printable())
+        self.assertEqual(state.shift, 0)
+        state.shift = 2
+        self.assertFalse(state.consume_printable())
+        self.assertEqual(state.shift, 2)
+
     def test_shift_wrap_exact_order(self):
         rec = Recorder()
         osk.Injector(rec).keycode(24, True)
@@ -101,6 +122,8 @@ class OSKCoreTests(unittest.TestCase):
                             isinstance(n.args[0], ast.Constant) and
                             n.args[0].value is False for n in calls))
         self.assertIn("Gdk.WindowTypeHint.DOCK", source)
+        self.assertIn('self.state.shift == 2 else "\\u21e7"', source)
+        self.assertIn('add_class("locked")', source)
         ok, _argv = osk.Gtk.init_check([])
         if not ok:
             self.skipTest("GTK display unavailable; static contract passed")

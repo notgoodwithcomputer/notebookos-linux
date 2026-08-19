@@ -118,6 +118,16 @@ for text, hour in (("Dentist 3pm", 15.0), ("Dentist 15:00", 15.0),
     check("%r is at %s" % (text, hour), got is not None and got[2] == hour,
           got)
 
+# Same-day records have no end-date field. A late quick event may end exactly
+# at midnight, but it must never persist or render 24:30/24:59.
+for hour, want_end, want_label in (
+        (22.5, 23.5, "23:30"), (23.5, 24.0, "24:00"),
+        (23.9833333333, 24.0, "24:00"), (0.0, 1.0, "01:00")):
+    end = cal._quick_event_end(hour)
+    check("quick event at %s ends within its day" % hour,
+          end == want_end and cal.Calendar._hhmm(end) == want_label,
+          (end, cal.Calendar._hhmm(end)))
+
 # ------------------------------------------------------------- days
 check("'today' is the base day", parse("Gym today")[1] == BASE,
       parse("Gym today"))

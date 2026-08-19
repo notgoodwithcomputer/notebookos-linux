@@ -120,5 +120,7 @@ print()
 if failures:
     print("MEDIA STRIP LIFECYCLE SELFTEST: %d checks, %d FAILED" %
           (checks, len(failures)))
+    print("RESULT: FAILED")
     raise SystemExit(1)
 print("MEDIA STRIP LIFECYCLE SELFTEST: %d checks, all pass" % checks)
+print("RESULT: PASS")

@@ -59,6 +59,7 @@ DE = os.path.join(ROOT, "buildroot", "board", "notebookos", "rootfs-overlay",
 # placeholder (%d/%i/%f, or {} / {:..}); %s is usually text and is NOT a number
 # here (the runtime-composed case the docstring cedes to the dynamic proof).
 _NUM = r"(?:\d|%[-+ #0]*\d*\.?\d*[difDIF]|\{\d*:?[^{}]*\})"
+_CURRENCY = r"(?:[$£€¥₹₩₽]\s*)*"
 # HIGH-CONFIDENCE only: a SIGN that STARTS a numeric run (at string start or
 # after whitespace). Deliberately NOT flagged, because the static view cannot
 # tell a truly-broken one from a correct one and the dynamic Pango proof must:
@@ -75,7 +76,7 @@ _NUM = r"(?:\d|%[-+ #0]*\d*\.?\d*[difDIF]|\{\d*:?[^{}]*\})"
 #     whole-wrapping, which FLIPS the figure to the wrong end and splits yi
 #     combining marks. The class (ES vs ET), not the character's look, decides.
 AT_RISK = re.compile(
-    r"(?:^|\s)[-+−]" + _NUM)                  # leading SIGN (ES) at a boundary
+    r"(?:^|\s)[-+−]" + _CURRENCY + _NUM)      # sign + optional ET + number
 
 # Debt: LEADING-SIGN labels ("+"/"−" before a number) not yet routed through
 # ltr(). module -> count, exact-match both directions (fix one and drop the
@@ -129,17 +130,34 @@ def _visible_at_risk(tree):
     at-risk. Only literals that reach a text call or a _t() — a docstring or a
     dict key that happens to look numeric is not a label."""
     out, seen = [], set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
-        if name not in _TEXT:
-            continue
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Constant) and isinstance(sub.value, str) \
-                    and id(sub) not in seen and AT_RISK.search(sub.value):
-                seen.add(id(sub))       # one literal, one finding, even if it
-                out.append((getattr(sub, "lineno", 0), sub.value, id(sub)))
+    scopes = [tree] + [n for n in ast.walk(tree)
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for scope in scopes:
+        definitions = {}
+        for stmt in getattr(scope, "body", ()):
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                if len(targets) == 1 and isinstance(targets[0], ast.Name) \
+                        and stmt.value is not None:
+                    definitions.setdefault(targets[0].id, []).append(
+                        (stmt.lineno, stmt.value))
+        for node in ast.walk(scope):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+            if name not in _TEXT or not node.args:
+                continue
+            shown = node.args[0]
+            if isinstance(shown, ast.Name):
+                prior = [value for line, value in definitions.get(shown.id, ())
+                         if line < node.lineno]
+                if prior:
+                    shown = prior[-1]
+            for sub in ast.walk(shown):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str) \
+                        and id(sub) not in seen and AT_RISK.search(sub.value):
+                    seen.add(id(sub))
+                    out.append((getattr(sub, "lineno", 0), sub.value, id(sub)))
     return out
 
 
@@ -180,6 +198,7 @@ def main():
               % (len(_FAILS), n))
         return 1
     print("PASS  rtl: %d checks (no unratcheted at-risk labels)" % n)
+    print("RESULT: PASS")
     return 0
 
 

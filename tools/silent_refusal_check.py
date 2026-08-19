@@ -13,6 +13,7 @@ that the ordinary analysis reports it.
 from __future__ import annotations
 
 import ast
+import collections
 import copy
 import contextlib
 import io
@@ -91,12 +92,6 @@ sequencer.py:_paste_clip
 sequencer.py:_toggle_loop
 sequencer.py:_toggle_metro
 tasks.py:_remove_list
-terminal.py:_shell_reset
-terminal.py:_term_copy
-terminal.py:_term_paste
-terminal.py:_term_select_all
-terminal.py:_toggle_blink
-terminal.py:_zoom
 video.py:_delete_clip_guarded
 video.py:_menu_add_transition
 video.py:_menu_split
@@ -151,11 +146,12 @@ DEBT = {
     ("academics.py", "_clear_search"): "The empty-query guard is the inverse of Clear Search's derived query state.",
     ("academics.py", "_cycle_style"): "The editor/active guard mirrors the menu's derived open-lecture flag.",
     ("academics.py", "_delete_homework"): "The empty done-list guard mirrors the menu's finished-homework count.",
+    ("academics.py", "_delete_lecture"): "A failed durable write is reported by the shared save path and the mutation is rolled back.",
     ("academics.py", "_insert_at_cursor"): "The editor/active guard mirrors the Insert menu's open-lecture flag.",
     ("academics.py", "_insert_list"): "The editor/active guard mirrors the Insert menu's open-lecture flag.",
     ("academics.py", "_move_lecture"): "The active-index/class-count guard mirrors the open-lecture/two-class condition.",
     ("academics.py", "_nav"): "The empty display-order guard protects a derived sidebar invariant.",
-    ("academics.py", "_new_lecture"): "The no-classes branch opens New Class, so the return completes a fallback action.",
+    ("academics.py", "_new_lecture"): "A failed durable write is reported by the shared save path and the mutation is rolled back — the same shape as _delete_lecture. The no-classes branch this row used to name is GONE: it delegates to New Class and now returns that call's result, so it is no longer a silent exit at all.",
     ("academics.py", "_recount"): "The missing-body branch visibly sets the word count to zero before returning.",
     ("academics.py", "_set_style"): "The editor/active guard mirrors the Format menu's open-lecture flag.",
     ("academics.py", "_toggle_tag"): "The editor/selection/tag guards protect formatting state; no selection only restores focus.",
@@ -165,11 +161,15 @@ DEBT = {
     ("animation.py", "_rename_cel_prompt"): "The missing-cel guard mirrors the menu's _active_cel() condition.",
     ("bills.py", "_open_payment"): "The missing-bill guard mirrors selection gating; the nested relookup protects a stale overlay.",
     ("bills.py", "_undo_delete"): "The duplicate-id guard cancels a stale undo that would corrupt bill identity.",
+    ("burner.py", "close"): "A second Close while the confirmed burn cancellation is already stopping is an idempotent lifecycle no-op; the visible Stopping status remains.",
     ("calculator.py", "recall"): "The empty-tape and forward-boundary guards silently refuse enabled history commands.",
     ("comics.py", "_arrange_bubble"): "The range guard silently refuses an enabled bubble-order command at either boundary.",
     ("comics.py", "_delete_selection"): "The invalid-index guard protects a stale selection after presence gating.",
     ("comics.py", "_structure"): "The false model-operation guard preserves page invariants reflected by menu/dock sensitivity.",
     ("contacts.py", "_clear_search"): "The empty query/widget guard mirrors Clear Search's derived text flag.",
+    ("contacts.py", "_new_contact"): "A failed pending edit or placeholder cleanup remains visibly open for retry with its save error.",
+    ("contacts.py", "_undo_delete"): "A failed restore write rebuilds the durable model and the shared save path reports the error.",
+    ("contacts.py", "_toggle_edit"): "A failed edit save is surfaced by _commit_edits and deliberately keeps the form open for retry.",
     ("contacts.py", "_delete_contact"): "The pending guard debounces re-entry; the index guard mirrors selected-card gating.",
     ("contacts.py", "_export_vcard"): "The empty-book guard mirrors both export entries' has-contact condition.",
     ("contacts.py", "_step"): "The empty-order guard silently refuses enabled Next/Previous Contact commands.",
@@ -177,6 +177,9 @@ DEBT = {
     ("cookbook.py", "_select_relative"): "The empty-list guard silently refuses enabled Next/Previous Recipe commands.",
     ("ebook.py", "_on_library_open"): "The revealer guard returns only after the library sheet is populated and shown.",
     ("g2048.py", "move"): "The overlay guard blocks hidden mutation; the no-move guard is the game's invalid-move no-op.",
+    ("g2048.py", "undo_reset_best"): "The missing token is menu-gated; failed persistence restores it and reports through the save path.",
+    ("gbaemu.py", "close"): "A vetoed close leaves the active-game confirmation visible.",
+    ("g2048.py", "undo_new_game"): "A failed durable undo is surfaced by _save_best and rolls the board plus the one-shot undo token back before returning.",
     ("gbasdk.py", "_delete_resource"): "The missing/stale selection guards mirror Delete Resource gating.",
     ("gbasdk.py", "_move_to_folder"): "The missing-resource guard mirrors the derived resource selection.",
     ("gbasdk.py", "_rename_resource"): "The missing-resource guard mirrors the derived resource selection.",
@@ -187,11 +190,20 @@ DEBT = {
     ("illustrator.py", "_move_layer"): "The destination guard is the boundary no-op for directional layer aliases.",
     ("illustrator.py", "_set_zoom"): "Closed is lifecycle protection; equal normalized zoom is an already-at-target no-op.",
     ("illustrator.py", "_zoom_fit"): "Closed/zero-allocation guards defer fitting until the viewport is measurable.",
+    # ("illustrator.py", "_show_all_layers") was here, and the gate reported it
+    # STALE. It is not a silent refusal any more: the View menu now offers the
+    # item only `if any(not ly.visible for ly in self.layers)`, which is the
+    # method's own guard word for word, so the check accounts for it as menu
+    # gating and never raises the finding. A ledger row that matches nothing is
+    # headroom a real refusal can be added into without turning this gate red,
+    # so it comes out rather than being carried.
+    ("illustrator.py", "_toggle_visible"): "The index guard protects a stale layer-row callback after a rebuild.",
     ("journal.py", "_clear_format"): "The entry guard mirrors gating; no selection silently leaves formatting unchanged.",
     ("journal.py", "_clear_search"): "The empty query/widget guard mirrors Clear Search's query flag.",
     ("journal.py", "_delete_active"): "The pending guard debounces re-entry; the index guard mirrors entry gating.",
     ("journal.py", "_go_entry"): "The no-entries guard is implied by the separately derived older/newer boundary gating.",
     ("journal.py", "_toggle_tag"): "The entry guard mirrors gating; no selection silently applies no character tag.",
+    ("language.py", "_reset_progress"): "Cancellation is visible; failed persistence restores progress and reports through the save path.",
     ("maps.py", "_fit"): "The missing-map guard silently refuses Fit before a map is loaded.",
     ("maps.py", "_zoom"): "The missing-map guard silently refuses Zoom before a map is loaded.",
     ("mealplanner.py", "_clear_week"): "The zero-meals guard mirrors Clear Week's nonempty-week condition.",
@@ -213,14 +225,12 @@ DEBT = {
     ("sequencer.py", "_toggle_loop"): "The selected-clip return follows setting the loop; no selection flashes guidance.",
     ("sequencer.py", "_toggle_metro"): "The loading guard suppresses callbacks while saved state is restored.",
     ("tasks.py", "_remove_list"): "The protected-name guard rejects built-in lists the removable-list UI does not offer.",
-    ("terminal.py", "_shell_reset"): "The missing-terminal guard protects startup/teardown before shell reset.",
-    ("terminal.py", "_term_copy"): "The missing-terminal guard protects startup/teardown before clipboard access.",
-    ("terminal.py", "_term_paste"): "The missing-terminal guard protects startup/teardown before clipboard access.",
-    ("terminal.py", "_term_select_all"): "The missing-terminal guard protects startup/teardown before selection access.",
-    ("terminal.py", "_toggle_blink"): "The missing-terminal guard protects startup/teardown before cursor changes.",
-    ("terminal.py", "_zoom"): "The missing-terminal guard protects startup/teardown before font scaling.",
+    ("tasks.py", "_clear_completed"): "The failed-save branch is already surfaced by _save_tasks and rolls the mutation back.",
     ("video.py", "_delete_clip_guarded"): "The missing/stale clip guard mirrors selected-clip gating.",
-    ("video.py", "_menu_add_transition"): "The missing/stale clip guard mirrors selected-clip gating.",
+    # ("video.py", "_menu_add_transition") was here. The item is offered only
+    # when (has_clip and k > 0), which is exactly what _can_lead_in() re-states,
+    # and the gate now matches that itself — it reported the row STALE. Ratchet
+    # down rather than carry a row that protects nothing.
     ("video.py", "_menu_split"): "Clip selection mirrors gating; sub-two-frame duration is unsplittable.",
     ("video.py", "_move_clip"): "The selected/destination guards mirror separately gated move aliases.",
     ("workout.py", "_delete_exercise"): "The missing-exercise guard mirrors exercise selection.",
@@ -229,8 +239,30 @@ DEBT = {
     ("writer.py", "_undo"): "The oldest-history guard mirrors the menu's derived can-undo boundary state.",
 }
 
+# A method may contain several independently silent exits.  The old set of
+# (file, method) keys collapsed those exits, so adding a fourth refusal to an
+# already-ledgered three-refusal callback stayed green.  Preserve multiplicity
+# until condition-level fingerprints replace these remaining debts.
+DEBT_COUNTS = collections.Counter({key: 1 for key in DEBT})
+DEBT_COUNTS.update({
+    ("academics.py", "_delete_homework"): 1,
+    ("g2048.py", "move"): 1,
+    ("mealplanner.py", "_clear_week"): 1,
+    ("academics.py", "_toggle_tag"): 2,       # total 3
+    ("animation.py", "_delete_cel"): 1,
+    ("calculator.py", "recall"): 1,
+    ("gbasdk.py", "_delete_resource"): 1,
+    ("illustrator.py", "_set_zoom"): 1,
+    ("illustrator.py", "_zoom_fit"): 1,
+    ("novel.py", "_on_fmt"): 1,
+    ("video.py", "_move_clip"): 1,
+    ("bills.py", "_undo_delete"): 1,
+    ("music.py", "_delete_current_playlist"): 1,
+    ("tasks.py", "_remove_list"): 1,
+})
+
 FEEDBACK_WORDS = (
-    "flash", "overlay", "prompt", "dialog", "save_failure_reason",
+    "flash", "overlay", "prompt", "dialog",
     "status", "chip", "message", "alert", "toast", "notify", "warning",
     "confirm", "choose", "chooser", "picker", "pick_file", "select_file",
     "guard_document", "ok_to_discard", "confirm_discard", "_card",
@@ -435,7 +467,13 @@ def _scan_block(statements, guards, feedback, source, out, bindings=None):
             if not seen_feedback and not any(_has_feedback(g) for g, _, _ in guards):
                 guard, text, guard_bindings = guards[-1]
                 out.append((stmt, guard, text, guard_bindings))
-        if _has_feedback(stmt):
+        # Feedback buried in one branch does not dominate later statements:
+        # the other branch can still reach a silent refusal.  Compound-flow
+        # feedback is analysed inside that construct above, not promoted to
+        # the surrounding sequential path.
+        if not isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.While,
+                                 ast.With, ast.AsyncWith, ast.Try)) \
+                and _has_feedback(stmt):
             seen_feedback = True
 
 
@@ -626,27 +664,33 @@ def run_gate(module_dir=DE, only=None, use_ledger=True):
         accounted_count += len(accounted)
         findings.extend(real)
 
-    actual_keys = {(f.file, f.method) for f in findings}
-    ledger = set(DEBT) if use_ledger and module_dir == DE and not only else set()
+    actual = collections.Counter((f.file, f.method) for f in findings)
+    ledger = DEBT_COUNTS if use_ledger and module_dir == DE and not only \
+        else collections.Counter()
     problems = 0
+    extras = actual - ledger
+    missing = ledger - actual
+    remaining = collections.Counter(extras)
     for f in findings:
-        if (f.file, f.method) not in ledger:
+        key = (f.file, f.method)
+        if remaining[key]:
+            remaining[key] -= 1
             problems += 1
             print(f"{f.file}:{f.method}:{f.line}: {f.condition}")
-    for key in sorted(ledger - actual_keys):
-        problems += 1
-        print(f"LEDGER STALE  {key[0]}:{key[1]} — {DEBT[key]}")
+    for key, count in sorted(missing.items()):
+        problems += count
+        print(f"LEDGER STALE  {key[0]}:{key[1]} x{count} — {DEBT[key]}")
     print(f"{callbacks} menu callbacks parsed across {modules} app modules; "
           f"{silent} silent returns; {accounted_count} accounted for by menu gating; "
           f"{len(findings)} findings before DEBT; "
-          f"{len(actual_keys & ledger)} ledger keys matched")
+          f"{sum((actual & ledger).values())} ledger findings matched")
     print("RESULT: " + ("PASS" if not problems else
                         f"FAILED: {problems} problem(s)"))
     return 1 if problems else 0
 
 
 def selfcheck():
-    """Insert one ungated silent guard in a copied real menu callback."""
+    """Prove silent guards cannot be hidden behind discarded reason text."""
     scratch = tempfile.mkdtemp(prefix="nb-silent-refusal-selfcheck-")
     try:
         module = "calculator"
@@ -662,12 +706,13 @@ def selfcheck():
         indent = " " * (method.col_offset + 4)
         sabotage = (indent + "# silent_refusal_check selfcheck sabotage\n" +
                     indent + "if self is not None:\n" +
+                    indent + "    nbapp.save_failure_reason(None)\n" +
                     indent + "    return None\n")
         lines.insert(insert - 1, sabotage)
         with open(target, "w", encoding="utf-8") as fh:
             fh.write("".join(lines))
-        print("SELFCHECK sabotage: calculator.py:_copy_result now returns None "
-              "under ungated guard `self is not None`")
+        print("SELFCHECK sabotage: calculator.py:_copy_result discards a "
+              "save-failure reason, then returns under an ungated guard")
         capture = io.StringIO()
         with contextlib.redirect_stdout(capture):
             rc = run_gate(scratch, only=module, use_ledger=False)

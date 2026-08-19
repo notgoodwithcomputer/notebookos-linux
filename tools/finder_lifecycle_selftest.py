@@ -276,3 +276,4 @@ if __name__ == "__main__":
             print("  - " + f)
         sys.exit(1)
     print("\nFinder lifecycle selftest: OK")
+    print("RESULT: PASS")

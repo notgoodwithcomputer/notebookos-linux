@@ -92,8 +92,32 @@ def literals(path):
                     and isinstance(body[0].value, ast.Constant)
                     and isinstance(body[0].value.value, str)):
                 docstrings.add(id(body[0].value))
+    # A regular expression is not text anybody reads. A character CLASS names
+    # its ranges by their endpoints, and an endpoint is routinely an
+    # unassigned codepoint on purpose ("[\u4e00-\u9fff]" ends at U+9FFF,
+    # which no font can draw because nothing is there) -- reporting those as
+    # tofu says the OS will show empty boxes for characters it never draws.
+    # Only the arguments of re.compile/match/search/sub and names ending _RE
+    # are skipped, so ordinary interface text is still swept.
+    regex_nodes = set()
     for node in ast.walk(tree):
-        if id(node) in docstrings:
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = getattr(fn, "attr", None) or getattr(fn, "id", "")
+            mod = getattr(getattr(fn, "value", None), "id", "")
+            if mod == "re" or name in ("compile", "match", "search", "fullmatch",
+                                       "sub", "split", "findall"):
+                for arg in node.args[:1]:
+                    for sub in ast.walk(arg):
+                        regex_nodes.add(id(sub))
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id.endswith("_RE"):
+                    for sub in ast.walk(node.value):
+                        regex_nodes.add(id(sub))
+
+    for node in ast.walk(tree):
+        if id(node) in docstrings or id(node) in regex_nodes:
             continue
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             for ch in node.value:
@@ -176,6 +200,9 @@ def main():
             bad.append(ch)
     if not bad:
         print("No tofu: every character resolves in at least one shipped face.")
+        # Terminal verdict for the release runner: a zero exit with only a
+        # prose line is read as DID NOT RUN (run_all_gates SUCCESSWORD).
+        print("RESULT: ALL PASS")
     for ch in bad:
         try:
             name = unicodedata.name(ch)

@@ -267,4 +267,5 @@ with tempfile.TemporaryDirectory(prefix="nb-undo-cleanup-") as root:
 print("\n%d checks, %d failed" % (checks, len(failures)))
 for line in failures:
     print("  FAILED: " + line)
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

@@ -281,10 +281,12 @@ def main():
     if FAILURES:
         print("FINDER COPY COLLISION SELFTEST: %d checks, %d FAILED"
               % (CHECKS[0], len(FAILURES)))
+        print("RESULT: FAIL")
         for f in FAILURES:
             print("   - %s" % f)
         return 1
     print("FINDER COPY COLLISION SELFTEST: %d checks, all pass" % CHECKS[0])
+    print("RESULT: PASS")
     return 0
 
 

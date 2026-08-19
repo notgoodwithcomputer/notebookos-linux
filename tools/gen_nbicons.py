@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 from pathlib import Path
 import re
+import tempfile
 import xml.etree.ElementTree as ET
 
 
@@ -286,9 +288,43 @@ def generate(vendor=VENDOR):
     return "\n".join(lines)
 
 
+def _write_atomic(output, content):
+    """Durably publish generated source without truncating the prior copy."""
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    mode = output.stat().st_mode & 0o7777 if output.exists() else 0o644
+    fd, tmp = tempfile.mkstemp(prefix="." + output.name + ".",
+                               dir=str(output.parent))
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fd = -1
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, output)
+        tmp = None
+        try:
+            dirfd = os.open(output.parent, os.O_RDONLY)
+            try:
+                os.fsync(dirfd)
+            finally:
+                os.close(dirfd)
+        except OSError:
+            pass
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(); parser.add_argument("--output",type=Path,default=DEFAULT_OUTPUT); parser.add_argument("--vendor",type=Path,default=VENDOR)
-    args=parser.parse_args(argv); args.output.parent.mkdir(parents=True,exist_ok=True); args.output.write_text(generate(args.vendor),encoding="utf-8")
+    args=parser.parse_args(argv); _write_atomic(args.output, generate(args.vendor))
     print(f"generated {args.output} ({len(MAPPING)} icons)")
 
 

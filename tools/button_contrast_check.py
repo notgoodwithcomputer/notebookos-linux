@@ -37,6 +37,21 @@ os.makedirs(os.environ["NB_HOME"], exist_ok=True)
 sys.path.insert(0, _HERE)
 import uishot  # noqa: E402
 
+# Stand clear of the single-instance lock, the way construct_all_host.py does.
+# nbapp.claim_single_instance() calls os._exit(0) -- no traceback, no output,
+# exit status ZERO -- when the app being constructed is already open in another
+# process, and this gate builds 35 apps in ONE process. An app left open on the
+# developer's desktop (or a sibling gate constructing the same app) therefore
+# ended the run part-way through and the missing verdict read as "did not run"
+# rather than as a result. This process is not a real app and must never stand
+# down.
+try:
+    import nbapp as _nbapp  # noqa: E402
+    _nbapp._APP_DIR = os.path.join(os.environ["NB_HOME"], "nb-apps-buttoncontrast")
+    os.makedirs(_nbapp._APP_DIR, exist_ok=True)
+except Exception:                                                 # noqa: BLE001
+    pass
+
 AA_LARGE = 3.0        # WCAG AA for large / bold text
 INVISIBLE = 1.5       # below this the label is simply not there
 
@@ -57,8 +72,16 @@ def ratio(fg, bg):
     return (hi + 0.05) / (lo + 0.05)
 
 
-def _rgba(ctx, prop):
-    v = ctx.get_property(prop, Gtk.StateFlags.NORMAL)
+def _rgba(ctx, prop, state=Gtk.StateFlags.NORMAL):
+    """One resolved style colour, as (r,g,b) 0-255 plus alpha.
+
+    `state` is a parameter rather than a constant because the same surface has
+    to be asked "and what are you under the pointer / when chosen?" -- see
+    tools/text_contrast_check.py, which reuses this and _effective_bg below so
+    that "the surface the text is actually read against" has exactly ONE
+    definition in the tool-set. Defaulting to NORMAL keeps every existing
+    caller byte-identical."""
+    v = ctx.get_property(prop, state)
     return (v.red * 255, v.green * 255, v.blue * 255), v.alpha
 
 
@@ -82,7 +105,7 @@ def _buttons(w, out):
     return out
 
 
-def _effective_bg(start):
+def _effective_bg(start, state=Gtk.StateFlags.NORMAL):
     """The surface the TEXT is actually read against.
 
     The nearest filled node at or above `start`, which is the LABEL -- not the
@@ -107,7 +130,7 @@ def _effective_bg(start):
     w = start
     for _ in range(8):
         ctx = w.get_style_context()
-        rgb, alpha = _rgba(ctx, "background-color")
+        rgb, alpha = _rgba(ctx, "background-color", state)
         if alpha > 0.35:
             return rgb
         w = w.get_parent()
@@ -193,7 +216,7 @@ APPS = ["academics", "accounting", "animation", "bills", "calculator", "calendar
         "contacts", "cookbook", "ebook", "g2048", "gbaemu", "gbasdk", "illustrator",
         "installer", "journal", "language", "maps", "mealplanner", "media",
         "music", "novel", "packages", "screenplay", "sequencer", "settings",
-        "burner", "composer", "sysmon", "tasks", "terminal", "usbwriter",
+        "burner", "composer", "sysmon", "tasks", "usbwriter",
         "video", "workout",
         "writer", "finder"]
 
@@ -204,12 +227,16 @@ def main():
     total = worst = 0
     gone = 0                  # under INVISIBLE: a defect by any standard
     worst_line = None
+    probed = 0
+    errors = 0
     for name in apps:
         try:
             bad = check_app(name)
         except Exception as exc:                                  # noqa: BLE001
             print("ERR  %-13s %s" % (name, str(exc)[:70]))
+            errors += 1
             continue
+        probed += 1
         for r, text, fg, bg, classes in sorted(bad):
             total += 1
             tag = "INVISIBLE" if r < INVISIBLE else "low"
@@ -230,7 +257,11 @@ def main():
           % (total, AA_LARGE, gone, INVISIBLE))
     if worst_line:
         print("worst: %.2f:1  %s  %r" % worst_line)
-    return 1 if total else 0
+    print("%d/%d app(s) inspected; %d probe error(s)" %
+          (probed, len(apps), errors))
+    failed = bool(total or errors or probed != len(apps))
+    print("RESULT: %s" % ("FAILED" if failed else "PASS"))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

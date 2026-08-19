@@ -59,6 +59,21 @@ def sample_song():
     return song
 
 
+def extension_checks():
+    """Normalization must not destroy fields owned by a newer song schema."""
+    song = sample_song()
+    song["future"] = {"author": "Ada"}
+    song["tracks"][0]["midi_channel"] = 3
+    song["tracks"][0]["notes"][0]["articulation"] = "staccato"
+    got = composer.normalize_song(song)
+    check("normalization preserves unknown top-level song fields",
+          got.get("future") == {"author": "Ada"})
+    check("normalization preserves unknown track fields",
+          got["tracks"][0].get("midi_channel") == 3)
+    check("normalization preserves unknown note fields",
+          got["tracks"][0]["notes"][0].get("articulation") == "staccato")
+
+
 def midi_checks():
     song = sample_song()
     raw = composer.midi_export(song)
@@ -280,8 +295,17 @@ def mutant_check():
     try:
         mutant_dir = Path(root) / "de"; mutant_dir.mkdir()
         source = (MODULE_DIR / "composer.py").read_text(encoding="utf-8")
-        source = source.replace("nbapp.quarantine_unrecognized(STATE_FILE); self._read_only = True; return new_song()",
-                                "self._read_only = False; return new_song()")
+        # (the guard now quarantines and stays writable when the damaged file
+        # was moved aside — read-only only if it could NOT be; the sabotage
+        # removes the quarantine and the guard together)
+        target = ("            nbapp.quarantine_unrecognized(STATE_FILE)\n"
+                  "            self._read_only = os.path.exists(STATE_FILE)\n"
+                  "            if self._read_only:\n"
+                  "                self._session_warning = _t(\"This could not be saved.\")\n"
+                  "            return new_song()")
+        assert target in source, "mutant target missing: " + target[:60]
+        source = source.replace(target,
+                                "            self._read_only = False; return new_song()")
         (mutant_dir / "composer.py").write_text(source, encoding="utf-8")
         home = Path(root) / "home"; cfg = home / ".config/notebook"; cfg.mkdir(parents=True)
         # Valid JSON with the wrong application shape reaches atomic_write's
@@ -324,7 +348,8 @@ def notation_mutant_check():
 
 
 if __name__ == "__main__":
-    for name, fn in (("MIDI checks", midi_checks), ("editing checks", editing_checks),
+    for name, fn in (("extension checks", extension_checks),
+                     ("MIDI checks", midi_checks), ("editing checks", editing_checks),
                      ("notation checks", notation_checks), ("store checks", store_checks),
                      ("mutant checks", mutant_check), ("notation mutant checks", notation_mutant_check)):
         try: fn()

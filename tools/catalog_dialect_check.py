@@ -130,7 +130,7 @@ def main(argv):
         print("RESULT: MIXED DIALECT in %s"
               % ", ".join(sorted({f[0] for f in findings})))
         return 1
-    print("RESULT: every catalog speaks one dialect")
+    print("RESULT: PASS — every catalog speaks one dialect")
     return 0
 
 

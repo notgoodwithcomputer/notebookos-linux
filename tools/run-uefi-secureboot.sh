@@ -17,6 +17,21 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 IMG="$ROOT/boot-work/notebookos-uefi.img"
 WORK="$ROOT/boot-work"; mkdir -p "$WORK"
 [ -f "$IMG" ] || { echo "missing image: $IMG (run tools/mkimage-uefi.sh)"; exit 2; }
+QPID=
+
+cleanup() {
+  if [ -n "$QPID" ]; then
+    if kill -0 "$QPID" 2>/dev/null; then
+      kill "$QPID" 2>/dev/null || true
+    fi
+    wait "$QPID" 2>/dev/null || true
+  fi
+  QPID=
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd
 OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.ms.fd
@@ -54,5 +69,6 @@ f.readline(); f.write(json.dumps({"execute":"qmp_capabilities"})+"\n"); f.flush(
 f.write(json.dumps({"execute":"screendump","arguments":{"filename":out}})+"\n"); f.flush(); f.readline()
 time.sleep(1); print("screenshot ->",out)
 PY
-kill -9 "$QPID" 2>/dev/null || true
+cleanup
+trap - EXIT HUP INT TERM
 echo "--- serial.sb.log (tail) ---"; tail -30 "$WORK/serial.sb.log" 2>/dev/null || true

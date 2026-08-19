@@ -138,6 +138,27 @@ for node in ast.walk(tree):
                     and sub.value.id == "self"):
                 uses = True
 check(uses, "_launch builds the vbam command from self.scale_filter")
+check('st.connect("delete-event", self._on_stage_delete)' in src
+      and 'st.connect("destroy", self._on_stage_destroy)' in src,
+      "window-manager and defensive stage teardown both enter game cleanup")
+
+# Exiting before the delayed launch fires must not start an emulator after its
+# stage has already been destroyed.
+exits = []
+early = nbgame.GameSession(None, "/bin/false", "/nonexistent.gba",
+                           lambda: exits.append(True), scale_filter="17")
+early._launch_id = 887
+removed = []
+real_remove = nbgame.GLib.source_remove
+nbgame.GLib.source_remove = lambda source_id: removed.append(source_id) or True
+try:
+    early._finish()
+finally:
+    nbgame.GLib.source_remove = real_remove
+check(removed == [887] and early._launch_id == 0 and exits == [True],
+      "finishing early removes the owned delayed-launch source")
+check(early._launch() is False and early.proc is None,
+      "a launch callback dispatched after finish cannot start an emulator")
 
 print("%s — %d/%d checks passed"
       % ("FAIL" if fails else "PASS", len(ran) - len(fails), len(ran)))

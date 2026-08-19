@@ -158,8 +158,9 @@ class Scan:
         self._find_accessors()
         for n in ast.walk(self.tree):
             # C[key] = ...   (write)
-            if isinstance(n, ast.Assign):
-                for t in n.targets:
+            if isinstance(n, (ast.Assign, ast.AnnAssign)):
+                targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                for t in targets:
                     if isinstance(t, ast.Subscript):
                         c = attr_chain(t.value)
                         k = const_str(t.slice)
@@ -176,12 +177,36 @@ class Scan:
             # C.get(key, ...)  (read)
             elif isinstance(n, ast.Call):
                 f = n.func
+                # C.update({"key": value}) / C.update(key=value) are writes
+                # just as surely as C["key"] = value. Missing this shape let a
+                # control persist and reload only itself while the scanner saw
+                # no producer and silently omitted the key from verdicts.
+                if isinstance(f, ast.Attribute) and f.attr == "update":
+                    c = attr_chain(f.value)
+                    if c in CONTAINERS:
+                        keys = []
+                        if n.args and isinstance(n.args[0], ast.Dict):
+                            keys.extend(const_str(k) for k in n.args[0].keys)
+                        keys.extend(kw.arg for kw in n.keywords if kw.arg)
+                        for k in keys:
+                            if k:
+                                self.containers.add(c)
+                                self.writes[k].append(
+                                    self.func_of.get(id(n), ""))
                 if (isinstance(f, ast.Attribute) and f.attr == "get"
                         and n.args):
                     c = attr_chain(f.value)
                     k = const_str(n.args[0])
                     if c in CONTAINERS and k:
                         self.containers.add(c)
+                        self.reads[k].append(self.setter_targets.get(id(n)))
+                    elif (k and isinstance(f.value, ast.Name)
+                          and (self.func_of.get(id(n), "").startswith("_load")
+                               or self.func_of.get(id(n), "").startswith("load"))):
+                        # Some loaders parse JSON into a local `data` mapping
+                        # and return one preference instead of assigning the
+                        # whole mapping to self. Illustrator's _load_recent is
+                        # this shape. It is still a real persisted read.
                         self.reads[k].append(self.setter_targets.get(id(n)))
                 # self._cfg_int("blank_timeout", 0) -- a read through a typed
                 # accessor, which is where most settings are actually read.

@@ -20,12 +20,14 @@ tree = ast.parse(source, SOURCE)
 method = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef) and n.name == "_drive_row")
 segment = ast.get_source_segment(source, method) or ""
-check("Gtk.Button()" in segment and "Gtk.EventBox()" not in segment,
-      "each drive choice is a real button")
+check("Gtk.ToggleButton()" in segment and "Gtk.EventBox()" not in segment,
+      "each drive choice exposes selected state")
 check('connect("clicked"' in segment and "button-press-event" not in segment,
       "drive choice uses keyboard-aware clicked activation")
-check("dd=d" in segment and "self._choose(dd)" in segment,
+check("dd=d" in segment and "self._choose(dd, _w)" in segment,
       "each handler binds its own drive record")
+check("hit.set_active" in segment and "self._drive_buttons" in segment,
+      "selected state and rebuilt button identity are retained")
 check("set_tooltip_text" in segment and 'd["label"]' in segment
       and 'd["size"]' in segment and 'd["node"]' in segment,
       "accessible tooltip repeats label, capacity, and device identity")
@@ -44,6 +46,9 @@ choose = next(n for n in ast.walk(tree)
 choose_source = ast.get_source_segment(source, choose) or ""
 check("if self.busy" in choose_source and "self.selected = d" in choose_source,
       "the busy guard and selected-drive model remain authoritative")
+check('self._rescan(focus_node=d["node"])' in choose_source,
+      "selection rebuild restores focus to the chosen drive")
 
 print("\n%d failed" % len(fails))
+print("RESULT: %s" % ("FAILED" if fails else "PASS"))
 sys.exit(1 if fails else 0)

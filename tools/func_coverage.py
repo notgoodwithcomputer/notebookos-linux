@@ -41,6 +41,7 @@ import re
 import sys
 import glob
 import runpy
+import shutil
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -104,8 +105,9 @@ def suites_importing(module):
 
 
 def run_under_profile(suite, target):
-    """Run one suite; return the set of first-lines entered in `target`."""
+    """Run one suite; return (entered first-lines, suite completed cleanly)."""
     seen = set()
+    ok = True
 
     def prof(frame, event, _arg):
         if event == "call" and frame.f_code.co_filename == target:
@@ -113,14 +115,18 @@ def run_under_profile(suite, target):
         return None
 
     argv, home = list(sys.argv), os.environ.get("NB_HOME")
-    os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="nb-cov-")
+    scratch = tempfile.mkdtemp(prefix="nb-cov-")
+    os.environ["NB_HOME"] = scratch
     sys.argv = [suite]
     sys.setprofile(prof)
     try:
         runpy.run_path(suite, run_name="__main__")
-    except SystemExit:
-        pass
+    except SystemExit as exc:
+        ok = exc.code in (None, 0)
+        if not ok:
+            print("   (suite exited nonzero: %r)" % (exc.code,))
     except Exception as exc:                                    # noqa: BLE001
+        ok = False
         print("   (suite raised: %s: %s)" % (type(exc).__name__, exc))
     finally:
         sys.setprofile(None)
@@ -129,7 +135,8 @@ def run_under_profile(suite, target):
             os.environ.pop("NB_HOME", None)
         else:
             os.environ["NB_HOME"] = home
-    return seen
+        shutil.rmtree(scratch, ignore_errors=True)
+    return seen, ok
 
 
 def report(module):
@@ -144,8 +151,13 @@ def report(module):
         return (module, len(defined), 0, sorted(defined.values()))
 
     seen = set()
+    failed = []
     for s in suites:
-        seen |= run_under_profile(s, target)
+        reached, ok = run_under_profile(s, target)
+        if ok:
+            seen |= reached
+        else:
+            failed.append(os.path.basename(s))
 
     hit = set()
     for ln in seen:
@@ -157,6 +169,9 @@ def report(module):
     print("\n== %s: %d functions, %d entered, %d never  (%s)"
           % (module, len(defined), len(hit), len(miss),
              ", ".join(os.path.basename(s)[:-3] for s in suites)))
+    if failed:
+        print("     %d failing suite(s) excluded from coverage: %s"
+              % (len(failed), ", ".join(failed)))
     for ln, name in miss:
         print("     %-52s :%d" % (name, ln))
     return (module, len(defined), len(hit), [n for _l, n in miss])

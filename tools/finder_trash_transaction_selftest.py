@@ -36,6 +36,10 @@ def window(src, trash):
     win = finder.Finder.__new__(finder.Finder)
     model = Model(src)
     win._selected_iter = lambda: (model, object())
+    # Trash and the clipboard now act on the SELECTION, not on one row,
+    # so the stub answers the list helper too. Same fixture, same
+    # assertions -- only the door the code comes in through moved.
+    win._selected_paths = lambda: [model.path]
     win.abspath = lambda path: path
     win._trash_dir = lambda: trash
     win._flash_status = lambda message, *args: setattr(win, "status", message)
@@ -105,6 +109,15 @@ with tempfile.TemporaryDirectory(prefix="nb-trash-txn-") as root:
     origin2 = os.path.join(trash, ".origins", "blocked.txt")
     check(os.path.exists(src2), "move failure leaves the source in place")
     check(not os.path.exists(origin2), "move failure removes the staged origin")
+
+    # Unix filenames may end in whitespace. The origin sidecar has no newline
+    # delimiter, so Put Back must read it byte-for-byte rather than strip it.
+    spaced = os.path.join(source_dir, "report \t")
+    exact_origin = os.path.join(trash, ".origins", "spaced")
+    with open(exact_origin, "w", encoding="utf-8") as fh:
+        fh.write(spaced)
+    check(finder._read_origin_record(exact_origin) == spaced,
+          "Put Back preserves trailing whitespace in the original path")
 
 print()
 if failures:

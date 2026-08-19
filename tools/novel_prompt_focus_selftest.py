@@ -80,5 +80,7 @@ print()
 if failures:
     print("NOVEL PROMPT FOCUS SELFTEST: %d checks, %d FAILED" %
           (checks, len(failures)))
+    print("RESULT: FAIL")
     raise SystemExit(1)
 print("NOVEL PROMPT FOCUS SELFTEST: %d checks, all pass" % checks)
+print("RESULT: PASS")

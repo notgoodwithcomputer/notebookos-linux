@@ -8,9 +8,13 @@ story = text[text.index("    def _story_card("):text.index("    def _card_mat(")
 add = text[text.index("    def _story_add_card("):text.index("    # Timeline scale:")]
 lane = text[text.index("    def _lane_click_wrap("):text.index("    def _lane_chip(")]
 checks = {
-    "story cards are native buttons": "evt = Gtk.Button()" in story,
+    "story cards are native selectable buttons":
+        "evt = Gtk.ToggleButton()" in story and "evt.set_active(" in story,
     "story selection uses clicked semantics": 'evt.connect("clicked"' in story,
     "story actions name clip number and title": "Select clip %d: %s" in story,
+    "story selection restores keyboard focus after rebuild":
+        "focus_story=_w.has_focus()" in story
+        and "cells[self._sel_cell].grab_focus()" in text,
     "add card is a native button": "evt = Gtk.Button()" in add,
     "add card explains ready and prerequisite states":
         "Add selected media" in add and "Select media before adding a clip" in add,

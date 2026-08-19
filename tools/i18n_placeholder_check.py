@@ -51,15 +51,16 @@ def specs(s):
 # KeyError the moment the string is shown. Proven on
 # "...cropped to %(new)d x %(new)d pixels...": `%(newe)d` -> RESULT: PLACEHOLDERS
 # OK, then KeyError: 'newe' at runtime.
-NAMED = re.compile(r"%\(([A-Za-z_][A-Za-z_0-9]*)\)[-#0-9.+ ]*[a-zA-Z]")
+NAMED = re.compile(r"%\(([A-Za-z_][A-Za-z_0-9]*)\)([-#0-9.+ ]*[a-zA-Z])")
+VALID_CONVERSIONS = set("diouxXeEfFgGcrsa")
 
 
 def named_specs(s):
-    """Every %(name)X in `s`, as (name, count) -- order does not matter for
-    dict formatting, but the NAMES and how many times each appears do."""
+    """Every %(name)X as a typed multiset; dict placeholder order is free."""
     out = {}
-    for name in NAMED.findall(s):
-        out[name] = out.get(name, 0) + 1
+    for name, spec in NAMED.findall(s):
+        token = (name, spec)
+        out[token] = out.get(token, 0) + 1
     return out
 
 
@@ -95,6 +96,11 @@ def check(key, val):
     want = [p for (k, p), kind in zip(sp, kinds) if k == "spec" and not kind]
     counted = any(kinds)
     bad = []
+    invalid_key = [p for p in specs(key) if p[-1] not in VALID_CONVERSIONS]
+    invalid_key += ["%%(%s)%s" % (name, spec) for name, spec in named_specs(key)
+                    if spec[-1] not in VALID_CONVERSIONS]
+    if invalid_key:
+        bad.append("source key has unsupported conversions %s" % invalid_key)
     forms = [val]
     if val.count("|") == 1:
         if counted:
@@ -104,7 +110,7 @@ def check(key, val):
                        "with, so the whole string including the | is printed")
     elif val.count("|") > 1:
         bad.append("more than one |")
-    # named placeholders: same names, same number of uses, and no stray %
+    # Named placeholders: same names, types, and number of uses.
     kn = named_specs(key)
     if kn:
         for i, form in enumerate(forms):
@@ -112,14 +118,25 @@ def check(key, val):
             if vn != kn:
                 bad.append("named placeholders are %s, the key needs %s"
                            % (vn or "none", kn))
-            stray = bare_percents(form)
-            if stray:
-                stray_k = bare_percents(key)
-                if stray != stray_k:
-                    bad.append("%d stray %% that will raise when formatted"
-                               % stray)
 
+    stray_k = bare_percents(key)
+    formatted = bool(want or kn or counted)
+    if stray_k and formatted:
+        bad.append("source key has %d unrecognized %% that will raise when formatted"
+                   % stray_k)
     for i, form in enumerate(forms):
+        invalid = [p for p in specs(form) if p[-1] not in VALID_CONVERSIONS]
+        invalid += ["%%(%s)%s" % (name, spec)
+                    for name, spec in named_specs(form)
+                    if spec[-1] not in VALID_CONVERSIONS]
+        if invalid:
+            bad.append("unsupported conversions %s" % invalid)
+        # This applies to positional strings too. Previously it lived under
+        # ``if kn``, so ``Hello %s`` -> ``Hola %s %`` passed despite raising
+        # ValueError at the first interpolation.
+        stray = bare_percents(form)
+        if stray and formatted:
+            bad.append("%d stray %% that will raise when formatted" % stray)
         got = specs(form)
         if got != want:
             where = ("" if len(forms) == 1 else

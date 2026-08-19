@@ -97,11 +97,54 @@ try:
         w._load_progress()
         check("LANG-STORE-QUARANTINE malformed store is pending quarantine",
               w._quarantine_pending)
-        w._save_progress()
+        saved_ok = w._save_progress()
+    check("LANG-STORE-VERIFY successful save reports durable completion",
+          saved_ok is True)
     saved = guarded_load(cfg, "LANG-STORE-VERIFY replacement store is readable")
     damaged = [n for n in os.listdir(HOME) if n.startswith("language.json.damaged-")]
     check("LANG-STORE-QUARANTINE damaged bytes are retained", len(damaged) == 1)
     check("LANG-STORE-VERIFY replacement is a dict", isinstance(saved, dict))
+
+    # Python's JSON decoder accepts these non-standard numeric constants. One
+    # damaged nested statistic must not stop the whole course picker opening.
+    weird = language.Language.norm_progress({
+        "xp": 12,
+        "stats": {"lessons": float("nan"), "perfect": float("inf"),
+                  "best_streak": 4},
+    })
+    check("LANG-STORE-NONFINITE nested statistics do not crash normalization",
+          weird["xp"] == 12 and weird["stats"] == {
+              "lessons": 0, "perfect": 0, "best_streak": 4},
+          repr(weird.get("stats")))
+
+    # A failed protective move must stop before the replacement writer. The
+    # old code cleared pending and wrote anyway, so a transient read-only/full
+    # filesystem spent the only protection and the next successful write
+    # replaced the learner's original file.
+    original = b'["progress from another version"]'
+    with open(cfg, "wb") as fh:
+        fh.write(original)
+    w = bare({"xp": 9})
+    w._quarantine_pending = True
+    writes = []
+    notices = []
+    with mock.patch.object(language, "CFG_FILE", cfg), \
+            mock.patch.object(language, "_quarantine", return_value=False), \
+            mock.patch.object(language.nbapp, "atomic_write_json",
+                              lambda *a: writes.append(a)), \
+            mock.patch.object(language.nbapp, "note_save_failure",
+                              lambda *a: notices.append(a)):
+        failed_ok = w._save_progress()
+    check("LANG-STORE-FAILURE failed save reports incomplete persistence",
+          failed_ok is False)
+    with open(cfg, "rb") as fh:
+        after = fh.read()
+    check("LANG-STORE-MOVE-FAIL failed quarantine preserves original bytes",
+          after == original, repr(after))
+    check("LANG-STORE-MOVE-FAIL replacement write is refused and retried later",
+          not writes and w._quarantine_pending and len(notices) == 1,
+          "writes=%r pending=%r notices=%d" %
+          (writes, w._quarantine_pending, len(notices)))
 
     # A failed save has to reach the person. Course progress is real work — a
     # write that does not land loses the lesson just finished — and this check
@@ -137,4 +180,5 @@ finally:
     shutil.rmtree(HOME, ignore_errors=True)
 
 print("\n%d checks, %d failed" % (count, len(failed)))
+print("RESULT: %s" % ("FAILED" if failed else "PASS"))
 sys.exit(1 if failed else 0)

@@ -47,7 +47,7 @@ THEME = os.path.join(ROOT, "buildroot", "board", "notebookos",
                      "rootfs-overlay", "usr", "share", "themes", "Papertone",
                      "gtk-3.0", "gtk.css")
 
-SIDE = re.compile(r"border-(top|bottom)\s*:\s*1px\s+solid", re.I)
+SIDE_DECL = re.compile(r"border-(?:top|bottom)\s*:\s*([^;}]+)", re.I)
 CONTROL = re.compile(r"btn|button|chip|entry|field|input|switch|check|radio|"
                      r"slider|spin|combo|tab\b|pill|crumb", re.I)
 
@@ -107,6 +107,15 @@ def css_rules(text):
         yield m.group(1).strip().replace("\n", " "), m.group(2)
 
 
+def has_side_hairline(body):
+    """CSS border shorthand components are order-independent."""
+    for value in SIDE_DECL.findall(body):
+        tokens = {tok.lower() for tok in re.findall(r"[^\s]+", value)}
+        if "1px" in tokens and "solid" in tokens:
+            return True
+    return False
+
+
 def role_of(selector):
     s = selector.lower()
     for role, pat in ROLES.items():
@@ -130,7 +139,7 @@ def main():
         except OSError:
             continue
         for selector, body in css_rules(text):
-            if not SIDE.search(body):
+            if not has_side_hairline(body):
                 continue
             if len(selector) > 160 or "def " in selector:
                 continue          # a python block that merely looks like CSS
@@ -164,6 +173,8 @@ def main():
     print("\n%s  §E4 check 3 (hairline positions): %d rule(s) examined, "
           "%d placed, %d reviewed by hand"
           % ("FAIL" if fails else "PASS", checks, placed, len(REVIEWED)))
+    if not fails:
+        print("RESULT: PASS")
     return 1 if fails else 0
 
 

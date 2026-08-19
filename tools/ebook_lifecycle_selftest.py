@@ -31,6 +31,11 @@ import os
 import sys
 import tempfile
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DE = os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                  "opt/notebook/de")
+sys.path.insert(0, DE)
+
 os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="ebook-lifecycle-"))
 
 import ebook  # noqa: E402
@@ -231,8 +236,16 @@ def main():
     gone = _os.path.join(_tf.mkdtemp(prefix="ebook-gone-"), "anna.pdf")
     w = _reader_with_missing_page(gone)              # file does NOT exist
     cls._pdf_show_page(w)
+    # The sentence is looked for across the whole card, not in one slot: a
+    # notice now says WHAT WENT WRONG on the card's own line and puts the file
+    # under it in the caption, where it used to be the other way round. What
+    # this check is about is that the reader is told at all.
+    def said_text(call):
+        return " ".join(str(part) for part in call)
+
     check("a page turn on a vanished PDF says so instead of going blank",
-          len(w.said) == 1 and "no longer at that location" in w.said[0][3])
+          len(w.said) == 1
+          and "no longer at that location" in said_text(w.said[0]))
     check("...and does not fall through to the blank relayout",
           w.relayouts == 0)
 
@@ -242,7 +255,7 @@ def main():
     check("a page that fails while the file is present blames the PDF, "
           "not the storage",
           len(w2.said) == 1 and "could not be opened for rendering"
-          in w2.said[0][3])
+          in said_text(w2.said[0]))
 
     # ---- a shelf that cannot be read is not an empty shelf.
     # _load_state used to treat "no file" and "file that will not parse" as the
@@ -300,6 +313,15 @@ def main():
                                '"fmt": "PDF"}]}')
     check("a shelf that reads fine is not read-only",
           w3._store_damaged is False and len(w3._books) == 1)
+
+    # Python deliberately accepts these non-standard constants in JSON. A NaN
+    # used to survive the loader's clamp and become 100% in the resume clamp,
+    # jumping a reopened book to the bottom of its saved page.
+    w4, _ = _reader_with_store('{"books": [{"path": "/finite", '
+                               '"title": "Finite", "fmt": "EPUB", '
+                               '"frac": NaN}]}')
+    check("a non-finite saved scroll position falls back to the page start",
+          len(w4._books) == 1 and w4._books[0]["frac"] == 0.0)
 
     print("RESULT: " + ("ALL PASS" if all(results) else "SOME FAILED"))
     sys.exit(0 if all(results) else 1)

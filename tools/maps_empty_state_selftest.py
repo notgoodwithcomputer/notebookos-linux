@@ -111,4 +111,5 @@ check(bool(branches) and any(is_sync_call(stmt) for stmt in branches[0].orelse),
       "the no-map branch is the one that installs the empty state")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

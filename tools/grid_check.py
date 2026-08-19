@@ -24,6 +24,8 @@ migration row 3d in PAPER-PHYSICS §9.
 import os
 import re
 import sys
+import ast
+from decimal import Decimal, InvalidOperation
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -91,29 +93,74 @@ def check_lockstep():
            % (m.groups() if m else "MISSING", budget))
 
 
-def check_rails():
-    pat = re.compile(r"^\s*(SIDEBAR_W|PANEL_W|DOCK_W|RAIL_W)\s*=\s*(\d+)",
-                     re.M)
+_RAIL_NAMES = {"SIDEBAR_W", "PANEL_W", "DOCK_W", "RAIL_W"}
+
+
+def _int_expr(node):
+    """Safely fold simple integer constant arithmetic, or return None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) \
+            and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        value = _int_expr(node.operand)
+        if value is not None:
+            return value if isinstance(node.op, ast.UAdd) else -value
+    if isinstance(node, ast.BinOp) and isinstance(
+            node.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv)):
+        left, right = _int_expr(node.left), _int_expr(node.right)
+        if left is None or right is None:
+            return None
+        try:
+            return {ast.Add: lambda: left + right,
+                    ast.Sub: lambda: left - right,
+                    ast.Mult: lambda: left * right,
+                    ast.FloorDiv: lambda: left // right}[type(node.op)]()
+        except (ArithmeticError, KeyError):
+            return None
+    return None
+
+
+def check_rails(de=DE):
     seen_debt = set()
-    for fn in sorted(os.listdir(DE)):
+    for fn in sorted(os.listdir(de)):
         if not fn.endswith(".py"):
             continue
         mod = fn[:-3]
-        for cname, val in pat.findall(_src(os.path.join(DE, fn))):
-            val = int(val)
-            if val == dt.RAIL:
-                _CHECKS[0] += 1
+        path = os.path.join(de, fn)
+        try:
+            tree = ast.parse(_src(path), filename=path)
+        except SyntaxError as exc:
+            _check(False, "%s rail constants cannot be parsed: %s" % (fn, exc))
+            continue
+        governed = list(tree.body)
+        for top in tree.body:
+            if isinstance(top, ast.ClassDef):
+                governed.extend(top.body)
+        for node in governed:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
                 continue
-            if dt.RAIL_EXCEPTIONS.get(mod) == val:
-                _CHECKS[0] += 1
-                continue
-            debt = RAIL_DEBT.get(mod)
-            if debt and debt == (cname, val):
-                seen_debt.add(mod)
-                _CHECKS[0] += 1
-                continue
-            _check(False, "%s.%s = %d is off RAIL=%d and not excepted or "
-                   "in debt" % (mod, cname, val, dt.RAIL))
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names = [target.id for target in targets
+                     if isinstance(target, ast.Name) and target.id in _RAIL_NAMES]
+            for cname in names:
+                val = _int_expr(node.value)
+                if val is None:
+                    _check(False, "%s.%s is not a measurable integer constant"
+                           % (mod, cname))
+                    continue
+                if val == dt.RAIL:
+                    _CHECKS[0] += 1
+                    continue
+                if dt.RAIL_EXCEPTIONS.get(mod) == val:
+                    _CHECKS[0] += 1
+                    continue
+                debt = RAIL_DEBT.get(mod)
+                if debt and debt == (cname, val):
+                    seen_debt.add(mod)
+                    _CHECKS[0] += 1
+                    continue
+                _check(False, "%s.%s = %d is off RAIL=%d and not excepted or "
+                       "in debt" % (mod, cname, val, dt.RAIL))
     for mod in sorted(set(RAIL_DEBT) - seen_debt):
         _check(False, "STALE DEBT: RAIL_DEBT[%r] no longer matches the "
                "source — it was fixed; delete the entry" % mod)
@@ -127,16 +174,25 @@ def check_ladder():
     # band [22, 40] the named steps apply; above it the general §E3.2 rule:
     # interior on the 4u grid, so rendered ≡ 0 (open) or ≡ 2 (bordered).
     named = set(dt.LADDER_RENDERED) | set(dt.LADDER_OPEN)
-    pat = re.compile(r"min-height:\s*(\d+)px")
+    # GTK accepts decimal px lengths.  Parse those too: spelling an off-ladder
+    # 25px as 25.0px must not make it disappear from the release gate.
+    pat = re.compile(r"min-height:\s*(\d+(?:\.\d+)?)px\b")
     found = {}
     files = [THEME] + [os.path.join(DE, f) for f in sorted(os.listdir(DE))
                        if f.endswith(".py")]
     for path in files:
         base = os.path.basename(path)
-        for v in pat.findall(_src(path)):
-            v = int(v)
-            if v < 22 or (v <= 40 and v in named) or \
-                    (v > 40 and v % 4 in (0, 2)):
+        for raw in pat.findall(_src(path)):
+            try:
+                value = Decimal(raw)
+            except InvalidOperation:
+                _check(False, "%s min-height:%spx is not measurable" %
+                       (base, raw))
+                continue
+            integral = value == value.to_integral_value()
+            v = int(value) if integral else value
+            if value < 22 or (integral and value <= 40 and int(value) in named) or \
+                    (integral and value > 40 and int(value) % 4 in (0, 2)):
                 _CHECKS[0] += 1
                 continue
             found[(base, v)] = found.get((base, v), 0) + 1
@@ -146,14 +202,14 @@ def check_ladder():
             _CHECKS[0] += 1
             continue
         if debt is None:
-            _check(False, "%s min-height:%dpx x%d off both ladders %s/%s "
+            _check(False, "%s min-height:%spx x%d off both ladders %s/%s "
                    "and not in debt" % (key[0], key[1], have,
                                         dt.LADDER_RENDERED, dt.LADDER_OPEN))
         elif have is None:
             _check(False, "STALE DEBT: HEIGHT_DEBT[%r] fixed in source — "
                    "delete the entry" % (key,))
         else:
-            _check(False, "%s min-height:%dpx count %d != debt %d — ledger "
+            _check(False, "%s min-height:%spx count %d != debt %d — ledger "
                    "must track the source exactly" % (key[0], key[1], have,
                                                       debt))
 
@@ -168,6 +224,7 @@ def main():
               % (len(_FAILS), n))
         return 1
     print("PASS  grid conformance: %d checks (lockstep, rails, ladder)" % n)
+    print("RESULT: PASS")
     return 0
 
 

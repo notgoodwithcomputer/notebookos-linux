@@ -150,10 +150,18 @@ if nav is not None:
         check(refresh[0].lineno < nav_switch[0].lineno,
               "Sources is re-scanned BEFORE the page slides in")
 
-    styling = [n for n in ast.walk(nav) if isinstance(n, ast.Call)
+    # The active class moves in _set_nav_active now (the rail is toggle rows,
+    # and lighting one from inside _on_nav has to happen with the rows' own
+    # handlers blocked — see that method); _on_nav calls it once.
+    lit = [n for n in ast.walk(nav) if isinstance(n, ast.Call)
+           and isinstance(n.func, ast.Attribute)
+           and n.func.attr == "_set_nav_active"]
+    setter = function("_set_nav_active")
+    styling = [n for n in ast.walk(setter) if isinstance(n, ast.Call)
                and isinstance(n.func, ast.Attribute)
-               and n.func.attr in ("add_class", "remove_class")]
-    check(len(styling) == 2, "_on_nav still moves the sidebar's active class")
+               and n.func.attr in ("add_class", "remove_class")] if setter else []
+    check(len(lit) == 1 and len(styling) == 2,
+          "_on_nav still moves the sidebar's active class")
     if styling and nav_switch:
         check(max(n.lineno for n in styling) < nav_switch[0].lineno,
               "the sidebar row is restyled before the switch, not after")
@@ -213,4 +221,5 @@ for view in VIEWS:
 check(stack.name == VIEWS[-1], "the whole sidebar is reachable in order")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

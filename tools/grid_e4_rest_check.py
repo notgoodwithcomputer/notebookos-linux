@@ -148,6 +148,10 @@ def main():
           "%d distinct width(s)"
           % ("FAIL" if fails else "PASS", len(targets and widths or widths),
              len(widths)))
+    # Terminal verdict for the release runner: a zero exit with only
+    # per-check lines is read as DID NOT RUN (run_all_gates SUCCESSWORD),
+    # because a suite that dies half way prints those lines too.
+    print("RESULT: %s" % ("FAILED" if fails else "ALL PASS"))
     return 1 if fails else 0
 
 

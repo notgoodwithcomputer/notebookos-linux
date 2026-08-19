@@ -95,13 +95,12 @@ VOWEL_PHONEMES = {"AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY",
 VOWEL_LETTERS = "aeiouy"
 
 _DICT = None
+_DICT_PATH = None
 
 
 def load_dict(path=None):
     """word -> list of ARPAbet phonemes (first pronunciation wins)."""
-    global _DICT
-    if _DICT is not None:
-        return _DICT
+    global _DICT, _DICT_PATH
     src = path
     if src is None:
         for p in DICT_PATHS:
@@ -111,6 +110,9 @@ def load_dict(path=None):
     if src is None:
         raise SystemExit("no CMU pronouncing dictionary found; looked in %s"
                          % ", ".join(DICT_PATHS))
+    src = os.path.realpath(src)
+    if _DICT is not None and _DICT_PATH == src:
+        return _DICT
     d = {}
     with open(src, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -122,7 +124,7 @@ def load_dict(path=None):
             if word.endswith(")"):
                 continue
             d.setdefault(word.lower(), parts[1:])
-    _DICT = d
+    _DICT, _DICT_PATH = d, src
     return d
 
 

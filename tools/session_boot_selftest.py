@@ -102,8 +102,12 @@ exec /bin/sh "$@"
 
 # `touch` and `rm` have to be real: the script's control flow depends on the
 # flag file existing. `kill` and `sleep` likewise.
+# `timeout` too: the keyboard-layout job runs under it (busybox ships it on
+# the target: /usr/bin/timeout, CONFIG_TIMEOUT=y), and without it here the
+# job never runs and the ordering checks read as if the layout were skipped.
 REAL = ("touch", "rm", "kill", "sleep", "sed", "head", "awk", "grep",
-        "basename", "readlink", "printf", "cat", "test", "expr", "sh", "dirname")
+        "basename", "readlink", "printf", "cat", "test", "expr", "sh", "dirname",
+        "timeout")
 STUBBED = ("python3", "xrandr", "xset", "xsetroot", "matchbox-window-manager",
            "dbus-launch", "amixer", "alsactl", "dmesg", "picom", "xcompmgr",
            "setxkbmap")
@@ -306,6 +310,9 @@ def test_flag_hygiene():
     check(not any(ln.rstrip().endswith("&") and "login.py" in ln
                   for ln in code),
           "the sign-in screen is never backgrounded")
+    check(any(ln.startswith("while ! python3 ") and "login.py" in ln
+              for ln in code),
+          "a crashed sign-in is retried rather than opening the desktop")
 
     # Audio routing (de/nbaudio.py) writes /etc/asound.conf and then runs a sweep
     # of amixer calls. Nothing on screen waits for any of it, and every one of
@@ -379,6 +386,9 @@ def test_compositor_fallback():
     check(idx(lines, "xflushd.py") >= 0,
           "with no compositor left, the software repaint daemon is started "
           "even though the probe said accelerated")
+    check("NB_XFLUSHD_FORCE=1" in open(SESSION, encoding="utf-8").read(),
+          "the accelerated fallback explicitly overrides xflushd's normal "
+          "acceleration guard")
 
     # 4. Both compositors die: still exactly one repaint daemon, not two.
     _r, lines = run_session(needed=False, accel="1", picom="die",

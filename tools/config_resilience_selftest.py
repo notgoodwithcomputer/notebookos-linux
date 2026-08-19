@@ -9,7 +9,8 @@ down — the app must fall back to its empty / safe state and open normally.
 This is exactly the class of bug that produced the E-book reader's
 "No module named xml" launch crash and would catch any future variant.
 
-For EACH of the 24 apps, and for EACH of four config states —
+For EACH visible app in Finder's built-in registry (plus the desktop-only
+config owners), and for EACH of four config states —
   * no-config       : nothing on disk
   * bare-list       : a bare JSON list   [1, 2, 3]
   * truncated-json  : a syntactically invalid / truncated JSON blob
@@ -44,26 +45,30 @@ import sys
 import tempfile
 import traceback
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DE = os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                  "opt/notebook/de")
+sys.path.insert(0, DE)
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-# Every app ships as <name>.py exposing exactly one Gtk.Window subclass and
-# (when it persists) reads $NB_HOME/.config/notebook/<name>.json.
-APPS = [
-    "writer", "novel", "journal", "academics", "screenplay", "ebook",
-    "cookbook", "contacts", "accounting", "calendar", "music",
-    "illustrator", "sequencer", "video", "media", "g2048",
-    "packages", "settings", "sysmon", "calculator", "terminal", "tasks",
-    "language", "maps", "finder",
-    "gbasdk", "gbaemu", "workout",
-    # Not in the Applications folder (it opens from the desktop's right-click
-    # menu), but it reads a store like any app and must survive a bad one.
-    "widgetsettings",
-    # Cookbook's sister app: reads cookbook.json read-only and writes
-    # its own plan, so BOTH stores can be damaged independently.
-    "mealplanner",
-]
+import finder  # noqa: E402
+import nbapp  # noqa: E402
+
+def registered_apps(registry, hidden):
+    """Visible image modules plus non-Applications config owners."""
+    modules = {module for display, module in registry.items()
+               if display not in hidden}
+    modules.update(("finder", "widgetsettings"))
+    return sorted(modules)
+
+
+# Finder's built-in registry is the launch-surface authority. A hand-maintained
+# copy silently omitted Bills, Installer, USB Writer and Disc Burner, and every
+# future visible app would have been equally uncovered.
+APPS = registered_apps(finder._BUILTIN_APP_MODULES, finder.HIDDEN_APPS)
 
 # Shared modules an app pulls in; drop them too so a re-import re-reads NB_HOME.
 _SHARED = ("nbapp", "nbicons", "widgets", "splash")
@@ -113,6 +118,7 @@ CASES = [
 ]
 
 results = []
+WORKER_SENTINEL = "CONFIG_RESILIENCE_OK "
 
 
 def check(name, ok):
@@ -121,10 +127,19 @@ def check(name, ok):
 
 
 def find_window_cls(mod):
-    for _n, c in inspect.getmembers(mod, inspect.isclass):
-        if c.__module__ == mod.__name__ and issubclass(c, Gtk.Window):
-            return c
-    return None
+    candidates = [c for _n, c in inspect.getmembers(mod, inspect.isclass)
+                  if c.__module__ == mod.__name__
+                  and issubclass(c, Gtk.Window)]
+    preferred = [c for c in candidates if issubclass(c, nbapp.AppWindow)]
+    # Test the same application-window contract the launcher uses. A helper
+    # Gtk.Window whose name sorts first must never divert all four corrupt-
+    # store cases away from the real app. Finder is the one intentional direct
+    # Gtk.Window and remains valid only while it is the sole candidate.
+    if len(preferred) == 1:
+        return preferred[0]
+    if not preferred and len(candidates) == 1:
+        return candidates[0]
+    return None                       # ambiguity is a failed probe, never a pick
 
 
 def pump():
@@ -147,9 +162,11 @@ def worker(app, home):
             return 1
         win = cls()
         pump()
-        print("OK")
+        print(WORKER_SENTINEL + json.dumps(
+            {"app": app, "class": cls.__name__, "stage": "destroy-ready"},
+            sort_keys=True))
         return 0
-    except Exception as e:
+    except BaseException as e:
         print("%s: %s\n%s" % (type(e).__name__, e, traceback.format_exc()))
         return 1
     finally:
@@ -178,9 +195,28 @@ def run_case(app, case_name, writer, home):
                            capture_output=True, text=True, timeout=120, env=env)
     except subprocess.TimeoutExpired:
         return False, "timed out constructing the window"
-    if r.returncode == 0:
+    if worker_succeeded(r.returncode, r.stdout, app):
         return True, ""
+    if r.returncode == 0:
+        return False, "worker exited without construction evidence"
     return False, (r.stdout + r.stderr).strip() or ("exit %d" % r.returncode)
+
+
+def worker_succeeded(returncode, stdout, app):
+    if returncode != 0:
+        return False
+    rows = [line[len(WORKER_SENTINEL):] for line in stdout.splitlines()
+            if line.startswith(WORKER_SENTINEL)]
+    if len(rows) != 1:
+        return False
+    try:
+        evidence = json.loads(rows[0])
+    except (TypeError, ValueError):
+        return False
+    return (evidence.get("app") == app
+            and evidence.get("stage") == "destroy-ready"
+            and isinstance(evidence.get("class"), str)
+            and bool(evidence["class"]))
 
 
 def main():

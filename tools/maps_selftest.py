@@ -182,9 +182,60 @@ def _startup_pack(packs, cfg):
     return fn(packs, cfg)
 
 
-check("with no config at all, the first pack opens",
-      _startup_pack(PACKS, {}) == PACKS[0][1],
+check("with no config at all, a pack still opens",
+      _startup_pack(PACKS, {}) in [p for _n, p in PACKS],
       _startup_pack(PACKS, {}))
+
+# ...and WHICH one is decided by SIZE, not by scan order. These paths must be
+# real files, because the rule reads them: /opt/notebook/maps is scanned first
+# and holds a 44 KB sample of Monaco, so "first found" opened a machine
+# carrying the whole of North America on one town on the Riviera — which reads
+# from the desk as the map data not having loaded at all.
+import tempfile as _tf                                          # noqa: E402
+_pd = _tf.mkdtemp(prefix="nbmapsize.")
+
+
+def _pack(name, size):
+    p = os.path.join(_pd, name)
+    with open(p, "wb") as fh:
+        fh.truncate(size)          # sparse: real sizes, no real bytes
+    return p
+
+
+_sample = _pack("monaco.nbm2", 44505)
+_cont = _pack("north-america.nbm2", 2707829344)
+# scan order deliberately puts the SAMPLE first, the way _scan_maps does
+_REAL = [("monaco", _sample), ("north-america", _cont)]
+check("with nothing remembered, the LARGEST pack opens, not the first found",
+      _startup_pack(_REAL, {}) == _cont, _startup_pack(_REAL, {}))
+check("...and a deliberately chosen small pack is still honoured",
+      _startup_pack(_REAL, {"pack": _sample}) == _sample,
+      _startup_pack(_REAL, {"pack": _sample}))
+check("...and with only the sample installed it opens that",
+      _startup_pack([("monaco", _sample)], {}) == _sample)
+check("...and a remembered pack that is gone falls back to the largest",
+      _startup_pack(_REAL, {"pack": "/data/maps/gone.nbm2"}) == _cont,
+      _startup_pack(_REAL, {"pack": "/data/maps/gone.nbm2"}))
+
+class _OpenProbe:
+    def __init__(self, valid):
+        self.valid = valid
+        self.calls = []
+    def _open_map(self, path):
+        self.calls.append(path)
+        return path == self.valid
+
+_fallback = _OpenProbe(_sample)
+_opened = maps._open_startup(_fallback, _REAL, {})
+check("a corrupt largest pack falls back to a smaller valid pack",
+      _opened == _sample and _fallback.calls == [_cont, _sample],
+      (_opened, _fallback.calls))
+_remembered_bad = _OpenProbe(_sample)
+_opened = maps._open_startup(
+    _remembered_bad, _REAL, {"pack": _cont})
+check("a corrupt remembered pack also falls back to a valid installed pack",
+      _opened == _sample and _remembered_bad.calls == [_cont, _sample],
+      (_opened, _remembered_bad.calls))
 
 # The regression itself: the remembered pack is NOT the first one.
 for want in (PACKS[1], PACKS[2]):
@@ -193,9 +244,12 @@ for want in (PACKS[1], PACKS[2]):
     check("the remembered pack reopens: %s" % want[0], got == want[1], got)
 
 # A pack that is no longer installed (deleted, or its stick unplugged) must
-# fall back rather than hand _open_map a path that cannot be read.
-check("an uninstalled remembered pack falls back to the first",
-      _startup_pack(PACKS, {"pack": "/data/maps/gone.nbm2"}) == PACKS[0][1],
+# fall back rather than hand _open_map a path that cannot be read. These
+# fixture paths do not exist, so every size reads alike and the fallback lands
+# on the first — the point here is that it lands on an INSTALLED pack at all.
+check("an uninstalled remembered pack falls back to one that is installed",
+      _startup_pack(PACKS, {"pack": "/data/maps/gone.nbm2"})
+      in [p for _n, p in PACKS],
       _startup_pack(PACKS, {"pack": "/data/maps/gone.nbm2"}))
 
 # Whatever a hand-edited or half-written config holds, this returns an
@@ -217,8 +271,8 @@ check("no packs installed is not an index error",
 # The pure function is only a fix if __init__ actually asks it. Static, so it
 # needs no display and no pack on disk.
 init = "\n".join(src)
-check("__init__ opens the pack _startup_pack chose, not maps[0]",
-      "_startup_pack(self.maps, self._load_cfg())" in init
+check("__init__ tries startup packs in validated preference order",
+      "_open_startup(self, self.maps, self._load_cfg())" in init
       and "_open_map(self.maps[0][1])" not in init,
       "startup still hard-codes maps[0]")
 

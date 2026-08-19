@@ -25,7 +25,7 @@ DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/
 APPS = ["writer", "novel", "journal", "academics", "screenplay", "ebook",
         "cookbook", "contacts", "accounting", "calendar", "music",
         "illustrator", "sequencer", "video", "media", "g2048", "packages",
-        "settings", "sysmon", "calculator", "terminal", "tasks", "language",
+        "settings", "sysmon", "calculator", "tasks", "language",
         "maps", "finder", "gbasdk", "gbaemu", "widgets", "animation",
         "comics", "bills", "burner", "composer", "installer",
         "mealplanner", "usbwriter", "workout"]

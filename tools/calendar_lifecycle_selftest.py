@@ -89,6 +89,8 @@ def bare_calendar(glib, closed=False, rollover_id=0):
     the re-render replaced by counters."""
     cal = cal_app.Calendar.__new__(cal_app.Calendar)
     cal._closed = closed
+    cal._status_tok = 0
+    cal._status_timer = 0
     cal._rollover_id = rollover_id
     cal.today = FrozenDate._now
     cal.refreshes = 0
@@ -204,4 +206,5 @@ finally:
     cal_app.GLib, cal_app.date = REAL_GLIB, REAL_DATE
 
 print("\n%d/%d checks passed" % (sum(RESULTS), len(RESULTS)))
+print("RESULT: %s" % ("PASS" if all(RESULTS) else "FAIL"))
 sys.exit(0 if all(RESULTS) else 1)

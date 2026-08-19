@@ -156,6 +156,7 @@ def main():
     print("\n%d passed, %d failed" % (PASS[0], len(FAIL)))
     for f in FAIL:
         print("  FAILED: %s" % f)
+    print("RESULT: %s" % ("FAILED" if FAIL else "PASS"))
     return 1 if FAIL else 0
 
 

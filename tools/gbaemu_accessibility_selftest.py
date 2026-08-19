@@ -111,4 +111,5 @@ check(".rombutton:focus" not in css and "outline: none" not in css,
       "app CSS does not suppress the global keyboard focus indicator")
 
 print("\n%d failed" % len(fails))
+print("RESULT: %s" % ("FAILED" if fails else "PASS"))
 sys.exit(1 if fails else 0)

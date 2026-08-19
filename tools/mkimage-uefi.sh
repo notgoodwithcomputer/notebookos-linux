@@ -17,6 +17,15 @@ KERNEL="$ROOT/kbuild-desktop/arch/x86/boot/bzImage"
 ROOTFS="$ROOT/buildroot/output/images/rootfs.ext4"
 WORK="$ROOT/boot-work"; mkdir -p "$WORK"
 OUT="$WORK/notebookos-uefi.img"
+OUT_TMP=
+
+cleanup() {
+    [ -z "$OUT_TMP" ] || rm -f -- "$OUT_TMP"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 SGDISK=/usr/sbin/sgdisk
 # Stable GPT partition GUID for the rootfs — baked into the GRUB cmdline.
@@ -111,22 +120,29 @@ ALIGN_MB=1                                  # GPT + 1MiB alignment at front
 BACKUP_MB=1                                 # backup GPT at the end
 TOTAL_MB=$(( ALIGN_MB + ESP_MB + (ROOTFS_BYTES + 1048575)/1048576 + BACKUP_MB ))
 echo "   rootfs=$((ROOTFS_BYTES/1048576))MiB  esp=${ESP_MB}MiB  total=${TOTAL_MB}MiB"
-rm -f "$OUT"
-dd if=/dev/zero of="$OUT" bs=1M count=$TOTAL_MB status=none
+# Build beside the destination, then rename only after the partition table and
+# both payloads have been verified.  The old bootable image remains intact if
+# dd runs out of space, sgdisk rejects the layout, or the build is interrupted.
+OUT_TMP=$(mktemp "$WORK/.notebookos-uefi.img.XXXXXX")
+dd if=/dev/zero of="$OUT_TMP" bs=1M count=$TOTAL_MB status=none
 
 echo "== 4/5  GPT partition table =="
-$SGDISK -Z "$OUT" >/dev/null
-$SGDISK -n 1:2048:+${ESP_MB}M -t 1:EF00 -c 1:"EFI System" "$OUT" >/dev/null
+$SGDISK -Z "$OUT_TMP" >/dev/null
+$SGDISK -n 1:2048:+${ESP_MB}M -t 1:EF00 -c 1:"EFI System" "$OUT_TMP" >/dev/null
 $SGDISK -n 2:0:0 -t 2:8300 -c 2:"notebookos-root" \
-        -u 2:"$ROOT_PARTUUID" "$OUT" >/dev/null
-P1_START=$($SGDISK -i 1 "$OUT" | awk '/First sector/{print $3}')
-P2_START=$($SGDISK -i 2 "$OUT" | awk '/First sector/{print $3}')
+        -u 2:"$ROOT_PARTUUID" "$OUT_TMP" >/dev/null
+P1_START=$($SGDISK -i 1 "$OUT_TMP" | awk '/First sector/{print $3}')
+P2_START=$($SGDISK -i 2 "$OUT_TMP" | awk '/First sector/{print $3}')
 echo "   p1(ESP) @ sector $P1_START   p2(root) @ sector $P2_START"
 
 echo "== 5/5  write partition contents =="
-dd if="$ESP"    of="$OUT" bs=512 seek="$P1_START" conv=notrunc status=none
-dd if="$ROOTFS" of="$OUT" bs=512 seek="$P2_START" conv=notrunc status=none
-$SGDISK -v "$OUT" | sed 's/^/   /'
+dd if="$ESP"    of="$OUT_TMP" bs=512 seek="$P1_START" conv=notrunc status=none
+dd if="$ROOTFS" of="$OUT_TMP" bs=512 seek="$P2_START" conv=notrunc status=none
+$SGDISK -v "$OUT_TMP" | sed 's/^/   /'
+chmod 0644 "$OUT_TMP"
+mv -f -- "$OUT_TMP" "$OUT"
+OUT_TMP=
+trap - EXIT HUP INT TERM
 
 echo
 echo "DONE -> $OUT  ($(du -h "$OUT" | cut -f1))"

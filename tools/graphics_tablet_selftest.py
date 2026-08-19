@@ -30,6 +30,7 @@ broken input and must go RED. A gate that cannot go red is not a gate.
 Exit status is the number of failures.
 """
 import os
+import fnmatch
 import re
 import sys
 import tempfile
@@ -41,6 +42,9 @@ SEED = os.path.join(REPO, "tools/desktop.config")
 LIVE = os.path.join(REPO, "kbuild-desktop/.config")
 ETC_XCONF = os.path.join(
     REPO, "buildroot/board/notebookos/rootfs-overlay/etc/X11/xorg.conf.d")
+ABS_UDEV = os.path.join(
+    REPO, "buildroot/board/notebookos/rootfs-overlay/etc/udev/rules.d",
+    "70-notebookos-absolute-pointer.rules")
 SYS_XCONF = os.path.join(
     REPO, "buildroot/output/target/usr/share/X11/xorg.conf.d")
 
@@ -217,6 +221,25 @@ else:
 # ============================================ 2. X routes the pen correctly
 print("\n--- 2. X gives the pen to the driver that speaks pressure -------")
 
+try:
+    _abs_rule = open(ABS_UDEV, encoding="utf-8").read()
+except OSError:
+    _abs_rule = ""
+_cap = re.search(r'ATTRS\{capabilities/abs\}=="([^"]+)"', _abs_rule)
+_cap_pattern = _cap.group(1) if _cap else ""
+check("udev scopes the absolute-pointer tag to input event mouse devices",
+      all(token in _abs_rule for token in
+          ('SUBSYSTEM=="input"', 'KERNEL=="event*"',
+           'ENV{ID_INPUT_MOUSE}=="1"')))
+check("udev and Xorg use the same absolute-pointer tag",
+      'ENV{ID_INPUT.tags}="notebook-absolute-pointer"' in _abs_rule)
+check("the udev capability mask requires both ABS_X and ABS_Y",
+      bool(_cap_pattern)
+      and all(fnmatch.fnmatchcase(value, _cap_pattern)
+              for value in ("3", "7", "b", "f", "1000003"))
+      and not any(fnmatch.fnmatchcase(value, _cap_pattern)
+                  for value in ("0", "1", "2", "4", "1000000")))
+
 # Attributes xorg derives from udev's ID_INPUT_* tags (config/udev.c), and the
 # MatchIs* directive each one answers (hw/xfree86/common/xf86Xinput.c).
 MATCH_ATTR = {
@@ -267,7 +290,7 @@ def conf_files():
     return sections
 
 
-def section_matches(directives, attrs, path):
+def section_matches(directives, attrs, path, product="", tags=()):
     for key, val in directives.items():
         if key in MATCH_ATTR:
             want = val.strip().lower() in ("on", "true", "yes", "1")
@@ -277,15 +300,22 @@ def section_matches(directives, attrs, path):
             # the only glob these files use
             if not re.match(val.replace("*", ".*") + "$", path):
                 return False
+        elif key == "matchproduct":
+            # Xorg treats MatchProduct as a case-insensitive substring match.
+            if val.lower() not in product.lower():
+                return False
+        elif key == "matchtag":
+            if val not in tags:
+                return False
     return True
 
 
-def driver_for(sections, attrs, path="/dev/input/event7"):
+def driver_for(sections, attrs, path="/dev/input/event7", product="", tags=()):
     """Replay xorg's rule: every matching section applies in order, and the
     LAST one that names a Driver is the one the device gets."""
     chosen = None
     for _ident, directives, driver in sections:
-        if driver and section_matches(directives, attrs, path):
+        if driver and section_matches(directives, attrs, path, product, tags):
             chosen = driver
     return chosen
 
@@ -300,15 +330,31 @@ else:
           driver_for(SECTIONS, {"tablet"}))
     # The rule the OS deliberately keeps: an absolute pointer freezes under
     # libinput, and a tablet with no kernel driver arrives looking like one.
-    check("a plain absolute pointer still lands on evdev (cursor-freeze fix)",
-          driver_for(SECTIONS, {"pointer"}) == "evdev",
+    check("a tagged absolute pointer lands on evdev (cursor-freeze fix)",
+          driver_for(SECTIONS, {"pointer"},
+                     tags={"notebook-absolute-pointer"}) == "evdev",
+          driver_for(SECTIONS, {"pointer"},
+                     tags={"notebook-absolute-pointer"}))
+    check("an ordinary relative mouse stays on libinput",
+          driver_for(SECTIONS, {"pointer"}) == "libinput",
           driver_for(SECTIONS, {"pointer"}))
     check("a touchscreen still lands on libinput (XI2 touch sequences)",
           driver_for(SECTIONS, {"touchscreen"}) == "libinput",
           driver_for(SECTIONS, {"touchscreen"}))
+    check("a touchpad stays on libinput (scrolling, taps, palm rejection)",
+          driver_for(SECTIONS, {"pointer", "touchpad"},
+                     tags={"notebook-absolute-pointer"}) == "libinput",
+          driver_for(SECTIONS, {"pointer", "touchpad"},
+                     tags={"notebook-absolute-pointer"}))
     check("a keyboard still lands on libinput",
           driver_for(SECTIONS, {"keyboard"}) == "libinput",
           driver_for(SECTIONS, {"keyboard"}))
+    check("the rule model honours MatchProduct",
+          section_matches({"matchproduct": "QEMU USB Tablet"}, {"pointer"},
+                          "/dev/input/event7", "QEMU USB Tablet")
+          and not section_matches({"matchproduct": "QEMU USB Tablet"},
+                                  {"pointer"}, "/dev/input/event7",
+                                  "Definitely Not QEMU"))
 
     # Red-proof: a later section stealing tablets for evdev is precisely the
     # regression this check exists to catch, so it must be caught.
@@ -321,6 +367,13 @@ else:
                     {"matchisjoystick": "off"}, "evdev"))
     mutant("a catch-all evdev rule with no device-class restriction",
            driver_for(widened, {"tablet"}) == "libinput")
+    no_touchpad_override = [
+        row for row in SECTIONS if "touchpad" not in row[0].lower()
+    ]
+    mutant("removing the touchpad libinput override",
+           driver_for(no_touchpad_override, {"pointer", "touchpad"},
+                      tags={"notebook-absolute-pointer"})
+           == "libinput")
 
 
 # ============================================== 3. the pressure -> width map

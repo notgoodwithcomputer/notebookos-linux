@@ -102,6 +102,99 @@ with tempfile.TemporaryDirectory(prefix="nb-tasks-shared-") as root:
     check([row["text"] for row in after_delete] == ["Keep"],
           "a widget snapshot cannot resurrect a task deleted in Tasks")
 
+    # Calendar is an external writer to the schedule rail. Do not admit dates
+    # that cannot correspond to a real mini-calendar cell, or loose spellings
+    # that violate the shared YYYY-MM-DD schema.
+    check(tasks.Tasks._parse_iso("2028-02-29") == (2028, 2, 29),
+          "the schedule accepts a canonical leap day")
+    check(tasks.Tasks._parse_iso("2026-02-31") is None,
+          "the schedule rejects an impossible calendar date")
+    check(tasks.Tasks._parse_iso("2026-8-4") is None,
+          "the schedule rejects a non-canonical calendar date")
+    app.events = []
+    malformed = app._event_from_cal(
+        {"date": "2026-02-31", "start": 9, "end": 10, "title": "Bad"})
+    check(malformed is None,
+          "an impossible Calendar record cannot enter the schedule model")
+
+    # A completion is not honest until the authoritative rich sidecar accepts
+    # it.  The shared projection is written first, so a failed sidecar write
+    # must also be followed by a best-effort projection rollback.
+    app.tasks = [rich("Pay rent")]
+    app._flat_base = [{"text": "Pay rent", "done": False}]
+    write(tasks.TASKS_FILE, app._flat_base)
+    undo_events = []
+    app.undo = type("Undo", (), {
+        "checkpoint": lambda _self, label: undo_events.append(("checkpoint", label)),
+        "commit": lambda _self: undo_events.append(("commit", None)),
+    })()
+    app._flash = lambda _message: None
+    real_write = tasks.nbapp.atomic_write_json
+
+    def fail_meta(path, value):
+        if path == tasks.META_FILE:
+            raise OSError("disk full")
+        return real_write(path, value)
+
+    tasks.nbapp.atomic_write_json = fail_meta
+    class ToggleProbe:
+        def __init__(self):
+            self.active = True  # GTK has toggled it before clicked is emitted.
+        def set_active(self, value):
+            self.active = bool(value)
+    toggle = ToggleProbe()
+    try:
+        app._toggle(toggle, 0)
+    finally:
+        tasks.nbapp.atomic_write_json = real_write
+    with open(tasks.TASKS_FILE, encoding="utf-8") as fh:
+        rolled_back = json.load(fh)
+    check(app.tasks[0]["done"] is False,
+          "a rejected rich-store completion is rolled back in memory")
+    check(toggle.active is False,
+          "a rejected completion restores the native checked state")
+    check(rolled_back[0]["done"] is False,
+          "a rejected rich-store completion is rolled back on the desktop")
+    check(not any(event[0] == "commit" for event in undo_events),
+          "a rejected completion is not recorded as an undoable success")
+
+    # Both projections are part of a successful Tasks save. A rich-sidecar
+    # success cannot hide a stale desktop projection.
+    notices = []
+    app._flash = notices.append
+    app._save_warned = False
+
+    def fail_flat(path, value):
+        if path == tasks.TASKS_FILE:
+            raise OSError("shared store full")
+        return real_write(path, value)
+
+    tasks.nbapp.atomic_write_json = fail_flat
+    try:
+        check(app._save_tasks() is False,
+              "a failed shared projection makes the whole save incomplete")
+    finally:
+        tasks.nbapp.atomic_write_json = real_write
+    check(bool(notices), "a failed shared projection is reported visibly")
+
+    # Valid scalar JSON is foreign to the sidecar. If its protective move
+    # fails, the launch-time save must not overwrite it.
+    write(tasks.META_FILE, "foreign sidecar")
+    real_q = tasks.nbapp.quarantine_unrecognized
+    tasks.nbapp.quarantine_unrecognized = lambda _path: None
+    meta_writes = []
+    tasks.nbapp.atomic_write_json = lambda path, value, **_kw: meta_writes.append(path)
+    try:
+        app._read_meta()
+        check(app._save_tasks() is False,
+              "a failed sidecar quarantine blocks the replacement save")
+    finally:
+        tasks.nbapp.quarantine_unrecognized = real_q
+        tasks.nbapp.atomic_write_json = real_write
+    check(tasks.META_FILE not in meta_writes
+          and json.load(open(tasks.META_FILE)) == "foreign sidecar",
+          "the foreign sidecar and retry state survive")
+
 print()
 if failures:
     print("TASKS SHARED STORE SELFTEST: %d checks, %d FAILED" %

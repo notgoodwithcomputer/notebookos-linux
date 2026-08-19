@@ -30,30 +30,7 @@ DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/
 # Every one of these is a string a person reads in English no matter which
 # of the 17 languages they chose. Several are failure messages, which is the
 # worst moment to fall back to a language someone may not read.
-DEBT = {
-    "academics.py": 11,
-    "accounting.py": 7,
-    "bills.py": 2,
-    "calculator.py": 4,
-    "calendar.py": 20,
-    "cookbook.py": 2,
-    "finder.py": 6,
-    "gbabuild.py": 1,
-    "journal.py": 2,
-    "language.py": 3,
-    "mealplanner.py": 2,
-    "music.py": 1,
-    "novel.py": 1,
-    "screenplay.py": 2,
-    "sequencer.py": 65,
-    "settings.py": 6,
-    "shell.py": 1,
-    "tasks.py": 3,
-    "usbwriter.py": 1,
-    "video.py": 10,
-    "workout.py": 1,
-    "writer.py": 3,
-}
+DEBT = {}
 
 
 def tracked():

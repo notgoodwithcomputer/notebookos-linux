@@ -33,6 +33,9 @@ DEFAULT = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/"
 
 # A libconfig scalar: number, boolean, quoted string, or a list/group opener.
 _NAME = r"[A-Za-z][-A-Za-z0-9_]*"
+_SCALAR = re.compile(
+    r'^(?:""|true|false|[-+]?(?:0[xX][0-9A-Fa-f]+|'
+    r'(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?))$')
 
 
 def strip_comments(text):
@@ -132,6 +135,9 @@ def check(path):
         if ";" not in tail or "=" in seg.replace("\\=", ""):
             errs.append("setting '%s' is not terminated with ';'"
                         % m.group(1))
+        elif not _SCALAR.fullmatch(seg.strip()):
+            errs.append("setting '%s' has an invalid scalar value"
+                        % m.group(1))
 
     # 3. blocks close with '};' — libconfig accepts '}' only at end of file
     for m in re.finditer(r"\}(?!\s*[;\]])", flat):
@@ -156,6 +162,7 @@ def main(argv):
         return 1
     print("picom.conf: valid libconfig (%s)"
           % ", ".join(os.path.basename(p) for p in paths))
+    print("RESULT: PASS")
     return 0
 
 

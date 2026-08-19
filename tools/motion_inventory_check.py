@@ -7,6 +7,7 @@ does not import or depend on the separately developed frame-pacing checker.
 """
 import argparse
 import ast
+from collections import Counter
 import io
 import json
 from pathlib import Path
@@ -105,6 +106,14 @@ def pacing_problems(entry):
                     % (entry["id"], p.get("reason"))]
         return []
     if status in PACING_ANSWERED:
+        # A recorded answer still has to be a PASSING one. `configured-verified`
+        # carries a verdict of its own — the configured duration is checked
+        # against the token's band — and reading only the status swallowed it,
+        # so an inventory recording a 20ms `SURFACE_IN` reveal was "answered"
+        # and this gate stayed green.
+        if p.get("verdict", "pass") != "pass":
+            return ["recorded pacing outside its band: %s (status %r: %s)"
+                    % (entry["id"], status, p.get("reason"))]
         return []
     return ["pacing not measured: %s (status %r: %s)"
             % (entry["id"], status, p.get("reason"))]
@@ -121,6 +130,11 @@ def main():
     ids = {e["id"] for e in entries}
     failures, warnings = [], []
     checks = 0
+    id_counts = Counter(e.get("id") for e in entries)
+    duplicate_ids = sorted(str(mid) for mid, count in id_counts.items()
+                           if count != 1)
+    if duplicate_ids:
+        failures.append("duplicate inventory id: " + ", ".join(duplicate_ids))
     counts = {s: sum(e["status"] == s for e in entries)
               for s in STATUSES}
     unknown = [e["id"] for e in entries if e["status"] not in STATUSES]
@@ -198,6 +212,7 @@ def main():
         print(f"RESULT: FAILED — {len(failures)} failures; {checks} checks")
         return 1
     print(f"PASS  motion inventory conformance: {checks} checks")
+    print("RESULT: PASS")
     return 0
 
 

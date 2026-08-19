@@ -338,8 +338,10 @@ def main():
     if FAILURES:
         print("INSTALLER LIFECYCLE SELFTEST: %d checks, %d FAILED"
               % (CHECKS[0], len(FAILURES)))
+        print("RESULT: FAIL")
         return 1
     print("INSTALLER LIFECYCLE SELFTEST: %d checks, all pass" % CHECKS[0])
+    print("RESULT: PASS")
     return 0
 
 

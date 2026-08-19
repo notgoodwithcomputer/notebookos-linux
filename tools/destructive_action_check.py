@@ -71,6 +71,7 @@ DEFAULT_DE = ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"
 DESTRUCTIVE_PREFIXES = ("_delete", "_remove", "_clear", "_empty", "_reset",
                         "_discard", "_trash")
 DELETE_CALLS = {"os.remove", "os.unlink", "shutil.rmtree"}
+COLLECTION_DELETE_CALLS = {"pop", "popitem", "remove"}
 SNAPSHOT_WORDS = ("snapshot", "checkpoint", "push_undo", "save_undo",
                   "record_undo", "set_undo", "undo_action")
 SNAPSHOT_CALLS = {"_push", "_begin_edit", "_remember", "_structure"}
@@ -84,18 +85,23 @@ CONFIRM_WORDS = ("confirm", "prompt", "are_you_sure", "ask_delete",
 # Exact two-way ledger.  Every accepted entry has its own reason; a new or
 # stale entry makes the gate fail.
 DEBT: dict[tuple[str, str, str], str] = {
-    ("accounting.py", "Accounting._export_csv", "NEITHER"):
-        "The dated CSV is an explicit one-way export; replacing today's prior export leaves the saved ledger intact.",
+    ("language.py", "Language._pick_goal", "NEITHER"):
+        "Daily Goal is a value-setting dialog, not a deletion; the one-level helper inherits a rollback-only pop false positive from _set_goal.",
+    ("language.py", "Language._set_goal", "NEITHER"):
+        "The only pop restores an absent prior goal after a failed save; it is rollback of an uncommitted setting, not destruction of user content.",
+    ("academics.py", "Academics._edit_meeting", "SNAPSHOT-AFTER-MUTATE"):
+        "The apparent earlier destructive helper is the dialog's Remove branch, which returns immediately; the edit branch checkpoints before its own replacement.",
     ("finder.py", "Finder._on_restore_all", "NEITHER"):
         "Restore All clears the persisted hidden-app set in order to reveal every app; it removes no user document.",
-    ("illustrator.py", "Illustrator._remember", "NEITHER"):
-        "This only caps the persisted recent-colour history at RECENT_MAX after adding its newest colour.",
-    ("music.py", "Music._remove_playlist", "NEITHER"):
-        "This helper has one caller, _delete_current_playlist, which checkpoints and commits undo around the call.",
     ("nbaudio.py", "apply", "NEITHER"):
         "This removes only Notebook OS's marked legacy ALSA routing file after writing its replacement system route.",
-    ("nbnotify.py", "clear_all", "NEITHER"):
-        "Clear All is the tray's explicit command and deletes notification records, not authored app content.",
+    # ("nbnotify.py", "clear_all", "NEITHER") was here. The tray now spans two
+    # spools -- the primary one inside the config directory and a fallback on
+    # the temp filesystem, so the notice about a disk that will not take a
+    # write can itself be written -- and clear_all walks the merged record list
+    # (_records()) instead of one listdir + remove. The detector no longer
+    # produces the finding, so the row is pruned rather than carried: a ledger
+    # entry that matches nothing protects nothing.
     ("nbnotify.py", "prune", "NEITHER"):
         "Notification posting enforces the documented MAX_KEEP/MAX_AGE_S retention policy on its own spool records.",
     ("writer.py", "Writer._deserialize", "NEITHER"):
@@ -117,6 +123,7 @@ class Method:
     helper_calls: tuple[tuple[str, int], ...]
     escape_lines: tuple[int, ...]
     ignored_mutations: tuple[str, ...]
+    inventoried: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -274,12 +281,23 @@ def mutation(node: ast.AST) -> str | None:
             if any(isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Slice)
                    for t in targets):
                 return "slice-empty"
+        # Replacing a saved collection with a filtered comprehension is the
+        # normal spelling of deleting one or many records (Calendar uses it
+        # for both calendars and their events).
+        if isinstance(value, (ast.ListComp, ast.SetComp, ast.DictComp)):
+            for target in targets:
+                attr = self_attribute(target)
+                if attr and attr in loaded_self_attributes(value):
+                    return "filtered-reassign"
     if isinstance(node, ast.Call):
         name = call_name(node)
         if name in DELETE_CALLS:
             return name
         if isinstance(node.func, ast.Attribute) and node.func.attr == "clear":
             return ".clear()"
+        if isinstance(node.func, ast.Attribute) \
+                and node.func.attr in COLLECTION_DELETE_CALLS:
+            return ".%s()" % node.func.attr
         if is_overwrite_call(node):
             return "overwrite"
     return None
@@ -297,7 +315,8 @@ def mutation_persistence(node: ast.AST, persistence: Persistence) -> tuple[bool,
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         target = targets[0] if targets else None
     elif isinstance(node, ast.Call):
-        if kind == ".clear()" and isinstance(node.func, ast.Attribute):
+        if (kind == ".clear()" or kind.startswith((".pop", ".remove"))) \
+                and isinstance(node.func, ast.Attribute):
             target = node.func.value
         elif kind in DELETE_CALLS:
             target = node.args[0] if node.args else None
@@ -342,6 +361,107 @@ def position(node: ast.AST) -> int:
 
 def source_line(pos: int) -> int:
     return pos // 10000
+
+
+def transactional_snapshot_lines(fn: ast.AST) -> list[int]:
+    """Copied local state later consumed by an explicit save rollback path.
+
+    Apps commonly use ``before = (dict(model), list(order))`` rather than a
+    method whose name contains "snapshot". Count that idiom only when the
+    copied local is either used inside a failed-save branch or passed as the
+    named ``before`` argument to a rollback helper; a merely suggestive local
+    name or shallow alias is deliberately insufficient.
+    """
+    out = []
+    nodes = list(descendants_without_nested(fn))
+    for node in nodes:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        if not names:
+            continue
+        value = node.value
+        copies = [part for part in ast.walk(value) if isinstance(part, ast.Call)
+                  and (call_name(part) in ("dict", "list", "set", "tuple", "copy.deepcopy")
+                       or call_name(part).endswith(".copy"))]
+        if not copies:
+            continue
+        for name in names:
+            passed_to_rollback = any(
+                isinstance(part, ast.Call)
+                and any(kw.arg == "before" and isinstance(kw.value, ast.Name)
+                        and kw.value.id == name for kw in part.keywords)
+                for part in nodes)
+            used_in_failed_save = any(
+                isinstance(part, ast.If)
+                and isinstance(part.test, ast.UnaryOp)
+                and isinstance(part.test.op, ast.Not)
+                and any(isinstance(test_part, ast.Call)
+                        and "save" in call_name(test_part).lower()
+                        for test_part in ast.walk(part.test))
+                and any(isinstance(body_part, ast.Name)
+                        and isinstance(body_part.ctx, ast.Load)
+                        and body_part.id == name
+                        for stmt in part.body for body_part in ast.walk(stmt))
+                for part in nodes)
+            if passed_to_rollback or used_in_failed_save:
+                out.append(position(node))
+                break
+    return out
+
+
+def confirmation_dominates(fn: ast.AST, call: ast.Call,
+                           target: ast.AST) -> bool:
+    """Whether a confirmation call executes before every path to target.
+
+    This intentionally recognizes the two product idioms: an unconditional
+    call in an earlier statement, and ``if not confirm(): return``. A prompt
+    hidden in an unrelated/debug branch must not certify a later deletion.
+    """
+    def contains(root, needle):
+        return root is needle or any(part is needle for part in ast.walk(root))
+
+    def path(body, needle, prefix=()):
+        for index, stmt in enumerate(body):
+            if not contains(stmt, needle):
+                continue
+            here = prefix + ((body, index, stmt),)
+            if stmt is needle:
+                return here
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(stmt, field, None)
+                if child and any(contains(x, needle) for x in child):
+                    return path(child, needle, here)
+            for handler in getattr(stmt, "handlers", []):
+                if any(contains(x, needle) for x in handler.body):
+                    return path(handler.body, needle, here)
+            return here
+        return ()
+
+    cp, tp = path(fn.body, call), path(fn.body, target)
+    if not cp or not tp:
+        return False
+    common = 0
+    while common < min(len(cp), len(tp)) and cp[common][0] is tp[common][0]:
+        if cp[common][1] != tp[common][1]:
+            break
+        common += 1
+    if common >= min(len(cp), len(tp)):
+        return position(call) < position(target)
+    cbody, ci, cstmt = cp[common]
+    tbody, ti, _tstmt = tp[common]
+    if cbody is not tbody or ci >= ti:
+        return False
+    # A call nested in an ordinary conditional is not guaranteed to run.
+    if isinstance(cstmt, ast.If) and contains(cstmt.test, call):
+        returns = any(isinstance(stmt, (ast.Return, ast.Raise))
+                      for stmt in cstmt.body)
+        negated = any(isinstance(part, ast.UnaryOp)
+                      and isinstance(part.op, ast.Not)
+                      and contains(part, call) for part in ast.walk(cstmt.test))
+        return returns and negated
+    return isinstance(cstmt, (ast.Expr, ast.Assign, ast.AnnAssign))
 
 
 def escape_destructive_lines(fn: ast.AST, method_map: dict[str, list[ast.AST]]) -> tuple[int, ...]:
@@ -390,12 +510,28 @@ def parse_module(path: Path) -> list[Method]:
                      if (any(word in name.lower() for word in SNAPSHOT_WORDS)
                          or name.split(".")[-1] in SNAPSHOT_CALLS)
                      and not any(x in name.lower() for x in ("restore", "apply", "can_undo", "do_undo"))]
-        confirms = [pos for name, pos in calls if any(word in name.lower() for word in CONFIRM_WORDS)]
+        snapshots.extend(transactional_snapshot_lines(fn))
         helpers = [(name.split(".")[-1], pos) for name, pos in calls
                    if name.startswith("self._")]
-        marked = fn.name.startswith(DESTRUCTIVE_PREFIXES) or bool(muts) or bool(ignored)
-        if not marked:
-            continue
+        confirm_nodes = [n for n in nodes if isinstance(n, ast.Call)
+                         and any(word in call_name(n).lower()
+                                 for word in CONFIRM_WORDS)]
+        protected_targets = [n for n, _kind in raw_muts
+                             if mutation_persistence(n, persistence)[0]]
+        protected_targets += [n for n in nodes if isinstance(n, ast.Call)
+                              and call_name(n).startswith("self._")
+                              and not any(word in call_name(n).lower()
+                                          for word in CONFIRM_WORDS)]
+        confirms = []
+        for call in confirm_nodes:
+            later = [target for target in protected_targets
+                     if position(target) > position(call)]
+            if later and all(confirmation_dominates(fn, call, target)
+                             for target in later):
+                confirms.append(position(call))
+        marked = (fn.name.startswith(DESTRUCTIVE_PREFIXES)
+                  or fn.name.startswith(tuple("_on" + p for p in DESTRUCTIVE_PREFIXES))
+                  or bool(muts) or bool(ignored))
         chain: list[str] = []
         cur: ast.AST | None = fn
         while cur is not None:
@@ -408,7 +544,7 @@ def parse_module(path: Path) -> list[Method]:
                               tuple(line for line, _ in sorted(muts)),
                               tuple(kind or "" for _, kind in sorted(muts)),
                               tuple(sorted(set(snapshots))), tuple(sorted(set(confirms))),
-                              tuple(helpers), (), tuple(ignored)))
+                              tuple(helpers), (), tuple(ignored), marked))
     # Esc is checked on every handler, including handlers not otherwise in the inventory.
     extra: list[Method] = []
     for fn in funcs:
@@ -427,11 +563,39 @@ def parse_module(path: Path) -> list[Method]:
 def classify(methods: list[Method]) -> list[Result]:
     by_name: dict[str, list[Method]] = {}
     for method in methods:
-        by_name.setdefault(method.name, []).append(method)
+        if method.inventoried:
+            by_name.setdefault(method.name, []).append(method)
+
+    callers: dict[tuple[str, str, str], list[tuple[Method, int]]] = {}
+    for caller in methods:
+        owner = caller.qualname.rpartition(".")[0]
+        for helper, call_pos in caller.helper_calls:
+            callers.setdefault((caller.module, owner, helper), []).append((caller, call_pos))
+
+    def protected_by_callers(method: Method) -> str | None:
+        owner = method.qualname.rpartition(".")[0]
+        sites = callers.get((method.module, owner, method.name), [])
+        if not sites:
+            return None
+        for caller, call_pos in sites:
+            if any(confirm < call_pos for confirm in caller.confirm_lines):
+                continue
+            # Equality means the helper call itself was recognized as a
+            # snapshot-shaped name (for example ``_remember``), not that the
+            # caller took a checkpoint before invoking it.
+            if any(snapshot < call_pos for snapshot in caller.snapshot_lines):
+                continue
+            return None
+        return f"all {len(sites)} caller(s) confirm or snapshot before calling the helper"
+
     def direct_status(method: Method) -> tuple[str, str] | None:
         mutations = list(method.mutation_lines)
         if method.confirm_lines:
-            return "CONFIRMED", f"confirmation/prompt at line {source_line(min(method.confirm_lines))}"
+            first_confirm = min(method.confirm_lines)
+            if not mutations or first_confirm < min(mutations):
+                return "CONFIRMED", f"confirmation/prompt at line {source_line(first_confirm)}"
+            return ("NEITHER", "confirmation follows mutation at line %s" %
+                    source_line(min(mutations)))
         if mutations and method.snapshot_lines:
             first_mutation, first_snapshot = min(mutations), min(method.snapshot_lines)
             if first_snapshot < first_mutation:
@@ -445,6 +609,8 @@ def classify(methods: list[Method]) -> list[Result]:
 
     results: list[Result] = []
     for method in methods:
+        if not method.inventoried:
+            continue
         if method.escape_lines:
             results.append(Result(method, "ESC-DESTRUCTIVE",
                                   "Escape path reaches destructive action at line(s) " +
@@ -452,6 +618,11 @@ def classify(methods: list[Method]) -> list[Result]:
             continue
         own = direct_status(method)
         if own:
+            if own[0] == "NEITHER":
+                caller_detail = protected_by_callers(method)
+                if caller_detail:
+                    results.append(Result(method, "UNDOABLE", caller_detail))
+                    continue
             results.append(Result(method, *own))
             continue
         helper_statuses: list[tuple[str, str]] = []
@@ -461,9 +632,12 @@ def classify(methods: list[Method]) -> list[Result]:
                 target = targets[0]
                 target_status = direct_status(target)
                 if target_status:
-                    if method.confirm_lines:
+                    if any(confirm < call_pos for confirm in method.confirm_lines):
                         helper_statuses.append(("CONFIRMED",
                                                 "wrapper confirmation precedes destructive helper"))
+                    elif method.confirm_lines:
+                        helper_statuses.append(("NEITHER",
+                                                "wrapper confirmation follows destructive helper"))
                     elif method.snapshot_lines:
                         snap = min(method.snapshot_lines)
                         if snap < call_pos:
@@ -531,44 +705,49 @@ def run(de: Path, use_ledger: bool = True) -> tuple[int, str]:
     for key, reason in sorted(ledger.items()):
         lines.append(f"DEBT {key[0]} {key[1]} {key[2]} — {reason}")
     ok = not new and not stale
-    lines.append("PASS: destructive actions are protected or specifically ledgered" if ok else
-                 "FAIL: destructive-action debt ratchet changed")
+    lines.append("RESULT: PASS" if ok else
+                 "RESULT: FAILED — destructive-action debt ratchet changed")
     return (0 if ok else 1), "\n".join(lines) + "\n"
 
 
 def selfcheck() -> tuple[int, str]:
-    # A copied real app supplies the surrounding syntax and a real destructive
-    # method.  Replace only that method in scratch with two explicit ordering
-    # variants so the proof cannot pass because of the production ledger.
-    source = DEFAULT_DE / "illustrator.py"
+    # A small persisted fixture keeps this proof independent of concurrent app
+    # schema refactors. Replace only its destructive method with explicit
+    # ordering variants so the production debt ledger cannot make it pass.
     with tempfile.TemporaryDirectory(prefix="destructive-action-selfcheck-") as scratch:
         scratch_de = Path(scratch)
-        target = scratch_de / source.name
-        shutil.copy2(source, target)
-        original = target.read_text(encoding="utf-8")
+        target = scratch_de / "ordering_fixture.py"
+        original = ("import json\n"
+                    "class OrderingFixture:\n"
+                    "    def _save(self):\n"
+                    "        json.dumps(self.items)\n"
+                    "    def _delete_layer(self):\n"
+                    "        self.items.clear()\n"
+                    "        self._snapshot()\n")
+        target.write_text(original, encoding="utf-8")
         tree = ast.parse(original)
         fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
                    and n.name == "_delete_layer"), None)
         if fn is None or fn.end_lineno is None:
-            return 1, "SELFCHECK FAIL: real illustrator.py _delete_layer fixture not found\n"
+            return 1, "SELFCHECK FAIL: ordering fixture not found\n"
         source_lines = original.splitlines()
         indent = " " * fn.col_offset
         replacement = [indent + "def _delete_layer(self):",
-                       indent + "    self.layers.clear()",
+                       indent + "    self.items.clear()",
                        indent + "    self._snapshot()"]
         source_lines[fn.lineno - 1:fn.end_lineno] = replacement
         target.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
         command = [sys.executable, str(Path(__file__).resolve()), "--de", str(scratch_de), "--no-ledger"]
         proc = subprocess.run(command, text=True, capture_output=True, check=False)
-        after = "FINDING SNAPSHOT-AFTER-MUTATE illustrator.py"
+        after = "FINDING SNAPSHOT-AFTER-MUTATE ordering_fixture.py"
         if proc.returncode == 0 or after not in proc.stdout:
             return 1, "SELFCHECK FAIL: snapshot-after-mutate sabotage did not make gate red\n" + proc.stdout + proc.stderr
         source_lines = original.splitlines()
-        replacement = [indent + "def _delete_layer(self):", indent + "    self.layers.clear()"]
+        replacement = [indent + "def _delete_layer(self):", indent + "    self.items.clear()"]
         source_lines[fn.lineno - 1:fn.end_lineno] = replacement
         target.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
         proc2 = subprocess.run(command, text=True, capture_output=True, check=False)
-        neither = "FINDING NEITHER illustrator.py"
+        neither = "FINDING NEITHER ordering_fixture.py"
         if proc2.returncode == 0 or neither not in proc2.stdout:
             return 1, "SELFCHECK FAIL: removed-snapshot sabotage did not make gate red\n" + proc2.stdout + proc2.stderr
         source_lines = original.splitlines()
@@ -577,14 +756,128 @@ def selfcheck() -> tuple[int, str]:
         source_lines[fn.lineno - 1:fn.end_lineno] = replacement
         target.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
         proc3 = subprocess.run(command, text=True, capture_output=True, check=False)
-        if ("Illustrator._delete_layer" in proc3.stdout or
+        if ("OrderingFixture._delete_layer" in proc3.stdout or
                 "transient-attribute 1" not in proc3.stdout):
             return 1, ("SELFCHECK FAIL: non-saved attribute mutation was reported\n" +
                        proc3.stdout + proc3.stderr)
-        return 0, ("SELFCHECK PASS: copied real illustrator.py _delete_layer\n"
+        caller_fixture = scratch_de / "caller_fixture.py"
+        caller_fixture.write_text(
+            "import json\n"
+            "class CallerFixture:\n"
+            "    def _save(self):\n"
+            "        json.dumps(self.items)\n"
+            "    def _erase_items(self):\n"
+            "        self.items.clear()\n"
+            "    def command_with_checkpoint(self):\n"
+            "        self.undo.checkpoint('Erase Items')\n"
+            "        self._erase_items()\n",
+            encoding="utf-8")
+        protected, _ignored = scan(scratch_de)
+        helper_result = next((r for r in protected
+                              if r.method.module == caller_fixture.name
+                              and r.method.name == "_erase_items"), None)
+        if helper_result is None or helper_result.status != "UNDOABLE":
+            return 1, ("SELFCHECK FAIL: checkpointing caller did not protect helper\n" +
+                       ("no helper result\n" if helper_result is None else
+                        f"reported {helper_result.status}: {helper_result.detail}\n"))
+        with caller_fixture.open("a", encoding="utf-8") as fixture:
+            fixture.write(
+                "    def command_without_checkpoint(self):\n"
+                "        self._erase_items()\n")
+        unprotected, _ignored = scan(scratch_de)
+        helper_result = next((r for r in unprotected
+                              if r.method.module == caller_fixture.name
+                              and r.method.name == "_erase_items"), None)
+        if helper_result is None or helper_result.status != "NEITHER":
+            return 1, ("SELFCHECK FAIL: unprotected caller did not leave helper as a finding\n" +
+                       ("no helper result\n" if helper_result is None else
+                        f"reported {helper_result.status}: {helper_result.detail}\n"))
+        after_confirm_fixture = scratch_de / "confirm_after_fixture.py"
+        after_confirm_fixture.write_text(
+            "import json\n"
+            "class ConfirmAfterFixture:\n"
+            "    def _save(self):\n"
+            "        json.dumps(self.items)\n"
+            "    def _erase_items(self):\n"
+            "        self.items.clear()\n"
+            "    def command(self):\n"
+            "        self._erase_items()\n"
+            "        self.confirm('Too late')\n",
+            encoding="utf-8")
+        after_confirm, _ignored = scan(scratch_de)
+        after_result = next((r for r in after_confirm
+                             if r.method.module == after_confirm_fixture.name
+                             and r.method.name == "_erase_items"), None)
+        if after_result is None or after_result.status != "NEITHER":
+            return 1, ("SELFCHECK FAIL: confirmation after helper laundered deletion\n" +
+                       ("no helper result\n" if after_result is None else
+                        f"reported {after_result.status}: {after_result.detail}\n"))
+        conditional_fixture = scratch_de / "conditional_confirm_fixture.py"
+        conditional_fixture.write_text(
+            "import json\n"
+            "class ConditionalConfirmFixture:\n"
+            "    def _save(self):\n"
+            "        json.dumps(self.items)\n"
+            "    def _delete_item(self):\n"
+            "        if self.debug:\n"
+            "            self.confirm('Debug only')\n"
+            "        self.items.clear()\n",
+            encoding="utf-8")
+        conditional, _ignored = scan(scratch_de)
+        conditional_result = next((r for r in conditional
+                                   if r.method.module == conditional_fixture.name
+                                   and r.method.name == "_delete_item"), None)
+        if conditional_result is None or conditional_result.status != "NEITHER":
+            return 1, ("SELFCHECK FAIL: conditional confirmation laundered deletion\n" +
+                       ("no result\n" if conditional_result is None else
+                        f"reported {conditional_result.status}: {conditional_result.detail}\n"))
+        transaction_fixture = scratch_de / "transaction_fixture.py"
+        transaction_fixture.write_text(
+            "import json\n"
+            "class TransactionFixture:\n"
+            "    def _save(self):\n"
+            "        json.dumps(self.items)\n"
+            "    def _reset_items(self):\n"
+            "        before = list(self.items)\n"
+            "        self.items.clear()\n"
+            "        if not self._save():\n"
+            "            self.items[:] = before\n",
+            encoding="utf-8")
+        transactional, _ignored = scan(scratch_de)
+        transaction_result = next((r for r in transactional
+                                   if r.method.module == transaction_fixture.name
+                                   and r.method.name == "_reset_items"), None)
+        if transaction_result is None or transaction_result.status != "UNDOABLE":
+            return 1, ("SELFCHECK FAIL: copied failed-save rollback was not protected\n" +
+                       ("no result\n" if transaction_result is None else
+                        f"reported {transaction_result.status}: {transaction_result.detail}\n"))
+        transaction_fixture.write_text(
+            "import json\n"
+            "class TransactionFixture:\n"
+            "    def _save(self):\n"
+            "        json.dumps(self.items)\n"
+            "    def _reset_items(self):\n"
+            "        before = self.items\n"
+            "        self.items.clear()\n"
+            "        if not self._save():\n"
+            "            self.items[:] = before\n",
+            encoding="utf-8")
+        shallow, _ignored = scan(scratch_de)
+        shallow_result = next((r for r in shallow
+                              if r.method.module == transaction_fixture.name
+                              and r.method.name == "_reset_items"), None)
+        if shallow_result is None or shallow_result.status != "NEITHER":
+            return 1, ("SELFCHECK FAIL: shallow alias laundered failed-save mutation\n" +
+                       ("no result\n" if shallow_result is None else
+                        f"reported {shallow_result.status}: {shallow_result.detail}\n"))
+        return 0, ("SELFCHECK PASS: isolated persisted ordering fixture\n"
                    "SELFCHECK PASS: mutation-before-snapshot reported SNAPSHOT-AFTER-MUTATE\n"
                    "SELFCHECK PASS: removed snapshot reported NEITHER\n"
-                   "SELFCHECK PASS: persistence filter reported saved layers and ignored non-saved transient state\n")
+                   "SELFCHECK PASS: persistence filter reported saved layers and ignored non-saved transient state\n"
+                   "SELFCHECK PASS: checkpointing caller protected destructive helper; unprotected caller still reported NEITHER\n"
+                   "SELFCHECK PASS: confirmation after destructive helper remains NEITHER\n"
+                   "SELFCHECK PASS: conditional confirmation does not protect an unconditional mutation\n"
+                   "SELFCHECK PASS: copied failed-save rollback is protected; shallow alias remains NEITHER\n")
 
 
 def main() -> int:

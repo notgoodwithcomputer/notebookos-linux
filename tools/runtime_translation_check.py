@@ -62,21 +62,20 @@ def catalog_keys():
     return set()
 
 
-def asks_for_translation(node):
-    """True when this expression passes through _t() somewhere."""
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) \
-                and sub.func.id == "_t":
-            return True
-    return False
-
-
 def literals_in(node):
-    """The bare string constants this expression would display."""
+    """Bare constants displayed outside their own `_t(...)` expression."""
     out = []
-    for sub in ast.walk(node):
+
+    def visit(sub):
+        if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                and sub.func.id == "_t"):
+            return
         if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
             out.append(sub.value)
+        for child in ast.iter_child_nodes(sub):
+            visit(child)
+
+    visit(node)
     return out
 
 
@@ -110,6 +109,17 @@ def scan(path, keys):
             continue
         if fn.name in BUILDERS:
             continue
+        # Straight-line local definitions dominate later statements in the
+        # function body.  Resolve these one hop so moving a formatted literal
+        # into `text = ...` cannot make the same runtime display disappear.
+        definitions = {}
+        for stmt in fn.body:
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                if len(targets) == 1 and isinstance(targets[0], ast.Name) \
+                        and stmt.value is not None:
+                    definitions.setdefault(targets[0].id, []).append(
+                        (stmt.lineno, stmt.value))
         for call in ast.walk(fn):
             if not isinstance(call, ast.Call):
                 continue
@@ -118,8 +128,11 @@ def scan(path, keys):
             if call.func.attr not in SETTERS or not call.args:
                 continue
             arg = call.args[0]
-            if asks_for_translation(arg):
-                continue
+            if isinstance(arg, ast.Name):
+                prior = [value for line, value in definitions.get(arg.id, ())
+                         if line < call.lineno]
+                if prior:
+                    arg = prior[-1]
             for text in literals_in(arg):
                 if text in keys and not recoverable(text):
                     findings.append((call.lineno, fn.name, text))

@@ -154,7 +154,10 @@ def main():
         print("FAIL: nbicons.image() raised: %s" % exc)
         failures += 1
 
-    print("\n%s" % ("PASS" if not failures else "%d FAILURE(S)" % failures))
+    # A bare "PASS" is not a terminal verdict the release runner recognises
+    # (it also matches half a run). Name the outcome.
+    print("\nRESULT: %s" % ("ALL PASS" if not failures
+                            else "FAILED (%d)" % failures))
     return 1 if failures else 0
 
 

@@ -17,6 +17,7 @@ Usage: python3 tools/video_lifecycle_selftest.py
 
 import os
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DE = os.path.join(HERE, "..", "buildroot", "board", "notebookos",
@@ -149,6 +150,40 @@ def main():
     check(o._exp_busy() is False, "teardown (Cancel, close, destroy) stops it")
     check(o._exp_build_gen == 1,
           "teardown supersedes the pending command-build")
+
+    # --- a failed autosave quarantine must preserve the only original -------
+    fd, project = tempfile.mkstemp(prefix="nb-video-store-", suffix=".json")
+    os.write(fd, b'{"foreign":"original project bytes"}')
+    os.close(fd)
+    o = video.VideoEditor.__new__(video.VideoEditor)
+    o._quarantine_pending = True
+    o._serialize = lambda: {"version": 2, "bin": [], "clips": []}
+    old_file = video.PROJECT_FILE
+    old_quarantine = o._quarantine_autosave
+    old_write = video.nbapp.atomic_write_json
+    old_note_failure = video.nbapp.note_save_failure
+    writes = []
+    video.PROJECT_FILE = project
+    o._quarantine_autosave = lambda: False
+    video.nbapp.atomic_write_json = lambda *a: writes.append(a)
+    # The assertion below is about replacing PROJECT_FILE.  A save failure may
+    # also post a notification through the same shared atomic writer; keep that
+    # independent side effect from looking like a project overwrite.
+    video.nbapp.note_save_failure = lambda *_a, **_k: None
+    try:
+        o._save_project()
+        with open(project, "rb") as fh:
+            after = fh.read()
+    finally:
+        video.PROJECT_FILE = old_file
+        o._quarantine_autosave = old_quarantine
+        video.nbapp.atomic_write_json = old_write
+        video.nbapp.note_save_failure = old_note_failure
+        os.unlink(project)
+    check(after == b'{"foreign":"original project bytes"}',
+          "failed quarantine leaves original autosave bytes untouched")
+    check(not writes and o._quarantine_pending,
+          "replacement is refused and quarantine remains pending")
 
     print("")
     if FAILED:

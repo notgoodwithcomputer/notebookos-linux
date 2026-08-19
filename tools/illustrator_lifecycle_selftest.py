@@ -2,6 +2,8 @@
 """Headless ownership checks for Illustrator's deferred UI callbacks."""
 import os
 import sys
+import json
+import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay",
@@ -150,5 +152,27 @@ check(events == [(401, True), (402, True), (403, True)],
 check((app._recentre_src, app._fit_src, app._chip_restore_src) == (0, 0, 0),
       "destroy clears all deferred ownership")
 
+# Remembering a colour updates one preference field without erasing settings
+# owned by a newer version or an extension.
+prefs_dir = tempfile.mkdtemp(prefix="illustrator-prefs-")
+prefs_path = os.path.join(prefs_dir, "illustrator.json")
+with open(prefs_path, "w", encoding="utf-8") as fh:
+    json.dump({"recent": ["#111111"], "palette_name": "custom"}, fh)
+real_cfg = illustrator.CFG_FILE
+illustrator.CFG_FILE = prefs_path
+app._recent = ["#111111"]
+app._sync_recent = lambda: None
+try:
+    app._remember("#ABCDEF")
+    with open(prefs_path, encoding="utf-8") as fh:
+        saved_prefs = json.load(fh)
+finally:
+    illustrator.CFG_FILE = real_cfg
+check(saved_prefs.get("recent", [])[:2] == ["#ABCDEF", "#111111"],
+      "remembering a colour persists the updated recent list")
+check(saved_prefs.get("palette_name") == "custom",
+      "remembering a colour preserves unrelated preference fields")
+
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

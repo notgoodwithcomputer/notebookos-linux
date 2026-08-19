@@ -62,6 +62,33 @@ def on_target(*rel):
     return os.path.join(TARGET, *rel)
 
 
+def regular_nonempty(path):
+    return os.path.isfile(path) and os.path.getsize(path) > 0
+
+
+def elf_file(path, executable=False):
+    if not regular_nonempty(path):
+        return False
+    if executable and not os.access(path, os.X_OK):
+        return False
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def font_file(path):
+    if not regular_nonempty(path):
+        return False
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) in (b"\x00\x01\x00\x00", b"OTTO", b"true",
+                                  b"typ1", b"ttcf")
+    except OSError:
+        return False
+
+
 def links_against(lib_glob, needed):
     """Is a shipped .so linked against `needed`? Answers the question the
     loaders directory cannot."""
@@ -113,7 +140,7 @@ def main():
 
     # ---- the clock survives a reboot (task 008) ----------------------
     check("hwclock is on the image, so Set Clock can write the RTC",
-          os.path.exists(on_target("sbin", "hwclock")))
+          elf_file(on_target("sbin", "hwclock"), executable=True))
     if kc:
         check("the kernel has an RTC driver to write to",
               re.search(r"^CONFIG_RTC_DRV_CMOS=[ym]$", kc, re.M) is not None)
@@ -129,12 +156,15 @@ def main():
                     ("libgstisomp4.so", "mp4/mov"),
                     ("libgstalsa.so", "sound out"),
                     ("libgstvideoconvertscale.so", "colour + scaling")):
-        check("gstreamer: %s (%s)" % (so, why), so in have)
+        check("gstreamer: %s (%s)" % (so, why),
+              so in have and elf_file(os.path.join(gst, so)))
 
     # ---- fonts the reader needs --------------------------------------
     fonts = glob.glob(on_target("usr", "share", "fonts", "**", "*.ttf"),
                       recursive=True)
-    check("fonts are on the image (%d)" % len(fonts), len(fonts) > 0)
+    valid_fonts = [path for path in fonts if font_file(path)]
+    check("fonts are on the image (%d valid of %d)" %
+          (len(valid_fonts), len(fonts)), bool(valid_fonts))
 
     print("\n%d checks, %d passed, %d FAILED"
           % (N[0], N[0] - len(FAILED), len(FAILED)))

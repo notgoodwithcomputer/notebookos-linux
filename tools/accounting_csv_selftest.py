@@ -39,12 +39,12 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-H = "/home/ben/Documents/notebookos-linux/.acct-csv-scratch/nb-%d" % os.getpid()
+H = tempfile.mkdtemp(prefix="accounting-csv-")
 os.environ["NB_HOME"] = H
-shutil.rmtree(H, ignore_errors=True)
 os.makedirs(H + "/.config/notebook", exist_ok=True)
 
 sys.path.insert(0, os.path.join(REPO, "tools"))
@@ -102,7 +102,9 @@ special = 'Comma, quote " and newline\nremain exact'
 unicode_desc = "房租 / Аренда / 🧾"
 amounts = [-12.34, 2000.00, -899.99, -0.01, -45.67, 1.50,
            -1000.00, 250.25, -3.33, 17.89, -88.88, 400.00]
-descriptions = [special, unicode_desc] + ["Entry %02d" % i for i in range(3, 13)]
+formula_desc = "=1+1"
+descriptions = [special, unicode_desc, formula_desc] + [
+    "Entry %02d" % i for i in range(4, 13)]
 transactions = [
     {"date": "%02d Aug" % (i + 1), "iso": "2026-08-%02d" % (i + 1),
      "desc": descriptions[i], "amt": amount}
@@ -172,6 +174,11 @@ unicode_ok = ("Description" in column and len(data) >= 2
               and data[1][column["Description"]] == unicode_desc)
 check("UTF-8 non-ASCII description round-trips", unicode_ok,
       data[1] if len(data) >= 2 else rows)
+
+formula_safe = ("Description" in column and len(data) >= 3
+                and data[2][column["Description"]] == "'" + formula_desc)
+check("formula-leading descriptions export as literal text", formula_safe,
+      data[2] if len(data) >= 3 else rows)
 
 write_store([], 17.25)
 empty_win = fresh_window()

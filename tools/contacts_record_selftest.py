@@ -27,6 +27,10 @@ import sys
 import tempfile
 import types
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                                "opt/notebook/de"))
+
 # Pin NB_HOME before importing the app: contacts.py resolves CONTACTS_FILE at
 # import time, and an unset NB_HOME points it at the caller's own real address
 # book. Nothing here writes, but nothing here should be able to.

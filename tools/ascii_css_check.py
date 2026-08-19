@@ -13,32 +13,40 @@ Reports the file, line and character so the fix is obvious. Exit 1 if any found.
     python3 tools/ascii_css_check.py
 """
 import os
-import re
+import io
 import sys
+import tokenize
 import unicodedata
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")
 
-BYTES_BLOCK = re.compile(r'b(?:"""|\'\'\')(.*?)(?:"""|\'\'\')', re.S)
-BYTES_LINE = re.compile(r'b"([^"\n]*)"|b\'([^\'\n]*)\'')
-
-
 def check(path):
     src = open(path, encoding="utf-8").read()
     hits = []
-    for m in list(BYTES_BLOCK.finditer(src)) :
-        block, start = m.group(1), m.start(1)
-        for i, ch in enumerate(block):
-            if ord(ch) > 127:
-                line = src[:start + i].count("\n") + 1
-                hits.append((line, ch))
-    for m in BYTES_LINE.finditer(src):
-        text = m.group(1) or m.group(2) or ""
-        for i, ch in enumerate(text):
-            if ord(ch) > 127:
-                line = src[:m.start()].count("\n") + 1
-                hits.append((line, ch))
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(src).readline)
+        for tok in tokens:
+            if tok.type != tokenize.STRING:
+                continue
+            # Python permits r/b prefixes in either order and in any case.
+            # Tokenization still yields the STRING token for the exact
+            # non-ASCII-bytes SyntaxError this gate is meant to catch.
+            prefix = tok.string[:next(
+                (i for i, ch in enumerate(tok.string) if ch in "'\""),
+                len(tok.string))].lower()
+            if "b" not in prefix:
+                continue
+            line = tok.start[0]
+            for ch in tok.string:
+                if ch == "\n":
+                    line += 1
+                elif ord(ch) > 127:
+                    hits.append((line, ch))
+    except (tokenize.TokenError, IndentationError):
+        # Other syntax gates own incomplete/indented source. Return every hit
+        # already proven before tokenization stopped rather than fail open.
+        pass
     return hits
 
 

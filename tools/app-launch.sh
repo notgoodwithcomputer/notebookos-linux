@@ -7,7 +7,22 @@
 #   app-launch.sh <module> [wait_secs]
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+[ "$#" -ge 1 ] || { echo "usage: app-launch.sh MODULE [wait-seconds]" >&2; exit 2; }
 MOD="$1"; WAIT="${2:-14}"
+# MOD is sent inside a root shell command in the guest and used as a host-side
+# filename. A module is an identifier, never shell syntax or a path.
+case "$MOD" in
+  ""|*[!A-Za-z0-9_]*)
+    echo "app-launch: invalid module identifier: $MOD" >&2
+    exit 2
+    ;;
+esac
+case "$WAIT" in
+  ""|*[!0-9]*)
+    echo "app-launch: wait must be a whole number of seconds" >&2
+    exit 2
+    ;;
+esac
 OUT="$ROOT/boot-work/apps"; mkdir -p "$OUT"
 G="python3 $ROOT/tools/gsh.py"
 Q="python3 $ROOT/tools/qmp.py"

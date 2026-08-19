@@ -128,8 +128,18 @@ try:
 
         splash.nbmotion.animate = broken_animate
         safety._finish()
-        check("raising motion primitive still hands over immediately",
-              any(event[0] == "quit" for event in events),
+        # The handover deadline is ARMED before any motion is attempted, so a
+        # primitive that raises cannot trap the session: the same grace timer
+        # that a clean lift uses still quits the boot loop (the completed bar
+        # stays briefly visible either way, rather than the screen blinking
+        # away the instant motion happens to break). What must hold is that a
+        # main_quit is scheduled — a real handover — not that it fires
+        # synchronously inside _finish.
+        handover = [e for e in events
+                    if e[0] == "timeout" and e[1] == splash.GRACE_MS
+                    and e[2] is splash.Gtk.main_quit]
+        check("raising motion primitive still hands the boot over",
+              len(handover) == 1 and not safety.get_visible() is None,
               "[not reached: events=%r]" % (events,))
 
         # Exercise nbmotion's actual Reduced Motion policy on another real

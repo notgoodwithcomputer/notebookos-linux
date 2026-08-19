@@ -22,7 +22,7 @@ APPS = (
     "music", "video", "media", "ebook", "maps", "language", "workout",
     "mealplanner", "cookbook", "bills", "contacts", "tasks", "journal",
     "novel", "writer", "screenplay", "sequencer", "illustrator", "calendar",
-    "g2048", "gbaemu", "gbasdk", "finder", "packages", "sysmon", "terminal",
+    "g2048", "gbaemu", "gbasdk", "finder", "packages", "sysmon",
     "calculator", "academics", "accounting",
 )
 

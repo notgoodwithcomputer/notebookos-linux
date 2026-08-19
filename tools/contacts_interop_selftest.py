@@ -88,6 +88,36 @@ check("dedupe keeps scalar conflict", book[0]["organization"] == "Existing")
 check("dedupe retains list conflict", book[0]["phones"] == [
       {"label": "home", "value": "111"}, {"label": "work", "value": "222"}])
 
+duplicate_values = c.normalize_person({"name": "Duplicate", "phones": [
+    {"label": "home", "value": "555-0100"},
+    {"label": "home", "value": "555-0100"}]})
+book = c.merge_contacts(
+    [c.normalize_person({"name": "Duplicate"})], [duplicate_values])
+check("dedupe removes repeated values within one import", book[0]["phones"] == [
+      {"label": "home", "value": "555-0100"}])
+
+
+class CountedBook(list):
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.scans = 0
+
+    def __iter__(self):
+        self.scans += 1
+        return super().__iter__()
+
+
+# A vCard import is handled on the GTK thread. Verify lookup is indexed once,
+# not one full address-book scan per imported card.
+large = CountedBook([c.normalize_person({"name": "Person %d" % i})
+                     for i in range(500)])
+incoming = [c.normalize_person({"name": "Person %d" % i,
+                                "organization": "Imported"})
+            for i in range(500)]
+c.merge_contacts(large, incoming)
+check("large vCard merge scans the address book only once",
+      large.scans == 1 and large[499]["organization"] == "Imported")
+
 check("digit search ignores formatting", c.contact_matches(p, "2125550199"))
 people = [c.normalize_person({"name": "Amy"}),
           c.normalize_person({"name": "Ava", "favorite": True}),

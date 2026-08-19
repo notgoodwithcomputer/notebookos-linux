@@ -66,8 +66,23 @@ class _Label(object):
         self.text = text
         self.ops += 1
 
+    def get_accessible(self):
+        return self
+
+    def set_name(self, name):
+        self.accessible_name = name
+
 
 class _Widget(object):
+    def get_accessible(self):
+        return self
+
+    def set_name(self, name):
+        self.accessible_name = name
+
+    def grab_focus(self):
+        self.focused = True
+
     def show(self):
         pass
 
@@ -97,6 +112,8 @@ class _Board(object):
         self.ov_box = _Widget()
         self.ov_text = _Widget()
         self.keep_btn = _Widget()
+        self.again_btn = _Widget()
+        self._overlay_status = None
 
     def zero(self):
         for row in self.tiles:
@@ -136,6 +153,10 @@ check("first refresh sets the tile style classes",
        and "t-16" in b.tiles[3][3].ctx.classes))
 check("first refresh writes the score readouts",
       (b.score_lbl.text, b.best_lbl.text) == ("24", "100"))
+check("every board cell exposes coordinates and value or empty state",
+      b.tiles[0][0].accessible_name == "Row 1, column 1: 2"
+      and b.tiles[0][1].accessible_name == "Row 1, column 2: Empty"
+      and b.tiles[3][3].accessible_name == "Row 4, column 4: 16")
 
 # 2. THE REGRESSION: a refresh that changes nothing must touch nothing -------
 b.zero()
@@ -157,6 +178,9 @@ check("the vacated cell drops its tile class",
       not any(c.startswith("t-") for c in b.tiles[3][3].ctx.classes))
 check("the arrived cell shows the merged value",
       b.tiles[3][1].text == "16" and "t-16" in b.tiles[3][1].ctx.classes)
+check("accessible cell state follows a move",
+      b.tiles[3][1].accessible_name == "Row 4, column 2: 16"
+      and b.tiles[3][3].accessible_name == "Row 4, column 4: Empty")
 check("a changed score is rewritten", b.score_lbl.text == "40")
 check("an unchanged best score is left alone", b.best_lbl.ops == 0)
 
@@ -301,6 +325,57 @@ g2048.Game2048._finish_anim_now(st3)
 check("finish-now clears phase, data and the overlay",
       st3._anim_phase is None and st3._anim_data is None
       and st3.anim_layer.hidden == 1)
+
+# 8. A restored terminal board must not remain stuck in "play". The normal
+# move path detects game-over after a successful slide, but a crash can leave
+# the immediately-saved high-score board on disk before that final check. On
+# reopen every direction is a no-op, so the no-op branch itself must raise the
+# banner and persist that the finished board should not be resumed again.
+terminal = g2048.Game2048.__new__(g2048.Game2048)
+terminal.board = [
+    [2, 4, 2, 4],
+    [4, 2, 4, 2],
+    [2, 4, 2, 4],
+    [4, 2, 4, 2],
+]
+terminal.status = "play"
+terminal._finish_anim_now = lambda: None
+terminal._refreshes = 0
+terminal._saves = 0
+terminal._refresh = lambda: setattr(
+    terminal, "_refreshes", terminal._refreshes + 1)
+terminal._save_best = lambda: setattr(
+    terminal, "_saves", terminal._saves + 1)
+terminal.move("left")
+check("a no-op key recognizes a restored terminal board",
+      terminal.status == "lose" and terminal._refreshes == 1)
+check("recognizing the terminal board persists it as finished",
+      terminal._saves == 1)
+
+# A first 2048 and a full terminal board can happen on the same move. Winning
+# must be shown before Game Over; Continue may reveal the terminal state later.
+winner = g2048.Game2048.__new__(g2048.Game2048)
+winner.board = [
+    [1024, 1024, 4, 8],
+    [4, 8, 16, 4],
+    [8, 16, 4, 8],
+    [16, 4, 8, 16],
+]
+winner.status = "play"; winner._won_shown = False
+winner.score = winner.best = 0
+winner._finish_anim_now = lambda: None
+def _spawn_last():
+    winner.board[0][3] = 2
+    return (0, 3, 2)
+winner._add_random = _spawn_last
+winner._save_best = lambda: None
+winner._queue_save = lambda: None
+winner._refresh = lambda: None
+winner._animate_move = lambda *_a: None
+winner.move("left")
+check("a terminal move that creates 2048 shows the win before loss",
+      winner.board[0] == [2048, 4, 8, 2]
+      and not winner._can_move() and winner.status == "win")
 
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(len(FAILS))

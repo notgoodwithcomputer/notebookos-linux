@@ -196,4 +196,5 @@ check("named content.maps transition is present",
 if win is not None:
     win.destroy()
 print("\n%d checks, %d passed, %d FAILED" % (passed + failed, passed, failed))
+print("RESULT: %s" % ("FAILED" if failed else "PASS"))
 raise SystemExit(1 if failed else 0)

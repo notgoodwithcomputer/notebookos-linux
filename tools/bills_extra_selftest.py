@@ -242,11 +242,18 @@ with open(STORE) as f:
     plain = json.load(f)
 check("a store with nothing extra gains only the app's own sort key",
       set(plain) == {"bills", "sort"}, sorted(plain))
-check("...and its bill gains nothing either",
+# `dom` is this version's OWN field, not a carried-through unknown: the day of
+# the month a bill falls on, kept beside the anchor because the anchor cannot
+# hold a 31st that lands in a short month (bills.add_months). A store written
+# before it existed gains it on the first save, filled in from the anchor's own
+# day, the same way the top level gains `sort`.
+check("...and its bill gains nothing but this version's own day-of-month rule",
       set(plain["bills"][0]) == {"id", "payee", "account", "amount", "due",
-                                 "every", "method", "address", "phone",
+                                 "dom", "every", "method", "address", "phone",
                                  "note", "lead", "paid"},
       sorted(plain["bills"][0]))
+check("...and that rule is the anchor's own day for a bill that has no other",
+      plain["bills"][0]["dom"] == 15, plain["bills"][0].get("dom"))
 app.destroy()
 pump()
 

@@ -118,7 +118,11 @@ unreachable = [kd[0] for kd, btn, _f in app._buttons if not btn.get_can_focus()]
 checks["every key can be reached from the keyboard"] = (not unreachable,
                                                         unreachable)
 
-checks["the history line can actually be focused"] = app._histbox.get_can_focus()
+# An EMPTY history line is not a control: it is unfocusable and insensitive
+# until there is a calculation to recall (it "disappears semantically" — see
+# accessibility_ux_selftest), and becomes focusable the moment there is one.
+checks["an empty history line is not offered to the keyboard"] = (
+    not app._histbox.get_can_focus() and not app._histbox.get_sensitive())
 
 # Drive the handler the way a keyboard does. The static check above only proves
 # the key constants appear in the file.
@@ -129,6 +133,8 @@ app.press(("=", "eq", None, "eq"))
 for _ in range(6):
     while Gtk.events_pending():
         Gtk.main_iteration_do(False)
+checks["the history line can actually be focused"] = (
+    app._histbox.get_can_focus() and app._histbox.get_sensitive())
 app.expr = ""
 _ev = type("Event", (), {"keyval": Gdk.KEY_Return, "state": 0})()
 _handled = app._on_history_key(app._histbox, _ev)

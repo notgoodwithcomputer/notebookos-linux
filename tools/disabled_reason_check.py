@@ -36,8 +36,6 @@ DEBT = {
     # comics.py had four entries here that were never real: its layer
     # buttons are icon-only, and the gate was reading their tooltip back
     # as their own name. Removed with the fix, not with a fix to comics.
-    ("burner.py", "Button", 'Burn disc', "no tooltip"):
-        "carries no reason at all; needs a sentence naming the condition",
 }
 
 CONTROL_TYPES = ("Button", "MenuItem", "ToolButton", "Switch", "ComboBox")
@@ -200,7 +198,7 @@ def _run_probe(name, module_dir):
 def run_gate(module_dir=DE, only=None):
     modules = [x for x in app_modules(module_dir) if not only or x == only]
     actual = set()
-    bad = inspected = disabled = apps = 0
+    bad = inspected = disabled = apps = environment_blocked = 0
     for name in modules:
         try:
             run = _run_probe(name, module_dir)
@@ -212,6 +210,8 @@ def run_gate(module_dir=DE, only=None):
         if run.returncode or not lines:
             bad += 1
             detail = (run.stderr or run.stdout).strip().splitlines()
+            if detail and "Gtk couldn't be initialized" in detail[-1]:
+                environment_blocked += 1
             print("%s.py: probe failed%s" %
                   (name, ": " + detail[-1] if detail else ""))
             continue
@@ -225,6 +225,11 @@ def run_gate(module_dir=DE, only=None):
         disabled += data["disabled"]
         for finding in data["findings"]:
             actual.add(tuple(finding))
+
+    if apps == 0 and modules and environment_blocked == len(modules):
+        print("0 controls inspected across 0 apps")
+        print("RESULT: NOT RUN — GTK display is unavailable")
+        return 2
 
     ledger = set(DEBT) if module_dir == DE and only is None else set()
     for key in sorted(actual - ledger):

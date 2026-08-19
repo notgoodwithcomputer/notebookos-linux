@@ -80,6 +80,10 @@ keep = open(bystander, "rb").read()
 
 real = illustrator.Illustrator.__new__(illustrator.Illustrator)
 real._flatten_surface = lambda: cairo.ImageSurface(cairo.FORMAT_ARGB32, 4, 4)
+real.cw = real.ch = 4
+real.layers = [illustrator.Layer("Background", 4, 4)]
+real.active = 0
+real.next_id = 2
 ok = illustrator.Illustrator._write_png(real, dest)
 check(ok is True, "the save itself still succeeds")
 check(os.path.exists(bystander) and open(bystander, "rb").read() == keep,

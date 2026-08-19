@@ -107,3 +107,4 @@ check("truncation survives expansion", all(e["date"] < cut["date"]
       for e in c.events if e.get("series") == cut.get("series")))
 
 print("PASS calendar customization selftest")
+print("RESULT: PASS")

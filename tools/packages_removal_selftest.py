@@ -139,6 +139,7 @@ def main():
         shutil.rmtree(home)
 
     print("\n%d failed" % len(failures))
+    print("RESULT: %s" % ("FAILED" if failures else "PASS"))
     return 1 if failures else 0
 
 

@@ -113,9 +113,10 @@ def _pack(art):
     return rows
 
 
-def glyph_rows(font, ch):
-    if ch in OVERRIDES:
-        return _pack(OVERRIDES[ch])
+def glyph_rows(font, ch, overrides=None):
+    rules = OVERRIDES if overrides is None else overrides
+    if ch in rules:
+        return _pack(rules[ch])
     img = Image.new("L", (8, 8), 0)
     ImageDraw.Draw(img).text((0, BASELINE_DY), ch, fill=255, font=font)
     px = img.load()
@@ -163,28 +164,23 @@ def audit(rows_by_ch):
 
 def rasterise(path, extra_overrides=None):
     """(tile stream, rows by char) for one source face, audited."""
-    global OVERRIDES
-    saved = OVERRIDES
+    overrides = dict(OVERRIDES)
     if extra_overrides:
-        OVERRIDES = dict(OVERRIDES)
-        OVERRIDES.update(extra_overrides)
-    try:
-        font = ImageFont.truetype(path, 9)
-        tiles = []
-        rows_by_ch = {}
-        for code in range(FIRST, LAST + 1):
-            rows = glyph_rows(font, chr(code))
-            rows_by_ch[code] = rows
-            for y in range(8):
-                for half in range(2):
-                    v = 0
-                    for k in range(4):
-                        if rows[y] & (1 << (half * 4 + k)):
-                            v |= 1 << (k * 4)      # pixel index 1 = ink
-                    tiles.append(v)
-        problems = audit(rows_by_ch)
-    finally:
-        OVERRIDES = saved
+        overrides.update(extra_overrides)
+    font = ImageFont.truetype(path, 9)
+    tiles = []
+    rows_by_ch = {}
+    for code in range(FIRST, LAST + 1):
+        rows = glyph_rows(font, chr(code), overrides)
+        rows_by_ch[code] = rows
+        for y in range(8):
+            for half in range(2):
+                v = 0
+                for k in range(4):
+                    if rows[y] & (1 << (half * 4 + k)):
+                        v |= 1 << (k * 4)      # pixel index 1 = ink
+                tiles.append(v)
+    problems = audit(rows_by_ch)
     return tiles, rows_by_ch, problems
 
 

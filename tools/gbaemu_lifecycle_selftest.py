@@ -43,6 +43,7 @@ class Session:
 
 app = gbaemu.GbaEmu.__new__(gbaemu.GbaEmu)
 app._closed = False
+app._scan_source = 20
 app._launch_source = 21
 events = []
 app._session = Session(app, events)
@@ -60,12 +61,14 @@ finally:
     gbaemu.GLib.source_remove = real_remove
 check(first is False and second is False and app._closed,
       "destroy is idempotent and raises the closed gate")
-check(events == [("remove-21", True), ("stop", True), ("finish", True)],
-      "destroy cancels the launch and tears down the session, in order")
+check(events == [("remove-20", True), ("remove-21", True),
+                 ("stop", True), ("finish", True)],
+      "destroy cancels scanning and launch, then tears down the session")
 check(not [e for e in events if e[0] == "save"],
       "destroy writes no settings file — there is none to write")
-check(app._launch_source == 0 and app._session is None,
-      "destroy clears launch and session ownership")
+check(app._scan_source == 0 and app._launch_source == 0 and
+      app._session is None,
+      "destroy clears scan, launch, and session ownership")
 
 app._session = object()
 app._launch_time = 0
@@ -104,4 +107,5 @@ check(0 < src.index("self._closed = False") < src.index("GLib.idle_add"),
       "the closed gate is initialised before anything can be scheduled")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

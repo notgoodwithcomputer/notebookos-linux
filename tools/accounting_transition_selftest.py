@@ -73,4 +73,5 @@ finally:
     nbtransitions.nbmotion.reduced_motion = old_reduced
 
 print("\n%d failed" % len(fails))
+print("RESULT: %s" % ("FAILED" if fails else "PASS"))
 sys.exit(1 if fails else 0)

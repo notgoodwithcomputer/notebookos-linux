@@ -39,6 +39,8 @@ OVERLAY_FONTS = os.path.join(
     REPO, "buildroot/board/notebookos/rootfs-overlay/usr/share/fonts")
 TARGET_FONTS = os.path.join(REPO, "buildroot/output/target/usr/share/fonts")
 VENDOR = os.path.join(REPO, "assets/fonts")
+FONT_CONF = os.path.join(
+    REPO, "buildroot/board/notebookos/rootfs-overlay/etc/fonts/conf.d")
 
 sys.path.insert(0, DE)
 os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="font-selftest-"))
@@ -82,10 +84,14 @@ def fontconfig_for_repo():
     dirs = "\n".join("  <dir>%s</dir>" % d
                      for d in (OVERLAY_FONTS, TARGET_FONTS)
                      if os.path.isdir(d))
+    policies = "\n".join(
+        "  <include>%s</include>" % os.path.join(FONT_CONF, name)
+        for name in ("09-notebookos-skip-bitmaps.conf",
+                     "99-notebookos-cjk.conf", "99-notebookos.conf"))
     conf.write('<?xml version="1.0"?>\n'
                '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
-               "<fontconfig>\n%s\n  <cachedir>%s</cachedir>\n</fontconfig>\n"
-               % (dirs, cache))
+               "<fontconfig>\n%s\n%s\n  <cachedir>%s</cachedir>\n</fontconfig>\n"
+               % (dirs, policies, cache))
     conf.close()
     return conf.name
 
@@ -113,6 +119,25 @@ def match(family, fmt="%{file}"):
     return (out or "").strip()
 
 
+def shipped_font_path(path):
+    """True only for a resolved file beneath one of the image font roots."""
+    if not path:
+        return False
+    resolved = os.path.realpath(path)
+    for root in (OVERLAY_FONTS, TARGET_FONTS):
+        try:
+            if os.path.commonpath([resolved, os.path.realpath(root)]) \
+                    == os.path.realpath(root):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+mutant("a repository-prefix sibling is not a shipped font root",
+       shipped_font_path(REPO + "-evil/fonts/Fake.ttf"))
+
+
 import writer                                                 # noqa: E402
 
 print("--- 1. every offered family is on the disc -----------------------")
@@ -120,11 +145,10 @@ print("--- 1. every offered family is on the disc -----------------------")
 if not (have("fc-match") and have("fc-list")):
     skip("font resolution", "fontconfig tools (fc-match/fc-list) not on PATH")
 else:
-    shipped_root = os.path.realpath(REPO)
     for family in writer.FONT_FAMILIES:
         path = match(family)
         got = match(family, "%{family[0]}")
-        inside = bool(path) and os.path.realpath(path).startswith(shipped_root)
+        inside = shipped_font_path(path)
         # BOTH conditions matter. A file inside the tree but with the wrong
         # family name is a substitution that happens to land on another of our
         # own fonts, which is precisely the silent failure being hunted.
@@ -138,6 +162,25 @@ else:
     bogus = match("Nonexistent Face XYZ", "%{family[0]}")
     mutant("a family the image does not carry",
            bogus == "Nonexistent Face XYZ")
+
+    # These aliases are the desktop-wide defaults, not merely compatibility
+    # spellings. Weak aliases can lose to another installed candidate (the
+    # measured failure was sans-serif resolving to Fira Sans), so assert the
+    # family Fontconfig actually chooses with these policy files loaded.
+    for generic, expected in (("sans", "Nimbus Sans"),
+                              ("sans-serif", "Nimbus Sans"),
+                              ("serif", "Liberation Serif"),
+                              ("monospace", "Liberation Mono")):
+        got = match(generic, "%{family[0]}")
+        check("%s resolves to the Notebook OS default" % generic,
+              got == expected, "got %s, want %s" % (got, expected))
+
+    cjk_chain = (fc("fc-match", "-s", "sans:lang=zh-cn",
+                    "--format=%{family[0]}\n") or "").splitlines()
+    check("generic Chinese UI text retains the shipped CJK fallback",
+          bool(cjk_chain) and cjk_chain[0] == "Nimbus Sans"
+          and "Noto Sans CJK SC" in cjk_chain,
+          cjk_chain[:8])
 
     print("\n--- 2. the styles the picker implies actually exist ------------")
     # Writer offers bold and italic buttons for whatever is selected. Where a

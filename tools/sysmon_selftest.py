@@ -31,12 +31,20 @@ import sysmon  # noqa: E402
 
 ok = True
 
+check_state_cases = (("R", True), ("S", True), ("Z", False),
+                     ("X", False), ("x", False))
+
 
 def check(name, cond):
     global ok
     print(("PASS " if cond else "FAIL ") + name)
     if not cond:
         ok = False
+
+
+for state, expected in check_state_cases:
+    check("process state %s has honest actionability" % state,
+          sysmon.actionable_proc_state(state) is expected)
 
 
 class Stub(object):
@@ -85,12 +93,11 @@ try:
           len(s.said) == 1 and "Writer" in s.said[0]
           and "finished" in s.said[0].lower())
 
-    # A program that is simply gone (start time None both times) still reaches
-    # os.kill, so the ESRCH wording keeps coming from the kernel's own answer.
+    # None is not a stable identity: two failed /proc reads must never compare
+    # equal and authorize a signal to a potentially recycled PID.
     s = Stub()
     s._do_end(4194305, "Gone", None)
-    check("a long-gone ID still goes through the kill path",
-          signalled == [(4194305, sysmon.signal.SIGTERM)])
+    check("an unidentified ID is never signalled", signalled == [])
 finally:
     victim.kill = real_kill
 
@@ -129,7 +136,7 @@ class StoreStub(object):
 
     def __init__(self, sort_col=4, order=Gtk.SortType.DESCENDING):
         self.store = Gtk.ListStore(str, int, str, str,
-                                   GObject.TYPE_INT64, GObject.TYPE_DOUBLE)
+                                   GObject.TYPE_INT64, GObject.TYPE_DOUBLE, str)
         self.store.set_sort_column_id(sort_col, order)
         self.changed = []
         self.deleted = []
@@ -145,8 +152,9 @@ class StoreStub(object):
         self.deleted = []
 
 
-def row(name, pid, rss, pct):
-    return (name, pid, sysmon.human_kb(rss), "%.0f%%" % pct, rss, pct)
+def row(name, pid, rss, pct, started=None):
+    return (name, pid, sysmon.human_kb(rss), "%.0f%%" % pct, rss, pct,
+            started or "start-%s" % pid)
 
 
 tick1 = [row("Writer", 101, 40000, 3.0),
@@ -183,6 +191,13 @@ before = dict((r[1], r.iter.user_data) for r in s.store)
 s._sync_store(tick2)
 after = dict((r[1], r.iter.user_data) for r in s.store)
 check("rows keep their identity across a tick", before == after)
+
+# Reusing a PID is a different row identity, never an in-place rewrite of the
+# stale selected program.
+old_iter = next(r.iter.user_data for r in s.store if r[1] == 101)
+s._sync_store([row("Other", 101, 40000, 3.0, "replacement-birth")])
+new_iter = next(r.iter.user_data for r in s.store if r[1] == 101)
+check("a reused PID replaces the row identity", old_iter != new_iter)
 
 # Programs that start and finish are still picked up.
 s.quiet()

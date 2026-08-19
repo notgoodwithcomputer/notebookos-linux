@@ -5,6 +5,8 @@ qmp.py's primitives. One gesture per invocation; the guest stays running.
   guestdrive.py dblclick <fx> <fy>          double-click at FRAMEBUFFER px
   guestdrive.py click <fx> <fy>
   guestdrive.py drag <fx0> <fy0> <fx1> <fy1> [steps]   press-move-release
+  guestdrive.py rclick <fx> <fy>            right-click at FRAMEBUFFER px
+  guestdrive.py wheel <fx> <fy> <clicks>    mouse wheel at FRAMEBUFFER px (+down/-up)
   guestdrive.py type <text>                 ASCII via send-key
   guestdrive.py key <qcode> [...]           raw qcodes (ret, esc, tab, ...)
   guestdrive.py watch <out-prefix> <n> <dt> shots out-prefix-000.png ...
@@ -29,12 +31,17 @@ def fb2qmp(x, y):
 
 def shot(q, path):
     fd, ppm = tempfile.mkstemp(suffix=".ppm"); os.close(fd)
-    qmp.do_shot(q, ppm) if hasattr(qmp, "do_shot") else q.cmd(
-        "screendump", filename=ppm)
-    time.sleep(0.4)
-    from PIL import Image
-    Image.open(ppm).save(path)
-    os.unlink(ppm)
+    try:
+        qmp.do_shot(q, ppm) if hasattr(qmp, "do_shot") else q.cmd(
+            "screendump", filename=ppm)
+        time.sleep(0.4)
+        from PIL import Image
+        Image.open(ppm).save(path)
+    finally:
+        try:
+            os.unlink(ppm)
+        except FileNotFoundError:
+            pass
 
 
 def main():
@@ -55,6 +62,26 @@ def main():
             yy = y0 + (y1 - y0) * i / steps
             qmp.send(q, qmp.ev_abs(xx, yy)); time.sleep(0.05)
         qmp.send(q, qmp.ev_btn(False))
+    elif op == "rclick":
+        fx, fy = float(sys.argv[2]), float(sys.argv[3])
+        x, y = fb2qmp(fx, fy)
+        qmp.send(q, qmp.ev_abs(x, y))
+        time.sleep(0.15)
+        qmp.send(q, [{"type": "btn", "data": {"button": "right", "down": True}}])
+        time.sleep(0.06)
+        qmp.send(q, [{"type": "btn", "data": {"button": "right", "down": False}}])
+    elif op == "wheel":
+        # guestdrive.py wheel <fx> <fy> <clicks>   (+ = down, - = up)
+        fx, fy = float(sys.argv[2]), float(sys.argv[3])
+        n = int(sys.argv[4]) if len(sys.argv) > 4 else 3
+        x, y = fb2qmp(fx, fy)
+        qmp.send(q, qmp.ev_abs(x, y))
+        time.sleep(0.15)
+        btn = "wheel-down" if n > 0 else "wheel-up"
+        for _ in range(abs(n)):
+            qmp.send(q, [{"type": "btn", "data": {"button": btn, "down": True}}])
+            qmp.send(q, [{"type": "btn", "data": {"button": btn, "down": False}}])
+            time.sleep(0.12)
     elif op == "type":
         text = sys.argv[2]
         SHIFTED = {c: k for c, k in zip('ABCDEFGHIJKLMNOPQRSTUVWXYZ',

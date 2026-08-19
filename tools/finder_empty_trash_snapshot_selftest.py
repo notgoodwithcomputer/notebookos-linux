@@ -232,5 +232,7 @@ print()
 if failures:
     print("FINDER EMPTY TRASH SNAPSHOT SELFTEST: %d checks, %d FAILED" %
           (checks, len(failures)))
+    print("RESULT: FAIL")
     raise SystemExit(1)
 print("FINDER EMPTY TRASH SNAPSHOT SELFTEST: %d checks, all pass" % checks)
+print("RESULT: PASS")

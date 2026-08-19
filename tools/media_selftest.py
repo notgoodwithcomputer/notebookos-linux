@@ -5,7 +5,7 @@ Display-free. The window is NOT constructed (that needs an X server and the
 whole widget tree); the real MediaViewer._show_surface is driven on a bare
 instance whose four stage surfaces and chrome are stand-ins that only record
 what was asked of them. That is enough, because the defect is in the surface
-switch itself: _show_surface used to swap the stage without touching _vfull,
+switch itself: _show_surface used to swap the stage without touching _stage_full,
 so opening a picture with Ctrl+O mid-film — or a clip that failed to decode,
 or trashing the last file — left the menu bar, the toolbar and the filmstrip
 hidden and the desktop panel stood down, on a surface with no Fullscreen
@@ -64,7 +64,7 @@ class FakeWidget(object):
 
 
 def viewer():
-    """A MediaViewer with the pieces _show_surface / _exit_video_fullscreen
+    """A MediaViewer with the pieces _show_surface / _exit_stage_fullscreen
     touch, and nothing else — no Gtk.Window, so no display is needed."""
     v = media.MediaViewer.__new__(media.MediaViewer)
     v._empty = FakeWidget()
@@ -77,7 +77,7 @@ def viewer():
     v._menubar = FakeWidget()
     v._vctl = FakeWidget()
     v._v_full_btn = FakeWidget()
-    v._vfull = False
+    v._stage_full = False
     v._vctl_hide_timer = None
     v.panel_hidden = None
     v._menubar_widget = lambda: v._menubar
@@ -86,26 +86,26 @@ def viewer():
 
 
 def in_fullscreen():
-    """A viewer mid-film with the chrome collapsed, as _enter_video_fullscreen
+    """A viewer mid-film with the chrome collapsed, as _enter_stage_fullscreen
     leaves it."""
     v = viewer()
     v._video.show()
-    v._enter_video_fullscreen()
+    v._enter_stage_fullscreen()
     return v
 
 
 v = in_fullscreen()
 chk("entering video fullscreen hides the chrome",
-    v._vfull and not v._toolbar_w.visible and not v._menubar.visible
+    v._stage_full and not v._toolbar_w.visible and not v._menubar.visible
     and not v._film_w.visible and v.panel_hidden is True,
     "vfull=%r toolbar=%r menubar=%r film=%r panel_hidden=%r"
-    % (v._vfull, v._toolbar_w.visible, v._menubar.visible,
+    % (v._stage_full, v._toolbar_w.visible, v._menubar.visible,
        v._film_w.visible, v.panel_hidden))
 
 # THE REGRESSION: Ctrl+O opens a picture while a film is fullscreen.
 v = in_fullscreen()
 v._show_surface("image")
-chk("opening an image leaves video fullscreen", not v._vfull, "still fullscreen")
+chk("opening an image leaves video fullscreen", not v._stage_full, "still fullscreen")
 chk("...and the toolbar comes back", v._toolbar_w.visible, "toolbar still hidden")
 chk("...and the menu bar comes back", v._menubar.visible, "menubar still hidden")
 chk("...and the filmstrip comes back", v._film_w.visible, "filmstrip still hidden")
@@ -116,24 +116,24 @@ chk("...and the desktop panel stands up again", v.panel_hidden is False,
 v = in_fullscreen()
 v._show_surface("notice")
 chk("a video that fails to play leaves fullscreen too",
-    not v._vfull and v._toolbar_w.visible and v.panel_hidden is False,
+    not v._stage_full and v._toolbar_w.visible and v.panel_hidden is False,
     "vfull=%r toolbar=%r panel_hidden=%r"
-    % (v._vfull, v._toolbar_w.visible, v.panel_hidden))
+    % (v._stage_full, v._toolbar_w.visible, v.panel_hidden))
 
 # trashing the last file in the folder empties the stage
 v = in_fullscreen()
 v._show_surface("empty")
 chk("an emptied stage leaves fullscreen too",
-    not v._vfull and v._menubar.visible and v.panel_hidden is False,
+    not v._stage_full and v._menubar.visible and v.panel_hidden is False,
     "vfull=%r menubar=%r panel_hidden=%r"
-    % (v._vfull, v._menubar.visible, v.panel_hidden))
+    % (v._stage_full, v._menubar.visible, v.panel_hidden))
 
 # staying on the video stage must NOT drop out of fullscreen: the poll and the
 # transport re-show the same surface while a film runs edge to edge.
 v = in_fullscreen()
 v._show_surface("video")
 chk("re-showing the video stage stays fullscreen",
-    v._vfull and not v._toolbar_w.visible and v.panel_hidden is True,
+    v._stage_full and not v._toolbar_w.visible and v.panel_hidden is True,
     "dropped out of fullscreen")
 
 # and the surface switch itself still does its own job

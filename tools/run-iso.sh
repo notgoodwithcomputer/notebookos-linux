@@ -26,7 +26,18 @@
 #   SCRATCH_GB=8  size of the install target disk
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-WORK="$ROOT/boot-work"; mkdir -p "$WORK"
+# NB_WORK gives this run a PRIVATE work dir, the way run-desktop.sh already
+# does. boot-work/ is otherwise a shared battleground: the OVMF vars, the
+# serial log, the ttyS1 socket and the extracted directboot kernel all live
+# there under fixed names, so a second lane booting a guest silently overwrites
+# the first one's — and a Live-ISO GRUB menu turning up in "your" serial.log is
+# what that looks like from the outside.
+#
+# Two constraints on the path, both learned the hard way: keep it SHORT (QEMU's
+# UNIX sockets hit the kernel's 108-byte limit, which a session scratchpad path
+# blows past and only reports at launch), and pass NB_GL=0 with it (screendump
+# returns "no surface" forever on the GL path). /tmp/<label> is the right shape.
+WORK="${NB_WORK:-$ROOT/boot-work}"; mkdir -p "$WORK"
 VER="${NB_VERSION:-1.0}"
 ISO="${ISO:-$ROOT/release/notebookos-${VER}.iso}"
 SCRATCH="${SCRATCH:-$WORK/install-target.img}"

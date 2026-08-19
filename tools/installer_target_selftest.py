@@ -112,7 +112,11 @@ def xinit_vt():
     init script so this test cannot drift away from it."""
     p = os.path.join(OVERLAY, "etc/init.d/S99notebookos")
     for ln in open(p):
-        if "xinit" in ln:
+        # The init script may invoke a configurable command ("$XINIT") so its
+        # lifecycle selftest can substitute a harmless fake.  Match either the
+        # literal program or that variable; matching only lowercase `xinit`
+        # never inspected the uppercase command line carrying `vt1`.
+        if "xinit" in ln or "$XINIT" in ln:
             for tok in ln.split():
                 if tok.startswith("vt") and tok[2:].isdigit():
                     return tok

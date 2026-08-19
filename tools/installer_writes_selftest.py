@@ -27,6 +27,7 @@ Run:
     tools/guestrun.sh python3 tools/installer_writes_selftest.py --de DIR
 """
 import os
+import ast
 import re
 import sys
 import json
@@ -96,6 +97,20 @@ def main():
     # ---- #26: swap reaches fstab -------------------------------------
     app = blank_installer()
     root = fake_root()
+    source_release = os.path.join(_HOME, "live-os-release")
+    with open(source_release, "w") as fh:
+        fh.write('NAME="Notebook OS"\nBUILD_ID="2026-08-15"\n')
+    old_release = installer.OS_RELEASE_SOURCE
+    installer.OS_RELEASE_SOURCE = source_release
+    try:
+        app._write_os_release(root)
+    finally:
+        installer.OS_RELEASE_SOURCE = old_release
+    installed_release = open(os.path.join(root, "etc", "os-release")).read()
+    check("installed system retains the image build stamp",
+          'BUILD_ID="2026-08-15"' in installed_release,
+          installed_release.replace("\n", " | "))
+
     app._configure_fstab(root)
     fstab = open(os.path.join(root, "etc", "fstab")).read()
     got = check("a swap line is added to /etc/fstab",
@@ -152,6 +167,43 @@ def main():
           "useradd" not in code and "/etc/passwd" not in code)
     check("the password still guards the machine (_configure_login exists)",
           hasattr(installer.Installer, "_configure_login"))
+
+    # Final writeback is an installation commit boundary.  Optional map packs
+    # may fail best-effort, but sync and target unmounts must not be hidden by
+    # allow_fail before the worker publishes Complete.
+    tree = ast.parse(src)
+    do_install = next(n for n in ast.walk(tree)
+                      if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and n.name == "_do_install")
+    # Anchored on the "Finishing up" phase itself, not on a line number. This
+    # check used to name line 2385, so every line added ABOVE it in the file
+    # silently slid the window it was measuring off the calls it was about --
+    # a green check measuring nothing at all, which is the shape a gate goes
+    # blind in most often.
+    finish = [n for n in ast.walk(do_install)
+              if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute)
+              and n.func.attr == "_phase"
+              and n.args and isinstance(n.args[0], ast.Constant)
+              and n.args[0].value == 0.97]
+    anchored = check("the install engine still has a 'Finishing up' phase to "
+                     "measure from", bool(finish))
+    after = finish[0].lineno if finish else 0
+    final_sh = [n for n in ast.walk(do_install)
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "_sh"
+                and n.lineno >= after]
+    if anchored:
+        check("final sync and target unmounts are not best-effort",
+              len(final_sh) >= 3 and all(
+                  not any(k.arg == "allow_fail"
+                          and isinstance(k.value, ast.Constant)
+                          and k.value.value is True for k in call.keywords)
+                  for call in final_sh[:3]))
+    else:
+        not_reached("no anchor phase",
+                    "final sync and target unmounts are not best-effort")
 
     # ---- #3: the disk is refused BEFORE anything is erased -----------
     # "Erases the disk before checking it fits": wipefs, sgdisk -Z and mkfs all

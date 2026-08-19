@@ -261,6 +261,7 @@ def main():
     print("\n%d checks" % CHECKS)
     print("%d stores; %d cells; explicit gaps: removable media (N/A by design)"
           % (len(stores), len(stores) * len(COLUMNS)))
+    print("RESULT: %s" % ("FAILED" if failures else "PASS"))
     return 1 if failures else 0
 
 

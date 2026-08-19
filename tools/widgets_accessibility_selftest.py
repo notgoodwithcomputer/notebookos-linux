@@ -28,12 +28,13 @@ check("launch tooltips are retained", "hit.set_tooltip_text(tip)" in clickable)
 
 tasks = text[text.index("    def _rebuild_tasks("):
              text.index("    @staticmethod\n    def _find_task")]
-check("task rows remain framebuffer-safe EventBoxes", "hit = Gtk.EventBox()" in tasks)
-check("task rows enter the keyboard focus chain", "hit.set_can_focus(True)" in tasks)
+check("task rows use native keyboard-focusable toggle buttons",
+      "hit = Gtk.ToggleButton()" in tasks)
+check("task rows retain opaque framebuffer-safe styling",
+      'add_class("boardhit")' in tasks and 'add_class("taskrow")' in tasks)
 check("task rows expose their action", 'set_tooltip_text(_t("Toggle task"))' in tasks)
-check("task rows handle keyboard activation", '_on_task_row_key' in tasks)
-check("task activation accepts return, keypad enter, and space",
-      all(key in tasks for key in ("Gdk.KEY_Return", "Gdk.KEY_KP_Enter", "Gdk.KEY_space")))
+check("task rows activate through native clicked semantics",
+      'connect("clicked", self._on_task_button_clicked, i)' in tasks)
 check("task rows have a visible focus treatment", ".taskrow:focus" in text)
 
 print("RESULT: " + ("ALL PASS" if ok else "SOME FAILED"))

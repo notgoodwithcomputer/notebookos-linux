@@ -39,20 +39,65 @@ def _check(ok, msg):
         print("FAIL  %s" % msg)
 
 
+def _selects_switch(selector):
+    """Whether any comma arm contains the GTK ``switch`` type selector.
+
+    Combinators are deliberately irrelevant: ``switch slider``,
+    ``switch > slider`` and ``window switch.foo + label`` can all override a
+    switch transition.  Match a type selector, not a class such as ``.switch``.
+    """
+    return any(re.search(r"(?<![\w.#-])switch(?=\s|[:>+~,.#\[]|$)", arm)
+               for arm in selector.split(","))
+
+
+def _selects_feedback_control(selector):
+    """Any button, entry, or switch type selector in a comma arm."""
+    return any(re.search(
+        r"(?<![\w.#-])(?:button|entry|switch)(?=\s|[:>+~,.#\[]|$)", arm)
+        for arm in selector.split(","))
+
+
+def _without_comments(src):
+    """Remove CSS block comments while preserving quoted comment markers."""
+    out = []
+    i = 0
+    quote = None
+    while i < len(src):
+        ch = src[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < len(src):
+                i += 1; out.append(src[i])
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch; out.append(ch); i += 1; continue
+        if src.startswith("/*", i):
+            end = src.find("*/", i + 2)
+            i = len(src) if end < 0 else end + 2
+            out.append(" ")
+            continue
+        out.append(ch); i += 1
+    return "".join(out)
+
+
 def main():
     if not os.path.isfile(THEME):
         print("FAIL  theme not found: %s" % THEME)
         return 1
     src = open(THEME, encoding="utf-8").read()
+    css = _without_comments(src)
 
     # state changes ANIMATE: the theme declares at least one transition, and a
     # short colour/border state-feedback transition (buttons, entries, toggles)
     # exists rather than snapping.
-    _check(len(re.findall(r"transition-property\s*:", src)) >= 1,
+    _check(len(re.findall(r"transition-property\s*:", css)) >= 1,
            "the theme declares no transition at all — state changes would SNAP")
     feedback = re.search(
         r"transition-property\s*:[^;{}]*\bborder-color\b[^;{}]*\bcolor\b[^;{}]*;"
-        r"\s*transition-duration\s*:\s*(\d+)ms", src)
+        r"\s*transition-duration\s*:\s*(\d+)ms", css)
     _check(feedback is not None,
            "no colour+border state-feedback transition — buttons/toggles/entries "
            "would change state with no animation")
@@ -60,15 +105,16 @@ def main():
     # a toggle's state TRAVELS (it is in the eased block and not forced to 0ms).
     eased = re.search(
         r"([^{}]*)\{\s*transition-property\s*:[^{}]*\bborder-color\b[^{}]*;"
-        r"\s*transition-duration\s*:\s*\d+ms", src)
+        r"\s*transition-duration\s*:\s*\d+ms", css)
     _check(eased is not None and "switch" in eased.group(1),
            "the switch is not in the eased state-feedback block — it would snap "
            "rather than travel (app.any-toggle)")
     forced_instant = any(
-        "switch:checked" in sel or "switch slider" in sel
-        for sel in re.findall(r"([^{}]*)\{\s*transition-duration\s*:\s*0ms", src))
+        _selects_feedback_control(sel)
+        for sel in re.findall(
+            r"([^{}]*)\{[^{}]*transition-duration\s*:\s*0ms\b", css))
     _check(not forced_instant,
-           "switch state is forced to 0ms — the toggle jumps (app.any-toggle)")
+           "button/entry/switch state is forced to 0ms — feedback snaps")
 
     # the inventory markers this theme realises are present.
     for mid in ("app.toolbar-state", "app.any-toggle"):
@@ -82,6 +128,7 @@ def main():
         return 1
     print("\nPASS  theme transitions: %d checks (state changes animate; markers "
           "present)" % n)
+    print("RESULT: PASS")
     return 0
 
 

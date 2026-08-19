@@ -199,7 +199,13 @@ def test_splash():
 # of the script, so this cannot drift away from what ships.
 _STUB = {
     "blkid": '#!/bin/sh\nprintf "%s\\n" "$NB_LABEL"\n',
-    "mkdir": '#!/bin/sh\nprintf "mkdir %s\\n" "$*" >> "$NB_TRACE"\n',
+    # mkdir IS the script's reservation of a mount point (udev runs add jobs
+    # concurrently, so check-then-mkdir let equal labels stack). When the test
+    # supplies its own media root the stub must therefore behave like mkdir —
+    # fail on an existing directory — or the "(2)" suffix can never be chosen.
+    "mkdir": ('#!/bin/sh\nprintf "mkdir %s\\n" "$*" >> "$NB_TRACE"\n'
+              'if [ -n "$NB_MEDIA_ROOT" ]; then exec /bin/mkdir "$@"; fi\n'
+              'exit 0\n'),
     "rmdir": '#!/bin/sh\nprintf "rmdir %s\\n" "$*" >> "$NB_TRACE"\n',
     "umount": '#!/bin/sh\nprintf "umount %s\\n" "$*" >> "$NB_TRACE"\n',
     # Print the LAST argument on its own line: that is the mount point, and it
@@ -237,11 +243,32 @@ def test_automount_labels():
     d = _automount_bin()
     trace = os.path.join(d, "trace")
 
-    def mnt(label):
+    # THE DEVICE NAME MUST NOT EXIST ON THIS MACHINE. automount.sh reads
+    # /proc/mounts directly (correctly — a duplicate udev add must be a no-op),
+    # and this developer machine happened to have a real /dev/sdb1 mounted: the
+    # script took its already-mounted exit on every call and all 25 checks
+    # failed while the code was right. Pick a name nothing here is using, and
+    # say so rather than testing whatever is left.
+    try:
+        mounted = open("/proc/mounts").read()
+    except OSError:
+        mounted = ""
+    dev = next((n for n in ["sdz%d" % i for i in range(1, 10)]
+                + ["nbtest%d" % i for i in range(1, 10)]
+                if ("/dev/%s " % n) not in mounted), None)
+    check(dev is not None,
+          "a device name free on this machine could be chosen "
+          "(every candidate is mounted here)")
+    dev = dev or "sdb1"
+    print("   (driving automount.sh as /dev/%s)" % dev)
+
+    def mnt(label, media_root=None):
         open(trace, "w").close()
         env = {"PATH": d, "NB_TRACE": trace, "NB_LABEL": label,
                "HOME": d, "SHELL": "/bin/sh"}
-        r = subprocess.run(["/bin/sh", script, "add", "sdb1"], env=env,
+        if media_root is not None:
+            env["NB_MEDIA_ROOT"] = media_root
+        r = subprocess.run(["/bin/sh", script, "add", dev], env=env,
                            capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             return "rc=%d %s" % (r.returncode, r.stderr[-120:])
@@ -260,7 +287,7 @@ def test_automount_labels():
                        ("." * 60, "an all-dots label, truncated"),
                        ("", "no label at all")):
         got = mnt(label)
-        check(got == "/media/sdb1",
+        check(got == "/media/" + dev,
               "label %r falls back to the device name (%s): got %r"
               % (label, why, got))
         check(resolves(got).startswith("/media/") and resolves(got) != "/media",
@@ -280,6 +307,14 @@ def test_automount_labels():
         r = resolves(got)
         check(r.startswith("/media/") and r != "/" and r != "/media",
               "...and stays inside /media: %r -> %r" % (got, r))
+
+    # An empty mount is still occupied. A second drive with the same label
+    # must not be stacked on top of it and hide the first one.
+    media_root = os.path.join(d, "media")
+    os.makedirs(os.path.join(media_root, "PHOTOS"))
+    got = mnt("PHOTOS", media_root)
+    check(got == os.path.join(media_root, "PHOTOS (2)"),
+          "duplicate empty volume label receives a distinct mount point")
 
 
 def main():

@@ -19,11 +19,52 @@ KEYDIR="${NB_SB_KEYDIR:-$ROOT/secureboot}"
 CN="${NB_SB_CN:-Notebook OS Secure Boot MOK}"
 mkdir -p "$KEYDIR"
 
-if [ -f "$KEYDIR/MOK.key" ] && [ -f "$KEYDIR/MOK.crt" ] && [ -f "$KEYDIR/MOK.cer" ]; then
+if [ -f "$KEYDIR/MOK.key" ] && [ -f "$KEYDIR/MOK.crt" ]; then
+    # A complete-looking directory is not enough: after a partial restore the
+    # private key and certificate can belong to different identities. Signing
+    # would succeed, but the certificate copied to the ESP could never
+    # authorize that kernel after enrollment.
+    KEY_FP=$(openssl pkey -in "$KEYDIR/MOK.key" -pubout -outform DER 2>/dev/null \
+        | openssl dgst -sha256 2>/dev/null) || {
+        echo "unreadable MOK private key in $KEYDIR; refusing to replace it" >&2
+        exit 2
+    }
+    CRT_FP=$(openssl x509 -in "$KEYDIR/MOK.crt" -pubkey -noout 2>/dev/null \
+        | openssl pkey -pubin -outform DER 2>/dev/null \
+        | openssl dgst -sha256 2>/dev/null) || {
+        echo "unreadable MOK certificate in $KEYDIR; refusing to replace it" >&2
+        exit 2
+    }
+    if [ "$KEY_FP" != "$CRT_FP" ]; then
+        echo "MOK key and certificate do not match in $KEYDIR; refusing to replace them" >&2
+        exit 2
+    fi
+    unset KEY_FP CRT_FP
+
+    # MOK.cer is only the DER encoding of the public certificate.  Recreate it
+    # from that certificate if it was lost; generating a whole new key here
+    # would silently invalidate the identity already enrolled in firmware.
+    if [ ! -f "$KEYDIR/MOK.cer" ]; then
+        echo "MOK.cer missing; recovering it from the existing certificate"
+        openssl x509 -in "$KEYDIR/MOK.crt" -outform DER \
+            -out "$KEYDIR/.MOK.cer.tmp"
+        chmod 0644 "$KEYDIR/.MOK.cer.tmp"
+        mv -f -- "$KEYDIR/.MOK.cer.tmp" "$KEYDIR/MOK.cer"
+    fi
     echo "MOK already present in $KEYDIR (reusing -- do NOT regenerate, it would"
     echo "invalidate the certificate the user has already enrolled):"
     openssl x509 -in "$KEYDIR/MOK.crt" -noout -subject -enddate | sed 's/^/   /'
     exit 0
+fi
+
+# An interrupted first generation can leave one irreplaceable half behind.
+# Never guess that it is safe to rotate it: the surviving certificate may
+# already be enrolled, and the surviving private key may be the only way to
+# keep signing for it.  Require deliberate recovery/removal by the operator.
+if [ -e "$KEYDIR/MOK.key" ] || [ -e "$KEYDIR/MOK.crt" ] || \
+        [ -e "$KEYDIR/MOK.cer" ]; then
+    echo "incomplete MOK set in $KEYDIR; refusing to replace the existing identity" >&2
+    exit 2
 fi
 
 echo "== generating a new MOK in $KEYDIR =="

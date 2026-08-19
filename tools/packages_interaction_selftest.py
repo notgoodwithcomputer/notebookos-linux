@@ -226,7 +226,11 @@ def main():
     items = dict((i[0], i[1]) for i in app.menu_items("Package")
                  if isinstance(i, tuple))
     check("the Package menu offers Open, Verify and Find",
-          all(k in items for k in ("Open", "Verify Package", "Find…")),
+          # "Find", not "Find…": _focus_search raises nothing to answer — it
+          # shows Installed and puts the caret in the search box already on
+          # screen — and nbcommands registers edit.find without an ellipsis.
+          # The ellipsis promised a card that never came.
+          all(k in items for k in ("Open", "Verify Package", "Find")),
           repr(sorted(items)))
     check("Clear Search is greyed out with no search",
           items.get("Clear Search") is None)
@@ -295,11 +299,22 @@ def main():
         # app sets it itself, so it launches correctly from anywhere.
         keep = os.environ.pop("PYTHONPATH", None)
         P.subprocess.Popen = _Fake      # NB: the same module object as ours
+        # Open first asks nbtrust whether the module is signed, and nbtrust
+        # verifies through `openssl` — via the SAME subprocess module, so the
+        # fake above would answer the signature check too and every launch
+        # would be refused. The trust gate has its own suite
+        # (app_trust_selftest); here it is held open so the LAUNCH is what
+        # is measured.
+        real_check = getattr(P.nbtrust, "check_path", None) if P.nbtrust else None
+        if real_check is not None:
+            P.nbtrust.check_path = lambda _path: (True, "")
         try:
             app._on_open()
             pump()
         finally:
             P.subprocess.Popen = real_popen
+            if real_check is not None:
+                P.nbtrust.check_path = real_check
             if keep is not None:
                 os.environ["PYTHONPATH"] = keep
         ran = check("Open spawns the module", len(spawned) == 1
@@ -323,7 +338,7 @@ def main():
     pump()
     app._focus_search()
     pump()
-    check("Find… returns to Installed and focuses the box",
+    check("Find returns to Installed and focuses the box",
           app.view == "installed" and app.entry.is_focus(),
           "view=%r focus=%s" % (app.view, app.entry.is_focus()))
     app._clear_search()

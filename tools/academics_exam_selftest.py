@@ -102,13 +102,19 @@ check("nothing else about it changed",
 app.homework = academics.Academics._clean_homework(
     [{"title": "A", "cls": 0, "due": "", "done": False, "kind": "EXAM"},
      {"title": "B", "cls": 0, "due": "", "done": False, "kind": "quiz"},
-     {"title": "C", "cls": 0, "due": "", "done": False, "kind": 7}], {0: 0})
+     {"title": "C", "cls": 0, "due": "", "done": False, "kind": 7},
+     {"title": "D", "cls": 0, "due": "", "done": "false"},
+     {"title": "E", "cls": 0, "due": "", "done": True}], {0: 0})
 check("`kind` is case-insensitive", app.homework[0]["kind"] == "exam",
       app.homework[0])
 check("an unknown kind reads as ordinary work",
       app.homework[1]["kind"] == "work", app.homework[1])
 check("a non-string kind reads as ordinary work",
       app.homework[2]["kind"] == "work", app.homework[2])
+check("the string 'false' does not complete an assignment",
+      app.homework[3]["done"] is False, app.homework[3])
+check("JSON true still completes an assignment",
+      app.homework[4]["done"] is True, app.homework[4])
 
 # --------------------------------------------------- the dialog round-trips it
 app.classes = [{"label": "Chem", "color": "#9A7B4F", "room": "",

@@ -21,6 +21,13 @@ def check(name, condition, detail=""):
 class Calc:
     evaluate = C.Calculator.evaluate
     _fail = C.Calculator._fail
+    # evaluate() answers through _answer(), which remembers the NUMBER
+    # beside the text a display mode renders it as. A stub that borrows
+    # evaluate must borrow that too, or every case in this file dies with
+    # AttributeError before a single check is counted -- which is exactly
+    # what it did, and a suite that CRASHES reports no verdict at all.
+    _answer = C.Calculator._answer
+    _answer_value = C.Calculator._answer_value
     def __init__(self, expression="", deg=True):
         self.expr, self.deg, self.variables, self.ans, self.fix = expression, deg, {}, 0, None
 
@@ -48,6 +55,12 @@ check("catalog random range", 0 <= float(got) < 1, got)
 for expression in ("sqrt(-1)", "log(0)", "root(-1,2)", "nCr(2,3)"):
     got, why = ev(expression)
     check("domain reported " + expression, got == "Error" and why == C._WHY_NOANSWER)
+# Combinations/permutations used to expand n! with no bound before dividing it
+# down. A large pasted first argument could freeze or exhaust the whole app.
+for expression in ("nCr(100000000,2)", "nPr(100000000,2)"):
+    got, why = ev(expression)
+    check("oversized count is refused promptly " + expression,
+          got == "Error" and why == C._WHY_TOOBIG, repr((got, why)))
 check("Ans expression", ev("Ans+5", ans=7)[0] == "12")
 check("stored variable expression", ev("A*3", variables={"A": 4})[0] == "12")
 

@@ -16,8 +16,8 @@ SECOND close is what overwrites that backup. A shape that only half-fails --
 where the app reads three records out of four -- reaches that path too, and no
 suite drove one twice.
 
-It also covers the two stores missing from store_damage_selftest entirely:
-ebook.json (a shelf plus every book's reading position) and terminal.json.
+It also covers a store missing from store_damage_selftest entirely:
+ebook.json (a shelf plus every book's reading position).
 
 EVERY CYCLE MAKES A REAL EDIT through the real handler, because a store is only
 destroyed by a SAVE: an app that never writes cannot lose anything, and a suite
@@ -84,16 +84,10 @@ GOOD = {
          "fmt": "EPUB", "pos": 0, "frac": 0.0, "total": 5, "author": ""}],
         "open": "/root/Documents/%s-one.epub" % MARK},
 
-    # Two view preferences and a marker key a hand-edit might have left behind:
-    # terminal.json is small, which is exactly the kind a half-finished write
-    # leaves in a foreign shape.
-    "terminal": {"font_scale": 1.3, "cursor_blink": False,
-                 "note": "%s do not lose" % MARK},
 }
 
 STORE_NAME = {"cookbook": "cookbook.json", "mealplanner": "mealplanner.json",
-              "language": "language.json", "ebook": "ebook.json",
-              "terminal": "terminal.json"}
+              "language": "language.json", "ebook": "ebook.json"}
 
 
 # ------------------------------------------------------------------ mutations
@@ -182,7 +176,7 @@ def m_scalar_where_map(app):
     check would fail on a store this suite itself emptied. That is the first
     thing this mutation did, and it read as two release blockers."""
     d = _clone(app)
-    key = {"terminal": "font_scale", "ebook": "books",
+    key = {"ebook": "books",
            "cookbook": "recipes", "mealplanner": "plan"}[app]
     if key in d:
         d["old_" + key] = d[key]
@@ -214,9 +208,6 @@ CASES = {
               ("top level is a bare list", m_bare_list),
               ("books is a number", m_scalar_where_map),
               ("file is not json", m_not_json)],
-    "terminal": [("control", m_control),
-                 ("font_scale is not a number", m_scalar_where_map),
-                 ("file is not json", m_not_json)],
 }
 
 
@@ -339,15 +330,6 @@ elif app == "ebook":
     # The real Library-open handler, which adds to the shelf and saves.
     w._open_book(p)
     pump(0.3)
-
-elif app == "terminal":
-    import terminal
-    w = terminal.Terminal()
-    w.show_all(); w.get_child().show_all(); pump(1.0)
-    read = -1 if not terminal.VTE_OK else 0
-    # Zoom is the real handler that writes this store.
-    w._zoom(1.1)
-    pump(0.2)
 
 else:
     print("NOAPP")

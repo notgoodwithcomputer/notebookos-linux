@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Display-free adversarial checks for Screenplay recovery persistence."""
 import os
+import json
 import shutil
 import sys
 import tempfile
@@ -34,13 +35,15 @@ class Field:
 
 
 class Buffer:
+    def __init__(self, text=""): self.text = text
     def get_start_iter(self): return None
     def get_end_iter(self): return None
-    def get_text(self, _a, _b, _hidden): return ""
+    def get_text(self, _a, _b, _hidden): return self.text
 
 
 class Body:
-    def get_buffer(self): return Buffer()
+    def __init__(self, text=""): self.buffer = Buffer(text)
+    def get_buffer(self): return self.buffer
 
 
 def bare():
@@ -78,6 +81,63 @@ def damaged_store_check():
     mutated = open(screenplay.DOC_FILE, "rb").read()
     check("MUTANT: removing recovery damage guard DOES rewrite the store",
           mutated != samples[0], "[not reached: save performed no write]")
+
+    # If the filesystem refuses the quarantine rename, an edit/autosave must
+    # leave the only original copy protected rather than assuming it moved.
+    original = samples[1]
+    with open(screenplay.DOC_FILE, "wb") as fh:
+        fh.write(original)
+    app = bare()
+    app._recovery_store_writable = False
+    real_quarantine = screenplay.nbapp.quarantine_unrecognized
+    screenplay.nbapp.quarantine_unrecognized = lambda _path: None
+    try:
+        prepared = app._prepare_recovery_write()
+        saved = app._save_doc()
+    finally:
+        screenplay.nbapp.quarantine_unrecognized = real_quarantine
+    check("failed recovery quarantine keeps writes blocked",
+          prepared is False and saved is False)
+    check("failed recovery quarantine preserves the original bytes",
+          open(screenplay.DOC_FILE, "rb").read() == original)
+
+
+def extension_store_check():
+    """A valid newer recovery schema survives this version's autosave."""
+    original = {
+        "title": "OLD", "subtitle": "", "body": "OLD BODY",
+        "body_tags": [], "path": None, "schema_revision": 2,
+        "future_metadata": {"board": ["A", {"locked": True}]},
+    }
+    with open(screenplay.DOC_FILE, "w", encoding="utf-8") as fh:
+        json.dump(original, fh)
+    app = bare()
+    app._load_doc()
+    app.scripttitle.text = "NEW"
+    app.body.buffer.text = "NEW BODY"
+    app._save_doc()
+    with open(screenplay.DOC_FILE, encoding="utf-8") as fh:
+        saved = json.load(fh)
+    check("valid recovery keeps unknown scalar metadata",
+          saved.get("schema_revision") == 2, repr(saved))
+    check("valid recovery keeps unknown nested metadata",
+          saved.get("future_metadata") == original["future_metadata"], repr(saved))
+    check("current fields remain authoritative over preserved metadata",
+          saved.get("title") == "NEW" and saved.get("body") == "NEW BODY",
+          repr(saved))
+
+    # Reusing a loader for another document must not retain the old extras.
+    with open(screenplay.DOC_FILE, "w", encoding="utf-8") as fh:
+        json.dump({"title": "PLAIN", "subtitle": "", "body": "",
+                   "body_tags": [], "path": None}, fh)
+    app._load_doc()
+    check("a second load clears extension metadata from the prior document",
+          app._recovery_extra == {}, repr(app._recovery_extra))
+
+    app._replace_recovery_extra({"future_metadata": {"document_id": "A"}})
+    app._replace_recovery_extra()
+    check("replacing a document clears the prior document's extension metadata",
+          app._recovery_extra == {}, repr(app._recovery_extra))
 
 
 def title_page_check():
@@ -154,19 +214,24 @@ def close_guard_check():
           proceeds is False, repr(proceeds))
 
     # A store held read-only because its bytes were not ours is NOT an I/O
-    # failure, and a card about making room would be about the wrong problem.
+    # failure, but edits still exist only in memory and closing must warn.
     app._recovery_store_writable = False
     app._recovery_dirty = True
     app._save_error = None
     before = len(asked)
     app._confirm = lambda title, body, ok: (asked.append((title, body, ok))
                                             or False)
-    check("an unwritable-by-law store does not raise a disk-full card",
-          app._on_delete() is False and len(asked) == before, repr(asked[before:]))
+    check("an unwritable-by-law store still protects in-memory edits",
+          app._on_delete() is True and len(asked) == before + 1,
+          repr(asked[before:]))
+    check("...without falsely blaming a full disk",
+          "disk is full" not in asked[-1][1] and
+          asked[-1][2] == "Close Without Saving", repr(asked[-1:]))
 
 
 try:
     damaged_store_check()
+    extension_store_check()
     title_page_check()
     close_guard_check()
     print("\n%d/%d checks passed" % (passed, passed + failed))

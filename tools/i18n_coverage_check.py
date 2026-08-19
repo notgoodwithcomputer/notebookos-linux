@@ -11,7 +11,7 @@ check_chrome() was added then, but it only inspects MENU labels.
 
 This asks the other question: for every string the code actually shows a person,
 is there a catalog entry at all? A miss means that string is English in the
-sixteen non-English languages, however green i18n_check looks.
+one or more shipped non-English languages, however green i18n_check looks.
 
   python3 tools/i18n_coverage_check.py [--file X.py ...] [--fail] [-v]
 
@@ -24,6 +24,7 @@ import re
 import json
 import os
 import sys
+import string
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")
@@ -34,12 +35,14 @@ CALLS = {"set_text", "set_label", "set_markup", "set_tooltip_text",
          "set_placeholder_text", "set_title", "_t", "_flash", "append_text",
          "prepend_text"}
 CTORS = {"Label", "Button", "CheckButton", "MenuItem", "RadioButton"}
+CTOR_TEXT_POSITION = {"Label": 0, "Button": 0, "CheckButton": 0,
+                      "MenuItem": 0, "RadioButton": 1}
 
 # Not prose: paths, format scaffolding, single glyphs, pure punctuation.
 # A user-visible string may LEAD with a placeholder and still be prose somebody
 # reads -- "%d to do" and "%d of %d sets" are on the desktop board. Excluding
 # everything starting with "%" hid 39 such strings and made this tool report
-# "FULLY COVERED" while they displayed in English in all sixteen languages.
+# "FULLY COVERED" while they displayed in English in every other language.
 # Judge a string on the words left once the placeholders are removed.
 _FMT = re.compile(r"%[-+ #0]*[\d*]*(?:\.\d+)?[hlL]?[a-zA-Z%]")
 
@@ -71,7 +74,7 @@ def is_prose(v):
 def shown_strings(path):
     try:
         tree = ast.parse(io.open(path, encoding="utf-8").read())
-    except (OSError, SyntaxError):
+    except OSError:
         return set()
     out = set()
     for n in ast.walk(tree):
@@ -84,16 +87,44 @@ def shown_strings(path):
         elif name in CTORS:
             args = [kw.value for kw in n.keywords
                     if kw.arg in ("label", "text", "title")]
+            position = CTOR_TEXT_POSITION.get(name)
+            if position is not None and position < len(n.args):
+                args.append(n.args[position])
         for a in args:
             if isinstance(a, ast.Call) and \
                     getattr(a.func, "id", None) == "_t" and a.args:
                 a = a.args[0]
-            if isinstance(a, ast.Constant) and isinstance(a.value, str) \
-                    and is_prose(a.value):
-                out.add(a.value.strip())
+            value = _display_pattern(a)
+            if value is not None and is_prose(value):
+                out.add(value.strip())
     out |= _indirect_strings(tree)
     out |= _via_local_strings(tree)
     return out
+
+
+def _display_pattern(node):
+    """Catalog-style pattern for one directly displayed expression."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                parts.append("%s")
+        return "".join(parts)
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "format"
+            and isinstance(node.func.value, ast.Constant)
+            and isinstance(node.func.value.value, str)):
+        try:
+            return "".join(literal + ("%s" if field is not None else "")
+                           for literal, field, _spec, _conv in
+                           string.Formatter().parse(node.func.value.value))
+        except ValueError:
+            return None
+    return None
 
 
 def _via_local_strings(tree):
@@ -232,16 +263,30 @@ def main():
     ap.add_argument("--update-baseline", action="store_true",
                     help="rewrite the baseline to the current gaps")
     a = ap.parse_args()
+    catalog_files = sorted(name for name in os.listdir(DE)
+                           if name.startswith("lang_") and name.endswith(".json"))
+    catalogs = []
     try:
-        with io.open(os.path.join(DE, "lang_es.json"), encoding="utf-8") as fh:
-            cat = set(json.load(fh))
-    except (OSError, ValueError):
-        print("could not read a catalog to compare against")
+        for name in catalog_files:
+            with io.open(os.path.join(DE, name), encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                raise ValueError("catalog is not an object: " + name)
+            catalogs.append(set(data))
+    except (OSError, ValueError) as exc:
+        print("could not read every catalog to compare against: %s" % exc)
         return 2
+    if not catalogs:
+        print("could not find any catalogs to compare against")
+        return 2
+    # A visible source string is covered only when EVERY shipped language can
+    # translate it. Comparing Spanish alone let 16 incomplete catalogs pass.
+    cat = set.intersection(*catalogs)
 
     files = ([os.path.join(DE, f) for f in a.file] if a.file else
              sorted(os.path.join(DE, f) for f in os.listdir(DE)
                     if f.endswith(".py")))
+    scoped_apps = {os.path.basename(path) for path in files}
     # Apps withheld by finder.HIDDEN_APPS have no reachable strings; skip
     # them VISIBLY (never silently), and resume the moment they unhide.
     # Parsed from source — this tool must not import GTK-bearing modules.
@@ -304,16 +349,23 @@ def main():
 
     print("\n%d user-visible string(s) with no catalog entry, across %d file(s)"
           % (total, len(files)))
-    print("Each one displays in ENGLISH in the sixteen non-English languages.")
+    print("Each one displays in ENGLISH in at least one of the %d shipped "
+          "non-English languages." % len(catalogs))
     if a.update_baseline:
+        if a.file:
+            print("refusing to rewrite the global baseline from a partial --file scan")
+            return 2
         with io.open(BASELINE, "w", encoding="utf-8") as fh:
             fh.write("# User-visible strings with no catalog entry: they render in\n"
-                     "# English in all sixteen non-English languages. --fail passes\n"
+                     "# English in one or more shipped non-English languages. --fail passes\n"
                      "# on these and fails on anything NEW. Shrink this file.\n")
-            fh.write("\n".join(sorted(lines)) + "\n")
+            if lines:
+                fh.write("\n".join(sorted(lines)) + "\n")
         print("baseline rewritten: %d entr(y/ies)" % len(lines))
         return 0
-    stale = known - seen
+    scoped_known = {rec for rec in known
+                    if rec.split("\t", 1)[0] in scoped_apps}
+    stale = scoped_known - seen
     if stale:
         print("%d baseline entr(y/ies) no longer present -- "
               "rerun with --update-baseline to prune" % len(stale))
@@ -322,7 +374,10 @@ def main():
               % (len(seen), os.path.basename(BASELINE)))
     print("RESULT: " + ("FULLY COVERED" if not total else
                         "%d UNCOVERED (%d new)" % (total, fresh)))
-    return 1 if (fresh and a.fail) else 0
+    # New visible English fallbacks are regressions, not advisory output.
+    # --fail additionally makes the acknowledged standing debt fatal for
+    # one-off cleanup/CI jobs that require complete coverage.
+    return 1 if (fresh or (a.fail and total)) else 0
 
 
 if __name__ == "__main__":

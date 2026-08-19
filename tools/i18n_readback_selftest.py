@@ -15,8 +15,9 @@ import shutil
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DE = "/home/ben/Documents/notebookos-linux/buildroot/board/notebookos/" \
-     "rootfs-overlay/opt/notebook/de"
+ROOT = os.path.dirname(HERE)
+DE = os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                  "opt/notebook/de")
 
 LANGS = sys.argv[1:] or ["ru", "es", "pl", "sr", "zh", "hi"]
 
@@ -152,6 +153,19 @@ def walk(w, kind, out, depth=0):
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--child":
         sys.exit(child(sys.argv[2]))
+    # Constructing even a ComboBoxText without a display aborts inside GTK,
+    # producing one fatal trace per language and no readback evidence. Make
+    # the prerequisite explicit and non-vacuous instead.
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk
+        display_ok, _args = Gtk.init_check([])
+    except Exception:
+        display_ok = False
+    if not display_ok:
+        print("RESULT: NOT RUN — GTK display unavailable; no readback was tested")
+        sys.exit(2)
     rc = 0
     for lg in LANGS:
         rc |= run_lang(lg)

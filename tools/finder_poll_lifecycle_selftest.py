@@ -93,4 +93,5 @@ check(win._dev_poll_id == win._app_poll_id == win._dir_reload_id == 0
       "destroy clears every released source and monitor field")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

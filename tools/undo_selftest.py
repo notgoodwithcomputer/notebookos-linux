@@ -469,7 +469,15 @@ def test_history():
     state = {"body": "", "_caret": 0}
     seen = []
 
-    h = nbapp.UndoHistory(lambda: dict(state), lambda s: seen.append(s["body"]))
+    # The restore callback APPLIES the snapshot, as every real app's does --
+    # UndoHistory now compares the on-screen state against the history top
+    # before stepping (so unrecorded edits become a step instead of being
+    # stepped over), and a stand-in that only records without applying reads
+    # as "the app changed something" on every undo.
+    def restore(s):
+        seen.append(s["body"])
+        state.update(s)
+    h = nbapp.UndoHistory(lambda: dict(state), restore)
     h.reset()
     check("nothing to undo at the baseline", not h.can_undo())
     check("nothing to redo at the baseline", not h.can_redo())

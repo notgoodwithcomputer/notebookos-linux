@@ -21,13 +21,18 @@ axis range is 0..32767 and QEMU maps it to the framebuffer.
 """
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WORK = os.path.join(ROOT, "boot-work")
+# The same private-work-dir hook run-desktop.sh / run-iso.sh honour, so a guest
+# booted with NB_WORK=/tmp/x is driven with NB_WORK=/tmp/x too instead of every
+# QMP command going to a socket some OTHER session's guest owns.
+WORK = os.environ.get("NB_WORK") or os.path.join(ROOT, "boot-work")
 SOCK = os.path.join(WORK, "qmp.sock")
 
 SCREEN_W, SCREEN_H = 1920, 1080
@@ -38,17 +43,21 @@ class Qmp:
     def __init__(self, path=SOCK):
         self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.s.connect(path)
+        self._buf = b""
         self._read()                       # greeting
         self.cmd("qmp_capabilities")
 
     def _read(self):
-        buf = b""
-        while b"\n" not in buf:
+        while b"\n" not in self._buf:
             chunk = self.s.recv(65536)
             if not chunk:
-                break
-            buf += chunk
-        return buf.decode(errors="replace")
+                raise ConnectionError("QMP connection closed mid-message")
+            self._buf += chunk
+        if b"\n" in self._buf:
+            line, self._buf = self._buf.split(b"\n", 1)
+        else:
+            line, self._buf = self._buf, b""
+        return line.decode(errors="replace")
 
     def cmd(self, name, **args):
         msg = {"execute": name}
@@ -57,13 +66,12 @@ class Qmp:
         self.s.sendall((json.dumps(msg) + "\r\n").encode())
         # skip async events until we get a return/error
         while True:
-            for line in self._read().splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                obj = json.loads(line)
-                if "return" in obj or "error" in obj:
-                    return obj
+            line = self._read().strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            if "return" in obj or "error" in obj:
+                return obj
 
 
 def scale(x, y):
@@ -99,20 +107,99 @@ def click_at(q, x, y, n=1):
             time.sleep(0.12)               # well inside GTK's dbl-click window
 
 
+def _prepare_boot_socket(path=SOCK):
+    """True when boot may proceed; remove only a stale Unix socket.
+
+    Path existence alone is not ownership: QEMU leaves its socket inode behind
+    after a crash, and treating that as a live guest permanently blocks the
+    next boot. A successful connection proves there is a listener; refusal
+    proves this is merely the crashed guest's stale rendezvous file.
+    """
+    if not os.path.exists(path):
+        return True
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        probe.connect(path)
+        return False
+    except (ConnectionRefusedError, FileNotFoundError):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        return True
+    finally:
+        probe.close()
+
+
+def _stop_boot_process(proc):
+    """Terminate and reap the guest process group this boot attempt created."""
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+
+
+def _capture(q, out):
+    """Capture beside `out` and publish only a successful, nonempty frame."""
+    directory = os.path.dirname(out)
+    mode = os.stat(out).st_mode & 0o7777 if os.path.exists(out) else 0o644
+    fd, tmp = tempfile.mkstemp(prefix=".qmp-shot-", suffix=".png",
+                               dir=directory)
+    os.close(fd)
+    try:
+        r = q.cmd("screendump", filename=tmp, format="png")
+        if "error" in r:
+            return r
+        if not os.path.getsize(tmp):
+            return {"error": {"desc": "QEMU produced an empty screenshot"}}
+        os.chmod(tmp, mode)
+        with open(tmp, "rb") as fh:
+            os.fsync(fh.fileno())
+        os.replace(tmp, out)
+        tmp = None
+        try:
+            dirfd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dirfd)
+            finally:
+                os.close(dirfd)
+        except OSError:
+            pass
+        return r
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+
+
 def do_boot(wait):
-    if os.path.exists(SOCK):
-        print("qmp.sock exists — guest already running? (rm it if stale)",
+    if not _prepare_boot_socket():
+        print("qmp.sock has a live listener — guest already running",
               file=sys.stderr)
         sys.exit(1)
     logf = open(os.path.join(WORK, "qemu.log"), "wb")
-    subprocess.Popen(
+    proc = subprocess.Popen(
         ["bash", os.path.join(ROOT, "tools", "run-desktop.sh"), "--headless"],
         stdout=logf, stderr=logf, start_new_session=True)
+    logf.close()
     for _ in range(120):
         if os.path.exists(SOCK):
             break
         time.sleep(0.5)
     else:
+        _stop_boot_process(proc)
         print("QMP socket never appeared", file=sys.stderr)
         sys.exit(1)
     print("guest up; waiting %ds for the desktop..." % wait, flush=True)
@@ -131,6 +218,7 @@ def do_boot(wait):
         time.sleep(2)
     print("timed out waiting for the shell (check %s)" % serial,
           file=sys.stderr)
+    _stop_boot_process(proc)
     sys.exit(1)
 
 
@@ -147,7 +235,7 @@ def main():
     q = Qmp()
     if op == "shot":
         out = os.path.abspath(sys.argv[2])
-        r = q.cmd("screendump", filename=out, format="png")
+        r = _capture(q, out)
         if "error" in r:
             print("QMP error:", r, file=sys.stderr)
             return 1

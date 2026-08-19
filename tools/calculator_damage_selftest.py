@@ -347,6 +347,62 @@ for _name, _win in (
           (_w["xmin"], _w["xmax"], _w["ymin"], _w["ymax"])
           == (-10., 10., -10., 10.), _w)
 
+# ------------------------- the store that could NOT be moved out of harm's way
+# The narrow state _store_readable exists for: the file is damaged AND the app
+# could not rename it aside, so overwriting it is the one outcome worth
+# refusing. Every save is then refused for the whole session -- and it used to
+# be refused in SILENCE, because _save_prefs returned before ever reaching
+# note_save_failure. Nothing on screen, nothing in the tray, and a strip over
+# the keypad reading "A new one was started. The damaged file was kept.", which
+# reads as "carry on". Everything worked out afterwards went nowhere.
+#
+# RED PROOF (M-silence): the note_save_failure call removed from the
+# `if not self._store_readable:` branch, suite pointed at the copy with
+# CALCULATOR_MODULE_DIR:
+#     FAIL a store that could not be moved aside says so   <- reason None
+#     FAIL ...and says it once, not once per save
+_locked = tempfile.mkdtemp(prefix="calc-unmovable-")
+_lockcfg = os.path.join(_locked, ".config", "notebook")
+os.makedirs(_lockcfg)
+open(os.path.join(_lockcfg, "calculator.json"), "w").write("{not json")
+os.chmod(_lockcfg, 0o555)
+try:
+    import subprocess as _sp
+    _probe = r"""
+import os, sys
+import gi; gi.require_version("Gtk", "3.0")
+import nbapp
+nbapp._APP_DIR = os.path.join("%s", "nb-apps-%%d" %% os.getpid())
+os.makedirs(nbapp._APP_DIR, exist_ok=True)
+import calculator
+w = calculator.Calculator()
+print("READABLE=%%s" %% bool(w._store_readable))
+w.expr = "2+2"
+w.press(("=", "eq", None, "eq"))
+print("SAVED=%%s" %% bool(w._save_prefs()))
+print("REASON=%%r" %% (getattr(w, "_save_error", None),))
+w._save_prefs(); w._save_prefs()
+print("TOLD=%%s" %% bool(getattr(w, "_save_failure_told", False)))
+""" % (tempfile.mkdtemp(prefix="calc-unmovable-apps-"),)
+    _env = dict(os.environ, NB_HOME=_locked,
+                DISPLAY=os.environ.get("DISPLAY", ":0"),
+                PYTHONPATH=MODULE_DIR + os.pathsep
+                + os.environ.get("PYTHONPATH", ""))
+    _r = _sp.run([sys.executable, "-c", _probe], capture_output=True,
+                 text=True, timeout=180, env=_env)
+    _out = dict(l.split("=", 1) for l in _r.stdout.splitlines() if "=" in l)
+    check("a store that could not be moved aside refuses to be overwritten",
+          _out.get("READABLE") == "False" and _out.get("SAVED") == "False",
+          (_out, _r.stderr[-200:]))
+    check("...and says so, rather than discarding the session in silence",
+          _out.get("REASON", "None") not in ("None", "''", '""'),
+          "reason %s" % _out.get("REASON"))
+    check("...once, not once per refused save",
+          _out.get("TOLD") == "True", _out)
+finally:
+    os.chmod(_lockcfg, 0o755)
+    shutil.rmtree(_locked, ignore_errors=True)
+
 shutil.rmtree(root, ignore_errors=True)
 bad = R.count(False)
 print("\n%d checks, %d failed" % (len(R), bad))

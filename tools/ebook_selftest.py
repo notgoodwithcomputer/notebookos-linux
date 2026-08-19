@@ -23,7 +23,15 @@ import tempfile
 # unscoped /tmp/nb-apps shared with any running app -- where
 # nbapp.claim_single_instance() os._exit(0)s this process with no output and
 # exit status 0, which reads as a pass while nothing was tested.
-os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="ebook-selftest-"))
+# ...and PIN it, do not setdefault: tools/guestrun.sh exports a SHARED
+# NB_HOME (/tmp/nb-guestrun-home), which setdefault leaves in place, so every
+# run of this suite read and wrote the same store as every other guestrun
+# render. That was invisible while the reader persisted nothing but the shelf;
+# now that the reading size is persisted too (it is a preference the reader
+# set on purpose), a run that ends at the minimum size handed the NEXT run a
+# store saying 12pt, and starts_at_default failed against a store this suite
+# had written itself. A suite that tests defaults needs a home of its own.
+os.environ["NB_HOME"] = tempfile.mkdtemp(prefix="ebook-selftest-")
 
 import gi
 gi.require_version("Gtk", "3.0")

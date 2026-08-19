@@ -274,6 +274,88 @@ def _str_const(node):
     return None
 
 
+_EXEC_ERRORS = {"OSError", "FileNotFoundError", "EnvironmentError", "IOError",
+                "Exception", "BaseException"}
+
+
+def _handler_catches_exec_error(handler):
+    """Whether an except clause can catch a missing executable."""
+    if handler.type is None:          # bare except
+        return True
+    nodes = handler.type.elts if isinstance(handler.type, ast.Tuple) \
+        else (handler.type,)
+    for node in nodes:
+        name = node.id if isinstance(node, ast.Name) else (
+            node.attr if isinstance(node, ast.Attribute) else "")
+        if name in _EXEC_ERRORS:
+            return True
+    return False
+
+
+def _try_guarded_nodes(tree):
+    """IDs executed inside a try that can catch exec/open failures.
+
+    Function, class and lambda bodies are deliberately separate runtime
+    scopes.  Defining one in a try does not protect a subprocess it runs later.
+    """
+    guarded = set()
+
+    class BodyVisitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, _node):
+            return
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+        visit_ClassDef = visit_FunctionDef
+        visit_Lambda = visit_FunctionDef
+
+        def generic_visit(self, node):
+            guarded.add(id(node))
+            super().generic_visit(node)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try) and any(
+                _handler_catches_exec_error(h) for h in node.handlers):
+            visitor = BodyVisitor()
+            for statement in node.body:
+                visitor.visit(statement)
+    return guarded
+
+
+def _probe_in(node, cmd):
+    return any(isinstance(n, ast.Call) and n.args
+               and isinstance(n.func, ast.Name)
+               and n.func.id in ("have", "_have")
+               and _str_const(n.args[0]) == cmd for n in ast.walk(node))
+
+
+def _probe_guarded(call, cmd, parents):
+    """True only when this exact call is control-flow gated by have(cmd)."""
+    child = call
+    parent = parents.get(id(child))
+    fn = None
+    while parent is not None:
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            fn = parent
+        if isinstance(parent, ast.If) and _probe_in(parent.test, cmd):
+            in_body = any(child is n or child in ast.walk(n) for n in parent.body)
+            positive = not isinstance(parent.test, ast.UnaryOp)
+            if in_body and positive:
+                return True
+        child, parent = parent, parents.get(id(parent))
+    # Canonical inverse guard immediately/earlier in the same straight-line
+    # function: `if not have(cmd): return; run(cmd)`.
+    if fn is not None:
+        for stmt in fn.body:
+            if getattr(stmt, "lineno", 0) >= call.lineno:
+                break
+            if (isinstance(stmt, ast.If) and isinstance(stmt.test, ast.UnaryOp)
+                    and isinstance(stmt.test.op, ast.Not)
+                    and _probe_in(stmt.test.operand, cmd)
+                    and any(isinstance(n, ast.Return) for n in ast.walk(stmt))):
+                return True
+    return False
+
+
 def check_binaries(rep):
     present = set()
     for d in BIN_DIRS:
@@ -289,27 +371,11 @@ def check_binaries(rep):
         tree = parse(path)
         if tree is None:
             continue
-        # Several modules carry their own `have("x")` / `_have("x")` probe
-        # (settings.py runs `command -v`, nbprint/sequencer wrap shutil.which).
-        # A command tested that way is guarded even though the call itself is
-        # not inside a try — treat it as such, or the check cries wolf on the
-        # one pattern the code uses correctly.
-        probed = set()
-        for n in ast.walk(tree):
-            if (isinstance(n, ast.Call) and n.args
-                    and isinstance(n.func, ast.Name)
-                    and n.func.id in ("have", "_have")):
-                c = _str_const(n.args[0])
-                if c:
-                    probed.add(c)
+        parents = {id(child): parent for parent in ast.walk(tree)
+                   for child in ast.iter_child_nodes(parent)}
         # map each node to its enclosing Try, so we can say whether a missing
         # binary degrades quietly or reaches the user as an error.
-        guarded = set()
-        for n in ast.walk(tree):
-            if isinstance(n, ast.Try):
-                for stmt in n.body:
-                    for sub in ast.walk(stmt):
-                        guarded.add(id(sub))
+        guarded = _try_guarded_nodes(tree)
         for n in ast.walk(tree):
             if not isinstance(n, ast.Call):
                 continue
@@ -342,7 +408,8 @@ def check_binaries(rep):
                         break
             if cmd == "<expr>" or os.path.basename(cmd) in present:
                 continue
-            how = ("guarded" if (id(n) in guarded or cmd in probed)
+            how = ("guarded" if (id(n) in guarded or
+                                  _probe_guarded(n, cmd, parents))
                    else "UNGUARDED")
             missing.setdefault(cmd, []).append((rel, n.lineno, how))
 
@@ -701,8 +768,22 @@ def check_toyfont(rep):
         rep.skip("toyfont", "fontconfig unavailable — cannot judge glyph coverage")
         return
     sites = _toy_sites()
+    # ONE list of reasoned keeps, not two. toyfont_check owns the ledger of
+    # toy-API sites whose CONTENT can never need fallback (a printer test page
+    # that is Latin by design, a ruler's "%d" bar counter, a graph axis's
+    # format_number()), and each entry there names the reading that justifies
+    # it. This gate used to keep its own silent view of the same rule, so a
+    # site argued through one gate still failed the other — the second copy of
+    # the truth that keeps costing this project ([[parallel-registry-rot]]).
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from toyfont_check import KEEP as _TOYFONT_KEEP     # noqa: PLC0415
+    except Exception:                                       # noqa: BLE001
+        _TOYFONT_KEEP = frozenset()
+    sites = [s for s in sites if os.path.basename(s[0]) not in _TOYFONT_KEEP]
     if not sites:
-        rep.ok("toyfont", "no cairo toy-font site draws non-literal text")
+        rep.ok("toyfont", "no cairo toy-font site draws non-literal text "
+                          "outside toyfont_check's reasoned keeps")
         return
     catalogs = sorted(glob.glob(os.path.join(DE, "lang_*.json")))
     if not catalogs:
@@ -1056,7 +1137,9 @@ def main():
             CHECKS[name](rep)
         except Exception as e:            # a broken check must never be silence
             rep.skip(name, "check itself raised %s: %s" % (type(e).__name__, e))
-    return 1 if rep.render() else 0
+    failed = rep.render()
+    print("RESULT: %s" % ("FAILED" if failed else "PASS"))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

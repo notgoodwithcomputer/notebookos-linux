@@ -321,6 +321,36 @@ def t_progress_stops_after_finish():
     owner.close()
 
 
+def t_queued_progress_stops_on_cancel():
+    """A progress idle queued before Cancel must not repaint cancellation UI.
+
+    ManualDispatcher holds the idle until after cancellation, reproducing a
+    busy GTK loop where the person has already clicked Cancel but an older
+    progress update has not reached the widget yet.
+    """
+    owner, disp = owner_with_manual()
+    sink = Sink()
+    gate = Gate()
+
+    def work(job):
+        job.progress(0.5, "Preparing")
+        return gate.work(job)
+
+    owner.start("p-cancel", work, on_done=sink.on_done,
+                on_cancel=sink.on_cancel, on_progress=sink.on_progress)
+    check(gate.entered.wait(JOIN_TIMEOUT),
+          "progress is queued while cancellable work remains in flight")
+    check(owner.cancel("p-cancel"), "the progress job accepts cancellation")
+    gate.open()
+    owner.join(JOIN_TIMEOUT)
+    disp.drain()
+    check(sink.progress == [],
+          "queued progress cannot overwrite the cancelling state")
+    check(sink.cancels == 1 and sink.done == [],
+          "the cancellation result still arrives exactly once")
+    owner.close()
+
+
 # ---- 5. duplicate-start policy ---------------------------------------------
 def t_duplicate_policy():
     owner, disp = owner_with_manual()
@@ -518,6 +548,29 @@ def t_exception_is_data():
     owner.close()
 
 
+def t_unprintable_worker_error():
+    class BrokenError(Exception):
+        def __str__(self):
+            raise RuntimeError("broken exception formatter")
+
+    owner = nbjobs.JobOwner(dispatch=nbjobs.direct_dispatch,
+                            name="unprintable-error")
+    sink = Sink()
+
+    def fail(_job):
+        raise BrokenError()
+
+    owner.start("broken-error", fail, on_error=sink.on_error)
+    check(owner.join(JOIN_TIMEOUT),
+          "an unprintable worker exception still retires its thread")
+    check(len(sink.errors) == 1 and sink.errors[0].kind == "BrokenError"
+          and sink.errors[0].message == "BrokenError",
+          "an unprintable exception is delivered as safe error data")
+    check(not owner.is_running("broken-error"),
+          "exception formatting cannot strand a running job")
+    owner.close()
+
+
 def t_callback_exception_does_not_escape():
     owner, disp = owner_with_manual()
     hit = []
@@ -606,10 +659,12 @@ def main():
                t_generations, t_generation_stale_answer_loses,
                t_generation_is_per_key,
                t_progress, t_progress_stops_after_finish,
+               t_queued_progress_stops_on_cancel,
                t_duplicate_policy, t_replace_is_the_default,
                t_close_stops_delivery, t_close_then_reopen,
                t_one_shot, t_many_jobs_deliver_once_each,
-               t_exception_is_data, t_callback_exception_does_not_escape,
+               t_exception_is_data, t_unprintable_worker_error,
+               t_callback_exception_does_not_escape,
                t_idle_dispatch, t_no_heavy_dependency):
         print("-- %s" % fn.__name__)
         fn()
@@ -623,8 +678,10 @@ def main():
         print("jobs selftest: %d FAILED" % len(FAILED))
         for f in FAILED:
             print("  - %s" % f)
+        print("RESULT: FAILED")
         return 1
     print("jobs selftest: OK")
+    print("RESULT: PASS")
     return 0
 
 

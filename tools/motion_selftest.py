@@ -314,6 +314,24 @@ def test_manual_scalar(m):
     check("cancelled scalar does not advance", s.advance() is False)
     check("cancelled scalar does not reach the target", s.value == mid)
 
+    # A broken frame callback is contained by Scalar. Its manual caller must
+    # also be told to stop; returning True schedules a dead animation again.
+    clock = FakeClock()
+    broken_done = []
+
+    def bad_frame(_value):
+        raise RuntimeError("paint failed")
+
+    s = m.Scalar(None, 0.0, on_frame=bad_frame, manual=True,
+                 clock=clock.monotonic)
+    s.animate_to(1.0, m.PAGE,
+                 on_done=lambda ok: broken_done.append(ok))
+    clock.advance(0.05)
+    check("a failed manual frame tells its driver to stop",
+          s.advance() is False and not s.running)
+    check("a failed manual frame cancels completion exactly once",
+          broken_done == [False], broken_done)
+
     # jump_to cancels rather than completes
     dones = []
     s = m.Scalar(None, 0.0, manual=True, clock=clock.monotonic)
@@ -382,6 +400,8 @@ def test_driver_lifecycle(m):
         check("tick callback removed when idle", w.ticks == {},
               str(w.ticks))
         check("driver dropped when idle", m.live_drivers() == 0)
+        check("idle completion disconnects lifecycle handlers",
+              w.handlers == {}, str(w.handlers))
         check("tick removed exactly once (return False, no double remove)",
               w.removed == [], str(w.removed))
 
@@ -783,8 +803,10 @@ def main():
         print("FAIL (%d):" % len(FAILURES))
         for f in FAILURES:
             print("  - %s" % f)
+        print("RESULT: FAILED")
         return 1
     print("PASS")
+    print("RESULT: PASS")
     return 0
 
 

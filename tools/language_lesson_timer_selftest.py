@@ -325,7 +325,8 @@ for name in ("_match_tap", "_grade", "_hold_for_continue"):
 owned = [n for n in ast.walk(tree)
          if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
          and n.func.attr == "_lesson_later"]
-check(len(owned) == 5, "all five lesson delays use _lesson_later (found %d)"
+check(len(owned) == 8,
+      "all six lesson delays and two focus deferrals use _lesson_later (found %d)"
       % len(owned))
 
 print("\n%s" % ("FAILED: %d" % len(FAIL) if FAIL else "all checks passed"))

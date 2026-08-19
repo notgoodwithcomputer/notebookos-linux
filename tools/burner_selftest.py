@@ -69,6 +69,45 @@ def mutant(name, ok_when_broken):
 # ===================================================== 1. capacity arithmetic
 print("--- 1. what fits on the disc ------------------------------------")
 
+class _GoProbe:
+    busy = False
+    items = [{"path": "/tmp/song.wav"}]
+    drive = {"node": "/dev/sr0"}
+    mode = burner.DiscBurner.AUDIO
+    disc = {"present": False}
+    confirmed = False
+    message = ""
+    def _say(self, text): self.message = text
+    def _confirm(self): self.confirmed = True
+
+_go_probe = _GoProbe()
+burner.DiscBurner._on_go(_go_probe, None)
+check("an empty drive cannot reach burn confirmation",
+      not _go_probe.confirmed and bool(_go_probe.message))
+_go_probe.disc = {}
+_go_probe.message = ""
+burner.DiscBurner._on_go(_go_probe, None)
+check("a drive still being probed cannot reach burn confirmation",
+      not _go_probe.confirmed and bool(_go_probe.message))
+
+class _MoveProbe:
+    busy = False
+    items = [{"name": "One"}, {"name": "Two"}, {"name": "Three"}]
+    _sel = 1
+    refreshed = 0
+    def _refresh(self): self.refreshed += 1
+
+_move_probe = _MoveProbe()
+burner.DiscBurner._on_move(_move_probe, None, -1)
+check("moving keeps the same item selected at its new position",
+      [x["name"] for x in _move_probe.items] == ["Two", "One", "Three"]
+      and _move_probe._sel == 0 and _move_probe.refreshed == 1)
+_burner_source = open(burner.__file__, encoding="utf-8").read()
+check("the selected burn row exposes toggle state and retained focus",
+      "btn = Gtk.ToggleButton()" in _burner_source
+      and "btn.set_active(i == getattr(self, \"_sel\", None))" in _burner_source
+      and "chosen.grab_focus()" in _burner_source)
+
 M = 60.0
 check("an 80-minute CD takes a 79-minute programme",
       burner.cd_fits([40 * M, 39 * M])[1])
@@ -523,7 +562,15 @@ import time
 
 
 class _CancelAfter:
-    """A job that reports cancelled once the burn has actually started."""
+    """A job that reports cancelled once the burn has actually started.
+
+    `cancelled` is a PROPERTY here because that is what it is on the real
+    nbjobs.Job (which delegates to the cancel token's own property). It was a
+    method, and this check therefore certified a contract that does not exist:
+    _step's `job.cancelled()` passed here and raised TypeError on the worker
+    thread of every real burn, so no disc was ever written. A fake has to be
+    the shape of the thing it stands in for.
+    """
 
     def __init__(self):
         self.cancels = 0
@@ -534,6 +581,7 @@ class _CancelAfter:
     def checkpoint(self):
         pass
 
+    @property
     def cancelled(self):
         self.cancels += 1
         return self.cancels > 1
@@ -542,8 +590,14 @@ class _CancelAfter:
 # A shell that spawns a child holding the same stdout, then sleeps. The child
 # outlives a terminate() aimed at the parent, exactly like mkisofs under
 # growisofs.
+# The child carries a MARKER only this suite uses. It used to be a bare
+# `sleep 60`, and the leftover check below both matched and SIGKILLed every
+# `sleep 60` on the machine — including other people's background jobs, which
+# is how this suite was killing unrelated work on the developer's box. A test
+# may reap what IT started and nothing else.
+MARK = "nb-burner-selftest-child"
 SCRIPT = ("python3 -c \"import subprocess,sys,time;"
-          "p=subprocess.Popen(['sleep','60']);"
+          "p=subprocess.Popen(['sleep','60','%s']);" % MARK +
           "print('burning', flush=True);"
           "sys.stdout.flush();"
           "time.sleep(60)\"")
@@ -555,6 +609,14 @@ SCRIPT = ("python3 -c \"import subprocess,sys,time;"
 # version of this check called _step directly, and sabotaging the process group
 # took the entire file past its timeout with no verdict at all.)
 import threading
+
+import nbjobs                                                    # noqa: E402
+
+check("the fake job matches nbjobs.Job's own cancellation contract",
+      isinstance(nbjobs.Job.__dict__.get("cancelled"), property)
+      and isinstance(_CancelAfter.__dict__.get("cancelled"), property),
+      (type(nbjobs.Job.__dict__.get("cancelled")).__name__,
+       type(_CancelAfter.__dict__.get("cancelled")).__name__))
 
 job = _CancelAfter()
 done = threading.Event()
@@ -577,7 +639,8 @@ check("a cancelled burn stops instead of hanging on the pipe", stopped,
       "still running after %.1fs" % elapsed)
 
 # And nothing it started is left running on the drive.
-leftover = subprocess.run(["pgrep", "-f", "^sleep 60"], capture_output=True,
+leftover = subprocess.run(["pgrep", "-f", "sleep 60 " + MARK],
+                          capture_output=True,
                           text=True, timeout=10).stdout.split()
 check("a cancelled burn leaves no tool still running", not leftover,
       "still alive: %r" % leftover)

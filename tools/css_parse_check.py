@@ -26,6 +26,10 @@ BLOCK = re.compile(r'b?(?:"""|\'\'\')(.*?)(?:"""|\'\'\')', re.S)
 # (a mangled declaration still fails) without punishing the files that are, if
 # anything, the best-organised ones in the tree.
 _PLACEHOLDER = re.compile(r"%\((\w+)\)s|%s|\{(\w*)\}")
+_CSS_DECL = re.compile(
+    r"(?m)(?:^|[;{])\s*(?:background(?:-\w+)?|color|border(?:-\w+)?|"
+    r"padding(?:-\w+)?|margin(?:-\w+)?|font(?:-\w+)?|transition(?:-\w+)?|"
+    r"box-shadow|opacity|min-width|min-height|outline(?:-\w+)?)\s*:")
 
 
 def _fill(css):
@@ -39,7 +43,7 @@ for path in sys.argv[1:]:
     blocks = 0
     for m in BLOCK.finditer(src):
         body = _fill(m.group(1))
-        if body.count("{") < 2 or "background" not in body + "border":
+        if "{" not in body or "}" not in body or not _CSS_DECL.search(body):
             continue                      # not a stylesheet
         blocks += 1
         line0 = src.count("\n", 0, m.start(1)) + 1

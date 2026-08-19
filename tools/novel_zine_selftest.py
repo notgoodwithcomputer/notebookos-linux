@@ -54,7 +54,12 @@ def build():
         for t in ("heading", "quote", "bold", "italic", "underline"):
             if not buf.get_tag_table().lookup(t):
                 buf.create_tag(t)
-        buf.set_text(title + "\n" + body)
+        # BODY ONLY. In format 2 the chapter heading is a field of its own
+        # (novel.Novel.chapter_title) and the buffer holds prose alone; seeding
+        # it the way format 1 did — heading line, then the body — hid the fault
+        # this suite now checks for, because the dropped line 0 happened to be
+        # a duplicate of the heading. See _chapter_paras.
+        buf.set_text(body)
         n.chapters.append({"num": num, "title": title, "part": 0,
                            "buffer": buf})
     return n
@@ -77,12 +82,55 @@ def paragraphs(n):
     return out
 
 
+def one_paragraph_book():
+    """The shape that exported as a heading over an empty page: chapters whose
+    whole body is a single paragraph, each carrying a sentinel word."""
+    n = novel.Novel()
+    n._title = "Two Short Chapters"
+    n.chapters = []
+    for num, title, mark in ((1, "Arrival", "SENTINELONE"),
+                             (2, "Departure", "SENTINELTWO")):
+        buf = Gtk.TextBuffer()
+        for t in ("heading", "quote", "bold", "italic", "underline"):
+            if not buf.get_tag_table().lookup(t):
+                buf.create_tag(t)
+        buf.set_text("%s and then the rest of the only paragraph." % mark)
+        n.chapters.append({"num": num, "title": title, "part": 0,
+                           "buffer": buf})
+    return n
+
+
 def main():
     n = build()
+
+    # ---- 0. every paragraph the writer typed reaches the page -------------
+    # The renderer skipped line 0 of each chapter buffer. That was right in
+    # format 1, where the chapter heading WAS the buffer's first line, and
+    # silently wrong in format 2, where the heading is a field of its own: the
+    # opening paragraph of every chapter fell out of BOTH publish routes, and a
+    # chapter with a single paragraph printed as a heading over an empty page.
+    solo = one_paragraph_book()
+    solo._prepare_render()
+    solo_frags = [it[1] for pg in solo._render_pages for it in pg["items"]
+                  if it[0] == "frag"]
+    for mark in ("SENTINELONE", "SENTINELTWO"):
+        check(any(mark in f for f in solo_frags),
+              "a chapter whose body is one paragraph prints it (%s)" % mark)
     # Through the real commit path, which is what File > Author... calls.
     n._commit_author("Ada Marchetti")
     count = n._prepare_render()
     pages = n._render_pages
+
+    first_lines = []
+    for ch in n.chapters:
+        buf = ch["buffer"]
+        end = buf.get_iter_at_line(0)
+        end.forward_to_line_end()
+        first_lines.append(buf.get_text(buf.get_start_iter(), end, False))
+    body_frags = [it[1] for pg in pages for it in pg["items"]
+                  if it[0] == "frag"]
+    check(all(any(line[:40] in f for f in body_frags) for line in first_lines),
+          "the first paragraph of every chapter is on a page")
 
     # ---- 1. the fault that cut text in half ---------------------------------
     # Pagination stores a clip window per fragment and _draw_page re-lays the

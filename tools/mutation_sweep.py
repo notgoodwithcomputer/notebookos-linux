@@ -85,11 +85,14 @@ AND TRIAGE SURVIVORS BY MEASUREMENT, NEVER BY READING THEM.
     Anything the battery does not call is "unexercised", not "equivalent".
 --------------------------------------------------------------------------
 """
+import atexit
 import glob
 import io
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import tokenize
 
 # REPO derived from this file's location (tools/ sits directly under the repo
@@ -99,8 +102,21 @@ REPO = os.path.dirname(HERE)
 DE = REPO + "/buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"
 MOD = os.environ.get("SWEEP_MOD", "bills")
 SRC = os.path.join(DE, MOD + ".py")
-WORK = os.environ.get("SWEEP_WORK", "/tmp/mutsweep-" + MOD)
-os.makedirs(WORK, exist_ok=True)
+
+
+def _make_work(environ=None):
+    """(path, owned): unique by default; explicit SWEEP_WORK is caller-owned."""
+    environ = os.environ if environ is None else environ
+    override = environ.get("SWEEP_WORK")
+    if override:
+        os.makedirs(override, exist_ok=True)
+        return override, False
+    return tempfile.mkdtemp(prefix="mutsweep-%s-" % MOD), True
+
+
+WORK, _OWN_WORK = _make_work()
+if _OWN_WORK:
+    atexit.register(shutil.rmtree, WORK, ignore_errors=True)
 
 # Line ranges worth mutating: domain logic and store paths. Widget construction
 # is excluded — a mutation there mostly means "the sheet looks different", which

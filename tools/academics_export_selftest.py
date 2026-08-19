@@ -27,12 +27,13 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from types import MethodType, SimpleNamespace
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-H = "/home/ben/Documents/notebookos-linux/.academics-export-scratch/nb-%d" % os.getpid()
+H = tempfile.mkdtemp(prefix="academics-export-")
 os.environ["NB_HOME"] = H
-shutil.rmtree(H, ignore_errors=True); os.makedirs(H + "/.config/notebook", exist_ok=True)
+os.makedirs(H + "/.config/notebook", exist_ok=True)
 
 sys.path.insert(0, os.path.join(REPO, "tools"))
 sys.path.insert(0, os.path.join(
@@ -78,6 +79,30 @@ def text(path):
 def real_pdf(path):
     return (os.path.isfile(path) and os.path.getsize(path) > 800
             and open(path, "rb").read(5) == b"%PDF-")
+
+
+def localized_lecture_metadata():
+    real_t = academics._t
+    try:
+        academics._t = lambda value: {
+            "Saturday 15 August 2026": "Samedi 15 août 2026",
+            "Added": "Ajouté",
+        }.get(value, value)
+        structured = academics._lecture_meta({
+            "meta": "Saturday 15 August 2026 · added 14:05",
+            "meta_date": "Saturday 15 August 2026",
+            "meta_kind": "added", "meta_suffix": "14:05",
+        })
+        legacy = academics._lecture_meta({
+            "meta": "Saturday 15 August 2026 · added 14:05"})
+        return (structured == "Samedi 15 août 2026 · Ajouté 14:05"
+                and legacy == structured)
+    finally:
+        academics._t = real_t
+
+
+check("lecture metadata localizes in both the UI and PDF helper",
+      localized_lecture_metadata)
 
 
 app = SimpleNamespace()

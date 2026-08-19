@@ -18,10 +18,15 @@ Runs the real loader on real files; builds no window, so it needs no DISPLAY.
   PYTHONPATH=<overlay>/opt/notebook/de python3 tools/tasks_selftest.py
 """
 import json
+import glob
 import os
 import shutil
 import sys
 import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                                "opt/notebook/de"))
 
 os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="nbtasks-"))
 HOME = os.environ["NB_HOME"]
@@ -49,10 +54,11 @@ class Probe(object):
     bare object. Only the display-side collaborators are stubbed."""
     for _m in ("_read_meta", "_read_flat", "_load_tasks", "_norm_task",
                "_overlay_flat", "_from_flat", "_adopt_orphan_lists",
-               "_load_state", "_save_tasks", "_open_doc", "_delete_task",
-               "_toggle"):
+               "_load_state", "_save_tasks", "_merge_external_ticks",
+               "_open_doc", "_delete_task", "_toggle"):
         locals()[_m] = getattr(tasks.Tasks, _m)
     del _m
+    _done_by_occurrence = staticmethod(tasks.Tasks._done_by_occurrence)
 
     view = "view:today"
     _doc_path = None
@@ -154,6 +160,17 @@ check("case 2: stored list colour untouched",
       tasks.PROJ_COLOR.get("Home") == "#4A5E73")
 check("case 2: no list invented for an unfiled task",
       [n for n, _c in tasks.PROJECTS] == ["Home"])
+
+# Loading another instance in the same interpreter must not inherit the first
+# instance's module-global list registry. This happens in tests, profile
+# switching, and any launcher that reuses the Python process. Before the fix,
+# the empty profile acquired Home and __init__'s launch-time save persisted it.
+write(tasks.META_FILE, {"tasks": [], "projects": []})
+write(tasks.TASKS_FILE, [])
+p_empty = Probe()
+p_empty._load_state()
+check("case 2: a second empty profile does not inherit prior lists",
+      tasks.PROJECTS == [] and tasks.PROJ_COLOR == {})
 
 # --- case 3: a document whose tasks name lists it never defined -------------
 reset()
@@ -266,6 +283,27 @@ finally:
 check("a sidecar that will not parse is marked damaged, so the person is told",
       getattr(_p, "_meta_damaged", False) is True)
 check("...and it still reads as no usable metadata", got is None)
+
+# A file can parse as JSON and still have no valid Tasks-store shape. Scalars
+# must take the same damaged-store path as malformed JSON; otherwise launch
+# treats them as first-run and silently replaces them.
+for _scalar in (42, "bad", None):
+    with open(_meta, "w") as _fh:
+        _json.dump(_scalar, _fh)
+    _scalar_probe = tasks.Tasks.__new__(tasks.Tasks)
+    _damaged_before = set(glob.glob(_meta + ".damaged-*"))
+    tasks.META_FILE = _meta
+    try:
+        _scalar_got = tasks.Tasks._read_meta(_scalar_probe)
+    finally:
+        tasks.META_FILE = _real_meta
+    check("valid JSON scalar %r is marked damaged" % (_scalar,),
+          _scalar_got is None
+          and getattr(_scalar_probe, "_meta_damaged", False) is True)
+    _damaged_after = set(glob.glob(_meta + ".damaged-*"))
+    check("valid JSON scalar %r is quarantined before launch save" % (_scalar,),
+          not os.path.exists(_meta)
+          and len(_damaged_after - _damaged_before) == 1)
 
 # A MISSING sidecar is first run, not damage — or every fresh install accuses
 # itself of losing data that never existed.

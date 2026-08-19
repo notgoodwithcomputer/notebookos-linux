@@ -132,6 +132,31 @@ def catalog_keys():
 CATALOG = None
 
 
+def expression_text(node):
+    """Static visible wording with dynamic values replaced by neutral X."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                parts.append("X")
+        return "".join(parts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        # Old-style formatting is still common in GTK call sites. The visible
+        # prose lives on the left; judge() already neutralizes its placeholders.
+        return expression_text(node.left)
+    if isinstance(node, ast.Call):
+        name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if name == "_t" and node.args:
+            return expression_text(node.args[0])
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == "format"):
+            return expression_text(node.func.value)
+    return None
+
+
 def strings_in(path):
     """(lineno, text) for every string that reaches a person."""
     try:
@@ -149,12 +174,9 @@ def strings_in(path):
             args = [kw.value for kw in node.keywords
                     if kw.arg in ("label", "text", "title")]
         for a in args:
-            # unwrap _t("...") so the literal inside is judged
-            if isinstance(a, ast.Call) and (
-                    getattr(a.func, "id", None) == "_t") and a.args:
-                a = a.args[0]
-            if isinstance(a, ast.Constant) and isinstance(a.value, str):
-                yield node.lineno, a.value
+            text = expression_text(a)
+            if text is not None:
+                yield node.lineno, text
     # ...plus every literal anywhere in the file that the catalogs translate.
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) \
@@ -207,6 +229,7 @@ def main():
     fails = 0
     per_rule = {}
     seen_pending = {}
+    seen_allow = set()
     for path in files:
         base = os.path.basename(path)
         hits = []
@@ -226,6 +249,7 @@ def main():
                 tags = ",".join(n for n, _w in found)
                 if text in allow:
                     status = "allow"
+                    seen_allow.add(text)
                 elif text in pending.get(base, ()):
                     status = "pending"
                     seen_pending.setdefault(base, set()).add(text)
@@ -243,6 +267,10 @@ def main():
     # the ratchet's other direction: a pending entry whose string is gone was
     # fixed — its entry must go too, or the ledger drifts into fiction
     if not a.file:
+        for text in sorted(set(allow) - seen_allow):
+            print("STALE allow entry: %r — no current finding uses it; delete "
+                  "it from voice_ledger.json" % text[:60])
+            fails += 1
         for base, texts in sorted(pending.items()):
             for text in sorted(texts - seen_pending.get(base, set())):
                 print("STALE pending entry (%s): %r — fixed in source, delete "

@@ -33,6 +33,11 @@ no X server) is used, for a genuinely pending debounce source.
 """
 import os, sys, json, tempfile
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DE = os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                  "opt/notebook/de")
+sys.path.insert(0, DE)
+
 HOME = tempfile.mkdtemp(prefix="nbhome-lifecycle-")
 os.environ["NB_HOME"] = HOME
 os.environ.setdefault("GDK_BACKEND", "x11")
@@ -114,6 +119,11 @@ class Harness:
     _save_to_disk = AW.__dict__["_save_to_disk"]
     _class_label = AW.__dict__["_class_label"]
     _wordcount_text = AW.__dict__["_wordcount_text"]
+    _undo_snapshot = AW.__dict__["_undo_snapshot"]
+    _rollback_failed_save = AW.__dict__["_rollback_failed_save"]
+    _copy_classes = staticmethod(AW.__dict__["_copy_classes"])
+    _copy_lectures = staticmethod(AW.__dict__["_copy_lectures"])
+    _caret_offset = AW.__dict__["_caret_offset"]
 
     def __init__(self, classes, lectures, homework, active, buffer_text,
                  buffer_ranges=None):
@@ -286,4 +296,4 @@ if __name__ == "__main__":
         for m in FAILED:
             print("  - " + m)
         sys.exit(1)
-    print("PASS")
+    print("RESULT: ALL PASS")

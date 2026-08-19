@@ -141,6 +141,17 @@ def audit(root: Path, quiet: bool = False):
     findings_missing: list[tuple[str, str]] = []
     findings_stale: list[tuple[str, str]] = []
 
+    for module in sorted(modules):
+        path = root / DE_REL / (module + ".py")
+        valid = path.is_file() and not path.is_symlink()
+        if valid:
+            try:
+                ast.parse(path.read_text(encoding="utf-8"), str(path))
+            except (OSError, SyntaxError, UnicodeError):
+                valid = False
+        if not valid:
+            findings_missing.append(("app-modules", module))
+
     stubs = app_stub_names(root)
     findings_missing.extend(("app-stubs", table[name]) for name in sorted(set(table) - stubs))
     findings_stale.extend(("app-stubs", name) for name in sorted(stubs - set(table)))
@@ -200,6 +211,11 @@ def selfcheck(root: Path) -> int:
             dest = scratch / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(root / rel, dest)
+        for module in set(launch_table(root).values()):
+            rel = DE_REL / (module + ".py")
+            dest = scratch / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root / rel, dest)
 
         perf = scratch / "tools/perf_baseline.py"
         _replace_once(perf, '"writer", ', "")
@@ -211,6 +227,17 @@ def selfcheck(root: Path) -> int:
         _missing, stale, _ = audit(scratch, quiet=True)
         assert ("performance-baseline", "nonexistent_app") in stale
         print("SELFCHECK stale-direction: PASS (added nonexistent_app to performance-baseline; STALE reported)")
+
+        writer = scratch / DE_REL / "writer.py"
+        writer.unlink()
+        missing, _stale, _ = audit(scratch, quiet=True)
+        assert ("app-modules", "writer") in missing
+        print("SELFCHECK app-module existence: PASS (missing writer.py reported)")
+        shutil.copy2(root / DE_REL / "writer.py", writer)
+        writer.write_text("def broken(:\n", encoding="utf-8")
+        missing, _stale, _ = audit(scratch, quiet=True)
+        assert ("app-modules", "writer") in missing
+        print("SELFCHECK app-module syntax: PASS (invalid writer.py reported)")
     print("SELFCHECK RESULT: PASS (both directions went red)")
     return 0
 

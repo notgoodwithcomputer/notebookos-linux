@@ -32,6 +32,15 @@ checks = {
                                 "box-shadow: none", "border: none", "padding: 0")),
     "flat styling keeps the focus ring": "outline" not in rule,
     "modal click-away scrims remain out of scope": "scrim = Gtk.EventBox()" in text,
+    "remove confirmation exposes a dialog role":
+        "dialog_acc.set_role(Atk.Role.DIALOG)" in text,
+    "remove confirmation exposes modal state":
+        "notify_state_change(Atk.StateType.MODAL, True)" in text,
+    "remove confirmation starts on Cancel": "cancel.grab_focus()" in text,
+    "remove confirmation traps Tab":
+        "Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab" in text,
+    "closing confirmation restores prior focus":
+        "self._confirm_restore_focus" in text and "prior.grab_focus()" in text,
 }
 ok = True
 for name, passed in checks.items():

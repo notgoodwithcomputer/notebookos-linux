@@ -159,6 +159,67 @@ def main():
         pk.GLib, pk.PACKAGES = real_glib, real_packages
         os.unlink(tmp.name)
 
+    # --- what this window says is on the machine ------------------------------
+    # The Installed list is the app's answer to "what is on this computer", and
+    # two things were wrong with it at once. The application names were a
+    # SECOND, hand-written copy of the launcher's registry, so seven shipped
+    # apps — and every app ever installed from a package — were missing from
+    # the window altogether. And PACKAGES was read once at import and never
+    # again, so an app installed from the Sources page of this very window did
+    # not join the list until Packages was closed and opened.
+    import json
+    import shutil
+
+    import finder
+
+    real_pk_de, real_finder_de = pk.DE_DIR, finder.DE_DIR
+    fake_de = tempfile.mkdtemp(prefix="packages-installed-")
+    try:
+        for mod in ("calculator", "govorimo"):
+            with open(os.path.join(fake_de, mod + ".py"), "w") as fh:
+                fh.write('"""%s — a module on this machine."""\n' % mod)
+        pk.DE_DIR = finder.DE_DIR = fake_de
+        pk.refresh_installed()
+        before = [p[pk.NAME] for p in pk.PACKAGES]
+        check("Calculator" in before, "a shipped app is listed")
+        check("Govorimo" not in before,
+              "a module the launcher has never heard of is not invented into "
+              "the list")
+
+        with open(os.path.join(fake_de, "installed_apps.json"), "w") as fh:
+            json.dump({"Old String Entry": "2.0", "Old List Entry": [],
+                       "Old Null Entry": None}, fh)
+        check(pk._installed_registry() == {},
+              "malformed nested registry entries are ignored, not exposed")
+
+        # Install it the way nbpkg_install does: the file is already on disk,
+        # and the registry entry is what makes it an app on this machine.
+        with open(os.path.join(fake_de, "installed_apps.json"), "w") as fh:
+            json.dump({"Govorimo": {"module": "govorimo", "kind": "Messaging",
+                                    "version": "2.0.0"}}, fh)
+        pk.refresh_installed()
+        rows = {p[pk.NAME]: p for p in pk.PACKAGES}
+        check("Govorimo" in rows,
+              "an app installed from a package joins the Installed list")
+        check(rows.get("Govorimo") is not None
+              and rows["Govorimo"][pk.KIND] == "Application",
+              "...as an application, not as a system part")
+        check(len(pk.PACKAGES) == len(before) + 1,
+              "...and installing one app adds exactly one row")
+        check(pk._installed_registry().get("Govorimo", {}).get("version")
+              == "2.0.0",
+              "the machine keeps the version it installed")
+        check(pk._installed_registry().get("Calculator") is None,
+              "an app that came with the image is not claimed as installed")
+    finally:
+        pk.DE_DIR, finder.DE_DIR = real_pk_de, real_finder_de
+        # _merge_installed_apps is additive, so the test app would otherwise
+        # stay in the launcher's registry for the rest of this process.
+        finder.APP_MODULES.pop("Govorimo", None)
+        finder.APP_KIND.pop("Govorimo", None)
+        pk.refresh_installed()
+        shutil.rmtree(fake_de, ignore_errors=True)
+
     print("\n%s" % ("FAILED: %d" % len(FAILURES) if FAILURES else "all ok"))
     return 1 if FAILURES else 0
 

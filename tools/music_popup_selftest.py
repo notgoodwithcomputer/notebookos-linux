@@ -117,11 +117,31 @@ class FakeItem(object):
     def connect(self, *_a, **_k):
         pass
 
+    def get_child(self):
+        return None
+
+    def set_label(self, text):
+        self.label = text
+
+
+class FakeLabel(object):
+    """The menu item's own AccelLabel child. _set_user_text stamps the item AND
+    its child (a Gtk.MenuItem keeps its text there, and the show_all walk
+    descends into it), and it decides with isinstance(child, Gtk.Label) — so a
+    fake Gtk without a Label attribute raised AttributeError inside the
+    handler's outer try, which swallowed it and left popup_at unreached. The
+    fake has to carry every attribute of the module surface the handler
+    actually touches, or it tests the fake."""
+
+    def __init__(self, label=None):
+        self.label = label
+
 
 class FakeGtk(object):
     Menu = FakeMenu
     MenuItem = FakeItem
     SeparatorMenuItem = FakeItem
+    Label = FakeLabel
 
 
 class StubApp(object):
@@ -161,4 +181,5 @@ if calls:
           isinstance(args[0], FakeMenu) and args[0].shown)
 
 print("OVERALL: " + ("PASS" if ok else "FAIL"))
+print("RESULT: " + ("PASS" if ok else "FAILED"))
 sys.exit(0 if ok else 1)

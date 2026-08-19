@@ -373,6 +373,7 @@ def main(argv):
                 print("   ? %s" % w)
     print()
     print("%d/%d courses pass" % (len(files) - bad, len(files)))
+    print("RESULT: %s" % ("FAIL" if bad else "PASS"))
     return 1 if bad else 0
 
 

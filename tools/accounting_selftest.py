@@ -91,7 +91,8 @@ r, t = running_vs_total(tx(*([-0.005] * 7)))
 check("sub-cent amounts agree", r == t, (r, t))
 
 # every typed amount is snapped to cents before it is ever stored
-for raw, want in (("0.005", 0.01), ("1.004", 1.0), ("12.345", 12.35),
+for raw, want in (("0.005", 0.01), ("1.005", 1.01), ("2.675", 2.68),
+                  ("2.674", 2.67), ("1.004", 1.0), ("12.345", 12.35),
                   ("$1,234.56", 1234.56), ("-50", 50.0), (" 12 ", 12.0),
                   ("1e3", 1000.0)):
     got = A._parse_amount(raw)

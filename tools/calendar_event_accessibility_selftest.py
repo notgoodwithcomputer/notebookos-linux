@@ -4,7 +4,10 @@ from pathlib import Path
 
 text = (Path(__file__).resolve().parents[1] /
         "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/calendar.py").read_text()
-month = text[text.index("        # Show up to three event chips"):
+# The chip block opens with a "Show up to ..." comment; the count in it is
+# no longer a fixed three (the month measures what fits), so anchor on
+# the prefix rather than the number.
+month = text[text.index("        # Show up to "):
              text.index("        ev.add(cell)")]
 timed = text[text.index("    def _time_chip("):text.index("    # ------------------------------------------------------------ persistence")]
 checks = {

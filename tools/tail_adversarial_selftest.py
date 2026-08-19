@@ -5,6 +5,11 @@ import json
 import os
 import tempfile
 import inspect
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                                "opt/notebook/de"))
 
 import calculator
 import g2048
@@ -237,5 +242,5 @@ finally:
     nbapp.save_failure_reason = original_reason
     nbnotify.post = original_post
 
-print("RESULT: %d failed" % failed)
+print("RESULT: %s" % ("FAILED: %d checks" % failed if failed else "PASS"))
 raise SystemExit(1 if failed else 0)

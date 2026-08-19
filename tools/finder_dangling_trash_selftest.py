@@ -45,6 +45,10 @@ def window(path, trash):
     win = finder.Finder.__new__(finder.Finder)
     model = Model(path)
     win._selected_iter = lambda: (model, object())
+    # Trash and the clipboard now act on the SELECTION, not on one row,
+    # so the stub answers the list helper too. Same fixture, same
+    # assertions -- only the door the code comes in through moved.
+    win._selected_paths = lambda: [model.path]
     win.abspath = lambda p: p
     win._trash_dir = lambda: trash
     win._inflight = set()
@@ -114,5 +118,7 @@ print()
 if failures:
     print("FINDER DANGLING TRASH SELFTEST: %d checks, %d FAILED" %
           (checks, len(failures)))
+    print("RESULT: FAIL")
     raise SystemExit(1)
 print("FINDER DANGLING TRASH SELFTEST: %d checks, all pass" % checks)
+print("RESULT: PASS")

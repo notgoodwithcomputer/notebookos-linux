@@ -141,3 +141,4 @@ if __name__ == "__main__":
     saved_checkpoint_tracks_undo_and_redo()
     save_as_failure_rolls_back_identity()
     print("document safety selftest: OK")
+    print("RESULT: PASS")

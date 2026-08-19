@@ -28,6 +28,11 @@ import sys
 import tempfile
 import time
 
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DE = os.path.join(_ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                   "opt/notebook/de")
+sys.path.insert(0, _DE)
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk                             # noqa: E402
@@ -194,6 +199,21 @@ def full_home():
 # -- 1. the pinned column ----------------------------------------------------
 home = full_home()
 wmod, b = board(home)
+# The board DECLINES the keyboard, and this assertion is the reverse of what it
+# used to say. Measured on target: with accept-focus on, matchbox made the board
+# its focused client for the whole session and the Finder's search box could not
+# be typed into at all -- see the note in widgets.Widgets.__init__. The cards
+# stay clickable and keep their accessible names; what they must never do is
+# hold the keyboard.
+check("the board never takes the keyboard, on map or after",
+      (not b.get_accept_focus()) and not b.get_focus_on_map(),
+      (b.get_accept_focus(), b.get_focus_on_map()))
+task_buttons = [row for row in b._tasklist.get_children()
+                if isinstance(row, Gtk.Button)]
+check("task rows expose native button actions to keyboard and AT",
+      task_buttons and all(button.get_accessible().get_name()
+                           for button in task_buttons),
+      [button.get_accessible().get_name() for button in task_buttons])
 check("the column holds exactly Tasks then the calendar, nothing else",
       len(b._col.get_children()) == 2, len(b._col.get_children()))
 check("the row budget covers the column only, not the tiles",
@@ -814,8 +834,6 @@ for weeks, fake in (("a five-week month", None), ("a six-week month", SIX)):
 # takes the WHOLE stylesheet with it, which on the board means unstyled cards
 # on a black desktop.
 import ast                                                       # noqa: E402
-_DE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                   "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")
 for _src in ("widgets.py", "widgetsettings.py"):
     _path = os.path.join(_DE, _src)
     _blobs = [n.value for n in ast.walk(ast.parse(open(_path,

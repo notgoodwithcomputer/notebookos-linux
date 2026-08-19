@@ -71,6 +71,23 @@ def _switches_a_stack(tree):
     return has_stack and switches
 
 
+def _uses_primitive(tree):
+    """Return true only for an executable shared-transition call.
+
+    Source-text membership let comments, strings and unused imports claim an
+    adoption that never happened.  Calls through either an imported name or a
+    module/object attribute are the useful, conservative boundary here.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in _PRIMITIVE:
+            return True
+        if isinstance(node.func, ast.Attribute) and node.func.attr in _PRIMITIVE:
+            return True
+    return False
+
+
 def main():
     seen_debt = {}
     for fn in sorted(os.listdir(DE)):
@@ -84,7 +101,7 @@ def main():
             continue
         if not _switches_a_stack(tree):
             continue
-        hand_rolled = not any(p in src for p in _PRIMITIVE)
+        hand_rolled = not _uses_primitive(tree)
         if fn in DEBT:
             seen_debt[fn] = hand_rolled
             if hand_rolled:
@@ -110,6 +127,7 @@ def main():
     print("\nPASS  page-switch consistency: %d checks (%d adopters clean, "
           "%d ratcheted debt)"
           % (n, n - len(seen_debt), sum(1 for v in seen_debt.values() if v)))
+    print("RESULT: PASS")
     return 0
 
 

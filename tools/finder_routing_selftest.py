@@ -243,6 +243,7 @@ def launch_failures(home):
     """The two ways a launch dies once a module HAS been chosen."""
     real_de, real_popen = finder.DE_DIR, finder.subprocess.Popen
     real_watch = finder.GLib.child_watch_add
+    real_check_path = finder.nbtrust.check_path
 
     class Recorder(Probe):
         def _launch_module(self, mod, file_arg=None):
@@ -272,6 +273,13 @@ def launch_failures(home):
               "a module absent from the image is reported, not ignored")
 
         finder.DE_DIR = real_de
+
+        # This section owns spawn failure and argv integrity, not signature
+        # verification (app_trust_selftest owns that boundary).  The shared
+        # worktree is intentionally dirty during development, so its files do
+        # not match the image manifest; approve these existing scripts so the
+        # fixture actually reaches the process launcher it is testing.
+        finder.nbtrust.check_path = lambda _path: (True, "")
 
         def refuse(*_a, **_kw):
             raise OSError("fork failed")
@@ -305,6 +313,7 @@ def launch_failures(home):
         finder.DE_DIR = real_de
         finder.subprocess.Popen = real_popen
         finder.GLib.child_watch_add = real_watch
+        finder.nbtrust.check_path = real_check_path
 
 
 def built_in_mapping_is_coherent():
@@ -336,3 +345,4 @@ if __name__ == "__main__":
             print("  - " + f)
         sys.exit(1)
     print("\nFinder routing selftest: OK")
+    print("RESULT: PASS")

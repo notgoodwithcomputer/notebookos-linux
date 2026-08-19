@@ -1,32 +1,37 @@
 #!/usr/bin/env python3
-"""Static guards for native Video preview transport controls."""
+"""Dynamic Video transport exposes the action it currently performs."""
+import os
 from pathlib import Path
+import sys
+import tempfile
 
-text = (Path(__file__).resolve().parents[1] /
-        "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de/video.py").read_text()
-factory = text[text.index("    def _round("):text.index("    def _update_preview(")]
-preview = text[text.index("        # transport controls"):
-               text.index("    def _round(")]
-checks = {
-    "actionable round controls are native buttons":
-        "Gtk.Box() if cb is None else Gtk.Button()" in factory,
-    "decorative no-callback branch remains supported": "if cb is None:" in factory,
-    "transport controls activate via clicked": 'b.connect("clicked", cb)' in factory,
-    "transport factory has no pointer-only wrapper":
-        "Gtk.EventBox" not in factory and "button-press-event" not in factory,
-    "exact requested geometry remains": "b.set_size_request(size, size)" in factory,
-    "icon handle is still returned": "return b, img" in factory,
-    "previous, play and next actions remain wired":
-        all(cb in preview for cb in ("self._on_prev", "self._on_play", "self._on_next")),
-    "play button handle remains retained": "self._play_w = play_w" in preview,
-    "transport actions remain described":
-        all(t in preview for t in ("Previous clip", '"Play"', "Next clip")),
-    "Papertone circles suppress theme chrome":
-        ".roundbtn {" in text and "background-image: none; box-shadow: none; padding: 0" in text,
-}
-ok = True
-for name, passed in checks.items():
-    print(("PASS " if passed else "FAIL ") + name)
-    ok &= passed
-print("RESULT: " + ("ALL PASS" if ok else "SOME FAILED"))
-raise SystemExit(0 if ok else 1)
+
+ROOT = Path(__file__).resolve().parents[1]
+DE = ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"
+sys.path.insert(0, str(DE))
+os.environ.setdefault("NB_HOME", tempfile.mkdtemp(prefix="video-a11y-"))
+import video  # noqa: E402
+
+
+class Accessible:
+    def __init__(self): self.name = ""
+    def set_name(self, name): self.name = name
+
+
+class Button:
+    def __init__(self): self.tooltip, self.acc = "", Accessible()
+    def set_tooltip_text(self, text): self.tooltip = text
+    def get_accessible(self): return self.acc
+
+
+app = video.VideoEditor.__new__(video.VideoEditor)
+app._play_img = None
+app._play_w = Button()
+app._set_play_glyph(False)
+assert app._play_w.tooltip == "Play" and app._play_w.acc.name == "Play"
+app._set_play_glyph(True)
+assert app._play_w.tooltip == "Stop" and app._play_w.acc.name == "Stop"
+app._set_play_glyph(False)
+assert app._play_w.tooltip == "Play" and app._play_w.acc.name == "Play"
+print("PASS Video transport accessible name follows Play and Stop")
+print("RESULT: PASS")

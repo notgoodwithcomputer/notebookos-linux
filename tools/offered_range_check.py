@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import collections
 import dataclasses
 import shutil
 import subprocess
@@ -48,6 +49,37 @@ DEFAULT_DE = (ROOT / "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de"
 # Keep this small: entries are accepted mismatches, not suppressions.  The
 # two-way check below rejects both new findings and entries which go stale.
 DEBT: dict[tuple[str, str], str] = {}
+
+# Every control the scanner cannot yet connect is still part of the gate's
+# coverage contract.  Normalize local line suffixes below so harmless source
+# movement does not churn this list, while a newly offered control, a removed
+# one, or another same-named local occurrence changes the Counter and fails.
+EXPECTED_INVENTORY = (
+    ('animation.py', 'prompt:count@*'), ('animation.py', 'prompt:count@*'),
+    ('animation.py', 'prompt:length@*'), ('animation.py', 'prompt:loud@*'),
+    ('animation.py', 'prompt:quiet@*'), ('animation.py', 'prompt:strength@*'),
+    ('animation.py', 'widget@*'), ('animation.py', 'widget@*'),
+    ('bills.py', 'd@*'), ('bills.py', 'lead@*'), ('bills.py', 'y@*'),
+    ('comics.py', 'scale@*'), ('comics.py', 'self.op_scale'),
+    ('composer.py', 'self.tempo'), ('composer.py', 'self.velocity'),
+    ('gbasdk.py', 'adj@*'), ('gbasdk.py', 'line:@*'),
+    ('gbasdk.py', 'self._obj_hurt_frames'), ('gbasdk.py', 'self._snd_tempo'),
+    ('illustrator.py', 'sc@*'), ('illustrator.py', 'self.op_scale'),
+    ('installer.py', 'self._sp_swap'), ('media.py', 'self._v_seek'),
+    ('music.py', 'self.vol'), ('music.py', 'track@*'),
+    ('nbprint.py', 'copies@*'), ('sequencer.py', 'gain@*'),
+    ('sequencer.py', 'gain@*'), ('sequencer.py', 's@*'),
+    ('sequencer.py', 'self._hadj'), ('sequencer.py', 'self.bpm_scale'),
+    ('sequencer.py', 'self.cgain'), ('sequencer.py', 'self.master_fader'),
+    ('sequencer.py', 'self.master_scale'), ('settings.py', 'adj@*'),
+    ('settings.py', 'cadj@*'), ('settings.py', 'self._hspin'),
+    ('settings.py', 'self._kdelay'), ('settings.py', 'self._krate'),
+    ('settings.py', 'self._mspin'), ('video.py', 'self._mus_vol'),
+    ('video.py', 'self._prop_dur'), ('video.py', 'self._prop_trim'),
+    ('video.py', 'self._prop_vol'), ('workout.py', 'r_adj@*'),
+    ('workout.py', 's_adj@*'), ('writer.py', 'sp@*'),
+)
+MIN_CONNECTED = 2
 
 RANGE_CTORS = {
     "SpinButton.new_with_range": (0, 1),
@@ -401,6 +433,12 @@ def fmt(value: float) -> str:
     return str(int(value)) if value.is_integer() else f"{value:g}"
 
 
+def inventory_key(control: Control) -> tuple[str, str]:
+    import re
+    name = re.sub(r"^line:\d+@\d+$", "line:@*", control.name)
+    return control.module, re.sub(r"@\d+$", "@*", name)
+
+
 def run(de: Path) -> tuple[int, str]:
     controls: list[Control] = []
     findings: list[Finding] = []
@@ -420,6 +458,14 @@ def run(de: Path) -> tuple[int, str]:
     lines = [f"RANGED CONTROLS: {len(controls)} across {modules} app modules",
              f"CONNECTED TO APPLY/CLAMP: {connected}",
              f"COULD NOT CONNECT: {len(controls) - connected}"]
+    actual_inventory = collections.Counter(inventory_key(c) for c in controls)
+    expected_inventory = collections.Counter(EXPECTED_INVENTORY)
+    for key, count in sorted((actual_inventory - expected_inventory).items()):
+        lines.append(f"NEW UNCONNECTED/UNRATCHETED CONTROL: {key[0]} {key[1]} x{count}")
+    for key, count in sorted((expected_inventory - actual_inventory).items()):
+        lines.append(f"STALE CONTROL INVENTORY: {key[0]} {key[1]} x{count}")
+    if connected < MIN_CONNECTED:
+        lines.append(f"CONNECTED COVERAGE SHRANK: {connected} < {MIN_CONNECTED}")
     for finding in sorted(findings, key=lambda f: (f.module, f.line, f.control)):
         lines.append(f"FINDING {finding.module}:{finding.line} {finding.label} "
                      f"offers {fmt(finding.offered_lo)}..{fmt(finding.offered_hi)}; "
@@ -436,9 +482,10 @@ def run(de: Path) -> tuple[int, str]:
         lines.append(f"DEBT {key[0]} {key[1]}: {reason}")
     if not DEBT:
         lines.append("DEBT LEDGER: empty")
-    ok = not new and not stale
-    lines.append("PASS: offered ranges agree with connected clamps" if ok else
-                 "FAIL: offered-range debt ratchet changed")
+    ok = (not new and not stale and actual_inventory == expected_inventory
+          and connected >= MIN_CONNECTED)
+    lines.append("RESULT: PASS" if ok else
+                 "RESULT: FAILED — offered-range debt ratchet changed")
     return (0 if ok else 1), "\n".join(lines) + "\n"
 
 

@@ -3,7 +3,12 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                                "opt/notebook/de"))
 
 HOME = tempfile.mkdtemp(prefix="nbjournal-adversarial-")
 os.environ["NB_HOME"] = HOME
@@ -30,6 +35,49 @@ def bare():
     app._save_warned = False
     app._flash = lambda _text: None
     return app
+
+
+def localized_date_check():
+    entry = {"day": "15", "wd": "Fri", "month_label": "August 2026",
+             "date": "Friday, 15 August"}
+    translations = {"Fri": "Ven", "Friday": "Vendredi", "August": "Août",
+                    "%s %d": "%s %d", "%s, %d %s %d": "%s %d %s %d"}
+    real_t = journal._t
+    journal._t = lambda text: translations.get(text, text)
+    try:
+        month = journal._localized_month_label(entry)
+        date = journal._localized_entry_date(entry)
+    finally:
+        journal._t = real_t
+    check("stored English month/year is localized at display time",
+          month == "Août 2026", repr(month))
+    check("stored English entry date is rebuilt from localized components",
+          date == "Vendredi 15 Août 2026", repr(date))
+
+
+def authored_label_check():
+    class Label:
+        def __init__(self): self.text = ""
+        def set_text(self, text): self.text = text
+
+    calls = []
+    real_verbatim = journal.nbi18n.set_verbatim
+    real_t = journal._t
+    journal.nbi18n.set_verbatim = lambda label, text: (
+        calls.append(text), label.set_text(text))[-1]
+    journal._t = lambda text: {"Untitled entry": "無題"}.get(text, text)
+    try:
+        title = Label()
+        journal._set_authored_label(title, "Save", "Untitled entry")
+        empty = Label()
+        journal._set_authored_label(empty, "", "Untitled entry")
+    finally:
+        journal.nbi18n.set_verbatim = real_verbatim
+        journal._t = real_t
+    check("user-authored chrome-like text is stamped verbatim",
+          title.text == "Save" and calls == ["Save"], repr((title.text, calls)))
+    check("only the empty-title fallback is translated",
+          empty.text == "無題", repr(empty.text))
 
 
 def _damaged_asides():
@@ -91,11 +139,36 @@ def damaged_store_check():
           "bytes at path: %r  asides: %r"
           % (after_shape, _damaged_asides()))
 
+    # If the protective move itself fails, saving must stop. Continuing would
+    # replace the only copy with the blank model that resulted from rejecting
+    # the foreign shape. Keep the pending flag too, so a later save retries.
+    _clear_asides()
+    with open(journal.JOURNAL_FILE, "wb") as fh:
+        fh.write(wrong_shape)
+    app = bare()
+    app.entries, app.active = app._load_entries()
+    real_replace = journal.os.replace
+    journal.os.replace = lambda *_a, **_k: (_ for _ in ()).throw(
+        OSError("injected quarantine failure"))
+    try:
+        saved_ok = app._persist()
+    finally:
+        journal.os.replace = real_replace
+    with open(journal.JOURNAL_FILE, "rb") as fh:
+        after_failed_move = fh.read()
+    check("a failed quarantine refuses to overwrite the only journal copy",
+          not saved_ok and after_failed_move == wrong_shape
+          and app._quarantine_pending,
+          "persist=%r bytes=%r pending=%r" %
+          (saved_ok, after_failed_move, app._quarantine_pending))
+
     # A store written by a NEWER build keeps its unknown top-level keys
     # through this build's save — rebuilding the file from only the keys
     # this build knows silently deletes the rest (the accounting finding).
     _clear_asides()
-    newer = {"entries": [{"title": "kept", "tags": []}], "active": 0,
+    newer = {"entries": [{"title": "kept", "tags": [],
+                           "weather": {"kind": "rain", "temperature": 12},
+                           "sync_revision": 9}], "active": 0,
              "mood_index": {"2026-08-08": "clear"}}
     with open(journal.JOURNAL_FILE, "w") as fh:
         json.dump(newer, fh)
@@ -106,6 +179,11 @@ def damaged_store_check():
     check("a newer build's unknown top-level key survives the save",
           saved.get("mood_index") == newer["mood_index"],
           "saved keys: %r" % sorted(saved))
+    check("a newer build's per-entry metadata survives the save",
+          saved["entries"][0].get("weather")
+          == newer["entries"][0]["weather"]
+          and saved["entries"][0].get("sync_revision") == 9,
+          repr(saved["entries"][0]))
 
     # PASS-MUTANT: a shape-blind flush is the exact sabotage. Valid JSON of
     # the wrong shape sails through nbapp's parse check (preserve_damaged
@@ -141,7 +219,7 @@ def delete_undo_check():
     app.undo = UndoProbe()
     app._save_current = lambda: None
     app._refresh_list = lambda: None
-    app._load_active = lambda: None
+    app._load_active = lambda *args, **kwargs: None
     app._persist = lambda: True
     confirmations = []
     app._confirm = lambda *args: confirmations.append(args)
@@ -299,6 +377,8 @@ def export_offthread_check():
 
 
 if __name__ == "__main__":
+    localized_date_check()
+    authored_label_check()
     damaged_store_check()
     delete_undo_check()
     ledger()

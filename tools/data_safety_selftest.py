@@ -331,16 +331,24 @@ _ALLOWED = [
     # drawing.png destroyed a real drawing.png.new beside it, and a failed
     # save deleted it. Now drafts under nbapp.atomic_write_via's unguessable
     # temp, so the only file at risk is the one being saved.
-    ("illustrator.py", "write_to_png(draft)", "draft of nbapp.atomic_write_via"),
-    # Animation's PNG-frames export: each frame lands in a mkstemp file in the
-    # destination folder and is os.replace()d into its numbered name, so a
-    # cancelled or failed export never leaves a truncated frame. The frames are
-    # a derived product, regenerable from the project store.
-    ("animation.py", "write_to_png(tmp)", "temp + os.replace of the export"),
+    # The save now encodes the PNG to memory FIRST and writes those finished
+    # bytes into the draft, so the flatten can fail without having touched a
+    # file at all; `draft` is still nbapp.atomic_write_via's unguessable temp.
+    ("illustrator.py", 'open(draft, "wb")', "draft of nbapp.atomic_write_via"),
+    # Animation's PNG-frames export: every frame is written into a private
+    # mkdtemp STAGING directory beside the destination and the finished set is
+    # os.replace()d in together, so a cancelled export leaves no half-written
+    # frame AND no partial numbering in the person's folder. The frames are a
+    # derived product, regenerable from the project store.
+    ("animation.py", "write_to_png(target)", "staging dir + os.replace of the export"),
     # A fresh mkstemp scratch frame handed to ffmpeg, deleted after the export.
     ("video.py", "surf.write_to_png(p)", "mkstemp scratch frame, never $HOME"),
     ("shell.py", "/tmp/nb-ready", "runtime flag in /tmp"),
     ("media.py", "VIDEO_FULL_FLAG", "runtime flag in /tmp, holds this pid"),
+    ("media.py", 'open(tmp, "w")',
+     "atomic staging file for the /tmp fullscreen-owner flag"),
+    ("nbsynth.py", 'wave.open(take, "wb")',
+     "standalone engine self-check writes fixed /tmp scratch audio"),
     ("video.py", "_exp_err_file", "ffmpeg stderr scratch"),
     ("gbaemu.py", "_log_path()", "append-only emulator log"),
     ("accounting.py", "DAMAGED_FILE", "writes the quarantine copy itself"),
@@ -381,7 +389,8 @@ _ALLOWED = [
 # when a raw open() here was rewritten as pb.savev() and the check did not
 # notice the write had moved.  Each takes its destination path as the first
 # argument.
-_PATH_WRITERS = ("savev", "save_to_callbackv", "write_to_png")
+_PATH_WRITERS = ("savev", "save_to_callbackv", "write_to_png",
+                 "write_text", "write_bytes")
 
 
 def _buffer_names(tree):
@@ -415,6 +424,12 @@ def _write_calls(path):
         return [("SYNTAX", str(e))]
     src = open(path, encoding="utf-8").read().splitlines()
     buffers = _buffer_names(tree)
+    constants = {}
+    for item in ast.walk(tree):
+        if isinstance(item, ast.Assign) and len(item.targets) == 1 \
+                and isinstance(item.targets[0], ast.Name) \
+                and isinstance(item.value, ast.Constant):
+            constants[item.targets[0].id] = item.value.value
     hits = []
     for n in ast.walk(tree):
         if not isinstance(n, ast.Call):
@@ -426,14 +441,23 @@ def _write_calls(path):
             line = src[n.lineno - 1].strip() if n.lineno <= len(src) else ""
             hits.append((n.lineno, line))
             continue
-        if not (isinstance(n.func, ast.Name) and n.func.id == "open"):
+        is_builtin_open = isinstance(n.func, ast.Name) and n.func.id == "open"
+        is_path_open = isinstance(n.func, ast.Attribute) and n.func.attr == "open"
+        if not (is_builtin_open or is_path_open):
             continue
         mode = ""
-        if len(n.args) > 1 and isinstance(n.args[1], ast.Constant):
-            mode = str(n.args[1].value)
+        mode_arg = (n.args[1] if is_builtin_open and len(n.args) > 1 else
+                    n.args[0] if is_path_open and n.args else None)
+        if isinstance(mode_arg, ast.Constant):
+            mode = str(mode_arg.value)
+        elif isinstance(mode_arg, ast.Name) and mode_arg.id in constants:
+            mode = str(constants[mode_arg.id])
         for kw in n.keywords:
-            if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-                mode = str(kw.value.value)
+            if kw.arg == "mode":
+                if isinstance(kw.value, ast.Constant):
+                    mode = str(kw.value.value)
+                elif isinstance(kw.value, ast.Name) and kw.value.id in constants:
+                    mode = str(constants[kw.value.id])
         if "w" in mode or "a" in mode:
             line = src[n.lineno - 1].strip() if n.lineno <= len(src) else ""
             hits.append((n.lineno, line))
@@ -531,7 +555,6 @@ STORES = [
     ("widgetsettings", "widgets.json", "the desktop tile layout"),
     ("finder", "finder.json",       "Finder places and view settings"),
     ("settings", "settings.json",   "every system preference"),
-    ("terminal", "terminal.json",   "shell history"),
     ("calculator", "calculator.json", "the calculation tape"),
     ("g2048", "g2048.json",         "the game in progress and best score"),
     ("gbaemu", "gbaemu.json",       "the ROM library and save slots"),

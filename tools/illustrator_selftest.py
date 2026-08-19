@@ -933,6 +933,68 @@ if os.environ.get("DISPLAY"):
           "before=%r after=%r" % (_before, _after))
     _win.destroy()
 
+# ---- the brush outline must show what the stamp will actually paint -------
+# A stylus scales its tip by pressure, and a footprint is anchored at -(n//2),
+# so an outline drawn from the CHOSEN size while the stamp paints the PRESSED
+# size is not merely the wrong width — its origin moves too. Measured before
+# the fix: a size-24 brush at 0.15 pressure outlined ten image pixels up and
+# left of the marks the pen was leaving, which at zoom 8 is eighty screen
+# pixels of daylight between the cursor and its own paint.
+if True:
+    _pw = illustrator.Illustrator()
+    _pw.tool = "brush"
+    _pw.size = 24
+    _pw._cursor = (30, 30)
+
+    class _PenEv:
+        """One stylus sample: a PEN source carrying a pressure axis."""
+
+        def __init__(self, pressure):
+            self.x = self.y = 0.0
+            self.button, self.state = 1, 0
+            self._p = pressure
+
+        def get_source_device(self):
+            class _D:
+                @staticmethod
+                def get_source():
+                    return Gdk.InputSource.PEN
+            return _D()
+
+        def get_axis(self, use):
+            if use == Gdk.AxisUse.PRESSURE:
+                return True, self._p
+            return False, None
+
+    def _stamp_box(size):
+        """The box the stamp would cover, from the runs the stamp itself uses."""
+        runs = illustrator.brush_runs(size, _pw._brush_shape())
+        dy0 = min(r[0] for r in runs)
+        dy1 = max(r[0] for r in runs)
+        dx0 = min(r[1] for r in runs)
+        dx1 = max(r[2] for r in runs)
+        return (30 + dx0, 30 + dy0, dx1 - dx0 + 1, dy1 - dy0 + 1)
+
+    check("hovering, the outline shows the brush as it is set",
+          _pw._cursor_rect() == _stamp_box(24), _pw._cursor_rect())
+    _pw._drawing = True
+    _seen = []
+    for _pressure in (1.0, 0.5, 0.2, 0.05):
+        _pw._pen_last = _pw._pen(_PenEv(_pressure))
+        _eff = _pw._pen_last[0]
+        _seen.append(_eff)
+        check("at pressure %.2f the outline is exactly the painted footprint"
+              % _pressure,
+              _pw._cursor_rect() == _stamp_box(_eff),
+              "outline=%s stamp=%s" % (_pw._cursor_rect(), _stamp_box(_eff)))
+    # ...and the test is not vacuously comparing one size to itself.
+    check("the swept pressures really do change the painted width",
+          len(set(_seen)) > 1, _seen)
+    _pw._drawing = False
+    check("released, the outline returns to the chosen brush",
+          _pw._cursor_rect() == _stamp_box(24), _pw._cursor_rect())
+    _pw.destroy()
+
 print("")
 print("%d checks, %d passed, %d FAILED"
       % (CHECKS[0], CHECKS[0] - len(FAILS), len(FAILS)))

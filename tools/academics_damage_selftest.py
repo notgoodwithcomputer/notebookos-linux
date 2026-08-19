@@ -147,7 +147,11 @@ if len(sys.argv) < 2:
         line = (r.stdout or "").strip().splitlines()
         line = line[-1] if line else "(no output)"
         print(line)
-        ok = ok and not line.startswith("FAIL")
+        case_ok = r.returncode == 0 and line.startswith("PASS")
+        if not case_ok and r.stderr:
+            detail = r.stderr.strip().splitlines()[-1]
+            print("      child failed: " + detail)
+        ok = ok and case_ok
     print("\nRESULT: " + ("ALL PASS" if ok else "SOME FAILED"))
     raise SystemExit(0 if ok else 1)
 

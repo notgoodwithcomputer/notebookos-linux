@@ -24,7 +24,7 @@ APP_ICONS = {
     "calculator", "accounting", "bills", "contacts", "messages", "g2048",
     "tetris", "gamepad", "mappin", "globe", "cartridge", "illustrator",
     "sequencer", "composer", "video", "media", "music", "packages", "sys",
-    "terminal", "sysmon", "installer", "gbasdk", "usbwriter",
+    "sysmon", "installer", "gbasdk", "usbwriter",
 }
 
 
@@ -200,6 +200,10 @@ def main():
     )
     if not all(mutants): return 1
     print("PASS nbicons_selftest")
+    # Terminal verdict for the release runner: it will not read success into a
+    # zero exit with no recognised report (a suite that dies half way also
+    # prints PASS lines). See tools/run_all_gates.py SUCCESSWORD.
+    print("RESULT: ALL PASS")
     return 0
 
 

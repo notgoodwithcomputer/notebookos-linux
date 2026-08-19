@@ -404,11 +404,20 @@ check("pixel and graph coordinates round-trip exactly",
 
 
 class _Entry(object):
+    """A stand-in for the Table Start / Table Step field.
+
+    It grew set_text when the app started PUTTING THE LIVE VALUE BACK after
+    refusing what was typed: left as typed, the field read "0" or "abc" over a
+    table plainly stepping by 1, and contradicted itself in silence."""
+
     def __init__(self, text):
         self._text = text
 
     def get_text(self):
         return self._text
+
+    def set_text(self, text):
+        self._text = text
 
 
 for typed, keep in (("2", 2.0), ("-1", -1.0), ("0.25", 0.25)):
@@ -419,9 +428,13 @@ for typed, keep in (("2", 2.0), ("-1", -1.0), ("0.25", 0.25)):
 
 for typed in ("0", "nan", "inf", "-inf", "1e400", "abc", ""):
     app.tbl_step = 7.0
-    app._table_setting(_Entry(typed), "tbl_step")
+    field = _Entry(typed)
+    app._table_setting(field, "tbl_step")
     check("a Table Step of %r leaves the old one alone" % typed,
           app.tbl_step == 7.0, app.tbl_step)
+    check("...and the field says so, not %r" % typed,
+          field.get_text() == calculator.format_number(7.0),
+          field.get_text())
 
 check("a stored Table Step of zero is not loaded",
       calculator.sanitize_state({"tbl_step": 0.0})["tbl_step"] == 1.0,

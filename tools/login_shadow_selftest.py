@@ -284,9 +284,7 @@ def run_matrix(login):
 
 
 def run_unreadable(login):
-    """A shadow the process cannot read is 'nothing to ask for', never a
-    prompt: login.py runs as root today, but a build that ever stopped doing so
-    must fail open rather than strand somebody."""
+    """Boot may fail open, but an established desktop lock must fail closed."""
     print("\n-- unreadable / unopenable shadow")
     with _CryptFlavour(FLAVOURS[0][1]):
         p = _write("shadow", "root:%s:19000::::::\n" % H6, 0o000)
@@ -307,6 +305,17 @@ def run_unreadable(login):
         login.SHADOW = os.path.join(TMP, "nope", "deeper", "shadow")
         check(login.has_password("root") is False,
               "shadow under a missing directory: has_password must be False")
+        check(login._password_state("root") == "error",
+              "an unreadable shadow is distinguished from passwordless state")
+        check(login._may_skip_login("root", lock=False) is True,
+              "boot still avoids an impossible password prompt")
+        check(login._may_skip_login("root", lock=True) is False,
+              "a desktop lock never opens because shadow became unreadable")
+
+        login.SHADOW = _write("locked-shadow", "root:*:19000::::::\n")
+        check(login._password_state("root") == "none"
+              and login._may_skip_login("root", lock=True) is True,
+              "a positively locked/passwordless account remains passwordless")
 
 
 def run_desktop_user(login):

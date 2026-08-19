@@ -3,8 +3,13 @@
 import copy
 import json
 import os
+import sys
 import tempfile
 from datetime import date
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                                "opt/notebook/de"))
 
 HOME = tempfile.mkdtemp(prefix="contacts-adversarial-")
 os.environ["NB_HOME"] = HOME
@@ -150,7 +155,7 @@ def damaged_store_and_undo_checks():
     app.editing = False
     app._pending_new = False
     app._deleted = None
-    app._save = lambda: None
+    app._save = lambda: True
     app._rebuild_list = lambda: None
     app._rebuild_detail = lambda: None
     app._flash = lambda _text: None
@@ -243,4 +248,5 @@ record_checks()
 damaged_store_and_undo_checks()
 debounce_window_checks()
 print("\n%d/%d checks passed" % (passed, passed + failed))
+print("RESULT: %s" % ("PASS" if not failed else "FAIL"))
 raise SystemExit(1 if failed else 0)

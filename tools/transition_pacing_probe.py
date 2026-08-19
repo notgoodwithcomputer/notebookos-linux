@@ -152,6 +152,62 @@ class ProbeWidget:
         self.text = value
 
 
+class ProbeCanvas(ProbeWidget):
+    """A cairo drawing surface: the allocation and device-scale calls a
+    self-rendering view (Maps) asks its widget for before it tweens."""
+    def get_allocated_width(self):
+        return 640
+
+    def get_allocated_height(self):
+        return 420
+
+    def get_scale_factor(self):
+        return 1
+
+
+class ProbeBox(ProbeWidget):
+    """A Gtk.Box-shaped holder: enough of the packing protocol for a container
+    replacement, which is all `nbtransitions.replace` and its `pack` callback
+    touch."""
+    def pack_start(self, child, *_args):
+        self.add(child)
+
+    def pack_end(self, child, *_args):
+        self.add(child)
+
+
+class ProbeDrawable(ProbeWidget):
+    """A widget a caller draws over through a `draw` handler it later
+    disconnects (nbpicker's arrival translates the body in its own draw)."""
+    def disconnect(self, _handler):
+        pass
+
+
+class ProbeSurface(ProbeWidget):
+    """One stage surface of a viewer: the visibility protocol a surface swap
+    exchanges while the stage itself is invisible."""
+    def __init__(self, visible=False):
+        ProbeWidget.__init__(self)
+        self.visible = bool(visible)
+
+    def set_visible(self, value):
+        self.visible = bool(value)
+
+
+class ProbeToplevel(ProbeWidget):
+    """A toplevel that can be MOVED. The splash lifts its own window rather
+    than fading a fullscreen surface, so position is the animated property."""
+    def __init__(self):
+        ProbeWidget.__init__(self)
+        self.moves = []
+
+    def get_position(self):
+        return (0, 0)
+
+    def move(self, x, y):
+        self.moves.append((int(x), int(y)))
+
+
 def drive_replace(token_ms):
     holder = ProbeWidget()
     holder.add(ProbeWidget())
@@ -275,6 +331,117 @@ def drive_2048(_token_ms):
     step(first)
 
 
+def drive_splash_lift(_token_ms):
+    """The boot handover's own half: `Splash._finish` arms the 180ms quit
+    deadline and then lifts the toplevel 32px on PAGE with DEPART.  The real
+    method is called, so what is measured is the code boot runs — including the
+    ordering that lets the handover happen whether or not the lift works.  The
+    desktop half of this entry is a different PROCESS and is not drivable from
+    anywhere in this harness."""
+    import splash
+    win = ProbeToplevel()
+    win._done = False
+    win._fraction = 0.0
+    win.bar = ProbeWidget()
+    splash.Splash._finish(win)
+    driver = nbmotion._DRIVERS.get(id(win))
+    step(driver.anims[0] if driver and driver.anims else None)
+
+
+def drive_picker_arrive(_token_ms):
+    """The picker's declared deviation from G3's grow-from-the-menu-item: the
+    dialog's own body settles 12px in on SURFACE_IN with ARRIVE.  `_arrive` IS
+    that motion end to end and takes only the body widget, so the app's method
+    runs untouched."""
+    import nbpicker
+    obj = SimpleNamespace()
+    nbpicker._Picker._arrive(obj, ProbeDrawable())
+    step(getattr(obj, "_arrival_motion", None))
+
+
+def drive_video_selection(_token_ms):
+    """Video's clip acknowledgement: the newly selected clip settles from 0.72
+    to full on SELECT.  ONE story cell and no lane cells, because the entry is
+    about the acknowledgement's pace and a fixture with n cells would drain n
+    identical runs and sum them into a false total."""
+    import video
+    cell = ProbeWidget()
+    obj = SimpleNamespace(_story_cells=[cell], _timeline_clip_cells={})
+    video.VideoEditor._animate_clip_selection(obj, 0)
+    driver = nbmotion._DRIVERS.get(id(cell))
+    step(driver.anims[0] if driver and driver.anims else None)
+
+
+def drive_maps_view(_token_ms):
+    """Maps tweens the RENDERER's viewport (cx/cy/scale) on PAGE with ARRIVE —
+    it is not a widget container.  The cached raster is pre-seeded to match the
+    starting scale so `_animate_view` takes its normal path and the measurement
+    is the tween, never a vector re-render."""
+    import maps
+    canvas = ProbeCanvas()
+    obj = SimpleNamespace(
+        pack=object(), canvas=canvas,
+        cx=10.0, cy=20.0, scale=1000.0,
+        _surface=object(), _surf_size=(canvas.get_allocated_width(),
+                                       canvas.get_allocated_height()),
+        _surf_scale=1000.0, _surf_dev=1, _surf_cx=10.0, _surf_cy=20.0,
+        _view_gen=0, _view_anim=None, _view_moving=False,
+        _render_surface=lambda *_a: None,
+        _invalidate=lambda: None, _save_cfg=lambda: None)
+    maps.Maps._animate_view(obj, 12.0, 22.0, 1400.0)
+    step(obj._view_anim)
+
+
+def drive_media_surface(_token_ms):
+    """Media's stage swap (empty -> image): the stage departs, the surfaces are
+    exchanged while it is invisible, and the new one arrives.  Both halves run
+    on the SAME stage Scalar — the arrival is started by the departure's
+    completion callback — so the second step drives it, exactly as the shared
+    `replace` primitive is driven above."""
+    import media
+    stage = ProbeWidget()
+    obj = SimpleNamespace(
+        _empty=ProbeSurface(True), _scroll=ProbeSurface(False),
+        _video=ProbeSurface(False), _notice=ProbeSurface(False),
+        _stage=stage, _surface_name="empty", _surface_gen=0,
+        _stage_full=False)
+    media.MediaViewer._show_surface(obj, "image")
+    first = getattr(stage, "_nbmotion_opacity", None)
+    step(first)
+    step(first)
+
+
+def drive_ebook_chapter(_token_ms):
+    """The e-book page/chapter turn: ONE container replacement of the document
+    column on PAGE.
+
+    The column and header BUILDERS are fixtured, and that is a deliberate
+    limit, not a shortcut: they construct real Gtk widgets, and a driver that
+    constructs a Gtk widget aborts this process outright on a machine with no
+    display (`Gtk-ERROR: Can't create a GtkStyleContext without a display
+    connection` is not catchable), so it would not degrade — it would take the
+    whole gate down.  Everything the entry is about still comes from the app:
+    `_epub_show_chapter`'s `to_top` gate, the holder it finds through the old
+    column's parent, the PAGE token and its pack callback."""
+    import ebook
+    holder = ProbeBox()
+    old = ProbeBox()
+    holder.add(old)
+    obj = SimpleNamespace(
+        _epub_col=old, _epub_pages=[(0, 0, None)], _page=0,
+        _epub_chapters=[[]],
+        _read_pt=ebook.EbookReader.READ_PT_DEFAULT,
+        READ_PT_DEFAULT=ebook.EbookReader.READ_PT_DEFAULT,
+        _epub_scroll=None, _scroll_top=lambda *_a: False,
+        _nav=SimpleNamespace(guard=lambda fn: fn),
+        _new_epub_column=ProbeBox,
+        _epub_chapter_header=lambda *_a, **_k: (ProbeWidget(), []))
+    ebook.EbookReader._epub_show_chapter(obj)
+    first = getattr(holder, "_nbmotion_opacity", None)
+    step(first)
+    step(first)
+
+
 DRIVERS = {
     "system.app-launch": drive_fade,
     "system.app-close": drive_fade_out,
@@ -296,16 +463,169 @@ DRIVERS = {
     "app.empty-populated": drive_replace,
     "app.zoom": drive_zoom,
     "content.2048": drive_2048,
+    "system.splash-desktop": drive_splash_lift,
+    "app.picker": drive_picker_arrive,
+    "content.video": drive_video_selection,
+    "content.maps": drive_maps_view,
+    "content.media": drive_media_surface,
+    "content.ebook": drive_ebook_chapter,
 }
 
 DRIVER_TOKEN = {"app.progress": "FEEDBACK",
-                "app.tab-section-change": "PAGE"}
+                "app.tab-section-change": "PAGE",
+                # The ONE motion bound to content.illustrator is the layer-row
+                # disclosure (illustrator.py's only two motion calls are
+                # nbtransitions.reveal at SURFACE_IN / SURFACE_OUT).  The
+                # entry's tokens come from G4's per-app row, `FEEDBACK /
+                # SELECT`, which covers the tool change and the reorder — and
+                # neither of those was built.  G3 tokens a row opening
+                # SURFACE_IN, so that is the token the driven primitive uses
+                # and the band it is answerable to.  Naming it here rather than
+                # in the entry keeps the inventory's declaration intact: the
+                # gap between what G4 asks for and what exists is real and is
+                # why the entry is still `partial`.
+                "content.illustrator": "SURFACE_IN"}
 
 
 CSS_IDS = {"app.inline-edit-begin-end", "app.toolbar-state", "app.any-toggle"}
 GTK_NATIVE_IDS = {"app.page-pane-switch", "app.list-insert", "app.list-remove"}
-CSS = ROOT / ("buildroot/board/notebookos/rootfs-overlay/usr/share/themes/"
-              "Papertone/gtk-3.0/gtk.css")
+#: App transitions a Gtk.Revealer owns, and the direction the app opens them
+#: in.  There is no driver to write for these, and that is a fact about the
+#: code rather than about this harness: the app's only motion call is
+#: `nbtransitions.reveal`, GTK then animates the child in C, and no nbmotion
+#: Scalar — so no trace — exists at any point in the transition.
+#:
+#: What can still be read is the token the APP declares at its own marked call
+#: site, resolved through the shared helper into the duration GTK is handed.
+#: Re-typing the token here instead (what app.list-insert does, correctly —
+#: that entry BINDS to nbtransitions.reveal, so the helper is its
+#: implementation) would make these two rows unable to fail for any change to
+#: finder.py or illustrator.py, which is a decoration, not a check.
+REVEALER_APP_IDS = {"finder.sidebar-reveal": nbtransitions.SLIDE_DOWN,
+                    "content.illustrator": nbtransitions.SLIDE_DOWN}
+
+
+def marker_call_duration(entry, attr="reveal"):
+    """The duration the app declares at the `nbmotion-inventory` marker.
+
+    Read from the module's AST, not executed, and the reason is a hard one:
+    both call sites sit inside methods that construct real Gtk widgets, and
+    constructing a Gtk widget with no display connection ABORTS the process
+    (`Gtk-ERROR: Can't create a GtkStyleContext without a display connection`
+    is not a Python exception and cannot be caught), so an executing driver
+    would not degrade on a headless machine — it would take the whole gate
+    down with it.
+
+    The module is resolved under DE, so `NB_DE_DIR` red-proofs a sabotaged copy
+    exactly as it does for a driven transition.  Only a duration token or an
+    integer literal is accepted: anything else is reported as an unreadable
+    configuration rather than quietly passing.
+    """
+    import ast
+    module = DE / Path(entry["binding"]["module"]).name
+    source = module.read_text(encoding="utf-8")
+    needle = "nbmotion-inventory: %s" % entry["id"]
+    lines = source.splitlines()
+    marked = [i + 1 for i, line in enumerate(lines)
+              if needle in line and line.lstrip().startswith("#")]
+    if len(marked) != 1:
+        raise ValueError("%s carries %d '%s' markers, expected 1"
+                         % (module.name, len(marked), needle))
+    calls = [node for node in ast.walk(ast.parse(source, filename=str(module)))
+             if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute)
+             and node.func.attr == attr
+             and isinstance(node.func.value, ast.Name)
+             and node.func.value.id == "nbtransitions"
+             and node.lineno > marked[0]]
+    if not calls:
+        raise ValueError("no nbtransitions.%s call after the %s marker in %s"
+                         % (attr, entry["id"], module.name))
+    call = min(calls, key=lambda node: node.lineno)
+    declared = [kw.value for kw in call.keywords if kw.arg == "duration"]
+    if len(declared) != 1:
+        raise ValueError("%s:%d passes no single duration= to %s"
+                         % (module.name, call.lineno, attr))
+    value = declared[0]
+    if isinstance(value, ast.Constant) and isinstance(value.value, int):
+        return int(value.value), "%s:%d" % (module.name, call.lineno)
+    if (isinstance(value, ast.Attribute)
+            and isinstance(value.value, ast.Name)
+            and value.value.id in ("nbtransitions", "nbmotion")
+            and value.attr in TOKEN_MS):
+        return TOKEN_MS[value.attr], "%s:%d" % (module.name, call.lineno)
+    raise ValueError("%s:%d duration is neither a token nor a literal"
+                     % (module.name, call.lineno))
+#: The shipped theme.  `NB_THEME_CSS` overrides it for the same reason
+#: `NB_DE_DIR` overrides the runtime modules: a theme-side check that cannot be
+#: pointed at a sabotaged copy cannot be red-proved, and the alternative --
+#: editing the shipped theme in place during a proof -- is how a mutation gets
+#: left behind in a release tree.
+CSS = Path(os.environ.get(
+    "NB_THEME_CSS",
+    ROOT / ("buildroot/board/notebookos/rootfs-overlay/usr/share/themes/"
+            "Papertone/gtk-3.0/gtk.css"))).resolve()
+
+#: Transitions the THEME performs, checked through GTK's own CSS parser against
+#: the selector the entry BINDS to.  Keyed by id rather than inferred, so the
+#: pairing is readable here; the selector itself is read from the entry.
+CSS_SELECTOR_IDS = {"finder.selection-change"}
+
+
+def css_selector_duration(entry):
+    """The transition duration GTK itself resolves for this entry's selector.
+
+    NOT a regex over the theme source.  The file is handed to a
+    `Gtk.CssProvider` and the rule is read back out of the PARSED form, so a
+    declaration GTK rejects, drops, or never associates with this selector
+    cannot pass: the check sees what the toolkit sees.  Verified
+    display-independent before being relied on here — `load_from_path` and
+    `to_string` both work with DISPLAY unset, where constructing so much as a
+    Gtk.Box aborts the process outright.
+
+    What it does NOT establish is that any frame was rendered, and for a
+    TreeView specifically it does not establish that a per-ROW selection change
+    eases: rows are painted by cell renderers through a `gtk_style_context_save`
+    context inside the TreeView's draw, not by a state change on the node this
+    rule matches.  That distinction is the entry's note, and it is why this
+    returns a `configured-verified` row and never a `measured` one.
+    """
+    from gi.repository import Gtk
+    selector = entry["binding"]["symbol_or_marker"].strip().rstrip(",").strip()
+    provider = Gtk.CssProvider()
+    errors = []
+    provider.connect("parsing-error",
+                     lambda _p, _sec, err: errors.append(str(err)))
+    provider.load_from_path(str(CSS))
+    if errors:
+        raise ValueError("GTK reported %d parse error(s) in %s: %s"
+                         % (len(errors), CSS.name, errors[0]))
+    found = []
+    for block in provider.to_string().split("}"):
+        if "{" not in block:
+            continue
+        head, body = block.split("{", 1)
+        if selector not in [s.strip() for s in head.replace("\n", " ").split(",")]:
+            continue
+        for line in body.splitlines():
+            line = line.strip().rstrip(";")
+            if line.startswith("transition-duration:"):
+                found.append(line.split(":", 1)[1].strip())
+    if not found:
+        raise ValueError(
+            "GTK's parse of %s carries no transition-duration for %r — the "
+            "selector is not in a rule that declares one"
+            % (CSS.name, selector))
+    # Last one wins, which is what the cascade does with two matching rules.
+    text = found[-1]
+    if text.endswith("ms"):
+        ms = float(text[:-2])
+    elif text.endswith("s"):
+        ms = float(text[:-1]) * 1000.0
+    else:
+        raise ValueError("unparsable transition-duration %r for %r"
+                         % (text, selector))
+    return ms, "%s rule in GTK's parse of %s" % (selector, CSS.name)
 
 
 def configured_measure(entry):
@@ -315,12 +635,14 @@ def configured_measure(entry):
     prove GTK rendered frames, their cadence, or elapsed wall-clock pacing.
     """
     ident = entry["id"]
-    if ident not in GTK_NATIVE_IDS and ident not in CSS_IDS:
+    if (ident not in GTK_NATIVE_IDS and ident not in CSS_IDS
+            and ident not in REVEALER_APP_IDS
+            and ident not in CSS_SELECTOR_IDS):
         return None
-    token_const = expected_token(entry)
+    token_const = DRIVER_TOKEN.get(ident) or expected_token(entry)
     token = TARGET[token_const]
     lo, hi = nbmotion.DURATION_BANDS[token]
-    if ident in GTK_NATIVE_IDS:
+    if ident in GTK_NATIVE_IDS or ident in REVEALER_APP_IDS:
         class TransitionRecorder:
             """The GTK setter protocol, without constructing a display widget."""
             def set_transition_duration(self, value): self.duration = value
@@ -329,11 +651,16 @@ def configured_measure(entry):
             def set_visible_child_name(self, value): self.child = value
             def set_reveal_child(self, value): self.revealed = value
 
-        if ident == "app.page-pane-switch":
+        if ident in REVEALER_APP_IDS:
+            widget = TransitionRecorder()
+            declared, site = marker_call_duration(entry)
+            returned = nbtransitions.reveal(
+                widget, True, direction=REVEALER_APP_IDS[ident],
+                duration=declared)
+        elif ident == "app.page-pane-switch":
             widget = TransitionRecorder()
             returned = nbtransitions.switch_page(
                 widget, "b", nbtransitions.FORWARD, TOKEN_MS[token_const])
-            configured = widget.get_transition_duration()
         else:
             widget = TransitionRecorder()
             opening = ident == "app.list-insert"
@@ -342,16 +669,29 @@ def configured_measure(entry):
             _kind, returned = nbtransitions.revealer_plan(
                 direction, TOKEN_MS[token_const])
             widget.set_transition_duration(returned)
-            configured = widget.get_transition_duration()
+        configured = widget.get_transition_duration()
         source = "shared-helper setter capture"
+        if ident in REVEALER_APP_IDS:
+            source = "app call-site token, resolved through the shared helper"
         if int(returned) != int(configured):
             reason = "helper returned %sms but GTK retained %sms" % (
                 returned, configured)
             verdict = "fail"
+        elif ident in REVEALER_APP_IDS:
+            reason = ("%s declares an in-band token and the helper hands GTK "
+                      "that duration; does not prove GTK rendered frames, "
+                      "their cadence, or elapsed time" % site)
+            verdict = "pass"
         else:
             reason = ("helper handed its owner an in-band duration; does not "
                       "prove GTK retained it or rendered frames/cadence/time")
             verdict = "pass"
+    elif ident in CSS_SELECTOR_IDS:
+        configured, source = css_selector_duration(entry)
+        reason = ("GTK's own parser keeps this duration on the bound selector "
+                  "and it is in band; does not prove a frame was rendered, nor "
+                  "that a per-row selection change eases (see the entry note)")
+        verdict = "pass"
     elif ident in CSS_IDS:
         import re
         text = CSS.read_text(encoding="utf-8")
@@ -403,11 +743,28 @@ def trace_stats(traces):
     return frames, longest, total, run_tokens
 
 
+#: Motion with no discrete run to time — each reason names the mechanism that
+#: makes it so, and each is checkable against the module named in the entry.
+CONTINUOUS_REASONS = {
+    "content.sequencer":
+        "linear playhead follows the audio/timer continuously; it creates no "
+        "nbmotion run",
+    "system.boot-session":
+        "indeterminate progress, not a transition: splash._tick_bar is a 70ms "
+        "GLib timer easing the fill toward a 0.9 CAP it deliberately never "
+        "passes ('+= (0.9 - self._fraction) * 0.08 + 0.003'), and it stops the "
+        "timer on reaching it. It starts no nbmotion run, and it has no "
+        "end-to-end length to band: it runs for however long the session takes "
+        "to come up, bounded only by the 30s failsafe. That is why the entry "
+        "carries `linear` and no duration token — one cannot be assigned "
+        "without inventing an end for it",
+}
+
 def unavailable(entry):
     ident = entry["id"]
-    if ident == "content.sequencer":
-        return {"status": "continuous-untraced", "reason":
-                "linear playhead follows the audio/timer continuously; it creates no nbmotion run"}
+    if ident in CONTINUOUS_REASONS:
+        return {"status": "continuous-untraced",
+                "reason": CONTINUOUS_REASONS[ident]}
     if ident in CSS_IDS:
         return {"status": "not-driven", "reason":
                 "CSS transition is driven by GTK and emits no nbmotion trace"}
@@ -420,6 +777,27 @@ def unavailable(entry):
                 "inventory declares linear motion without a duration token/band"}
     return {"status": "not-driven", "reason":
             "no transition-specific driver has been implemented yet"}
+
+
+def answered(result):
+    """Is this row a real answer about pacing, or is it a gap?
+
+    Mirrors `tools/motion_inventory_check.PACING_ANSWERED` — and carries the
+    verdict check that gate turned out to need as well.  A `configured-verified`
+    row whose configured duration is OUTSIDE its band is a FAILURE and must
+    never read as an answer; that hole is the reason an out-of-band reveal could
+    sit in the ledger under a green run.  `measured` is listed for completeness
+    only: a failing measured verdict turns the run red before this is consulted.
+
+    `not-driven`, `undrivable-headless` and `configuration-unreadable` are the
+    three that keep coverage incomplete, and they are the only three.
+    """
+    status = result["status"]
+    if status == "continuous-untraced":
+        return True
+    if status in ("measured", "configured-verified"):
+        return result.get("verdict") == "pass"
+    return False
 
 
 def measure(entry):
@@ -527,26 +905,59 @@ def main():
                 "configuration-unreadable", "undrivable-headless", "not-driven")
     counts = {s: sum(r["status"] == s for r in results.values())
               for s in statuses}
+    # ANY failing verdict, not only a measured one.  Restricted to `measured`,
+    # the eight `configured-verified` rows could print FAIL in the table above
+    # while this line still said the run was green — and a check that cannot
+    # turn the gate red is a decoration.  Red-proved by pointing NB_DE_DIR at a
+    # copy of illustrator.py whose reveal asks for 20ms.
     failed = [ident for ident, r in results.items()
-              if r["status"] == "measured" and r["verdict"] == "fail"]
+              if r.get("verdict") == "fail"]
+    unanswered = [entry["id"] for entry in eligible
+                  if not answered(results[entry["id"]])]
     print("\nCOVERAGE: " + " ".join("%s=%d" % (s, counts[s]) for s in statuses)
           + " eligible=%d" % len(eligible))
+    # Say what the coverage is MADE OF on its own line, because the verdict
+    # sentence below cannot: only 24 of these rows carry a real frame trace, and
+    # a reader who is told "green" is owed the composition without having to
+    # count the table.
+    print("ANSWERED: %d of %d — %d measured from a frame trace, %d "
+          "configured-verified, %d continuous-untraced; %d unanswered"
+          % (len(eligible) - len(unanswered), len(eligible), counts["measured"],
+             counts["configured-verified"], counts["continuous-untraced"],
+             len(unanswered)))
     if args.apply:
         for entry in eligible:
             entry["pacing"] = results[entry["id"]]
-        # Preserve the inventory's established one-space indentation so an
-        # apply diff contains measurements, not whole-file formatting churn.
-        args.inventory.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
+        # Preserve the inventory's established formatting so an apply diff
+        # contains MEASUREMENTS and nothing else.  This wrote indent=1 ASCII
+        # against a file stored two-space and UTF-8, so every apply rewrote all
+        # 1174 lines and buried the numbers it came to record -- the comment
+        # said "not whole-file formatting churn" while the code produced
+        # exactly that.
+        args.inventory.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
         print("WROTE: %s" % args.inventory)
     else:
         print("REPORT ONLY: inventory unchanged (use --apply to write)")
     if failed:
-        print("RESULT: RED — measured pacing failures: %s" % ", ".join(failed))
+        print("RESULT: RED — pacing failures: %s" % ", ".join(failed))
         return 1
-    if counts["measured"] != len(eligible):
+    if unanswered:
+        # Reported, not failed (exit 0), which is the contract run_all_gates
+        # records for this gate — but the sentence is not the accepted green
+        # one, so the aggregate still shows the gap rather than swallowing it.
         print("RESULT: MEASURED VERDICTS GREEN; COVERAGE INCOMPLETE — "
-              "%d of %d transitions measured" % (counts["measured"], len(eligible)))
+              "%d of %d transitions unanswered: %s"
+              % (len(unanswered), len(eligible), ", ".join(unanswered)))
     else:
+        # The wording is run_all_gates' accepted grammar for this gate and is
+        # not free text; the ANSWERED line above carries the composition. Every
+        # eligible transition has a pacing answer in its band, and the ten that
+        # a Gtk.Revealer, a Gtk.Stack, the theme or a continuous quantity owns
+        # cannot have a frame trace at all — no driver can be written for them,
+        # so requiring one here would have made this sentence unreachable
+        # forever rather than demanding.
         print("RESULT: GREEN — every eligible transition measured in band")
     return 0
 

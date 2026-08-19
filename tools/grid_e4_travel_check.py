@@ -114,6 +114,30 @@ def enclosing_functions(tree):
     return owner
 
 
+def forwarded_travel_helpers(tree):
+    """Map a one-hop drawing helper to the parameters it forwards as x/y."""
+    found = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = [a.arg for a in fn.args.args]
+        if params and params[0] in ("self", "cls"):
+            params = params[1:]
+        for call in ast.walk(fn):
+            if not (isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)):
+                continue
+            slots = TRAVEL_CALLS.get(call.func.attr)
+            if slots is None or len(call.args) <= max(slots):
+                continue
+            x, y = call.args[slots[0]], call.args[slots[1]]
+            if (isinstance(x, ast.Name) and isinstance(y, ast.Name)
+                    and x.id in params and y.id in params):
+                found.setdefault(fn.name, []).append(
+                    (params.index(x.id), params.index(y.id), call.func.attr))
+    return found
+
+
 def main():
     global checks
     try:
@@ -146,12 +170,31 @@ def main():
             fails.append(name)
             continue
         owner = enclosing_functions(tree)
+        helpers = forwarded_travel_helpers(tree)
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)):
+            if not isinstance(node, ast.Call):
                 continue
-            slots = TRAVEL_CALLS.get(node.func.attr)
+            callee = (node.func.attr if isinstance(node.func, ast.Attribute)
+                      else node.func.id if isinstance(node.func, ast.Name)
+                      else "")
+            slots = (TRAVEL_CALLS.get(callee) if isinstance(
+                node.func, ast.Attribute) else None)
             if slots is None:
+                forwarded = helpers.get(callee, [])
+                for xi, yi, primitive in forwarded:
+                    if len(node.args) <= max(xi, yi):
+                        continue
+                    checks += 1
+                    x, y = node.args[xi], node.args[yi]
+                    if (not is_zero(x) and not is_zero(y)
+                            and (reads_state(x) or reads_state(y))):
+                        fn = owner.get(node, None)
+                        fails.append(
+                            "%s:%d %s() via %s() in %s: travel vector moves "
+                            "BOTH axes (dx=%s, dy=%s) — §E2 forbids diagonal "
+                            "travel" % (name, node.lineno, primitive, callee,
+                                        fn or "<module>", ast.unparse(x)[:28],
+                                        ast.unparse(y)[:28]))
                 continue
             xi, yi = slots
             if len(node.args) <= max(xi, yi):
@@ -174,7 +217,7 @@ def main():
                 fails.append(
                     "%s:%d %s() in %s: travel vector moves BOTH axes "
                     "(dx=%s, dy=%s) — §E2 forbids diagonal travel"
-                    % (name, node.lineno, node.func.attr, fn or "<module>",
+                    % (name, node.lineno, callee, fn or "<module>",
                        ast.unparse(x)[:28], ast.unparse(y)[:28]))
 
     for f in fails:
@@ -182,6 +225,8 @@ def main():
     print("\n%s  §E4 check 5 (no diagonal travel): %d vector(s) examined, "
           "%d exemption(s) declared"
           % ("FAIL" if fails else "PASS", checks, len(EXEMPT)))
+    if not fails:
+        print("RESULT: PASS")
     return 1 if fails else 0
 
 

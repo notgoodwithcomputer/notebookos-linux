@@ -78,4 +78,5 @@ check("no empty literal is emitted", _split_spec("%s"), [(SPEC, "%s")])
 check("an empty string yields nothing", _split_spec(""), [])
 
 print("\n%d/%d checks passed" % (passed, passed + failed))
+print("RESULT: %s" % ("PASS" if not failed else "FAILED"))
 raise SystemExit(1 if failed else 0)

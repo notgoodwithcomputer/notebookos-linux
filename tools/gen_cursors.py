@@ -97,6 +97,18 @@ def shape_text(cr, s):
     return "fill"
 
 
+def shape_vertical_text(cr, s):
+    """Horizontal I-beam used when selecting vertically set text."""
+    w = 0.16 * s
+    h = 0.30 * s
+    cx, cy = 0.5 * s, 0.5 * s
+    t = 0.055 * s
+    cr.rectangle(cx - h, cy - t, 2 * h, 2 * t)
+    cr.rectangle(cx - h, cy - w, 2 * t, 2 * w)
+    cr.rectangle(cx + h - 2 * t, cy - w, 2 * t, 2 * w)
+    return "fill"
+
+
 def shape_pointer(cr, s):
     """The clickable pointer. A RING rather than a disc: same silhouette as the
     default so the pointer does not appear to change size, but visibly open, so
@@ -194,6 +206,78 @@ def shape_wait(cr, s):
     return "fill"
 
 
+def shape_progress(cr, s):
+    """Background activity while interaction remains available.
+
+    Keep the normal solid pointer and add a smaller incomplete activity disc at
+    its lower-right edge.  This must remain visually distinct from ``wait``:
+    progress promises that the interface is still usable, while wait means it
+    is blocked.
+    """
+    _disc(cr, 0.39 * s, 0.39 * s, 0.17 * s)
+    r = 0.12 * s
+    cx, cy = 0.72 * s, 0.72 * s
+    cr.move_to(cx, cy)
+    cr.arc(cx, cy, r, -math.pi / 2 + 0.9, -math.pi / 2 + 2 * math.pi)
+    cr.close_path()
+    return "fill"
+
+
+def shape_copy(cr, s):
+    """Copy drag: the default ink disc plus a small positive mark."""
+    _disc(cr, 0.43 * s, 0.43 * s, 0.19 * s)
+    cx, cy = 0.72 * s, 0.72 * s
+    t, arm = 0.055 * s, 0.16 * s
+    cr.rectangle(cx - t, cy - arm, 2 * t, 2 * arm)
+    cr.rectangle(cx - arm, cy - t, 2 * arm, 2 * t)
+    return "fill"
+
+
+def shape_context_menu(cr, s):
+    """Clickable pointer with a compact three-line menu marker."""
+    _disc(cr, 0.34 * s, 0.50 * s, 0.15 * s)
+    for y, width in ((0.34, 0.25), (0.50, 0.31), (0.66, 0.22)):
+        cr.rectangle(0.57 * s, (y - 0.035) * s, width * s, 0.07 * s)
+    return "fill"
+
+
+def shape_help(cr, s):
+    """Open clickable ring with a help dot, without importing a hand glyph."""
+    r = 0.20 * s
+    _disc(cr, 0.42 * s, 0.42 * s, r)
+    _disc(cr, 0.42 * s, 0.42 * s, r * 0.48)
+    _disc(cr, 0.73 * s, 0.73 * s, 0.07 * s)
+    return "fill-eo"
+
+
+def _shape_zoom(cr, s, minus=False):
+    cx, cy, r = 0.42 * s, 0.42 * s, 0.20 * s
+    _disc(cr, cx, cy, r)
+    _disc(cr, cx, cy, r * 0.55)
+    # Handle, plus the sign inside the lens.
+    cr.move_to(0.56 * s, 0.56 * s)
+    cr.line_to(0.82 * s, 0.82 * s)
+    cr.line_to(0.73 * s, 0.87 * s)
+    cr.line_to(0.51 * s, 0.61 * s)
+    cr.close_path()
+    cr.rectangle(0.31 * s, 0.385 * s, 0.22 * s, 0.07 * s)
+    if not minus:
+        # Do not overlap the horizontal bar: this shape uses even-odd filling
+        # for the lens, so overlapping rectangles would punch a white square
+        # out of the exact centre of the plus sign.
+        cr.rectangle(0.385 * s, 0.31 * s, 0.07 * s, 0.075 * s)
+        cr.rectangle(0.385 * s, 0.455 * s, 0.07 * s, 0.075 * s)
+    return "fill-eo"
+
+
+def shape_zoom_in(cr, s):
+    return _shape_zoom(cr, s)
+
+
+def shape_zoom_out(cr, s):
+    return _shape_zoom(cr, s, minus=True)
+
+
 def shape_no_drop(cr, s):
     """Not allowed: ring plus a bar. Reads at 24px, which a diagonal slash of
     the same weight does not."""
@@ -212,9 +296,15 @@ def shape_no_drop(cr, s):
 # names (text, ew-resize) are provided, because GTK apps use both.
 CURSORS = {
     "left_ptr": (shape_default, [
-        "default", "arrow", "top_left_arrow", "left_ptr_watch"]),
+        "default", "arrow", "top_left_arrow"]),
     "xterm": (shape_text, ["text", "ibeam"]),
-    "hand2": (shape_pointer, ["hand1", "hand", "pointer", "pointing_hand"]),
+    "vertical-text": (shape_vertical_text, []),
+    "hand2": (shape_pointer, ["hand1", "hand", "pointer", "pointing_hand",
+                              "alias", "link", "dnd-link"]),
+    "context-menu": (shape_context_menu, []),
+    "help": (shape_help, ["question_arrow", "whats_this"]),
+    "zoom-in": (shape_zoom_in, []),
+    "zoom-out": (shape_zoom_out, []),
     "sb_h_double_arrow": (shape_ew, [
         "ew-resize", "h_double_arrow", "col-resize", "split_h",
         "left_side", "right_side", "e-resize", "w-resize"]),
@@ -227,9 +317,12 @@ CURSORS = {
     "bottom_left_corner": (shape_nesw, [
         "nesw-resize", "top_right_corner", "sw-resize", "ne-resize",
         "size_bdiag"]),
-    "fleur": (shape_move, ["move", "all-scroll", "size_all", "grabbing", "grab"]),
+    "fleur": (shape_move, ["move", "all-scroll", "size_all", "grabbing", "grab",
+                           "dnd-move"]),
     "crosshair": (shape_crosshair, ["cross", "tcross", "cell", "crosshair2"]),
-    "watch": (shape_wait, ["wait", "progress"]),
+    "watch": (shape_wait, ["wait", "left_ptr_watch"]),
+    "progress": (shape_progress, []),
+    "copy": (shape_copy, ["dnd-copy"]),
     "crossed_circle": (shape_no_drop, [
         "not-allowed", "no-drop", "forbidden", "dnd-none"]),
 }
@@ -289,6 +382,11 @@ def build_cursor(name, shape_fn, outdir, workdir):
     with open(cfg, "w") as fh:
         fh.write("\n".join(cfg_lines) + "\n")
     out = os.path.join(outdir, name)
+    # A name may have been an alias in an older version of the theme. Remove
+    # that stale symlink before promoting it to a real cursor; otherwise
+    # xcursorgen follows the link and overwrites the old target instead.
+    if os.path.lexists(out):
+        os.unlink(out)
     subprocess.run(["xcursorgen", cfg, out], check=True,
                    capture_output=True, text=True)
     return out

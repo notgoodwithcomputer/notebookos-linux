@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sys
+import ast
 import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -169,19 +170,33 @@ CONCEPTS = {
 
 
 def norm(s):
-    return unicodedata.normalize("NFD", s.lower())
+    return "".join(ch for ch in unicodedata.normalize("NFD", s.lower())
+                   if unicodedata.category(ch) != "Mn")
 
 
 def owned_by(key, src, apps):
     """True when this key appears as a quoted literal ONLY in `apps`."""
-    # ensure_ascii=False matters: the default escapes non-ASCII, so a key
-    # holding an ellipsis, an em dash or the menu arrow was compared against
-    # "\u2026" and never matched anything. Every concept was quietly checking
-    # fewer keys than it claimed.
-    pats = [json.dumps(key, ensure_ascii=False),
-            "'" + key.replace("'", "\\'") + "'"]
-    found = {a for a, t in src.items() if any(p in t for p in pats)}
+    found = {a for a, literals in src.items() if key in literals}
     return bool(found) and found <= apps
+
+
+def source_literals(text):
+    """Runtime string literals, excluding comments and declaration docstrings."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return set()
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                    and isinstance(first.value.value, str):
+                docs.add(id(first.value))
+    return {node.value for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and id(node) not in docs}
 
 
 def survey(english, src, pattern, apps):
@@ -204,9 +219,7 @@ def survey(english, src, pattern, apps):
         return 1
     owners = {}
     for k in keys:
-        held = {a for a, t in src.items()
-                if json.dumps(k, ensure_ascii=False) in t
-                or "'" + k.replace("'", "\\'") + "'" in t}
+        held = {a for a, literals in src.items() if k in literals}
         owners[k] = sorted(held) or ["(not found as a literal)"]
     print("%d keys match %r%s" % (len(keys), pattern,
                                   " owned by %s" % ", ".join(sorted(apps))
@@ -241,7 +254,7 @@ def main():
         if name.endswith(".py"):
             with io.open(os.path.join(DE, name), encoding="utf-8",
                          errors="replace") as fh:
-                src[name] = fh.read()
+                src[name] = source_literals(fh.read())
 
     if "--survey" in sys.argv:
         i = sys.argv.index("--survey")
@@ -273,26 +286,23 @@ def main():
                     cat = json.load(fh)
             except (OSError, ValueError):
                 continue
+            agreed = roots[0]
             used = {}
-            for r in roots:
-                n = sum(1 for k in keys
-                        if re.search(norm(r), norm(cat.get(k, ""))))
-                if n:
-                    used[r] = n
-            if len(used) > 1:
-                agreed = roots[0]
-                strays = {r: n for r, n in used.items() if r != agreed}
-                print("  %s uses %d words for one concept: agreed %r, also %s"
-                      % (lang, len(used), agreed,
-                         ", ".join("%r x%d" % (r, n)
-                                   for r, n in sorted(strays.items()))))
-                for k in keys:
-                    v = cat.get(k, "")
-                    if any(re.search(norm(r), norm(v)) for r in strays):
-                        print("      %-44s %s" % (k[:44], v[:52]))
+            for root in roots:
+                count = sum(1 for key in keys
+                            if re.search(norm(root), norm(cat.get(key, ""))))
+                if count:
+                    used[root] = count
+            strays = {root: count for root, count in used.items()
+                      if root != agreed}
+            # Uniformity alone is insufficient: a wholesale new synonym used
+            # to match no declared root and therefore passed vacuously.
+            if agreed not in used or strays:
+                print("  %s: agreed root %r appears %d time(s); alternatives %s"
+                      % (lang, agreed, used.get(agreed, 0), strays or "none"))
                 problems += 1
     print("\nRESULT: " + ("CONSISTENT" if not problems
-                          else "%d language(s) using more than one word"
+                          else "%d language(s) outside agreed terminology"
                                % problems))
     return 1 if problems else 0
 

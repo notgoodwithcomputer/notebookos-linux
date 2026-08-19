@@ -196,9 +196,62 @@ finally:
     shutil.copy2 = real_copy2
     settings.run = real_run
 
+# Printer test polling is owned by the window. Closing Settings removes the
+# exact source, and even a callback already dispatched by GLib is inert.
+class PrinterPane:
+    _on_destroy = settings.Settings._on_destroy
+    _poll_test = settings.Settings._poll_test
+    _reset_test_btn = settings.Settings._reset_test_btn
+
+
+class AudioJobs:
+    def __init__(self):
+        self.closed = 0
+
+    def close(self):
+        self.closed += 1
+
+
+printer = PrinterPane()
+printer._alive = True
+printer._audio_jobs = AudioJobs()
+printer._pr_test_source = 731
+printer._pr_reset_source = 732
+printer._dt_source = None
+printer._backup_close = lambda: None
+printer._save_settings = lambda: None
+removed = []
+real_source_remove = settings.GLib.source_remove
+real_printer_stopped = settings.nbprint.printer_stopped
+real_jobs_pending = settings.nbprint.jobs_pending
+settings.GLib.source_remove = lambda source: removed.append(source)
+settings.nbprint.printer_stopped = lambda _name: (_ for _ in ()).throw(
+    AssertionError("closed poll queried printer state"))
+settings.nbprint.jobs_pending = lambda _name: (_ for _ in ()).throw(
+    AssertionError("closed poll queried jobs"))
+try:
+    printer._on_destroy()
+    check(printer._audio_jobs.closed == 1,
+          "close releases the audio job owner exactly once")
+    check(removed == [731, 732],
+          "close removes printer poll and terminal reset sources")
+    check(printer._pr_test_source is None,
+          "close clears printer-test source ownership")
+    check(printer._pr_reset_source is None,
+          "close clears printer-reset source ownership")
+    check(printer._poll_test(object(), "Office") is False,
+          "dispatched printer-test poll is inert after close")
+    check(printer._reset_test_btn(object()) is False,
+          "dispatched printer reset is inert after close")
+finally:
+    settings.GLib.source_remove = real_source_remove
+    settings.nbprint.printer_stopped = real_printer_stopped
+    settings.nbprint.jobs_pending = real_jobs_pending
+
 print()
 if failures:
     print("SETTINGS BACKUP LIFECYCLE SELFTEST: %d checks, %d FAILED" %
           (checks, len(failures)))
     raise SystemExit(1)
 print("SETTINGS BACKUP LIFECYCLE SELFTEST: %d checks, all pass" % checks)
+print("RESULT: ALL PASS")

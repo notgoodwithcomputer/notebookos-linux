@@ -225,6 +225,7 @@ def main():
 
     print("%s: %d checks, %d failed" %
           ("FAIL" if FAILS else "PASS", CHECKS[0], len(FAILS)))
+    print("RESULT: %s" % ("FAILED" if FAILS else "PASS"))
     return 1 if FAILS else 0
 
 

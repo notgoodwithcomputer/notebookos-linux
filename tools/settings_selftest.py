@@ -95,6 +95,7 @@ def main():
         fails.append("coverage")
     print("\n%s — %d case(s), %d of them the old bug"
           % ("FAIL" if fails else "PASS", len(CASES), regressions))
+    print("RESULT: %s" % ("FAILED" if fails else "PASS"))
     return 1 if fails else 0
 
 

@@ -86,6 +86,7 @@ class Backlight(object):
         os.makedirs(self.dev)
         self.write("max_brightness", mx)
         self.write("brightness", cur)
+        self.write("type", "raw")
 
     def write(self, name, v):
         with open(os.path.join(self.dev, name), "w") as fh:
@@ -150,6 +151,35 @@ def main():
         bl.remove()
         MK.glob.glob = real_glob
 
+    # Firmware/platform nodes often coexist with the native controller.  The
+    # former may accept writes while leaving the actual panel unchanged.
+    root = tempfile.mkdtemp(prefix="nb-bl-multi-")
+    try:
+        for name, kind in (("acpi_video0", "firmware"),
+                           ("intel_backlight", "raw")):
+            dev = os.path.join(root, name)
+            os.makedirs(dev)
+            for field, value in (("type", kind), ("max_brightness", "100"),
+                                 ("brightness", "50")):
+                with open(os.path.join(dev, field), "w") as fh:
+                    fh.write(value)
+        MK.glob.glob = lambda pat: (sorted(REAL_GLOB(os.path.join(root, "*")))
+                                    if "backlight" in pat else REAL_GLOB(pat))
+        check("native raw backlight wins over alphabetically first firmware node",
+              MK._backlight_dev() == os.path.join(root, "intel_backlight"),
+              repr(MK._backlight_dev()))
+        with open(os.path.join(root, "intel_backlight", "max_brightness"), "w") as fh:
+            fh.write("broken")
+        pct = MK._brightness(MK.BRIGHT_STEP)
+        with open(os.path.join(root, "acpi_video0", "brightness")) as fh:
+            firmware_value = int(fh.read())
+        check("a broken preferred backlight falls through to a usable sibling",
+              pct == 58 and firmware_value == 58,
+              "pct=%r raw=%r" % (pct, firmware_value))
+    finally:
+        MK.glob.glob = real_glob
+        shutil.rmtree(root, ignore_errors=True)
+
     # A panel with a tiny range must not be pinned to a floor it cannot leave.
     bl = Backlight(mx=7, cur=7)
     bl.install()
@@ -161,6 +191,82 @@ def main():
     finally:
         bl.remove()
         MK.glob.glob = real_glob
+
+    # A readable mixer does not mean the requested mutation succeeded. If the
+    # set command fails (permissions, a disappearing device), do not read the
+    # old percentage and present that unchanged value as a successful key.
+    real_run = MK._run
+    volume_calls = []
+
+    mixer_state = "Mono: Playback 50 [50%] [on]\n"
+
+    def reject_set(cmd):
+        volume_calls.append(cmd)
+        if "get" in cmd and cmd[-1] == "Master":
+            return 0, mixer_state
+        return 1, ""
+
+    MK._run = reject_set
+    try:
+        check("a rejected volume change reports failure",
+              MK._volume(delta=MK.VOL_STEP) == (None, False))
+        check("a rejected mute toggle reports failure",
+              MK._volume(toggle=True) == (None, False))
+        check("failed mutations do not read and misreport the old level",
+              len([call for call in volume_calls if "sset" in call]) == 2 and
+              not any(call[-1] == "Master" and "get" in call
+                      for call in volume_calls[1::2]),
+              repr(volume_calls))
+    finally:
+        MK._run = real_run
+
+    volume_calls = []
+
+    def switchless_pcm(cmd):
+        volume_calls.append(cmd)
+        if "get" in cmd and cmd[-1] == "PCM":
+            return 0, "Mono: Playback 72 [72%]\n"
+        if "sset" in cmd and "PCM" in cmd:
+            return 0, ""
+        return 1, ""
+
+    MK._run = switchless_pcm
+    try:
+        check("a switchless PCM control is not accepted for mute",
+              MK._volume(toggle=True) == (None, False)
+              and not any("sset" in call for call in volume_calls),
+              repr(volume_calls))
+        volume_calls[:] = []
+        check("the same PCM control remains usable for volume",
+              MK._volume(delta=MK.VOL_STEP) == (72, False)
+              and any("sset" in call and "PCM" in call
+                      for call in volume_calls), repr(volume_calls))
+    finally:
+        MK._run = real_run
+
+    # Supported codecs do not universally expose a Master control.  Discover
+    # one usable playback control and use the same one for mutation and state.
+    volume_calls = []
+
+    def speaker_only(cmd):
+        volume_calls.append(cmd)
+        if "get" in cmd:
+            return ((0, "Mono: Playback 40 [40%] [on]\n")
+                    if cmd[-1] == "Speaker" else (1, ""))
+        if "sset" in cmd and "Speaker" in cmd:
+            return 0, ""
+        return 1, ""
+
+    MK._run = speaker_only
+    try:
+        check("volume keys fall back from Master to Speaker",
+              MK._volume(delta=MK.VOL_STEP) == (40, False),
+              repr(volume_calls))
+        check("the discovered control is used for both set and read",
+              any("sset" in call and "Speaker" in call for call in volume_calls)
+              and volume_calls[-1][-1] == "Speaker", repr(volume_calls))
+    finally:
+        MK._run = real_run
 
     # ---- a key with nothing to move must SAY so --------------------------
     mk = MK.MediaKeys.__new__(MK.MediaKeys)
@@ -225,21 +331,27 @@ def main():
     # ---- the OSD can actually draw both shapes ---------------------------
     # A note and a level take different paths through _draw; a crash there is
     # invisible to everything above, which only records the call.
-    osd = MK._OSD()
-    try:
-        osd.show_level("volume", 40, False)
-        osd.show_level("volume", 0, True)
-        osd.show_level("brightness", 100)
-        osd.show_note("brightness", "This screen cannot be adjusted from here.")
-        pump()
-        surf = osd.area.get_window()
-        check("the OSD builds and draws a level and a note", True)
-    except Exception as exc:
-        check("the OSD builds and draws a level and a note", False, repr(exc))
-    try:
-        osd.destroy()
-    except Exception:
-        pass
+    gtk_ready = Gtk.init_check()[0]
+    if gtk_ready:
+        osd = MK._OSD()
+        try:
+            osd.show_level("volume", 40, False)
+            osd.show_level("volume", 0, True)
+            osd.show_level("brightness", 100)
+            osd.show_note("brightness",
+                          "This screen cannot be adjusted from here.")
+            pump()
+            osd.area.get_window()
+            check("the OSD builds and draws a level and a note", True)
+        except Exception as exc:
+            check("the OSD builds and draws a level and a note", False,
+                  repr(exc))
+        try:
+            osd.destroy()
+        except Exception:
+            pass
+    else:
+        print("SKIP the OSD render check (no GTK display)")
 
     # ---- every note fits the popup, in every language --------------------
     # The OSD is 300x92 and the note is drawn at (H - lh)/2, which goes
@@ -254,8 +366,7 @@ def main():
     NOTES = ("This screen cannot be adjusted from here.",
              "Volume cannot be adjusted from here.",
              "Volume is set on the television")
-    osd2 = MK._OSD()
-    W, H = osd2._w, osd2._h
+    W, H = 300, 92
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
     cr = cairo.Context(surf)
 
@@ -287,11 +398,6 @@ def main():
           "; ".join("%s %r" % (l, k[:28]) for l, k in missing[:3]))
     check("...and fits the %dx%d popup without clipping" % (W, H), not over,
           "; ".join("%s %dpx %r" % (l, h, t) for l, h, t in over[:3]))
-    try:
-        osd2.destroy()
-    except Exception:
-        pass
-
     print("\n%d checks, %d passed, %d FAILED"
           % (N[0], N[0] - len(FAILED), len(FAILED)))
     if FAILED:

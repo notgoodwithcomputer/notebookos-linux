@@ -81,4 +81,5 @@ check(events == [("source-41", True), ("autosave", True)],
 check(win._search_timer == 0, "destroy clears search ownership")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

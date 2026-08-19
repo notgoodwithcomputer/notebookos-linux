@@ -1499,7 +1499,7 @@ def _scripted(code):
                                  {"kind": "execute_code", "lang": "Script",
                                   "code": code}]}]}],
             "rooms": [{"id": "rm", "w": 240, "h": 160, "speed": 60,
-                       "bg": "#000",
+                       "bg": "#000000",
                        "instances": [{"object": "obj_player", "x": 8, "y": 8}],
                        "warps": [], "tiles": [0] * 600}]}
 
@@ -1612,7 +1612,7 @@ _everything = {
                 "lead": [0] * 16, "bass": [0] * 16, "pcm": [0] * 32768}],
     "objects": [{"id": "o", "sprite": "s", "visible": True, "solid": False,
                  "events": []}],
-    "rooms": [{"id": "rm", "w": 240, "h": 160, "speed": 60, "bg": "#000",
+    "rooms": [{"id": "rm", "w": 240, "h": 160, "speed": 60, "bg": "#000000",
                "instances": [{"object": "o", "x": 8, "y": 8}],
                "warps": [], "tiles": [1] + [0] * 599}]}
 _rep = gbabuild.budget_report(_everything)
@@ -1688,7 +1688,7 @@ def _many_sprites(n):
             "objects": [{"id": "o", "sprite": "s0", "visible": True,
                          "solid": False, "events": []}],
             "rooms": [{"id": "rm", "w": 240, "h": 160, "speed": 60,
-                       "bg": "#000",
+                       "bg": "#000000",
                        "instances": [{"object": "o", "x": 8, "y": 8}],
                        "warps": [], "tiles": [0] * 600}]}
 
@@ -1745,7 +1745,7 @@ if gcc:
                                    {"kind": "execute_code", "lang": "C",
                                     "code": "if (nb_score = 3) { }"}]}]}],
               "rooms": [{"id": "rm", "w": 240, "h": 160, "speed": 60,
-                         "bg": "#000",
+                         "bg": "#000000",
                          "instances": [{"object": "o", "x": 8, "y": 8}],
                          "warps": [], "tiles": [0] * 600}]})
     nbpicker.save_file = lambda *a, **k: os.path.join(HOME, "Documents", "W.gba")
@@ -1797,7 +1797,7 @@ def _big(nframes):
             "objects": [{"id": "o", "sprite": "big", "visible": True,
                          "solid": False, "events": []}],
             "rooms": [{"id": "rm", "w": 240, "h": 160, "speed": 60,
-                       "bg": "#000",
+                       "bg": "#000000",
                        "instances": [{"object": "o", "x": 8, "y": 8}],
                        "warps": [], "tiles": [0] * 600}]}
 
@@ -3453,8 +3453,13 @@ pump()
 section("play hand-off return")
 _ph_app = app()
 pump()
+# Markers now carry /proc's process start token (second line); app_marker_live
+# trusts a marker only when its pid is alive AND the token matches (PID-reuse
+# guard added after this fixture was written). Write this process's marker in
+# the real two-field form so the recount sees the SDK as alive; the dead pid's
+# marker needs no valid token (its pid is gone, so it is reaped either way).
 with open(os.path.join(nbapp._APP_DIR, str(os.getpid())), "w") as _fh:
-    _fh.write("gbasdk\n")
+    _fh.write("gbasdk\n" + nbapp._proc_start_token(os.getpid()) + "\n")
 with open(os.path.join(nbapp._APP_DIR, "99999999"), "w") as _fh:
     _fh.write("gbaemu\n")
 open(nbapp._APP_FLAG, "w").close()

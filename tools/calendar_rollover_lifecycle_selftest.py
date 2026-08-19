@@ -60,6 +60,8 @@ finally:
 
 win = calmod.Calendar.__new__(calmod.Calendar)
 win._closed = False
+win._status_tok = 0
+win._status_timer = 66
 win._rollover_id = 77
 events = []
 win._save_events = lambda: events.append(("events", win._closed))
@@ -74,10 +76,14 @@ finally:
     calmod.GLib.source_remove = real_remove
 
 check(win._closed is True, "destroy marks the Calendar closed")
-check(removed == [77] and win._rollover_id == 0,
-      "destroy removes exactly its recorded source and clears the ID")
+check(win._status_tok == 1,
+      "destroy invalidates pending status callbacks exactly once")
+check(removed == [66, 77] and
+      win._status_timer == 0 and win._rollover_id == 0,
+      "destroy removes exactly its recorded sources and clears their IDs")
 check(events == [("events", True), ("calendars", True)],
       "final stores save once, after the closed gate is raised")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

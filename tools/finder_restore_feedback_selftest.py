@@ -43,6 +43,10 @@ def window(trash, origins, name):
     win = finder.Finder.__new__(finder.Finder)
     model = Model(name)
     win._selected_iter = lambda: (model, object())
+    # Trash and the clipboard now act on the SELECTION, not on one row,
+    # so the stub answers the list helper too. Same fixture, same
+    # assertions -- only the door the code comes in through moved.
+    win._selected_paths = lambda: [model.path]
     win._trash_dir = lambda: trash
     win._origins_dir = lambda: origins
     win._inflight = set()
@@ -216,4 +220,5 @@ with tempfile.TemporaryDirectory(prefix="nb-restore-feedback-") as root:
           "the origin sidecar survives a failed Put Back")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

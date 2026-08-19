@@ -179,6 +179,21 @@ app._on_canvas_key(canvas, event(Gdk.EventType.KEY_PRESS, 0, 0,
 check("keyboard erase matches mouse erase",
       frame[15 * 16 + 15] == gbasdk.TRANSPARENT)
 
+# Closing while sprite playback is active must release its repeating source.
+app, _canvas, _frame, _handler = harness(8, True)
+app._spr_play = 713
+app._layout_save_timer = None
+app.jobs = SimpleNamespace(close=lambda: None)
+removed = []
+real_remove = gbasdk.GLib.source_remove
+gbasdk.GLib.source_remove = lambda source_id: removed.append(source_id) or True
+try:
+    app._on_destroy()
+finally:
+    gbasdk.GLib.source_remove = real_remove
+check("destroy stops and clears the sprite preview timer",
+      removed == [713] and app._spr_play is None, (removed, app._spr_play))
+
 
 def mutant_check():
     if os.environ.get("GBASDK_PAINT_MUTANT"):

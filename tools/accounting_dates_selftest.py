@@ -173,11 +173,38 @@ def main():
             check("editing does not drop the ISO date",
                   ISO.match(edited[0].get("iso", "") or "") is not None,
                   repr(edited[0]))
+            # Free-form date text is allowed, but it cannot keep an unrelated
+            # machine-readable date from before the edit. The helper already
+            # returned None here; _save_edit used to leave the copied old iso
+            # in place anyway, so CSV exported two disagreeing date columns.
+            app2._edit_tx(app2.tx.index(edited[0]))
+            app2._e_date.set_text("sometime soon")
+            app2._e_desc.set_text("Bread and jam")
+            app2._e_amt.set_text("4.10")
+            app2._save_edit()
+            freeform = [r for r in app2.tx
+                        if r.get("desc") == "Bread and jam"]
+            check("free-form date text clears a stale sortable date",
+                  len(freeform) == 1 and "iso" not in freeform[0],
+                  repr(freeform))
         else:
             not_reached("the edit did not land",
-                        "editing does not drop the ISO date")
+                        "editing does not drop the ISO date",
+                        "free-form date text clears a stale sortable date")
 
     # ---- the CSV leads with a sortable column ------------------------
+    # The edits above deliberately reduced every existing entry to a free-form
+    # (year-less) date, so nothing left in app2 carries an ISO — that is the
+    # point of "free-form date text clears a stale sortable date". Add ONE
+    # fresh entry through the real add form, which stamps today's ISO, so the
+    # export has both shapes to prove: a machine-readable row AND a year-less
+    # one. (Before Accounting cleared the stale ISO on a free-form edit, the
+    # edited row kept one by accident and this section leaned on that.)
+    app2.f_desc.set_text("Milk")
+    app2.f_amt.set_text("1.90")
+    app2.fdir = "debit"
+    app2._on_add()
+    pump()
     docs = os.path.join(_HOME, "Documents")
     os.makedirs(docs, exist_ok=True)
     app2._export_csv()

@@ -206,6 +206,10 @@ else:
     p._undo = None
     p._clipboard = None
     p._selected_iter = lambda: (None, None)
+    # Trash and the clipboard now act on the SELECTION, not on one row,
+    # so the stub answers the list helper too. Same fixture, same
+    # assertions -- only the door the code comes in through moved.
+    p._selected_paths = lambda: [None.path]
     p._do_undo = lambda: None
     p._get_info = lambda: None
     p._context_open = lambda: None

@@ -1,5 +1,5 @@
 """OEM install -> first-run setup, end to end, against a fake target root."""
-import os, sys, shutil, json, inspect
+import os, sys, shutil, json, inspect, subprocess
 import gi; gi.require_version("Gtk","3.0")
 from gi.repository import Gtk
 ROOT="/tmp/oemroot"; H="/tmp/nbhome-oem"
@@ -63,12 +63,29 @@ chk("the keyboard chosen is the one the session will actually apply",
     nbi18n.keyboard()=="fr", (nbi18n.keyboard(), loc))
 root_hash=open(ROOT+"/etc/shadow").read().splitlines()[0].split(":")[1]
 chk("a real password hash was set", root_hash.startswith("$6$"), root_hash[:12])
-try:
-    import crypt
-    chk("...and the chosen password verifies",
-        crypt.crypt("nb1234", root_hash)==root_hash)
-except ImportError:
-    print("SKIP crypt not on this host (guest ships it)")
+# VERIFY THE HASH, on this host too. Python 3.13 removed `crypt`, so this
+# check used to SKIP here -- and a skipped check is not coverage: the release
+# runner rightly records the whole suite as DID NOT RUN, so the one assertion
+# that proves a new owner can actually sign in was protecting nothing on the
+# machine that runs the gates. openssl verifies a $6$ hash against a password
+# with the salt taken from the hash itself, and openssl is present BOTH here
+# and in the image (buildroot/output/target/usr/bin/openssl), which is also
+# firstrun.hash_password's own fallback when crypt is missing.
+def _verifies(password, hashed):
+    try:
+        import crypt                                       # noqa: PLC0415
+        return crypt.crypt(password, hashed) == hashed
+    except ImportError:
+        pass
+    salt = "$".join(hashed.split("$")[:3])                  # $6$<salt>
+    out = subprocess.run(["openssl", "passwd", "-6", "-salt",
+                          salt.split("$")[2], password],
+                         capture_output=True, text=True, timeout=20)
+    return out.returncode == 0 and out.stdout.strip() == hashed
+
+
+chk("...and the chosen password verifies", _verifies("nb1234", root_hash),
+    root_hash[:16])
 chk("the marker is gone, so it never asks again", not firstrun.pending())
 print("\nRESULT: " + ("ALL PASS" if all(R) else "SOME FAILED"))
 sys.exit(0 if all(R) else 1)

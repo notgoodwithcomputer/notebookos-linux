@@ -487,6 +487,10 @@ CASES = {
 }
 
 
+# Apps that save on every user action and never on close (see run_case).
+ACTION_SAVERS = ("workout", "mealplanner", "bills")
+
+
 def run_case(app, case):
     home = "/tmp/nbhome-dmg-%s" % app
     shutil.rmtree(home, ignore_errors=True)
@@ -528,12 +532,17 @@ def run_case(app, case):
         pass
     if hasattr(w, "_on_destroy"):
         w._on_destroy()
-    elif hasattr(w, "_save"):
-        # Workout and Meal Planner have no destroy flush; ANY user action saves,
-        # so stand in for one. Losing the store on the first tap is the same
-        # defect as losing it on close.
+    if app in ACTION_SAVERS:
+        # Workout, Meal Planner and Bill Tracker have no destroy FLUSH -- their
+        # _on_destroy (when they have one) only retires timers; ANY user action
+        # saves, so stand in for one. Losing the store on the first tap is the
+        # same defect as losing it on close. This used to be inferred from
+        # "has no _on_destroy", which stopped being true the day the three
+        # grew a timer-cleanup handler: the harness then closed without ever
+        # saving and reported the untouched damaged file as a missing
+        # quarantine. Named explicitly now.
         w._save()
-    else:
+    elif not hasattr(w, "_on_destroy"):
         # Language flushes from a destroy lambda rather than a named handler.
         w._save_progress()
 
@@ -683,8 +692,6 @@ COVERAGE = {
     "calculator": "defended-untested: several shapes not rewritten at all; "
                   "the tape; needs a gate",
     "g2048": "defended-untested: .bak every shape; board + best score",
-    "terminal": "defended-untested: .damaged-* unreadable / .bak wrong-type; "
-                "scrollback + geometry",
     # read path safe by measurement AND construction; the write-over-damaged
     # path needs a real map-pack fixture to reach (atomic by source comment)
     "maps": "read-safe-write-unmeasured: _load_cfg catches all, 0 crashes; "
@@ -703,6 +710,8 @@ COVERAGE = {
 _DE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "buildroot", "board", "notebookos", "rootfs-overlay",
                    "opt", "notebook", "de")
+if _DE not in sys.path:
+    sys.path.insert(0, _DE)
 
 
 def store_bearing_apps():
@@ -781,12 +790,13 @@ _REC_VAL = "PRESERVE-REC-4f2a9c"
 # app-improve fixed it the same day (its loader _parse_tx dropped
 # entry_id/reconciled/category — the READ site of the three-site store-eater,
 # left standing in an app whose own 401 green suites could not see it), 7 -> 6.
+#
+# 2026-08-16: journal, calendar, cookbook and tasks came off the list -- their
+# loaders now carry unknown top-level and per-record keys through (the Aug-15
+# "retain unknown keys" pass); the ratchet reported all four as stale, which is
+# exactly the direction it exists to catch. 6 -> 2.
 PRESERVE_DEBT = {
-    "journal":     "per-record keys (loader rebuilds entries) -- bug-fix's lane",
-    "calendar":    "per-record keys (loader rebuilds events) -- bug-fix's lane",
-    "cookbook":    "top-level + per-record (recipes rebuilt) -- app-improve day 7",
     "mealplanner": "top-level key (plan wrapper rebuilt) -- app-improve day 15",
-    "tasks":       "top-level + per-record (tasks-app rebuilt) -- app-improve day 24",
     "workout":     "top-level + per-record -- app-improve day 28",
 }
 

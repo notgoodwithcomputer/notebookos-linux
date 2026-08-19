@@ -26,10 +26,15 @@ Run as:
 """
 import json
 import os
+import copy
 import shutil
 import sys
 import tempfile
 import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                                "opt/notebook/de"))
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -107,6 +112,15 @@ try:
                                      _probe._restore_undo_snapshot)
     _probe.undo.reset()
     _probe._refresh = lambda: None
+    _probe._save = lambda: True
+    _wo_model._confirm = lambda *a, **k: False
+    before = copy.deepcopy(_probe.data)
+    _probe._clear_today()
+    check("cancelling Clear Today preserves every logged set",
+          _probe.data == before, _probe.data)
+    _probe._delete_exercise()
+    check("cancelling Delete Exercise preserves its history",
+          _probe.data == before, _probe.data)
     _wo_model._confirm = lambda *a, **k: True
     _probe._clear_today()
     _reached = _probe.undo.undo()
@@ -205,7 +219,12 @@ shutil.rmtree(home, ignore_errors=True)
 home = fresh_home()
 wo, app = new_app(home)
 app.data["exercises"] = [{"id": "a", "name": "Push-ups", "sets": 3, "reps": 10}]
-app.data["log"] = {TODAY: {"a": [10, 10]}, day_ago(1): {"a": [10]}}
+# The second day has to be a day of THIS week, chosen from the strip itself.
+# day_ago(1) is last week's Sunday whenever the suite runs on a Monday, so the
+# footer rightly left it out and this check failed one day in seven — a fixture
+# bug, not the app: SETS THIS WEEK counts the week the strip is showing.
+_other_day = next(d for d in wo._week_days() if d != TODAY)
+app.data["log"] = {TODAY: {"a": [10, 10]}, _other_day: {"a": [10]}}
 app._refresh_week()
 # the footer totals every day in the week that has sets
 total = int(app.week_total.get_text())

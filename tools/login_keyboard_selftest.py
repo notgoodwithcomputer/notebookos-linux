@@ -90,8 +90,15 @@ def run_codes():
           "a variant inside a multi-group code is a VARIANT, not a layout "
           "name — the case four private copies of this parser all missed")
     check(k.parse("") == [("us", "")], "an empty code is never an empty list")
+    check(all(k.parse(value) == [("us", "")]
+              for value in (None, 7, ["ru", "us"], {"layout": "ru"})),
+          "damaged non-text layout state falls back to a usable keyboard")
     check(k.join(k.parse("jp(kana),us")) == "jp(kana),us",
           "parse and join round-trip")
+    check(k.parse("us,us,ru,us") == [("us", ""), ("ru", "")],
+          "duplicate groups collapse without changing first-use order")
+    check(k.xorg_parts("us,us")[2] == "",
+          "duplicate groups do not enable a switch key that goes nowhere")
 
     check(k.is_latin("us") and k.is_latin("fr") and k.is_latin("hr"),
           "Latin layouts are Latin")
@@ -194,6 +201,9 @@ def run_qwerty():
           "a code that already carries US is left exactly as it is")
     check(k.ensure_qwerty("jp(kana)") == "jp(kana),us",
           "kana keeps its own group first and gains the way back")
+    check(k.parse(k.ensure_qwerty("ru,gr,il,jp(kana)")) ==
+          [("ru", ""), ("gr", ""), ("il", ""), ("us", "")],
+          "a full four-group code reserves its last valid slot for US")
     check(k.parse(k.ensure_qwerty("fr"))[0] == ("fr", ""),
           "the machine's own layout stays the LIVE one — US is appended, "
           "never substituted")
@@ -321,14 +331,20 @@ class _Machine:
         import nbkeyboard
         self._real_i18n = self.login.nbi18n
         self._real_apply = nbkeyboard.apply
+        # the screen asks the X server what is REALLY loaded when the saved
+        # layout is showing (session.sh may have fallen back to US); on the
+        # developer's host that would be the developer's layouts
+        self._real_live = nbkeyboard.live_code
         self.login.nbi18n = self
         nbkeyboard.apply = self._apply
+        nbkeyboard.live_code = lambda *a, **k: ""
         return self
 
     def __exit__(self, *_e):
         import nbkeyboard
         self.login.nbi18n = self._real_i18n
         nbkeyboard.apply = self._real_apply
+        nbkeyboard.live_code = self._real_live
         return False
 
     def _apply(self, code, timeout=10):
@@ -350,6 +366,7 @@ def _key(group):
 def run_window(login):
     print("\n-- the sign-in screen on a Cyrillic machine")
     import nbkeyboard as k
+    from gi.repository import Gtk
     login.SHADOW = _write("shadow", "root:%s:19000::::::\n" % H6)
 
     with _Machine(login, "ru,us") as m:
@@ -361,9 +378,12 @@ def run_window(login):
         check(len(win._kb_btns) == 2, "one button per half is on screen")
         check(win._kb_btns[0].get_active() and not win._kb_btns[1].get_active(),
               "the live half is the one the machine is configured for")
-        check(not any(b.get_can_focus() for b in win._kb_btns),
-              "the buttons cannot take focus: a switch happens mid-password "
-              "and the caret must stay in the field")
+        # The buttons ARE in the focus chain (a keyboard-only person may have
+        # to switch alphabets before a password can be typed at all); what
+        # protects a mid-password switch is the caret coming straight back
+        # to the field with what was typed intact — checked below.
+        check(all(b.get_can_focus() for b in win._kb_btns),
+              "the buttons can be reached from the keyboard")
         check(m.applied == [],
               "nothing was loaded on the way in — session.sh already applied "
               "this layout and setxkbmap forks xkbcomp")
@@ -375,7 +395,33 @@ def run_window(login):
         check("Alt+Shift" in warn, "...and the key that switches them")
 
         # The switch itself.
+        # mid-password: four characters typed, then a switch by pressing the
+        # other button (which takes focus, as a real click on it would)
+        win.show_all()
+        for _ in range(20):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+        win.entry.grab_focus()
+        win.entry.set_text("secr")
+        win.entry.set_position(4)
+        win._kb_btns[1].grab_focus()
         win._kb_btns[1].set_active(True)
+        # (get_focus, not has_focus: the latter also needs the toplevel to be
+        # the ACTIVE window on this display, which a test window may not be)
+        check(win.get_focus() is win.entry,
+              "after a switch the caret is back in the password field")
+        check(win.entry.get_selection_bounds() == () and
+              win.entry.get_position() == 4 and win.entry.get_text() == "secr",
+              "...with what was typed intact and unselected, so the next key "
+              "does not REPLACE the password so far: sel=%r pos=%r"
+              % (win.entry.get_selection_bounds(), win.entry.get_position()))
+        # pressing the live one again: no alphabet-less state, caret back too
+        win._kb_btns[1].grab_focus()
+        win._kb_btns[1].set_active(False)
+        check(win._kb_btns[1].get_active() and win.get_focus() is win.entry
+              and win.entry.get_selection_bounds() == (),
+              "pressing the live half again keeps it lit and returns the caret")
+        win.entry.set_text("")
         check(m.applied == ["us,ru"],
               "choosing English loads the layout with US first: %r"
               % (m.applied,))

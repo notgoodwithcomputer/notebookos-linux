@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Display-free adversarial execution checks for Media's image paths."""
 import os
+import time
 import struct
 import subprocess
+import sys
 import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                                "opt/notebook/de"))
 
 HOME = tempfile.mkdtemp(prefix="nbmedia-adversarial-")
 os.environ["NB_HOME"] = HOME
@@ -64,7 +70,7 @@ def fallback_and_orientation_checks():
     real_decode = media._decode_to_png
     calls = []
 
-    def load(path):
+    def load(path, real=None):
         calls.append(path)
         if path == src:
             raise RuntimeError("forced missing loader")
@@ -83,7 +89,7 @@ def fallback_and_orientation_checks():
           getattr(pb, "oriented", False), "fallback pixbuf was not oriented")
 
     # Direct loader must obey the same orientation law.
-    media._bounded_pixbuf = lambda _path: FakePixbuf()
+    media._bounded_pixbuf = lambda _path, real=None: FakePixbuf()
     try:
         direct = media._pixbuf_any(src)
     finally:
@@ -101,9 +107,9 @@ def fallback_and_orientation_checks():
         "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
         "color=red:s=17x9", "-frames:v", "1", webp]).returncode == 0
     real_bounded = media._bounded_pixbuf
-    media._bounded_pixbuf = lambda path: (
+    media._bounded_pixbuf = lambda path, real=None: (
         (_ for _ in ()).throw(RuntimeError("forced source refusal"))
-        if path == webp else real_bounded(path))
+        if path == webp else real_bounded(path, real))
     try:
         actual = media._pixbuf_any(webp) if made else None
     finally:
@@ -240,6 +246,7 @@ class NoticeViewer:
     # distinguishable without attempting it. The double carries the real
     # background path so the check still exercises the app's own code.
     _decode_in_background = media.MediaViewer._decode_in_background
+    _cancel_notice_timer = media.MediaViewer._cancel_notice_timer
     _image_failed = media.MediaViewer._image_failed
 
     def __init__(self):
@@ -273,8 +280,48 @@ def refusal_checks():
         titles = [n[0] for n in viewer.notices]
         check(label + " image produces an honest visible error",
               "This file cannot be opened" in titles, repr(viewer.notices))
-        check(label + " image says what it is doing before it refuses",
-              titles and titles[0].startswith("Opening"), repr(titles))
+        # An instant refusal is ONE card. The "Opening…" card exists for a
+        # decode that is taking a while (NOTICE_AFTER_MS); flashing it for a
+        # file that fails in a few milliseconds is a grey blink before the
+        # real message, and it used to be exactly that.
+        if label == "zero-byte":
+            # nothing to try on zero bytes: the refusal is immediate, and it
+            # must be the only card
+            check(label + " image refuses without a pointless 'Opening' flash first",
+                  titles == ["This file cannot be opened"], repr(titles))
+        else:
+            # corrupt bytes are only known corrupt after every decoder has
+            # been tried, which can outlast the grace period -- an "Opening"
+            # card is then honest, but the refusal must still be the last word
+            check(label + " image ends on the refusal, with at most one 'Opening' before it",
+                  titles[-1:] == ["This file cannot be opened"]
+                  and [t for t in titles if t.startswith("Opening")] in ([], titles[:1]),
+                  repr(titles))
+
+    # ...but a decode that outlasts the grace period DOES say what it is doing
+    slow = os.path.join(HOME, "slow.png")
+    with open(slow, "wb") as fh:
+        fh.write(b"not an image either")
+    real_any = media._pixbuf_any
+
+    def slow_any(path, real=None):
+        time.sleep((media.NOTICE_AFTER_MS + 200) / 1000.0)
+        return real_any(path, real)
+    media._pixbuf_any = slow_any
+    try:
+        viewer = NoticeViewer()
+        viewer._display(slow)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not any(
+                n[0] == "This file cannot be opened" for n in viewer.notices):
+            pump()
+            time.sleep(0.02)
+        titles = [n[0] for n in viewer.notices]
+        check("a decode that outlasts the grace period says 'Opening…' first",
+              len(titles) >= 2 and titles[0].startswith("Opening")
+              and titles[-1] == "This file cannot be opened", repr(titles))
+    finally:
+        media._pixbuf_any = real_any
 
     refused = {".heic", ".heif", ".avif"}
     check("NOT-A-DEFECT unsupported HEIF/AVIF stays out of Open patterns",
@@ -294,6 +341,9 @@ def refusal_checks():
     viewer = media.MediaViewer.__new__(media.MediaViewer)
     viewer._siblings = [src]
     viewer._sib_idx = 0
+    # the file the window is on: _do_trash checks it so a Delete during a step
+    # does not drag the picture being decoded along with the one it removed
+    viewer._media_path = src
     viewer._thumb_cache = {}
     viewer._set_zoom = lambda *_: None
     viewer._set_info = lambda *_: None
@@ -331,6 +381,7 @@ def refusal_checks():
         fh.write(b"second file")
     viewer._siblings = [other]
     viewer._sib_idx = 0
+    viewer._media_path = other
     viewer._do_trash(other)
     dup_origin = os.path.join(HOME, ".Trash", ".origins", "trash-me.png (1)")
     dup = ""
@@ -358,17 +409,26 @@ def offthread_decode_check():
     notices = []
     app._show_notice = lambda title, sub: notices.append(title)
     presented = []
-    app._present_image = lambda path, pb, uc: presented.append((path, pb))
+    app._present_image = lambda path, pb, uc, dims=None: presented.append((path, pb))
     app._image_failed = lambda path, uc: presented.append((path, None))
 
     main_ident = threading.get_ident()
     seen = {}
     real_any = media._pixbuf_any
-    media._pixbuf_any = lambda path: (
-        seen.__setitem__("ident", threading.get_ident()) or FakePixbuf())
+
+    def any_slowly(path, real=None):
+        # slower than the grace period, so the "Opening…" card is owed
+        time.sleep((media.NOTICE_AFTER_MS + 150) / 1000.0)
+        seen["ident"] = threading.get_ident()
+        return FakePixbuf()
+    media._pixbuf_any = any_slowly
     try:
         app._decode_gen += 1
         app._decode_in_background("/tmp/slow.webp", True)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not presented:
+            pump()
+            time.sleep(0.02)
         app.jobs.join()
         pump()
     finally:
@@ -389,9 +449,9 @@ def offthread_decode_check():
     app2.jobs = media.nbjobs.JobOwner(name="media-test-2")
     app2._show_notice = lambda title, sub: None
     landed = []
-    app2._present_image = lambda path, pb, uc: landed.append(path)
+    app2._present_image = lambda path, pb, uc, dims=None: landed.append(path)
     app2._image_failed = lambda path, uc: landed.append(None)
-    media._pixbuf_any = lambda path: FakePixbuf()
+    media._pixbuf_any = lambda path, real=None: FakePixbuf()
     try:
         app2._decode_gen += 1
         app2._decode_in_background("/tmp/superseded.webp", True)
@@ -410,9 +470,9 @@ def offthread_decode_check():
     app3.jobs = media.nbjobs.JobOwner(name="media-test-3")
     app3._show_notice = lambda title, sub: None
     after_close = []
-    app3._present_image = lambda path, pb, uc: after_close.append(path)
+    app3._present_image = lambda path, pb, uc, dims=None: after_close.append(path)
     app3._image_failed = lambda path, uc: after_close.append(None)
-    media._pixbuf_any = lambda path: FakePixbuf()
+    media._pixbuf_any = lambda path, real=None: FakePixbuf()
     try:
         app3._decode_in_background("/tmp/closing.webp", True)
         app3._closed = True
@@ -445,4 +505,5 @@ if __name__ == "__main__":
     refusal_checks()
     offthread_decode_check()
     print("\n%d/%d checks passed" % (passed, passed + failed))
+    print("RESULT: %s" % ("PASS" if not failed else "FAILED"))
     raise SystemExit(1 if failed else 0)

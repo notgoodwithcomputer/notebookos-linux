@@ -42,7 +42,6 @@ NO_SIDEBAR = {
     "screenplay": "document surface; no sidebar",
     "sequencer": "timeline workspace; no navigation sidebar",
     "sysmon": "dashboard; no sidebar",
-    "terminal": "terminal surface; no sidebar",
     "usbwriter": "single task flow; no sidebar",
     "video": "multi-pane editing workspace; no comparable navigation sidebar",
     "writer": "document surface; no sidebar",

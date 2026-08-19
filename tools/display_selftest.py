@@ -71,8 +71,11 @@ check("the TELEVISION is switched on too",
       any("HDMI-1" in c for c in calls), calls)
 check("...and it MIRRORS the panel rather than extending the desktop",
       any("HDMI-1" in c and "--same-as" in c for c in calls), calls)
-check("the TV is given its own preferred mode, not forced to 1920x1080",
-      any("HDMI-1" in c and "--auto" in c for c in calls), calls)
+check("the TV uses the panel's shared logical mode",
+      any("HDMI-1" in c and "--mode 1920x1080" in c for c in calls), calls)
+check("mirroring never overlaps unequal automatic modes",
+      not any("HDMI-1" in c and "--auto" in c and
+              "--scale-from" not in c for c in calls), calls)
 check("a disconnected output is not configured",
       not any("DP-2" in c and "--auto" in c for c in calls), calls)
 

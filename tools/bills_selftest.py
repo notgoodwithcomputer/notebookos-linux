@@ -174,9 +174,28 @@ check("malformed punctuation is refused, not silently made into other money",
       (bills.parse_money("12-34"), bills.parse_money("1.2.3")))
 check("digits embedded in words are refused, not charged as dollars",
       bills.parse_money("room 12") is None, bills.parse_money("room 12"))
-check("a huge typed amount is capped in cents without float overflow",
-      bills.parse_money("9" * 400) == bills.MAX_CENTS,
-      bills.parse_money("9" * 400))
+# WAS: "a huge typed amount is capped in cents without float overflow", which
+# asserted parse_money("9" * 400) == MAX_CENTS. The cap protected the
+# arithmetic and lost the money: the sheet saved the cap and said "Bill added"
+# over a figure nobody typed (17 digits were confirmed as $1,000,000,000.00).
+# A figure this app will not keep is refused so the sheet can ask again; the
+# digits themselves are still read, in integer arithmetic, by _money_cents.
+check("a typed amount over the cap is refused rather than quietly capped",
+      bills.parse_money("9" * 400) is None, bills.parse_money("9" * 400))
+check("...and the cap itself is still accepted",
+      bills.parse_money("1000000000") == bills.MAX_CENTS,
+      bills.parse_money("1000000000"))
+check("...and the digits are still read without float overflow",
+      bills._money_cents("9" * 400) == int("9" * 400) * 100,
+      bills._money_cents("9" * 12))
+nonfinite_store = put(
+    "nonfinite.json",
+    '{"bills": [{"payee": "Water", "amount": NaN}, '
+    '{"payee": "Power", "amount": Infinity}]}')
+nonfinite_bills = bills.read_bills(nonfinite_store)
+check("non-finite stored amounts become variable instead of crashing the shelf",
+      len(nonfinite_bills) == 2
+      and [b["amount"] for b in nonfinite_bills] == [None, None])
 
 
 # -- 3. what is due ----------------------------------------------------------
@@ -342,6 +361,18 @@ put("bills.json", {"bills": [{"payee": "Kept", "amount": 500,
                                    "ref": "cheque 1042"}] * 40}]})
 check("a long payment history is not truncated",
       len(bills.read_bills(os.path.join(CFG, "bills.json"))[0]["paid"]) == 40)
+
+# A newer Bills version may attach reconciliation metadata to an otherwise
+# familiar payment.  Reading and saving in this version must not erase it.
+future_payment = bills.normalise({
+    "payee": "Future payment", "amount": 1000, "due": "2026-08-11",
+    "paid": [{"on": "2026-08-01", "for": "2026-08-01",
+              "amount": 1000, "method": "mail", "ref": "x",
+              "confirmation_id": "abc", "cleared": True}],
+})
+check("unknown payment fields survive normalization",
+      future_payment["paid"][0].get("confirmation_id") == "abc"
+      and future_payment["paid"][0].get("cleared") is True)
 
 put("bills.json", {"bills": [{"payee": "Big", "amount": 500,
                               "due": "2026-08-11"}] * 260})

@@ -201,6 +201,19 @@ for tag, note in (("WITHADDR", "Quote 88"), ("NOADDRNOTE", "Ref 22"),
           any(note in ln for ln in g.get(tag, [])),
           "%r missing from %s" % (note, g.get(tag)))
 
+# ------------------------------------------------------------ THE DUE DATE
+# The printed page never carried one. `info["state"]` is written for a 252px
+# rail and a desktop tile, so it prints "Overdue", "Due in 2 days" or a "Due 28
+# Feb" with no year — measured, a phone bill and an automatic bill printed no
+# date at all, and the copy that goes by the phone is the copy a person pays
+# from. Every bill with something outstanding names the day it is due, in full.
+for tag, _e in CASES:
+    bill = [b for b in app.bills if b["account"] == tag][0]
+    want = bills.fmt_date(bills.due_info(bill)["due"], year=True)
+    check("%s's report line carries its due date in full" % tag,
+          any(want in ln for ln in g.get(tag, [])),
+          "%r missing from %s" % (want, g.get(tag)))
+
 # ------------------------------------------------ the facts that must be there
 for tag, _e in CASES:
     lines = g.get(tag, [])
@@ -224,6 +237,49 @@ if made:
           os.path.getsize(path) > 800, "%d bytes" % os.path.getsize(path))
     with open(path, "rb") as fh:
         check("...with a PDF header", fh.read(5) == b"%PDF-", "bad magic")
+
+# A bill that is already late keeps the word that says so, in front of the date
+# — and a bill with nothing outstanding has no date to print, so it says what it
+# does have.
+with open(STORE, "w") as f:
+    json.dump({"bills": [
+        dict(id="late", payee="Payee LATE", account="LATE", amount=2500,
+             due="2026-01-20", every=0, method="phone", address="",
+             phone="555-0199", note="", lead=0, paid=[]),
+        dict(id="done", payee="Payee DONE", account="DONE", amount=2500,
+             due="2026-01-20", every=0, method="phone", address="",
+             phone="555-0199", note="", lead=0,
+             paid=[{"on": "2026-01-19", "for": "2026-01-20"}])]}, f)
+app4 = bills.Bills()
+pump()
+lines4 = []
+_real_page = nbprint.report_page
+
+
+def _spy4(path):
+    surf, cr, text = _real_page(path)
+    _real_emit = text.emit
+
+    def emit(s, *a, **k):
+        lines4.append(s)
+        return _real_emit(s, *a, **k)
+    text.emit = emit
+    return surf, cr, text
+
+
+nbprint.report_page = _spy4
+try:
+    app4._render_pdf(os.path.join(H, "late.pdf"))
+finally:
+    nbprint.report_page = _real_page
+check("an overdue bill prints the word AND the date it was due",
+      any("Overdue" in ln and "20 January 2026" in ln for ln in lines4),
+      lines4)
+check("a settled bill prints what it has instead of a date",
+      any(ln.startswith("Paid") for ln in lines4)
+      and not any("Paid" in ln and "January" in ln for ln in lines4), lines4)
+app4.destroy()
+pump()
 
 # An empty book still produces a page that says so, rather than a blank sheet.
 with open(STORE, "w") as f:

@@ -40,9 +40,18 @@ DEFAULT_DIRS = [os.path.join(HERE, "..", "buildroot", "board", "notebookos",
 
 
 def _targets(node, out):
-    for n in ast.walk(node):
-        if isinstance(n, ast.Name):
-            out.add(n.id)
+    """Collect names an assignment target actually binds.
+
+    Attribute/subscript bases are loads, not bindings: `ghost.attr = 1` must
+    resolve ghost before it can assign and therefore cannot define ghost.
+    """
+    if isinstance(node, ast.Name):
+        out.add(node.id)
+    elif isinstance(node, (ast.Tuple, ast.List)):
+        for elt in node.elts:
+            _targets(elt, out)
+    elif isinstance(node, ast.Starred):
+        _targets(node.value, out)
 
 
 def defined_names(tree):
@@ -76,7 +85,10 @@ def defined_names(tree):
         elif isinstance(n, ast.Assign):
             for t in n.targets:
                 _targets(t, d)
-        elif isinstance(n, (ast.AnnAssign, ast.AugAssign)):
+        elif isinstance(n, ast.AnnAssign):
+            if n.value is not None:          # `x: T` alone creates no value
+                _targets(n.target, d)
+        elif isinstance(n, ast.NamedExpr):
             _targets(n.target, d)
         elif isinstance(n, (ast.For, ast.AsyncFor)):
             _targets(n.target, d)
@@ -99,6 +111,13 @@ def audit_file(path):
     defined = defined_names(tree) | BUILTINS
     hits = {}
     for n in ast.walk(tree):
+        if (isinstance(n, ast.AugAssign)
+                and isinstance(n.target, ast.Name)
+                and n.target.id not in defined
+                and not n.target.id.startswith("__")):
+            # AugAssign's target has Store context in the AST, but execution
+            # reads the old value first.
+            hits.setdefault(n.target.id, n.lineno)
         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
             if n.id not in defined and not n.id.startswith("__"):
                 hits.setdefault(n.id, n.lineno)

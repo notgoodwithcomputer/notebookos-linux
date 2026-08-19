@@ -149,7 +149,8 @@ def main():
     import data_safety_selftest as D
     want = sys.argv[1:]
     apps = [a for a in sorted(D.RECORD_STORES) if not want or a in want]
-    over, grew = [], []
+    over, grew, errors = [], [], []
+    measured = 0
     for app in apps:
         cfgname, build = D.RECORD_STORES[app][0], D.RECORD_STORES[app][1]
         base = build(N)
@@ -158,13 +159,18 @@ def main():
         bw, bh = measure(app, home)
         if bw is None:
             print("  %-11s ERROR measuring baseline" % app)
+            errors.append((app, "baseline"))
             continue
+        measured += 1
         print("  %-11s baseline %4dx%-4d" % (app, bw, bh))
         for p in paths(base):
             h2 = tempfile.mkdtemp(prefix="nbstress-f-")
             write_store(h2, cfgname, setpath(base, p, LONG))
             w2, hh2 = measure(app, h2)
             if w2 is None:
+                errors.append((app, ".".join(p)))
+                print("     ERROR     %-26s could not be measured" %
+                      ".".join(p))
                 continue
             label = ".".join(p)
             moved = (w2 > bw + GROW_PX or hh2 > bh + GROW_PX)
@@ -174,6 +180,10 @@ def main():
             h3 = tempfile.mkdtemp(prefix="nbstress-h-")
             write_store(h3, cfgname, setpath(base, p, HUGE))
             w3, hh3 = measure(app, h3)
+            if w3 is None:
+                errors.append((app, label + " (bound check)"))
+                print("     ERROR     %-26s bound could not be measured" % label)
+                continue
             unbounded = w3 is not None and (w3 > w2 + GROW_PX or hh3 > hh2 + GROW_PX)
             if unbounded and (w3 > W or hh3 > H):
                 over.append((app, label, w3, hh3))
@@ -189,8 +199,14 @@ def main():
 
     print("\n%d field(s) OVERFLOW %dx%d, %d more move the minimum"
           % (len(over), W, H, len(grew)))
+    if errors:
+        print("RESULT: INCONCLUSIVE — %d measurement error(s), %d/%d app baselines measured"
+              % (len(errors), measured, len(apps)))
+        return 2
     if not over:
-        print("RESULT: no stored field pushes an app off the panel")
+        # "RESULT: <prose>" is not a verdict the release runner recognises
+        # (run_all_gates POSITIVE_RESULT); lead with the word, keep the fact.
+        print("RESULT: PASS — no stored field pushes an app off the panel")
         return 0
     print("RESULT: %d OVERFLOW" % len(over))
     return 1

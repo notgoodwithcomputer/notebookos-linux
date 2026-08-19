@@ -59,7 +59,7 @@ APPS = [
     ("media", "media.json"), ("workout", "workout.json"),
     ("mealplanner", "mealplanner.json"), ("language", "language.json"),
     ("widgetsettings", "widgets.json"), ("finder", "finder.json"),
-    ("settings", "settings.json"), ("terminal", "terminal.json"),
+    ("settings", "settings.json"),
     ("calculator", "calculator.json"), ("g2048", "g2048.json"),
     ("gbaemu", "gbaemu.json"), ("gbasdk", "gbasdk.json"),
 ]

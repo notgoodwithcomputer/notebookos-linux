@@ -60,10 +60,6 @@ HANDLERS: dict[str, dict[str, str]] = {
         "_on_sort_changed": "file sort order",
         "_on_toggle_hidden": "hidden-file visibility",
     },
-    "terminal.py": {
-        "_zoom": "terminal font scale",
-        "_toggle_blink": "terminal cursor blink",
-    },
     "sysmon.py": {"_apply_sort": "process-list sort order"},
     # Excluded from edits by the task, but still analysed read-only.
     "packages.py": {
@@ -83,15 +79,11 @@ HANDLERS: dict[str, dict[str, str]] = {
 }
 
 # Ambiguity is debt, never a quiet pass.  Every entry has its own reason.
-DEBT: dict[tuple[str, str], str] = {
-    ("settings.py", "_on_vol"): "reaches the mixer through amixer, which this gate cannot follow. It DOES persist: _on_vol writes sound.volume to settings.json and session.sh applies it at session start, after its own defaults so the person's choice wins.",
-    ("settings.py", "_on_capvol"): "same shape as _on_vol: amixer is opaque to the gate, but sound.capture is written to settings.json and re-applied by session.sh.",
-    ("settings.py", "_on_mute"): "same shape as _on_vol: amixer is opaque to the gate, but sound.muted is written to settings.json and session.sh mutes or unmutes to match before storing.",
-}
+DEBT: dict[tuple[str, str], str] = {}
 
 WRITE_NAMES = {
     "atomic_write_json", "atomic_write_text", "write_text", "write_bytes",
-    "dump", "dumps", "set_lang", "set_keyboard", "save_choice", "choose",
+    "dump", "set_lang", "set_locale", "set_keyboard", "save_choice", "choose",
 }
 SAVE_WORDS = ("save", "persist", "write")
 LIVE_METHODS = {
@@ -101,8 +93,7 @@ LIVE_METHODS = {
 LIVE_HELPERS = {
     "run", "Popen", "apply_blank", "apply_repeat", "apply_scale",
     "_apply_tz", "_apply_keyboard", "_apply_view", "_refresh", "_tick",
-    "_after_change", "_autosave", "_save", "_save_prefs", "_save_settings",
-    "_persist", "_apply_sort", "choose",
+    "_after_change", "_apply_sort", "choose",
 }
 
 
@@ -194,6 +185,20 @@ def evidence(scopes: list[ast.AST]) -> tuple[set[str], set[str]]:
     return live, writes
 
 
+def split_branch_evidence(fn: ast.AST) -> bool:
+    """True when apply and save exist only on mutually exclusive branches."""
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.If) or not node.orelse:
+            continue
+        left_live, left_write = evidence(list(node.body))
+        right_live, right_write = evidence(list(node.orelse))
+        if ((left_live and not left_write and right_write and not right_live)
+                or (right_live and not right_write and left_write
+                    and not left_live)):
+            return True
+    return False
+
+
 def analyse(de: Path) -> list[Result]:
     results: list[Result] = []
     for module, wanted in HANDLERS.items():
@@ -215,7 +220,7 @@ def analyse(de: Path) -> list[Result]:
                 results.append(Result(module, name, pref, "UNRESOLVED", 0, (), ()))
                 continue
             live, writes = evidence(direct_helpers(fn, fmap))
-            if (module, name) in DEBT:
+            if split_branch_evidence(fn):
                 kind = "UNRESOLVED"
             elif live and writes:
                 kind = "BOTH"
@@ -246,7 +251,18 @@ def print_report(results: list[Result]) -> int:
     print("DEBT: %d" % len(DEBT))
     for (module, handler), reason in sorted(DEBT.items()):
         print("DEBT: %s %s — %s" % (module, handler, reason))
-    return 1 if counts["IN-PROCESS ONLY"] else 0
+    unresolved = {(r.module, r.handler) for r in results
+                  if r.classification == "UNRESOLVED"}
+    debt = set(DEBT)
+    unexpected = unresolved - debt
+    stale = debt - unresolved
+    for module, handler in sorted(unexpected):
+        print("UNLEDGERED UNRESOLVED: %s %s" % (module, handler))
+    for module, handler in sorted(stale):
+        print("STALE DEBT: %s %s" % (module, handler))
+    ok = not counts["IN-PROCESS ONLY"] and not unexpected and not stale
+    print("RESULT: PASS" if ok else "RESULT: FAILED — setting scope incomplete")
+    return 0 if ok else 1
 
 
 def selfcheck(de: Path) -> int:
@@ -274,7 +290,8 @@ def selfcheck(de: Path) -> int:
         for lineno in range(fn.lineno, fn.end_lineno + 1):
             if "self._save_settings()" in lines[lineno - 1]:
                 lines[lineno - 1] = lines[lineno - 1].replace(
-                    "self._save_settings()", "pass  # selfcheck removed persistence")
+                    "self._save_settings()",
+                    "json.dumps(self._settings)  # serialization is not persistence")
                 removed = True
                 break
         if not removed:
@@ -287,7 +304,17 @@ def selfcheck(de: Path) -> int:
             got = hit.classification if hit else "missing"
             print("SELFCHECK FAIL: mutated settings.py:_on_scale was %s, not reported" % got)
             return 2
-        print("SELFCHECK PASS: mutated settings.py:_on_scale is REPORTED as IN-PROCESS ONLY")
+        print("SELFCHECK PASS: discarded json.dumps is REPORTED as IN-PROCESS ONLY")
+        split = ast.parse(
+            "def handler(self, enabled):\n"
+            "    if enabled:\n"
+            "        self.widget.set_visible(True)\n"
+            "    else:\n"
+            "        self._save_settings()\n").body[0]
+        if not split_branch_evidence(split):
+            print("SELFCHECK FAIL: mutually exclusive apply/save looked complete")
+            return 2
+        print("SELFCHECK PASS: mutually exclusive apply/save is unresolved")
         return 0
 
 

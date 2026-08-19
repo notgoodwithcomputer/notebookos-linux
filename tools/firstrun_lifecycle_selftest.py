@@ -25,6 +25,7 @@ Run: python3 tools/firstrun_lifecycle_selftest.py
 import os
 import shutil
 import subprocess
+import stat
 import sys
 import types
 
@@ -76,8 +77,10 @@ def marker_back():
 # Every subprocess this file runs is a live convenience -- `hostname`, and
 # setxkbmap through nbi18n. A machine where none of them can run at all is the
 # case that used to wedge, so that is the machine the whole run happens on.
-def _dead_run(*_a, **_kw):
-    raise FileNotFoundError(2, "No such file or directory", "hostname")
+def _dead_run(args, *_a, **_kw):
+    if args and args[0] == "hostname":
+        raise FileNotFoundError(2, "No such file or directory", "hostname")
+    return subprocess.CompletedProcess(args, 0)
 
 
 firstrun.subprocess = types.SimpleNamespace(
@@ -92,8 +95,10 @@ chk("...and the name is on disk anyway",
     and open(firstrun.HOSTNAME_FILE).read().strip() == "benbook")
 
 
-def _slow_run(*_a, **_kw):
-    raise subprocess.TimeoutExpired(cmd="hostname", timeout=10)
+def _slow_run(args, *_a, **_kw):
+    if args and args[0] == "hostname":
+        raise subprocess.TimeoutExpired(cmd="hostname", timeout=10)
+    return subprocess.CompletedProcess(args, 0)
 
 
 firstrun.subprocess.run = _slow_run
@@ -118,6 +123,44 @@ chk("the password the owner chose is the one in the shadow file",
     == "$6$selftest$selftesthash",
     open(firstrun.SHADOW).read().splitlines()[0])
 
+# Password publication is a power-loss boundary: bytes/metadata must be
+# durable before rename, and the directory entry durable afterwards.
+events = []
+real_fsync = firstrun.os.fsync
+real_replace = firstrun.os.replace
+def traced_fsync(fd):
+    events.append("dir-fsync" if stat.S_ISDIR(os.fstat(fd).st_mode)
+                  else "file-fsync")
+    return real_fsync(fd)
+def traced_replace(src, dst):
+    events.append("replace")
+    return real_replace(src, dst)
+firstrun.os.fsync = traced_fsync
+firstrun.os.replace = traced_replace
+try:
+    shadow_ok = firstrun.set_root_password("$6$selftest$secondhash")
+finally:
+    firstrun.os.fsync = real_fsync
+    firstrun.os.replace = real_replace
+chk("shadow bytes and directory entry are fsynced around replacement",
+    shadow_ok and events.index("file-fsync") < events.index("replace")
+    < events.index("dir-fsync"), events)
+
+# Keyboard live-apply is not merely a convenience: the password is typed now
+# and checked after this persisted layout starts. A normal nonzero setxkbmap
+# exit must keep setup owed rather than store a password under the wrong keys.
+def _bad_keyboard(args, *_a, **_kw):
+    return subprocess.CompletedProcess(args, 1)
+
+firstrun.subprocess.run = _bad_keyboard
+marker_back()
+failed = firstrun.apply({"hostname": "benbook", "username": "Ben",
+                         "lang": "fr", "kbd": "fr", "password": "nb1234"})
+chk("a failed live keyboard change is reported", "keyboard" in failed, failed)
+chk("...and setup remains owed to prevent next-boot password lockout",
+    firstrun.pending())
+firstrun.subprocess.run = _dead_run
+
 # --- 3. a genuinely unwritable file MUST still hold the screen ------------
 # The gate has to be able to go red, or the fix above is just a check deleted.
 blocked = os.path.join(TREE, "etc", "not-a-dir")
@@ -132,6 +175,30 @@ failed = firstrun.apply({"hostname": "benbook", "username": "Ben",
 chk("...is named to the person on the screen", "hostname" in failed, failed)
 chk("...and setup stays owed rather than handing over a half-set machine",
     firstrun.pending())
+
+# A password-less setup still changes /etc/shadow (it explicitly locks root),
+# and failure must be reported just like failure to install a chosen hash.
+firstrun.HOSTNAME_FILE = os.path.join(TREE, "etc", "hostname")
+marker_back()
+real_set_password = firstrun.set_root_password
+firstrun.set_root_password = lambda _hashed: False
+failed = firstrun.apply({"hostname": "benbook", "username": "Ben",
+                         "lang": "fr", "kbd": "fr", "password": ""})
+chk("failure to apply password-less startup is reported",
+    failed == ["password"], failed)
+chk("...and setup remains owed", firstrun.pending())
+firstrun.set_root_password = real_set_password
+
+# Removing the marker is itself the final durable setup step. Claiming success
+# when it remains would make this screen reappear on every boot.
+marker_back()
+real_clear_marker = firstrun.clear_marker
+firstrun.clear_marker = lambda: False
+failed = firstrun.apply({"hostname": "benbook", "username": "Ben",
+                         "lang": "fr", "kbd": "fr", "password": "nb1234"})
+chk("failure to finalize setup is reported", failed == ["completion"], failed)
+chk("...and the marker still makes setup owed", firstrun.pending())
+firstrun.clear_marker = real_clear_marker
 
 print("\n%d/%d checks passed" % (sum(1 for x in R if x), len(R)))
 sys.exit(0 if all(R) else 1)

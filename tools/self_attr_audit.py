@@ -122,10 +122,14 @@ class ClassInfo:
 
 def _record_target(node, defines):
     """Record `self.X` appearing as an assignment target."""
-    for n in ast.walk(node):
-        if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
-                and n.value.id == "self"):
-            defines.add(n.attr)
+    if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+            and node.value.id == "self"):
+        defines.add(node.attr)
+    elif isinstance(node, (ast.Tuple, ast.List)):
+        for elt in node.elts:
+            _record_target(elt, defines)
+    elif isinstance(node, ast.Starred):
+        _record_target(node.value, defines)
 
 
 def _str_const(node):
@@ -253,8 +257,18 @@ def scan_class(module, node):
         if isinstance(n, ast.Assign):
             for t in n.targets:
                 _record_target(t, info.defines)
-        elif isinstance(n, (ast.AugAssign, ast.AnnAssign)):
-            _record_target(n.target, info.defines)
+        elif isinstance(n, ast.AugAssign):
+            # `self._x += 1` loads before storing; it cannot establish a
+            # previously missing attribute. Its target carries Store context,
+            # so record the otherwise-invisible read explicitly.
+            if (isinstance(n.target, ast.Attribute)
+                    and isinstance(n.target.value, ast.Name)
+                    and n.target.value.id == "self"):
+                info.uses.append((n.target.attr, n.lineno, False))
+        elif isinstance(n, ast.AnnAssign):
+            # An annotation without a value creates no instance attribute.
+            if n.value is not None:
+                _record_target(n.target, info.defines)
         elif isinstance(n, (ast.For, ast.AsyncFor)):
             _record_target(n.target, info.defines)
         elif isinstance(n, (ast.With, ast.AsyncWith)):

@@ -97,10 +97,16 @@ def main():
     app = video.VideoEditor()
     pump(0.4)
 
-    # A real project: one trimmed clip on the storyboard.
-    app.clips = [{"kind": "video", "path": clip_file, "name": "shot",
-                  "start": 2.0, "duration": 4, "speed": 1.0,
-                  "transition": None}]
+    # A real project: one trimmed clip on the storyboard, built the way the
+    # EDITOR builds one. This fixture used to hand the clip its own "path"
+    # key, which no clip this app makes has ever carried — a clip carries an
+    # index into the media bin and the path lives on the bin entry. Both
+    # playback entry points read clip["path"], so they agreed with the fixture
+    # and with nothing else: every check below passed while, in the app, Play
+    # never opened the stream at all. The fixture is the app's own shape now,
+    # so these checks answer for the app.
+    app._bin = [{"path": clip_file, "name": "shot", "kind": "video", "dur": 4}]
+    app.clips = [dict(video._new_clip(0, "video", 4), start=2.0)]
     app._render_timeline()
     pump(0.3)
     check("the editor takes the clip", len(app.clips) == 1)
@@ -156,13 +162,17 @@ def main():
         not_reached("no GStreamer player on this host", SPEED_NAME, TRIM_NAME)
     else:
         opens = []
-        real_open = app._player.open
+        # The editor streams through open_async (a preroll that must not
+        # block the GTK thread — a decoder may take seconds); the spy sits
+        # on that call. Spying open() here would see nothing and report the
+        # reopen missing when it is only elsewhere.
+        real_open = app._player.open_async
 
         def spy_open(path, at=0.0, rate=1.0, **kw):
             opens.append((round(float(at), 2), float(rate)))
             return real_open(path, at=at, rate=rate, **kw)
 
-        app._player.open = spy_open
+        app._player.open_async = spy_open
         try:
             app._on_play()
             pump(1.0)
@@ -202,7 +212,7 @@ def main():
                 app._stop_playback(reset=True)
                 pump(0.2)
         finally:
-            app._player.open = real_open
+            app._player.open_async = real_open
             app.clips[0]["speed"] = 1.0
             app.clips[0]["start"] = 2.0
             app.clips[0]["duration"] = 4
@@ -233,9 +243,8 @@ def main():
     # Both halves come from one file, so a frame cache keyed on the path alone
     # handed them the same decoded frame: the stage and both storyboard cards
     # showed an identical picture, which makes a split look like it did nothing.
-    app.clips = [{"kind": "video", "path": clip_file, "name": "shot",
-                  "start": 0.0, "duration": 8, "speed": 1.0,
-                  "transition": None}]
+    app._bin = [{"path": clip_file, "name": "shot", "kind": "video", "dur": 8}]
+    app.clips = [video._new_clip(0, "video", 8)]
     app._sel_cell = 0
     app._menu_split()
     pump(0.2)

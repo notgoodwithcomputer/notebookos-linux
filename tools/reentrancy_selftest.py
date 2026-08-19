@@ -45,9 +45,12 @@ def check(name, fn):
 
 def double_journal_delete():
     app = SimpleNamespace(entries=[{"id": "A"}, {"id": "B"}], active=0,
-                          undo=UndoSpy(), _delete_pending=False)
+                          undo=UndoSpy(), _delete_pending=False, _query="")
     app._remove_active = lambda: journal.Journal._remove_active(app)
-    app._refresh_list = app._load_active = app._persist = lambda: None
+    app._copy_entries = journal.Journal._copy_entries
+    app._refresh_list = app._load_active = lambda *a, **k: None
+    app._persist = lambda: True
+    app._mark_saved = lambda *_a: None
     app._release_delete_guard = lambda: journal.Journal._release_delete_guard(app)
     journal.Journal._delete_active(app)
     journal.Journal._delete_active(app)
@@ -60,7 +63,8 @@ def double_contact_delete():
                           editing=False, _pending_new=False, _deleted=None,
                           _delete_pending=False)
     app._do_delete = lambda: contacts.Contacts._do_delete(app)
-    app._save = app._rebuild_list = app._rebuild_detail = lambda: None
+    app._save = lambda: True
+    app._rebuild_list = app._rebuild_detail = lambda: None
     app._flash = lambda *_a: None
     app._release_delete_guard = lambda: contacts.Contacts._release_delete_guard(app)
     contacts.Contacts._delete_contact(app)
@@ -77,6 +81,7 @@ def double_novel_delete_identity():
                           undo=UndoSpy())
     app._renumber_chapters = app._refresh_chapter_list = app._recount = lambda: None
     app._show_buffer = app._place_cursor_body = lambda *_a: None
+    app._undo_snapshot = lambda: {"chapters": [chapter["id"] for chapter in app.chapters]}
     app._save_state = lambda: True
     target = chapters[0]
     assert "expected_chapter" in inspect.signature(novel.Novel._delete_chapter).parameters, \
@@ -91,7 +96,7 @@ def double_music_remove_undo():
     song = {"id": "A"}
     app = SimpleNamespace(_playlist_tracks={"P": [song]}, undo=UndoSpy(),
                           view="songs", _current_playlist=None)
-    app._save = lambda: None
+    app._save = lambda: True
     music.Music._remove_from_playlist(app, song, "P")
     music.Music._remove_from_playlist(app, song, "P")
     assert app._playlist_tracks["P"] == [], "removed wrong playlist member"
@@ -199,6 +204,7 @@ def main():
     )
     results = [check(name, fn) for name, fn in checks]
     ok = all(results)
+    print("RESULT: %s" % ("PASS" if ok else "FAILED"))
     return 0 if ok else 1
 
 

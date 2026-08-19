@@ -217,6 +217,7 @@ def main():
     wiring(loop, source)
     size_neutral_chrome()
     print("\nvideo zoom accessibility selftest: all checks passed")
+    print("RESULT: PASS")
     return 0
 
 
@@ -225,4 +226,5 @@ if __name__ == "__main__":
         sys.exit(main())
     except AssertionError as exc:
         print("\nvideo zoom accessibility selftest FAILED: %s" % exc)
+        print("RESULT: FAILED")
         sys.exit(1)

@@ -71,4 +71,5 @@ check(stack.names == ["home", "course", "lesson", "course"],
       "the policy still delivers every requested page")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

@@ -7,18 +7,23 @@ payload is refused, a forged signature is refused, and a traversal dest is
 refused, all WITHOUT writing to the target. Exit 0 = all checks pass.
 """
 import json
+import glob
 import os
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NBPKG = os.path.join(ROOT, "tools", "nbpkg.py")
 KEY = os.path.join(ROOT, "packaging", "keys", "nbpkg-signing.key")
 PUB = os.path.join(ROOT, "packaging", "nbpkg-release.pub")
 CHECKS = []
+sys.path.insert(0, os.path.join(ROOT, "buildroot", "board", "notebookos",
+                                "rootfs-overlay", "opt", "notebook", "de"))
+import nbpkg_install  # noqa: E402
 
 
 def check(name, cond, detail=""):
@@ -39,6 +44,71 @@ def main():
         return 2
     td = tempfile.mkdtemp(prefix="nbpkg-test-")
     try:
+        # Trust metadata for the same app can be published by overlapping
+        # installer processes. Each writer must own its staging file; a shared
+        # `path.tmp` lets one replace consume the other's file.
+        trust_race = os.path.join(td, "trust.manifest")
+        replace_barrier = threading.Barrier(2)
+        real_replace = nbpkg_install.os.replace
+        write_results = []
+
+        def synchronized_replace(src, dst):
+            replace_barrier.wait(timeout=2)
+            return real_replace(src, dst)
+
+        def trust_write(value):
+            try:
+                nbpkg_install._atomic_write(trust_race, value)
+                write_results.append(True)
+            except OSError:
+                write_results.append(False)
+
+        nbpkg_install.os.replace = synchronized_replace
+        try:
+            writers = [threading.Thread(target=trust_write, args=(value,))
+                       for value in (b"first manifest", b"second manifest")]
+            for writer in writers:
+                writer.start()
+            for writer in writers:
+                writer.join(timeout=3)
+        finally:
+            nbpkg_install.os.replace = real_replace
+        complete = open(trust_race, "rb").read() if os.path.exists(trust_race) else b""
+        check("overlapping trust writes retain independent ownership",
+              write_results == [True, True] and
+              complete in (b"first manifest", b"second manifest"),
+              "results=%r content=%r" % (write_results, complete))
+
+        # Verified payloads need the same ownership guarantee as trust files.
+        payload_race = os.path.join(td, "installed-module.py")
+        replace_barrier = threading.Barrier(2)
+        write_results = []
+
+        def payload_write(value):
+            try:
+                nbpkg_install._install_payload(payload_race, value, 0o755)
+                write_results.append(True)
+            except OSError:
+                write_results.append(False)
+
+        nbpkg_install.os.replace = synchronized_replace
+        try:
+            writers = [threading.Thread(target=payload_write, args=(value,))
+                       for value in (b"first payload", b"second payload")]
+            for writer in writers:
+                writer.start()
+            for writer in writers:
+                writer.join(timeout=3)
+        finally:
+            nbpkg_install.os.replace = real_replace
+        installed = (open(payload_race, "rb").read()
+                     if os.path.exists(payload_race) else b"")
+        check("overlapping payload writes retain independent ownership",
+              write_results == [True, True] and
+              installed in (b"first payload", b"second payload") and
+              os.stat(payload_race).st_mode & 0o111,
+              "results=%r content=%r" % (write_results, installed))
+
         # A tiny source tree standing in for a Govorimo package.
         src = os.path.join(td, "src")
         os.makedirs(os.path.join(src, "app"))
@@ -93,6 +163,23 @@ def main():
         check("the mode was honored (executable module)",
               os.stat(os.path.join(target, "opt", "notebook", "de",
                                    "govorimo.py")).st_mode & 0o111)
+
+        # Valid JSON can still have the wrong registry shape. Installation must
+        # rebuild discovery metadata instead of failing after payload/trust
+        # publication, and it must preserve the old bytes for diagnosis.
+        for bad_registry in ([], None, "legacy registry"):
+            with open(reg_path, "w") as fh:
+                json.dump(bad_registry, fh)
+            before_damage = set(glob.glob(reg_path + ".damaged-*"))
+            r = run("install", pkg, "--target", target, "--pub", PUB)
+            repaired = json.load(open(reg_path)) if r.returncode == 0 else {}
+            after_damage = set(glob.glob(reg_path + ".damaged-*"))
+            check("wrong-shaped registry %r is quarantined and rebuilt"
+                  % (bad_registry,),
+                  r.returncode == 0
+                  and repaired.get("Govorimo", {}).get("module") == "govorimo"
+                  and len(after_damage - before_damage) == 1,
+                  r.stdout + r.stderr)
 
         # SECURITY: a tampered payload must be refused, and nothing new written.
         tampered = os.path.join(td, "tampered.nbpkg")

@@ -33,15 +33,14 @@ target: shrinking it needs no change here, and a file that has been migrated can
 never quietly go back.
 """
 import os
-import re
 import sys
+import ast
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")
 
-# The toy API, as it is actually spelled at a call site.
-TOY = re.compile(r"\b(?:cr|ctx|c)\.(?:show_text|text_path|text_extents"
-                 r"|select_font_face|set_font_size)\s*\(")
+TOY_METHODS = {"show_text", "text_path", "text_extents",
+               "select_font_face", "set_font_size"}
 
 # Files whose migration belongs to the parallel guest-divergence sweep. Listed
 # by name so this check is useful today rather than only once everything lands.
@@ -62,17 +61,32 @@ KEEP = {
     # Timeline ruler numerals only ("%d" / "%d.%d" bar.beat counters):
     # ASCII digits exist in every shipped face; no fallback can be needed.
     "sequencer.py",
+    # Graph axis numerals only. calculator.py has exactly ONE toy-API draw
+    # (the tick labels at ~line 1127) and its content comes from
+    # format_number(), which is "%.12g" or "%.Nf" of a float -- ASCII digits,
+    # a minus sign, a decimal point and at most an exponent's "e". Checked by
+    # reading every show_text site in the file, not by assuming: a second one
+    # drawing translated text would have to be argued here first.
+    "calculator.py",
 }
 
 
 def offenders(path):
-    """Line numbers of toy-API calls, ignoring comments and docstring prose."""
-    out = []
-    for i, line in enumerate(open(path, encoding="utf-8"), 1):
-        code = line.split("#", 1)[0]
-        if TOY.search(code):
-            out.append(i)
-    return out
+    """Line numbers of toy-API calls, independent of receiver spelling.
+
+    Cairo contexts are routinely named ``canvas`` or ``context`` as helpers
+    evolve.  Restricting this safety gate to cr/ctx/c made a harmless rename
+    erase coverage.  An identically named custom method needs an explicit
+    file-level KEEP with a reviewed reason; ambiguity must not quietly pass.
+    """
+    try:
+        tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+    except (OSError, SyntaxError):
+        return [-1]
+    return sorted({node.lineno for node in ast.walk(tree)
+                   if isinstance(node, ast.Call)
+                   and isinstance(node.func, ast.Attribute)
+                   and node.func.attr in TOY_METHODS})
 
 
 def main():

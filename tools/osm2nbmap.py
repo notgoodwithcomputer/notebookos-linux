@@ -17,13 +17,16 @@ the Notebook OS Maps app renders. Build-time tool (runs on the host).
         uint16  point count
         points: point count × (int32 lat_e6, int32 lon_e6)   # degrees * 1e6
 """
+import os
 import sys
 import struct
+import tempfile
 import xml.etree.ElementTree as ET
 
 # feature categories (kept small; the app styles each)
 CAT = {"other": 0, "road_major": 1, "road_minor": 2, "path": 3, "water": 4,
        "waterway": 5, "building": 6, "green": 7, "landuse": 8, "rail": 9}
+MAX_POINTS = 65535
 
 MAJOR = {"motorway", "trunk", "primary", "secondary", "motorway_link",
          "trunk_link", "primary_link", "secondary_link"}
@@ -64,6 +67,69 @@ def classify(tags):
     if tags.get("amenity") or tags.get("man_made"):
         return "landuse"
     return None
+
+
+def _utf8_prefix(text, limit):
+    """At most `limit` UTF-8 bytes, never ending inside a code point."""
+    raw = text.encode("utf-8")
+    if len(raw) <= limit:
+        return raw
+    return raw[:limit].decode("utf-8", "ignore").encode("utf-8")
+
+
+def _bounded_points(points, closed):
+    if len(points) <= MAX_POINTS:
+        return points
+    if closed:
+        # Keep the explicit closing coordinate inside the uint16 limit. The
+        # runtime also honors the closed flag, but retaining this invariant
+        # avoids a false edge from an arbitrary truncated vertex to the start.
+        return points[:MAX_POINTS - 1] + [points[0]]
+    return points[:MAX_POINTS]
+
+
+def _write_map(dst, region, features, bounds):
+    directory = os.path.dirname(os.path.abspath(dst))
+    mode = os.stat(dst).st_mode & 0o7777 if os.path.exists(dst) else 0o644
+    fd, tmp = tempfile.mkstemp(prefix=".nbmap-", dir=directory)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as fh:
+            fd = -1
+            fh.write(b"NBMAP1\n")
+            rn = _utf8_prefix(region, 65535)
+            fh.write(struct.pack("<H", len(rn))); fh.write(rn)
+            fh.write(struct.pack("<dddd", *bounds))
+            fh.write(struct.pack("<I", len(features)))
+            for cat, closed, name, pts in features:
+                pts = _bounded_points(pts, closed)
+                nb = _utf8_prefix(name, 255)
+                fh.write(struct.pack("<BBB", cat, 1 if closed else 0, len(nb)))
+                fh.write(nb)
+                fh.write(struct.pack("<H", len(pts)))
+                for la, lo in pts:
+                    fh.write(struct.pack("<ii", int(round(la * 1e6)),
+                                         int(round(lo * 1e6))))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, dst)
+        tmp = None
+        try:
+            dirfd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dirfd)
+            finally:
+                os.close(dirfd)
+        except OSError:
+            pass
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def main():
@@ -126,21 +192,7 @@ def main():
     order = {7: 0, 8: 1, 4: 2, 6: 3, 5: 4, 9: 5, 3: 6, 2: 7, 1: 8, 0: 1}
     features.sort(key=lambda f: order.get(f[0], 1))
 
-    with open(dst, "wb") as fh:
-        fh.write(b"NBMAP1\n")
-        rn = region.encode("utf-8")[:65535]
-        fh.write(struct.pack("<H", len(rn))); fh.write(rn)
-        fh.write(struct.pack("<dddd", minlat, minlon, maxlat, maxlon))
-        fh.write(struct.pack("<I", len(features)))
-        for cat, closed, name, pts in features:
-            nb = name.encode("utf-8")[:255]
-            fh.write(struct.pack("<BBB", cat, 1 if closed else 0, len(nb)))
-            fh.write(nb)
-            fh.write(struct.pack("<H", min(len(pts), 65535)))
-            for la, lo in pts[:65535]:
-                fh.write(struct.pack("<ii", int(round(la * 1e6)),
-                                     int(round(lo * 1e6))))
-    import os
+    _write_map(dst, region, features, (minlat, minlon, maxlat, maxlon))
     print("wrote %s: %d features, %d nodes, %d bytes; bbox %.4f,%.4f,%.4f,%.4f"
           % (dst, len(features), len(nodes), os.path.getsize(dst),
              minlat, minlon, maxlat, maxlon))

@@ -2,8 +2,14 @@
 """Display-free adversarial checks for Music's model and persistence logic."""
 
 import os
+import json
 import random
+import sys
 import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                                "opt/notebook/de"))
 
 
 _HOME = tempfile.mkdtemp(prefix="nbmusic-adversarial-")
@@ -51,10 +57,13 @@ def damaged_store_check():
     app = bare()
     app._load()
     app._save()
-    with open(music.CFG_FILE, "rb") as fh:
-        after = fh.read()
-    check("damaged playlist store survives open+close byte-for-byte",
-          after == original, "store was rewritten")
+    asides = [os.path.join(music.CFG_DIR, name)
+              for name in os.listdir(music.CFG_DIR)
+              if name.startswith("music.json.damaged-")]
+    check("damaged playlist bytes survive while a working store is rebuilt",
+          app._store_load_ok
+          and any(open(path, "rb").read() == original for path in asides),
+          "original was not preserved or recovered session stayed read-only")
 
     # Sabotage proof: bypassing the loader's damage state must make the same
     # assertion detect the destructive rewrite, rather than pass vacuously.
@@ -74,10 +83,13 @@ def damaged_store_check():
     app = bare()
     app._load()
     app._save()
-    with open(music.CFG_FILE, "rb") as fh:
-        after_shape = fh.read()
-    check("wrong-shaped playlist store survives open+close byte-for-byte",
-          after_shape == wrong_shape, "loader-normalized store was rewritten")
+    asides = [os.path.join(music.CFG_DIR, name)
+              for name in os.listdir(music.CFG_DIR)
+              if name.startswith("music.json.damaged-")]
+    kept_shape = any(open(path, "rb").read() == wrong_shape for path in asides)
+    check("wrong-shaped playlist store is preserved before rebuilding",
+          kept_shape and app._store_load_ok,
+          "original was not preserved or the recovered session stayed read-only")
 
     # The read-only law above protects work that could not be READ. It must not
     # be triggered by the two caches, which are rebuilt from the audio files
@@ -100,6 +112,48 @@ def damaged_store_check():
         saved = fh.read()
     check("a playlist made after a damaged cache row reaches the disk",
           b"Evening" in saved, "the new playlist was never written")
+
+    future = {
+        "library_revision": 7,
+        "playlists": ["Road trip"],
+        "tracks": {"Road trip": [{
+            "title": "Song", "artist": "Artist", "album": "Album",
+            "time": "3:00", "path": "/music/song.mp3",
+            "rating": 5, "gain": -2,
+        }]},
+        "shuffle": False,
+    }
+    with open(music.CFG_FILE, "w", encoding="utf-8") as fh:
+        json.dump(future, fh)
+    app = bare()
+    app.songs = [{"title": "Song", "artist": "Artist", "album": "Album",
+                  "time": "3:01", "path": "/music/song.mp3"}]
+    app._by_path = {"/music/song.mp3": app.songs[0]}
+    app._load()
+    app._playlists = [name for name, _tracks in app._loaded_playlists]
+    app._playlist_tracks = dict(app._loaded_playlists)
+    app._saved_shuffle = True
+    app._save()
+    with open(music.CFG_FILE, encoding="utf-8") as fh:
+        saved_future = json.load(fh)
+    saved_track = saved_future["tracks"]["Road trip"][0]
+    check("future root and track metadata survive an ordinary playlist save",
+          saved_future.get("library_revision") == 7
+          and saved_track.get("rating") == 5
+          and saved_track.get("gain") == -2
+          and saved_track.get("time") == "3:01"
+          and saved_future.get("shuffle") is True)
+
+    # Python's JSON decoder accepts Infinity. A regenerable cache value must
+    # cost only itself, not abort playlist restoration or disable every save.
+    with open(music.CFG_FILE, "w", encoding="utf-8") as fh:
+        fh.write('{"playlists":["Road trip"],"tracks":{"Road trip":[]},'
+                 '"lengths":{"/music/a.mp3":["stat",Infinity]}}')
+    app = bare()
+    app._load()
+    check("a non-finite cached length keeps playlists and writes enabled",
+          app._store_load_ok and [name for name, _rows in app._loaded_playlists]
+          == ["Road trip"] and "/music/a.mp3" not in app._lengths)
 
     # A write that does not land has to reach the person: playlists are made
     # one drag at a time, with no Save button to press again.
@@ -233,7 +287,7 @@ def destructive_undo_check():
     app = bare()
     app.undo = UndoProbe()
     app._playlist_tracks = {"Mix": [song]}
-    app._save = lambda: None
+    app._save = lambda: True
     app._populate = lambda: None
     app.view = "songs"
     app._remove_from_playlist(song, "Mix")
@@ -245,7 +299,12 @@ def destructive_undo_check():
 
     app = bare()
     app._store_load_ok = True
-    app._save = lambda: None
+    # _save reports True on success and False on failure, and every mutation
+    # ROLLS BACK a failed save (the sidebar must never show what the disk
+    # does not hold). A stand-in save therefore has to say it succeeded — a
+    # bare `lambda: None` reads as failure and made this check fail for a
+    # reason that had nothing to do with undo.
+    app._save = lambda: True
     app.view = "songs"
     app._playlists = ["Mix"]
     app._playlist_tracks = {"Mix": [song]}
@@ -266,11 +325,12 @@ def destructive_undo_check():
     app._playlist_tracks = {"Mix": [song]}
     app._playlist_rows = [object()]
     app._current_playlist = "Mix"
-    app._pl_box = type("Box", (), {"remove": lambda self, row: None})()
+    app._pl_box = type("Box", (), {"remove": lambda self, row: None,
+                                   "pack_start": lambda self, *a: None})()
     app._none = type("NoneRow", (), {
         "set_no_show_all": lambda self, value: None,
-        "show": lambda self: None})()
-    app._save = lambda: None
+        "show": lambda self: None, "hide": lambda self: None})()
+    app._save = lambda: True        # a stand-in save that succeeded (see above)
     app._select = lambda view: None
     app._flash = lambda text: None
     app._confirm = lambda *args: None
@@ -280,6 +340,34 @@ def destructive_undo_check():
           and app.undo.calls == [("checkpoint", "Delete Playlist"),
                                  ("commit", None)],
           "[not reached: destructive action still confirms or lacks undo]")
+
+    app = bare()
+    app.undo = UndoProbe()
+    app._playlists = ["Mix"]
+    app._playlist_tracks = {"Mix": [song]}
+    app._playlist_rows = [object()]
+    app._current_playlist = "Mix"
+    app.view = "playlist"
+    app._pl_box = type("Box", (), {"remove": lambda self, row: None,
+                                   "pack_start": lambda self, *a: None})()
+    # the rollback re-creates the playlist row through _create_playlist,
+    # which retires the "No playlists" placeholder — the fake needs hide()
+    app._none = type("NoneRow", (), {
+        "set_no_show_all": lambda self, value: None,
+        "show": lambda self: None, "hide": lambda self: None})()
+    app._save = lambda: False
+    app._select = lambda view: None
+    flashes = []
+    app._flash = flashes.append
+    before = app._undo_snapshot()
+    app._restore_undo_snapshot = lambda state: (
+        setattr(app, "_playlists", list(state["playlists"])),
+        setattr(app, "_playlist_tracks", state["tracks"]),
+        setattr(app, "_current_playlist", state["playlist"]))
+    app._delete_current_playlist()
+    check("failed playlist deletion is rolled back without success wording",
+          app._playlists == before["playlists"] and not flashes,
+          repr((app._playlists, flashes)))
 
     # Sabotage proof for both assertions: an edit with no history calls is the
     # exact old gap, and must not satisfy either expected call sequence.
@@ -319,6 +407,44 @@ def late_tag_view_check():
           [v for v in ("songs", "albums", "artists", "scope")
            if v == "albums"] != ["songs", "albums", "artists", "scope"])
 
+    # Discoverer callbacks are delivered on the main loop. stop() during
+    # destroy cannot retract one already queued, so neither a final result nor
+    # the finished signal may reach torn-down state/widgets.
+    app = bare()
+    app._closed = True
+    touched = []
+
+    class LateInfo:
+        def get_uri(self):
+            touched.append("result")
+            raise AssertionError("late discovery result was inspected")
+
+    app._populate = lambda: touched.append("populate")
+    app._save = lambda: touched.append("save")
+    app._disc_dirty = True
+    app._on_discovered(None, LateInfo(), None)
+    app._on_discover_finished(None)
+    check("queued discovery callbacks after close are inert", touched == [],
+          "late callbacks touched " + repr(touched))
+
+
+def playlist_track_identity_check():
+    """Identical tags do not make two different audio files interchangeable."""
+    app = bare()
+    first = {"path": "/music/disc-1/song.flac", "title": "Overture",
+             "artist": "Orchestra", "album": "Concert", "time": "3:00"}
+    second = {"path": "/music/disc-2/song.flac", "title": "Overture",
+              "artist": "Orchestra", "album": "Concert", "time": "3:02"}
+    app.songs = [first, second]
+    linked = app._link_track(dict(second))
+    check("a restored playlist relinks an identically tagged track by path",
+          linked is second, "linked to %r" % linked.get("path"))
+
+    # A moved file is still recoverable through the metadata fallback.
+    moved = dict(second, path="/old/location/song.flac")
+    check("a moved playlist track still falls back to matching metadata",
+          app._link_track(moved) is first)
+
 
 if __name__ == "__main__":
     damaged_store_check()
@@ -327,5 +453,6 @@ if __name__ == "__main__":
     destructive_undo_check()
     sort_key_check()
     late_tag_view_check()
+    playlist_track_identity_check()
     print("\n%d/%d checks passed" % (passed, passed + failed))
     raise SystemExit(1 if failed else 0)

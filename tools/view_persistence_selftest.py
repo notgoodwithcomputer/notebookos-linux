@@ -163,6 +163,7 @@ def main():
     finally:
         shutil.rmtree(root, ignore_errors=True)
     print("%d checks, %d failed" % (CHECKS, len(FAILS)))
+    print("RESULT: %s" % ("FAILED" if FAILS else "PASS"))
     return 1 if FAILS else 0
 
 

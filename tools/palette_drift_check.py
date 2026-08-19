@@ -21,12 +21,14 @@ Advisory by default: some near-misses are deliberate (a hover tint one shade
 off its base), so this informs a human rather than gating a build.
 """
 import argparse
+import ast
 import collections
 import glob
 import io
 import os
 import re
 import sys
+import tokenize
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DE = os.path.join(REPO, "buildroot/board/notebookos/rootfs-overlay/opt/notebook/de")
@@ -54,16 +56,39 @@ def palette():
     return out
 
 
+def css_byte_blobs(src):
+    """Byte-string stylesheet bodies, independent of legal quote spelling."""
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(src).readline)
+        for tok in tokens:
+            if tok.type != tokenize.STRING:
+                continue
+            prefix = re.match(r"(?i)^([rubf]*)", tok.string).group(1).lower()
+            if "b" not in prefix:
+                continue
+            try:
+                value = ast.literal_eval(tok.string)
+            except (SyntaxError, ValueError):
+                continue
+            if not isinstance(value, bytes):
+                continue
+            body = value.decode("utf-8", "replace")
+            if "{" in body and "}" in body and ":" in body:
+                yield body
+    except (tokenize.TokenError, IndentationError):
+        return
+
+
 def app_colours():
-    """Every literal hex inside an app's b\"\"\"CSS\"\"\" blob, and who uses it."""
+    """Every literal hex inside an app byte-string stylesheet, and its users."""
     found = collections.defaultdict(set)
     for f in sorted(glob.glob(os.path.join(DE, "*.py"))):
         try:
             src = io.open(f, encoding="utf-8").read()
         except OSError:
             continue
-        for blob in re.finditer(r'b"""(.*?)"""', src, re.S):
-            for c in re.finditer(r'#[0-9A-Fa-f]{6}\b', blob.group(1)):
+        for blob in css_byte_blobs(src):
+            for c in re.finditer(r'#[0-9A-Fa-f]{6}\b', blob):
                 found[c.group(0).upper()].add(os.path.basename(f))
     return found
 

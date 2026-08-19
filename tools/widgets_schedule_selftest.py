@@ -145,3 +145,4 @@ with tempfile.TemporaryDirectory() as tmp:
           "damaged academics.json must become the empty state")
 
 print("widgets schedule selftest: ok")
+print("RESULT: PASS")

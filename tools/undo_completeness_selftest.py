@@ -124,7 +124,7 @@ def calendar_fixture(doc_path):
     o.cals_on={"Work":True,"Private":False}; o._orphans=[]; o._seen=set()
     o._doc_path=str(doc_path); o.sel=calendar_app.date(2026,8,19)
     o.cur_y=2026; o.cur_m=8; o.view="week"; o._calendars_quarantine=False
-    o._save_events=lambda *a,**k: None; o._save_calendars=lambda: None
+    o._save_events=lambda *a,**k: True; o._save_calendars=lambda: True
     o._populate_cal_list=lambda: None; o._refresh=lambda: None
     o._flash_status=lambda _s: None; o._mark_seen=lambda e: o._seen.add(e["id"])
     o.undo=History(o); return o
@@ -155,8 +155,15 @@ with tempfile.TemporaryDirectory(dir=os.environ["NB_HOME"]) as td:
     o._media_path=str(src); o._siblings=[str(src)]; o._sib_idx=0
     for n in ("_set_zoom","_set_info","_show_surface","_update_controls","_rebuild_strip"):
         setattr(o,n,lambda *a,**k:None)
+    # NB_HOME is shared across guestrun invocations, so the Trash arrives with
+    # whatever earlier runs left in it. Diff against a pre-snapshot instead of
+    # assuming an empty bin: "exactly one file named this" was measuring the
+    # harness, and the de-duplicated names it saw ("(1)", "(2)") are the app
+    # doing the right thing — never overwriting something already trashed.
+    trash=Path(os.environ["NB_HOME"])/".Trash"
+    before_trash=set(trash.glob("recover-me.bin*")) if trash.is_dir() else set()
     o._do_trash(str(src))
-    candidates=list((Path(os.environ["NB_HOME"])/".Trash").glob("recover-me.bin*"))
+    candidates=sorted(set(trash.glob("recover-me.bin*")) - before_trash)
     ok=(not src.exists() and len(candidates)==1 and candidates[0].read_bytes()==payload)
     result(ok, "media Move to Trash is recoverable")
     if ok: candidates[0].rename(src)
@@ -171,4 +178,5 @@ result("undo.checkpoint" not in body("calendar", "_load_document", mut),
        "PASS-MUTANT calendar Open missing checkpoint is caught")
 
 print("TALLY: pass=%d fail=%d skip=%d" % (passed, failed, skipped))
+print("RESULT: %s" % ("FAILED" if failed else "PASS"))
 raise SystemExit(bool(failed))

@@ -46,6 +46,13 @@ class _Calc(object):
     self.deg, and records WHY a failure failed through _fail()."""
     evaluate = C.evaluate
     _fail = C._fail
+    # evaluate() answers through _answer(), which remembers the NUMBER
+    # beside the text a display mode renders it as. A stub that borrows
+    # evaluate must borrow that too, or every case in this file dies with
+    # AttributeError before a single check is counted -- which is exactly
+    # what it did, and a suite that CRASHES reports no verdict at all.
+    _answer = C._answer
+    _answer_value = C._answer_value
 
     def __init__(self, deg=True):
         self.deg = deg
@@ -66,6 +73,18 @@ def case(expr, want, deg=True):
         FAILS.append(expr)
     print("%-4s %-24r -> %-22r %s" % ("ok" if ok else "FAIL", expr, got,
                                       "" if ok else "want %r" % want))
+
+
+# Python function objects expose their module globals through attributes.  A
+# calculator expression must never be able to traverse that object graph.
+sentinel = os.path.join(os.environ["NB_HOME"], "eval-escaped")
+payload = "sin.__globals__['os'].system('touch %s')" % sentinel
+case(payload, "Error")
+if os.path.exists(sentinel):
+    FAILS.append("evaluator sandbox escape")
+    print("FAIL evaluator executed a non-arithmetic command")
+else:
+    print("ok   evaluator rejects attributes, subscripts, and strings")
 
 
 def check(name, ok, detail=""):

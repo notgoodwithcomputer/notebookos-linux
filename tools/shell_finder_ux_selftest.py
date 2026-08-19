@@ -85,3 +85,4 @@ if __name__ == "__main__":
     stale_refresh_contract()
     wiring_contract()
     print("shell/Finder UX selftest: OK")
+    print("RESULT: PASS")

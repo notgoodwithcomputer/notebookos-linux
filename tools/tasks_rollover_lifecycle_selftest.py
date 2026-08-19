@@ -111,4 +111,5 @@ check(events == [("save", True)],
       "final state saves once, after the closed gate is raised")
 
 print("\n%d checks, %d failed" % (checks, len(failures)))
+print("RESULT: %s" % ("FAILED" if failures else "PASS"))
 sys.exit(1 if failures else 0)

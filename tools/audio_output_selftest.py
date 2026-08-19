@@ -31,7 +31,15 @@ Writes only into a throwaway NB_HOME.
 import os
 import sys
 import shutil
+import stat
 import tempfile
+import threading
+import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DE = os.path.join(ROOT, "buildroot", "board", "notebookos",
+                  "rootfs-overlay", "opt", "notebook", "de")
+sys.path.insert(0, DE)
 
 HOME = tempfile.mkdtemp(prefix="nbaudio-selftest-")
 os.makedirs(os.path.join(HOME, ".config", "notebook"))
@@ -39,6 +47,56 @@ os.environ["NB_HOME"] = HOME
 os.environ["NB_ASOUND_CONF"] = os.path.join(HOME, "asound.conf")
 
 import nbaudio                                             # noqa: E402
+
+durability_path = os.path.join(HOME, "durable-audio-choice")
+fsynced_modes = []
+real_fsync = nbaudio.os.fsync
+
+
+def recording_fsync(fd):
+    fsynced_modes.append(os.fstat(fd).st_mode)
+    return real_fsync(fd)
+
+
+nbaudio.os.fsync = recording_fsync
+try:
+    assert nbaudio._write(durability_path, "PCH:0")
+finally:
+    nbaudio.os.fsync = real_fsync
+assert any(stat.S_ISDIR(mode) for mode in fsynced_modes), fsynced_modes
+
+# Two session actors can persist at once: boot applies the remembered route
+# while Settings accepts a click. Their atomic writes need independent staging
+# names or one replace consumes the other writer's shared `.new` file.
+race_path = os.path.join(HOME, "audio-write-race")
+race_barrier = threading.Barrier(2)
+real_replace = nbaudio.os.replace
+race_results = []
+
+
+def synchronized_replace(src, dst):
+    race_barrier.wait(timeout=2)
+    return real_replace(src, dst)
+
+
+def race_write(value):
+    race_results.append(nbaudio._write(race_path, value))
+
+
+nbaudio.os.replace = synchronized_replace
+try:
+    writers = [threading.Thread(target=race_write, args=(value,))
+               for value in ("speakers", "television")]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join(timeout=3)
+finally:
+    nbaudio.os.replace = real_replace
+assert all(not writer.is_alive() for writer in writers), "audio writers deadlocked"
+assert race_results == [True, True], race_results
+with open(race_path) as fh:
+    assert fh.read() in ("speakers", "television")
 
 # ---- no real commands, ever ------------------------------------------------
 # Recorded so the un-mute sweep can be asserted on, and canned so the
@@ -255,6 +313,27 @@ check("twenty volume keypresses in a row cost ONE jack probe, not twenty",
 JACKS.clear()
 nbaudio._JACK_CACHE.clear()
 
+# ALSA reuses numeric card indexes after USB removal. Cached state from the
+# former card must not be assigned to different hardware inheriting index 1.
+JACKS[1] = jack_contents([(3, True)])
+old_jacks = nbaudio._jack_map(1, "OLD")
+JACKS[1] = jack_contents([(3, False)])
+new_jacks = nbaudio._jack_map(1, "NEW")
+check("jack cache follows stable card identity across index reuse",
+      old_jacks.get(3) is True and new_jacks.get(3) is False,
+      (old_jacks, new_jacks))
+JACKS.clear()
+nbaudio._JACK_CACHE.clear()
+
+now = time.monotonic()
+for index in range(40):
+    nbaudio._JACK_CACHE[(index, "OLD-%d" % index)] = (
+        now - nbaudio._JACK_TTL - 1, {})
+nbaudio._jack_map(1, "CURRENT")
+check("expired hotplug identities are reclaimed from the long-lived cache",
+      set(nbaudio._JACK_CACHE) == {(1, "CURRENT")}, nbaudio._JACK_CACHE)
+nbaudio._JACK_CACHE.clear()
+
 # A card with more than ten ELD slots: "eld#2.10" sorts before "eld#2.2" as a
 # string, which silently reorders the pins and points at the wrong port.
 many = fake_proc(INTEL_CARDS, INTEL_PCM,
@@ -339,8 +418,9 @@ check("applying an output un-mutes IEC958 — HDMI's mute, and the reason a "
       any("IEC958" in s for s in sset), sset[:4])
 check("...including the numbered ones a multi-port card has",
       any("IEC958,1" in s for s in sset), [s for s in sset if "IEC958" in s][:4])
-check("...and the analog controls as before",
-      any("Master" in s for s in sset), sset[:4])
+check("...without overriding analog volume or mute state",
+      not any(any(ctl in s for ctl in ("Master", "Speaker", "PCM"))
+              for s in sset), sset[:4])
 check("every un-mute names the card, so it cannot act on the wrong one",
       all("-c 1" in s for s in sset), [s for s in sset if "-c 1" not in s][:3])
 check("HDMI is not asked for a volume level it does not have",
@@ -352,6 +432,36 @@ check("an unparseable output key is refused rather than written",
 
 # ============================================================ remembering it
 section("remembering the choice")
+check("a legacy numeric choice cannot target different hardware after reboot",
+      nbaudio._untoken("hw:1,0", p_tv) is None)
+with open(nbaudio.CHOICE, "w") as fh:
+    fh.write("PCH:0")
+before = open(nbaudio.CHOICE).read()
+check("a hot-unplugged output cannot erase the saved choice",
+      nbaudio.choose("hw:99,7", p_tv) is None
+      and open(nbaudio.CHOICE).read() == before)
+real_outputs, real_token = nbaudio.outputs, nbaudio._token
+nbaudio.outputs = lambda _proc=nbaudio.PROC: [{"key": "hw:1,7"}]
+nbaudio._token = lambda _key, _proc=nbaudio.PROC: None
+check("disappearing during stable-ID lookup also preserves the choice",
+      nbaudio.choose("hw:1,7", p_tv) is None
+      and open(nbaudio.CHOICE).read() == before)
+nbaudio.outputs, nbaudio._token = real_outputs, real_token
+inventory_calls = [0]
+nbaudio.outputs = lambda _proc=nbaudio.PROC: (
+    inventory_calls.__setitem__(0, inventory_calls[0] + 1) or
+    ([{"key": "hw:1,7"}] if inventory_calls[0] == 1 else []))
+nbaudio._token = lambda _key, _proc=nbaudio.PROC: "PCH:7"
+check("disappearing immediately before apply preserves the choice",
+      nbaudio.choose("hw:1,7", p_tv) is None
+      and open(nbaudio.CHOICE).read() == before)
+nbaudio.outputs, nbaudio._token = real_outputs, real_token
+real_write, real_apply = nbaudio._write, nbaudio.apply
+nbaudio._write = lambda _path, _text: False
+nbaudio.apply = lambda key, _proc=nbaudio.PROC: key or "hw:1,3"
+check("a choice that could not be saved is reported as a failure",
+      nbaudio.choose("hw:1,7", p_tv) is None)
+nbaudio._write, nbaudio.apply = real_write, real_apply
 nbaudio.choose("hw:1,7", p_tv)
 check("a chosen output is remembered", nbaudio.saved_choice(p_tv) == "hw:1,7")
 check("...and is what is in force", nbaudio.current(p_tv) == "hw:1,7",
@@ -403,9 +513,11 @@ check("a card that is not in this machine any more is forgotten, not guessed at"
       nbaudio.current(p))
 with open(nbaudio.CHOICE, "w") as fh:
     fh.write("hw:1,7")
-check("a choice saved by an OLDER build, as a bare index, is still honoured "
-      "rather than silently dropped on upgrade",
-      nbaudio.current(p_tv) == "hw:1,7", nbaudio.current(p_tv))
+check("a choice saved by an older build as a bare index fails closed to auto "
+      "rather than guessing after hardware reorder",
+      nbaudio.saved_choice(p_tv) is None
+      and nbaudio.current(p_tv) == nbaudio.auto_pick(p_tv),
+      nbaudio.current(p_tv))
 
 # ============================================================== the microphone
 section("the microphone")
@@ -427,5 +539,6 @@ if FAILED:
     print("\nFAILED:")
     for n in FAILED:
         print("  - " + n)
+print("RESULT: %s" % ("PASS" if all(RESULTS) else "FAILED"))
 shutil.rmtree(HOME, ignore_errors=True)
 sys.exit(0 if all(RESULTS) else 1)

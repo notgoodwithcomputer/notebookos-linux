@@ -185,4 +185,5 @@ check("transition has its content.video inventory name",
       source_error or "marker absent")
 
 print("\nVIDEO MOTION SELFTEST: %d passed, %d failed" % (passed, failed))
+print("RESULT: %s" % ("FAILED" if failed else "PASS"))
 raise SystemExit(1 if failed else 0)

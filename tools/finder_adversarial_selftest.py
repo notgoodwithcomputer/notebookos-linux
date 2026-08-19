@@ -130,4 +130,5 @@ finally:
     shutil.rmtree(HOME, ignore_errors=True)
 
 print("\n%d checks, %d failed" % (count, len(failed)))
+print("RESULT: %s" % ("FAILED" if failed else "PASS"))
 sys.exit(1 if failed else 0)

@@ -149,7 +149,13 @@ class Widget:
         pass
 
     def show(self):
-        pass
+        self.visible = True
+
+    def hide(self):
+        self.visible = False
+
+    def get_visible(self):
+        return getattr(self, "visible", False)
 
     def set_no_show_all(self, *_a):
         pass
@@ -161,6 +167,20 @@ timers = []
 def fake_timeout_add_seconds(secs, cb, *a):
     timers.append((secs, cb))
     return len(timers)          # a truthy source id, like GLib's
+
+
+def pauses():
+    """The timers that are the PAUSE, by the callback each one carries.
+
+    A failure now arms two sources: the pause itself (_re_enable) and the 1s
+    tick that counts it down on screen (_tick_wait), which exists because a
+    field that has stopped accepting keys and says nothing about it reads as a
+    dead keyboard. The invariant these checks are about has always been "one
+    pause per failure" -- not "one timer" -- so they count the pauses, and a
+    second _re_enable arriving from anywhere would still fail them.
+    """
+    return [t for t in timers
+            if getattr(t[1], "__name__", "") == "_re_enable"]
 
 
 login.GLib.timeout_add_seconds = fake_timeout_add_seconds
@@ -180,23 +200,30 @@ win._kb_active = 0
 win.entry = Widget()
 win.error = Widget()
 win._show = Widget()
+# The recall is two paragraphs in two labels now, and the pause says how many
+# seconds it has left in a third -- with its own 1s source, which the tear-down
+# has to own exactly like the other two.
 win._recall = Widget()
+win._kbdnote = Widget()
+win._wait = Widget()
+win._count_id = 0
+win._wait_left = 0
 win._go = Widget()
 
 for _ in range(2):
     win.entry.set_text("wrong")
     win._try()
-check(win._tries == 2 and not timers,
+check(win._tries == 2 and not pauses(),
       "two wrong passwords: counted 2 (got %d), no pause yet (%d armed)"
-      % (win._tries, len(timers)))
+      % (win._tries, len(pauses())))
 check(win.entry.sensitive,
       "the field is still accepting input after two failures")
 
 win.entry.set_text("wrong")
 win._try()
-check(win._tries == 3 and len(timers) == 1,
-      "the third failure arms exactly one pause (tries=%d, timers=%d)"
-      % (win._tries, len(timers)))
+check(win._tries == 3 and len(pauses()) == 1,
+      "the third failure arms exactly one pause (tries=%d, pauses=%d)"
+      % (win._tries, len(pauses())))
 check(not win.entry.sensitive and not win._go.sensitive,
       "the field and the button are held during the pause")
 
@@ -208,23 +235,23 @@ win._try()
 check(win._tries == 3,
       "a submit during the pause is not counted (tries=%d, want 3)"
       % win._tries)
-check(len(timers) == 1,
-      "a submit during the pause does not arm a second timer (timers=%d)"
-      % len(timers))
+check(len(pauses()) == 1,
+      "a submit during the pause does not arm a second pause (pauses=%d)"
+      % len(pauses()))
 
 # When the pause ends, the screen accepts attempts again -- the guard must not
 # be able to wedge the field shut, which would be the brick this file's header
 # in login.py exists to prevent.
-secs, cb = timers[0]
+secs, cb = pauses()[0]
 check(secs == 3, "the first pause is min(5, tries) = 3s (got %s)" % secs)
 check(cb() is False, "_re_enable does not repeat")
 check(win.entry.sensitive and win._go.sensitive and not win._wait_id,
       "the field comes back after the pause")
 win.entry.set_text("wrong")
 win._try()
-check(win._tries == 4 and len(timers) == 2,
-      "attempts count again after the pause (tries=%d, timers=%d)"
-      % (win._tries, len(timers)))
+check(win._tries == 4 and len(pauses()) == 2,
+      "attempts count again after the pause (tries=%d, pauses=%d)"
+      % (win._tries, len(pauses())))
 
 # A successful sign-in quits the main loop; anything still queued behind it
 # must not run crypt again over a screen that is already gone.
@@ -264,6 +291,8 @@ check(clock._tick_clock() is False and clock._clock_id == 0
 pause = login.Login.__new__(login.Login)
 pause._closed = True
 pause._wait_id = 23
+pause._count_id = 0
+pause._wait = Widget()
 pause.entry, pause._go = Widget(), Widget()
 pause.entry.set_sensitive(False)
 pause._go.set_sensitive(False)
@@ -276,6 +305,9 @@ check(pause._re_enable() is False and pause._wait_id == 0
 owner = login.Login.__new__(login.Login)
 owner._closed = False
 owner._clock_id, owner._wait_id = 31, 32
+# ...and the countdown that says how long the pause has left: a 1s source over
+# the same widgets, so it goes down with them.
+owner._count_id = 33
 events = []
 real_remove = login.GLib.source_remove
 real_quit = login.Gtk.main_quit
@@ -289,9 +321,10 @@ finally:
     login.Gtk.main_quit = real_quit
 check(first is False and second is False and owner._closed,
       "destroy is idempotent and raises the Login closed gate")
-check(events == [("remove-31", True), ("remove-32", True), ("quit", True)],
-      "destroy cancels both timers then quits exactly once behind the gate")
-check(owner._clock_id == 0 and owner._wait_id == 0,
+check(events == [("remove-31", True), ("remove-32", True),
+                 ("remove-33", True), ("quit", True)],
+      "destroy cancels every timer then quits exactly once behind the gate")
+check(owner._clock_id == 0 and owner._wait_id == 0 and owner._count_id == 0,
       "destroy clears all Login timer ownership")
 
 closed_try = login.Login.__new__(login.Login)
@@ -333,6 +366,9 @@ def fresh(closed, **kw):
     w.user = "tester"
     w._tries = 0
     w._wait_id = 0
+    w._count_id = 0
+    w._wait_left = 0
+    w._wait = Widget()
     w._clock_id = 0
     w._closed = closed
     w.ok = False
@@ -476,6 +512,32 @@ finally:
 check(login.GLib.source_remove is real_source_remove and
       login.Gtk.main_quit is real_main_quit,
       "the real GLib.source_remove and Gtk.main_quit are put back")
+
+# Escape is not the only way a window can be closed. Alt+F4 and an EWMH
+# _NET_CLOSE_WINDOW request arrive as delete-event; destroying the lock screen
+# would return its caller to the already-running desktop without a password.
+guard = login.Login.__new__(login.Login)
+guard.ok = False
+check(guard._on_delete() is True,
+      "a window-manager close is vetoed before authentication")
+guard.ok = True
+check(guard._on_delete() is False,
+      "an authenticated screen may close normally")
+
+delete_targets = []
+for node in ast.walk(tree):
+    if not isinstance(node, ast.Call) or not isinstance(node.func,
+                                                        ast.Attribute):
+        continue
+    if node.func.attr != "connect" or len(node.args) < 2:
+        continue
+    sig = node.args[0]
+    if isinstance(sig, ast.Constant) and sig.value == "delete-event":
+        handler = node.args[1]
+        delete_targets.append(handler.attr if isinstance(handler, ast.Attribute)
+                              else getattr(handler, "id", "?"))
+check(delete_targets == ["_on_delete"],
+      "the real login window connects delete-event to the close veto")
 
 print()
 if fails:

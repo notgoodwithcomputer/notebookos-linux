@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Headless self-test for the tablet-mode daemon."""
+import ctypes
 import importlib.util
 import fcntl
 import io
@@ -11,6 +12,7 @@ import tempfile
 import time
 import unittest
 import uuid
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DAEMON = os.path.join(ROOT, "buildroot", "board", "notebookos",
@@ -77,7 +79,94 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(requests[0][2])
 
 
+class DeviceLoopTests(unittest.TestCase):
+    def test_multiple_switches_are_aggregated(self):
+        calls = []
+        loop = xt.DeviceLoop(xt.ModeCore(calls.append), discover=lambda: [])
+        loop.devices = {10: ["a", b"", True], 11: ["b", b"", False]}
+        loop._publish_mode()
+        loop._consume_records(11, [(xt.EV_SW, xt.SW_TABLET_MODE, 0)])
+        self.assertEqual(calls, [True])
+        loop._consume_records(10, [(xt.EV_SW, xt.SW_TABLET_MODE, 0)])
+        self.assertEqual(calls, [True, False])
+
+    def test_inactive_device_cannot_cancel_active_peer(self):
+        calls = []
+        loop = xt.DeviceLoop(xt.ModeCore(calls.append), discover=lambda: [])
+        loop.devices = {10: ["a", b"", True], 11: ["b", b"", True]}
+        loop._publish_mode()
+        loop._consume_records(10, [(xt.EV_SW, xt.SW_TABLET_MODE, 0)])
+        self.assertEqual(calls, [True])
+
+    def test_losing_last_switch_preserves_folded_safety(self):
+        calls = []
+        loop = xt.DeviceLoop(xt.ModeCore(calls.append), discover=lambda: [])
+        loop.devices = {10: ["hinge", b"", True]}
+        loop._publish_mode()
+        loop._drop(10)
+        self.assertEqual(calls, [True])
+
+    def test_losing_one_switch_publishes_remaining_authority(self):
+        calls = []
+        loop = xt.DeviceLoop(xt.ModeCore(calls.append), discover=lambda: [])
+        loop.devices = {10: ["folded", b"", True],
+                        11: ["unfolded", b"", False]}
+        loop._publish_mode()
+        loop._drop(10)
+        self.assertEqual(calls, [True, False])
+
+
+class XInputResourceTests(unittest.TestCase):
+    def test_missing_advertised_class_array_is_conservatively_touch(self):
+        self.assertTrue(xt.has_touch_class(None, 1))
+        self.assertFalse(xt.has_touch_class(None, 0))
+
+    def test_malformed_device_node_property_is_freed(self):
+        backing = (ctypes.c_ubyte * 2)(1, 2)
+        freed = []
+
+        class X11:
+            @staticmethod
+            def XInternAtom(_dpy, _name, _only):
+                return 1
+
+            @staticmethod
+            def XFree(data):
+                freed.append(bool(data))
+
+        class XI:
+            @staticmethod
+            def XIGetProperty(*args):
+                args[-4]._obj.value = 16       # allocated, wrong format
+                args[-3]._obj.value = 2
+                ptr = ctypes.cast(backing, ctypes.POINTER(ctypes.c_ubyte))
+                ctypes.cast(
+                    args[-1],
+                    ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)))[0] = ptr
+                return 0
+
+        adapter = object.__new__(xt.XInput2)
+        adapter.x11, adapter.xi = X11(), XI()
+        self.assertIsNone(adapter._node(1, 2))
+        self.assertEqual(freed, [True])
+
+
 class ActionTests(unittest.TestCase):
+    def test_hung_keyboard_is_killed_and_reaped(self):
+        child = mock.Mock(pid=43210)
+        child.poll.return_value = None
+        child.wait.side_effect = [subprocess.TimeoutExpired("osk", 2), 0]
+        controller = xt.OskController()
+        controller.child = child
+        with mock.patch.object(xt.os, "killpg") as killpg:
+            controller.stop()
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(43210, signal.SIGTERM),
+             mock.call(43210, signal.SIGKILL)])
+        self.assertEqual(child.wait.call_count, 2)
+        self.assertIsNone(controller.child)
+
     def test_flag_and_owned_keyboard_lifecycle(self):
         with tempfile.TemporaryDirectory() as td:
             flag = os.path.join(td, "mode")
@@ -222,6 +311,22 @@ class SafetyTests(unittest.TestCase):
                 self.assertEqual(fh.read(), "AT keyboard\n")
             actions.close()
 
+    def test_reconcile_catches_late_internal_device(self):
+        with tempfile.TemporaryDirectory() as td:
+            first = fake_device(10, "AT keyboard", xt.XI_SLAVE_KEYBOARD,
+                                phys="isa0060/serio0/input0")
+            actions = self._actions(td, [first])
+            actions.inhibit()
+            late = fake_device(11, "AT keyboard", xt.XI_SLAVE_KEYBOARD,
+                               phys="isa0060/serio0/input0")
+            external = fake_device(12, "USB keyboard", xt.XI_SLAVE_KEYBOARD,
+                                   phys="usb-0000/input0")
+            actions.xinput.inventory = [late, external]
+            actions.reconcile_inhibition()
+            self.assertIn((11, False), actions.xinput.changed)
+            self.assertNotIn((12, False), actions.xinput.changed)
+            self.assertEqual(set(actions.disabled), {11})
+
     def test_failed_confirmation_does_not_inhibit(self):
         with tempfile.TemporaryDirectory() as td:
             events = []
@@ -232,6 +337,42 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual(events, ["start-osk", "confirm"])
             self.assertEqual(actions.xinput.changed, [])
             actions.close()
+
+    def test_bad_diagnostic_marker_cannot_interrupt_close(self):
+        with tempfile.TemporaryDirectory() as td:
+            events = []
+            actions = xt.Actions(
+                flag=os.path.join(td, "mode"),
+                xinput=FakeXInput(events=events),
+                inhibited_file=td,       # unlink/open is an IsADirectoryError
+                osk=FakeOsk(events=events))
+            actions.disabled = {7: "internal keyboard"}
+            actions.close()
+            self.assertEqual(events, ["enable", "stop-osk"])
+            self.assertEqual(actions.disabled, {})
+
+    def test_bad_diagnostic_marker_cannot_abort_startup_heal(self):
+        with tempfile.TemporaryDirectory() as td:
+            device = fake_device(1, "AT keyboard", xt.XI_SLAVE_KEYBOARD,
+                                 phys="isa0060/serio0/input0")
+            actions = xt.Actions(
+                flag=os.path.join(td, "mode"),
+                xinput=FakeXInput([device]),
+                inhibited_file=td,       # unlink is an IsADirectoryError
+                osk=FakeOsk())
+            actions.startup_heal()
+            self.assertEqual(actions.xinput.changed, [(1, True)])
+
+    def test_bad_mode_flag_cannot_abort_close(self):
+        with tempfile.TemporaryDirectory() as td:
+            events = []
+            actions = xt.Actions(
+                flag=td,                # unlink is an IsADirectoryError
+                xinput=FakeXInput(events=events),
+                inhibited_file=os.path.join(td, "inhibited"),
+                osk=FakeOsk(events=events))
+            actions.close()
+            self.assertEqual(events, ["stop-osk"])
 
     def test_leave_order(self):
         with tempfile.TemporaryDirectory() as td:
@@ -373,8 +514,7 @@ class UinputChainTests(unittest.TestCase):
 
     def test_real_kernel_event_chain(self):
         if not uinput_chain_available():
-            print(UINPUT_SKIP)
-            return
+            self.skipTest(UINPUT_SKIP)
 
         print("UINPUT CHAIN: OSK path is hardcoded; asserting flag-file actions only")
         flag = "/tmp/nb-tablet-mode"
@@ -454,4 +594,11 @@ class UinputChainTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    # unittest's own "OK (skipped=1)" is not a verdict the release runner
+    # recognises (run_all_gates SUCCESSWORD), so this gate was recorded as DID
+    # NOT RUN while passing. Print the outcome in the house grammar; the one
+    # skip (/dev/uinput needs root) is declared in run_all_gates.ALLOWED_SKIPS.
+    _result = unittest.main(verbosity=2, exit=False).result
+    _ok = _result.wasSuccessful()
+    print("RESULT: %s" % ("ALL PASS" if _ok else "FAILED"))
+    raise SystemExit(0 if _ok else 1)

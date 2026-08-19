@@ -117,6 +117,25 @@ def case_unrelated_keys_survive():
         shutil.rmtree(home, ignore_errors=True)
 
 
+def case_unencodable_update_fails_safely():
+    """A caller's bad value obeys the same false/no-replacement contract."""
+    print("case: an unencodable update reports failure without touching state")
+    home, path = fresh_home(HEALTHY)
+    circular = []
+    circular.append(circular)
+    try:
+        check(nbi18n._update_locale(keyboard=circular) is False,
+              "JSON encoding failure is returned, not raised")
+        with open(path) as fh:
+            check(fh.read() == HEALTHY,
+                  "the healthy live locale file remains byte-for-byte intact")
+        strays = [p for p in glob.glob(path + "*")
+                  if p != path and not p.endswith(".lock")]
+        check(not strays, "the failed writer removes its private temp file")
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # The interleaving harness. json.dump is swapped for one that serialises the
 # object into the writer's still-OPEN temp file and then parks the thread there,
@@ -150,6 +169,7 @@ def case_concurrent_writers():
                             '"login_keyboard": "us"}')
     arrived = {"A": threading.Event(), "B": threading.Event()}
     release = {"A": threading.Event(), "B": threading.Event()}
+    results = {}
 
     def gate(name):
         if name not in arrived:
@@ -160,22 +180,25 @@ def case_concurrent_writers():
     real_json = nbi18n.json
     nbi18n.json = _PausingJson(real_json, gate)
     try:
-        a = threading.Thread(target=nbi18n.set_lang, args=("fr",), name="A")
-        b = threading.Thread(target=nbi18n.set_keyboard, args=("ru,us",),
-                             name="B")
+        def write(name, fn, value):
+            results[name] = fn(value)
+
+        a = threading.Thread(target=write,
+                             args=("A", nbi18n.set_lang, "fr"), name="A")
+        b = threading.Thread(target=write,
+                             args=("B", nbi18n.set_keyboard, "ru,us"), name="B")
         a.start()
         arrived["A"].wait(5.0)          # A is inside its half-written temp file
         b.start()
-        # B either joins A inside the write (no serialisation) or is held out of
-        # it. Both are answered by the assertions below; the wait only makes the
-        # first case deterministic rather than scheduler-dependent.
-        arrived["B"].wait(1.0)
+        # Release A inside the documented 200ms lock deadline. B must then read
+        # A's committed value, merge its own key, and commit successfully.
         release["B"].set()
-        b.join(5.0)
         release["A"].set()
         a.join(5.0)
         b.join(5.0)
         check(not a.is_alive() and not b.is_alive(), "both writers finished")
+        check(results == {"A": True, "B": True},
+              "both writers report committed success")
     finally:
         nbi18n.json = real_json
 
@@ -196,6 +219,58 @@ def case_concurrent_writers():
         strays = [p for p in glob.glob(path + "*")
                   if p != path and not p.endswith(".lock")]
         check(not strays, "no temp file left behind: %r" % (strays,))
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def case_lock_timeout_fails_closed():
+    """A contender past the bounded deadline fails without partial bytes."""
+    print("case: a lock timeout fails closed without corrupting committed state")
+    home, path = fresh_home('{"lang": "en", "keyboard": "us", '
+                            '"login_keyboard": "us"}')
+    arrived = threading.Event()
+    release = threading.Event()
+    results = {}
+
+    def gate(name):
+        if name == "A":
+            arrived.set()
+            release.wait(5.0)
+
+    def write(name, fn, value):
+        results[name] = fn(value)
+
+    real_json = nbi18n.json
+    nbi18n.json = _PausingJson(real_json, gate)
+    try:
+        a = threading.Thread(target=write,
+                             args=("A", nbi18n.set_lang, "fr"), name="A")
+        b = threading.Thread(target=write,
+                             args=("B", nbi18n.set_keyboard, "ru,us"), name="B")
+        a.start()
+        arrived.wait(5.0)
+        b.start()
+        b.join(2.0)
+        check(results.get("B") is False,
+              "the timed-out writer reports failure")
+        release.set()
+        a.join(5.0)
+        b.join(5.0)
+        check(results.get("A") is True and not a.is_alive() and not b.is_alive(),
+              "the lock owner commits and both writers finish")
+    finally:
+        release.set()
+        nbi18n.json = real_json
+
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        check(data == {"lang": "fr", "keyboard": "us",
+                       "login_keyboard": "us"},
+              "the owner's committed state remains intact")
+        strays = [p for p in glob.glob(path + "*")
+                  if p != path and not p.endswith(".lock")]
+        check(not strays, "the timed-out writer leaves no temp file")
     finally:
         shutil.rmtree(home, ignore_errors=True)
 
@@ -224,7 +299,9 @@ def case_unwritable_reports_failure():
 if __name__ == "__main__":
     case_damaged_store_is_preserved()
     case_unrelated_keys_survive()
+    case_unencodable_update_fails_safely()
     case_concurrent_writers()
+    case_lock_timeout_fails_closed()
     case_unwritable_reports_failure()
     print()
     if FAILS:
@@ -233,3 +310,7 @@ if __name__ == "__main__":
             print("  - " + m)
         sys.exit(1)
     print("locale.json write safety: all checks pass")
+# Terminal verdict for the release runner: it will not read success into a
+# zero exit with no recognised report (a suite that dies half way also prints
+# PASS lines). See tools/run_all_gates.py SUCCESSWORD.
+print("RESULT: ALL PASS")

@@ -107,6 +107,31 @@ def test_write_path(nbapp, tmp):
           bak2 == {"v": 1}, "bak=%r (must stay v1)" % (bak2,))
     check("the store itself still advances across saves",
           read_json(g) == {"v": 3})
+    # ...and THE BACKUP IS THE STORE, so it carries the store's permissions.
+    # A plain open() takes the umask (0644 on this image), which handed a full
+    # copy of a private journal or address book to every account on the machine
+    # while the store beside it stayed 0600. Found by novel's drive (F12) as an
+    # OS-wide defect: every app's .bak had it.
+    import stat as _stat
+    _mode = lambda q: _stat.S_IMODE(os.stat(q).st_mode)
+    check("the .bak carries the store's own permissions, not the umask's",
+          _mode(g + ".bak") == _mode(g),
+          "store=%s bak=%s" % (oct(_mode(g)), oct(_mode(g + ".bak"))))
+    # ...and where the store is PRIVATE, so is its backup. Planted at 0600 the
+    # way atomic_write_json leaves a real store -- `g` above was hand-created
+    # with open(), which takes the umask, and a .bak that matched THAT is
+    # correct: copying the store's own mode is the contract, in both
+    # directions. Forcing 0600 on a file its owner deliberately opened up
+    # would be the mirror mistake (see _keep_mode).
+    pv = os.path.join(tmp, "private.json")
+    with open(pv, "w", encoding="utf-8") as fh:
+        json.dump({"v": 1}, fh)
+    os.chmod(pv, 0o600)
+    nbapp.atomic_write_json(pv, {"v": 2})
+    check("a private store's .bak is private too (never the umask's 0644)",
+          os.path.isfile(pv + ".bak") and _mode(pv + ".bak") == 0o600,
+          "bak=%s" % (oct(_mode(pv + ".bak")) if os.path.isfile(pv + ".bak")
+                      else "missing"))
 
     # 5. Atomicity when serialisation THROWS: a non-JSON object must raise,
     #    leave the original byte-for-byte, and drop the temp file. This is the
@@ -208,6 +233,28 @@ def test_atomic_via(nbapp, tmp):
           open(p, "rb").read() == b"%PDF-1.4 the new one")
     check("atomic_write_via leaves no draft behind on success",
           not [f for f in os.listdir(tmp) if f.startswith(".nbw-")])
+
+    # A producer may fail internally and simply return.  Committing the empty
+    # mkstemp in that case destroys a previously good export just as surely as
+    # writing directly to the destination did.
+    prior = open(p, "rb").read()
+    raised = False
+    try:
+        nbapp.atomic_write_via(p, lambda _draft: None)
+    except OSError:
+        raised = True
+    check("atomic_write_via rejects a producer that emits no bytes",
+          raised and open(p, "rb").read() == prior)
+
+    raised = False
+    try:
+        nbapp.atomic_write_via(
+            p, lambda d: open(d, "wb").write(b"not a PDF"),
+            validate=lambda d: open(d, "rb").read(5) == b"%PDF-")
+    except OSError:
+        raised = True
+    check("atomic_write_via validation failure preserves the previous export",
+          raised and open(p, "rb").read() == prior)
 
     # A destination whose directory does not exist yet is created, the way
     # every export into Documents relies on.
@@ -454,6 +501,7 @@ def main():
     print("%d checks, %d failed" % (CHECKS, len(FAILS)))
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))
+    print("RESULT: %s" % ("FAILED" if FAILS else "PASS"))
     return 1 if FAILS else 0
 
 

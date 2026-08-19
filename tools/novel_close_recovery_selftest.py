@@ -25,6 +25,9 @@ def check(condition, message):
 
 def close_fixture(dirty, retry):
     win = novel.Novel.__new__(novel.Novel)
+    # A store that read fine. The quarantined case has its own fixture below:
+    # the guard says something different there, because retrying cannot work.
+    win._store_read_only = False
     win._recovery_dirty = dirty
     win._save_error = OSError(errno.ENOSPC, "disk full")
     win._closeprompt = None
@@ -44,7 +47,7 @@ def close_fixture(dirty, retry):
         win._save_error = OSError(errno.ENOSPC, "disk full")
         return False
 
-    def confirm(title, message, action, callback):
+    def confirm(title, message, action, callback, **kw):
         win.confirm_count += 1
         win.confirm = (title, message, action, callback)
         win._prompt_layer = object()
@@ -94,6 +97,21 @@ check(win._discarded and win.destroyed,
       "Close Without Saving records consent before destruction")
 check(win._closeprompt is None, "discard clears the close-card lifecycle token")
 
+# A QUARANTINED STORE IS NOT A FULL DISK. This session refuses, by design, to
+# write over the manuscript it could not read, so "make room and close again to
+# try once more" sends the writer to clear space that is not short and to retry
+# a save that can never happen. Say what is true instead.
+win = close_fixture(True, retry=False)
+win._store_read_only = True
+check(win._on_delete() is True, "a quarantined session still vetoes the close")
+check("make room" not in win.confirm[1].lower(),
+      "the quarantined close guard does not blame the disk")
+check("kept" in win.confirm[1].lower()
+      and "saved over" in win.confirm[1].lower(),
+      "...it says the manuscript was kept and will not be written over")
+check("typed here" in win.confirm[1].lower(),
+      "...and that closing loses what was typed in this session")
+
 # A manuscript that could not be read leaves a seeded Chapter 1 on screen —
 # indistinguishable from a new book, and the most alarming thing this app can
 # show someone who had a book here yesterday. It used to say nothing at all;
@@ -102,7 +120,8 @@ def unreadable_notice_fixture(read_only):
     win = novel.Novel.__new__(novel.Novel)
     win._store_read_only = read_only
     said = []
-    win._confirm = lambda title, body, ok, cb: said.append((title, body, ok))
+    win._confirm = lambda title, body, ok, cb, **kw: said.append(
+        (title, body, ok, kw))
     return win, said
 
 
@@ -119,6 +138,13 @@ check(bool(said) and "saved over" in said[0][1],
 # on, and an error number is not a fact about their manuscript.
 check(bool(said) and ".damaged-" not in said[0][1] and "rrno" not in said[0][1],
       "the card names no path and no error number")
+# It TELLS the writer something; it does not ask them to decide anything. Two
+# buttons that do the same nothing — one of them painted the red of a
+# destructive action — offer a choice that does not exist.
+check(bool(said) and said[0][3].get("cancel") is False,
+      "the notice is acknowledged with one button, not chosen between two")
+check(bool(said) and said[0][3].get("danger") is False,
+      "...and that button is not dressed as a destructive one")
 
 # THE NOTICE BELONGS TO THE DAMAGED CASE ONLY, and the card cannot enforce
 # that itself — it is the CALL that must be gated, so that is what is checked.
@@ -173,5 +199,7 @@ print()
 if failures:
     print("NOVEL CLOSE RECOVERY SELFTEST: %d checks, %d FAILED" %
           (checks, len(failures)))
+    print("RESULT: FAIL")
     raise SystemExit(1)
 print("NOVEL CLOSE RECOVERY SELFTEST: %d checks, all pass" % checks)
+print("RESULT: PASS")

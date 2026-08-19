@@ -8,6 +8,11 @@ import sys
 import tempfile
 from datetime import date
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DE = os.path.join(ROOT, "buildroot/board/notebookos/rootfs-overlay",
+                  "opt/notebook/de")
+sys.path.insert(0, DE)
+
 HOME = tempfile.mkdtemp(prefix="calendar-adversarial-")
 os.environ["NB_HOME"] = HOME
 
@@ -48,8 +53,8 @@ def bare(events=None):
     app._events_readable = True
     app._seen = set()
     app.undo = UndoProbe()
-    app._save_events = lambda *a, **k: None
-    app._save_calendars = lambda: None
+    app._save_events = lambda *a, **k: True
+    app._save_calendars = lambda: True
     app._refresh = lambda: None
     app._populate_cal_list = lambda: None
     return app
@@ -120,6 +125,32 @@ def two_store_durability_check():
           _aside_holds(calmod.CALENDARS_FILE, wrong_shape),
           "asides=%r" % _asides(calmod.CALENDARS_FILE))
 
+    future = [{"name": "Work", "color": "#417E74", "id": "uuid-1",
+               "remote_url": "https://calendar.invalid/work",
+               "read_only": True, "sync": {"revision": 7}}]
+    app = bare()
+    app.calendars = app._norm_calendars(future)
+    app.calendars[0]["color"] = "#C8341E"
+    calmod.Calendar._save_calendars(app)
+    saved_future = json.load(open(calmod.CALENDARS_FILE))
+    check("future calendar metadata survives while known fields update",
+          saved_future[0].get("id") == "uuid-1"
+          and saved_future[0].get("remote_url") == future[0]["remote_url"]
+          and saved_future[0].get("read_only") is True
+          and saved_future[0].get("sync") == {"revision": 7}
+          and saved_future[0].get("color") == "#C8341E")
+
+    # Python accepts these non-standard JSON constants. They must not survive
+    # into week/day geometry, where int(NaN) prevents Calendar from rendering.
+    app = bare()
+    bad_time = app._norm_event({
+        "date": "2026-08-15", "title": "Damaged time",
+        "start": float("nan"), "end": float("inf"),
+    })
+    check("non-finite stored event times fall back without losing the event",
+          bad_time is not None and bad_time["start"] == 9.0
+          and bad_time["end"] == 10.0 and bad_time["title"] == "Damaged time")
+
     # PASS-MUTANT: a shape-blind flush is the sabotage — valid JSON of the
     # wrong shape sails through nbapp's parse check, so writing without the
     # app-level quarantine leaves the bytes NOWHERE.
@@ -148,7 +179,9 @@ def destructive_undo_check():
               dict(one, id="s2", date=date(2026, 8, 15),
                    series="series", repeat="week")]
     app = bare(series)
-    app._choose_series_scope = lambda _title: "all"
+    # The real chooser is a modal dialog; it now also takes the body naming the
+    # event and a destructive flag, so the stand-in accepts whatever it is passed.
+    app._choose_series_scope = lambda *_a, **_k: "all"
     removed = app._delete_event(app.events[0])
     check("deleting a whole series creates one undo step",
           removed and app.events == [] and app.undo.calls == [
@@ -159,6 +192,12 @@ def destructive_undo_check():
     app.calendars.append({"name": "Work", "color": "#417E74"})
     app.events[0]["cal"] = "Work"
     app._confirm = lambda *args: False
+    app._on_delete_cal(None, "Work")
+    check("cancelling calendar deletion preserves its events and history",
+          [c["name"] for c in app.calendars] == ["Personal", "Work"]
+          and len(app.events) == 1 and app.undo.calls == [],
+          repr((app.calendars, app.events, app.undo.calls)))
+    app._confirm = lambda *args: True
     app._on_delete_cal(None, "Work")
     check("deleting a calendar and its events is immediate and undoable",
           [c["name"] for c in app.calendars] == ["Personal"]
@@ -279,4 +318,5 @@ series_edge_checks()
 import_shadow_check()
 translated_date_phrase_check()
 print("\n%d/%d checks passed" % (passed, passed + failed))
+print("RESULT: %s" % ("PASS" if not failed else "FAIL"))
 raise SystemExit(1 if failed else 0)

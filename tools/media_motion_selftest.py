@@ -73,26 +73,36 @@ def runtime_checks():
         v._empty, v._scroll = Widget(True), Widget(False)
         v._video, v._notice = Widget(False), Widget(False)
         v._stage = Widget(True)
-        v._surface_name, v._surface_gen, v._vfull = "empty", 0, False
+        v._surface_name, v._surface_gen, v._stage_full = "empty", 0, False
         v._show_surface("image")
         check("surface fixture reaches transition path",
               len(calls) == 2 and v._scroll.visible and not v._empty.visible,
               "fade_calls=%d" % len(calls))
-        check("surface swap uses PAGE depart/arrive easing",
+        # The PAGE token is the length of the WHOLE swap, so the depart and the
+        # arrive get HALF each and must SUM to it. This check used to demand a
+        # full PAGE per half, which pinned a 400ms surface swap -- twice the
+        # page budget -- as if it were the contract; the frame trace in
+        # tools/transition_pacing_probe.py measured it at 400ms and named it.
+        # Both halves and the sum are asserted, so neither a return to the full
+        # token nor a silenced half can pass.
+        half = media.nbmotion.PAGE // 2
+        check("surface swap splits the PAGE token across depart and arrive",
               len(calls) == 2
-              and calls[0][2:] == (media.nbmotion.PAGE, media.nbmotion.EASE_IN)
-              and calls[1][2:] == (media.nbmotion.PAGE, media.nbmotion.EASE_OUT))
+              and calls[0][2:] == (half, media.nbmotion.EASE_IN)
+              and calls[1][2:] == (half, media.nbmotion.EASE_OUT)
+              and calls[0][2] + calls[1][2] == media.nbmotion.PAGE,
+              "durations=%r" % ([c[2] for c in calls],))
 
         calls.clear()
         v = media.MediaViewer.__new__(media.MediaViewer)
         v._video = Widget(True)
         v._toolbar_w, v._info_w, v._film_w = Widget(), Widget(), Widget()
         v._menubar, v._vctl, v._v_full_btn = Widget(), Widget(), Widget()
-        v._vfull, v._vctl_hide_timer = False, None
+        v._stage_full, v._vctl_hide_timer = False, None
         v._menubar_widget = lambda: v._menubar
         v._hide_panel = lambda _hide: None
-        v._enter_video_fullscreen()
-        v._exit_video_fullscreen()
+        v._enter_stage_fullscreen()
+        v._exit_stage_fullscreen()
         out_calls = [c for c in calls if c[1] == 0.0]
         in_calls = [c for c in calls if c[1] == 1.0]
         check("fullscreen fixture reaches transition path",

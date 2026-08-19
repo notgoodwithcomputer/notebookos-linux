@@ -274,8 +274,20 @@ def test_translated_once():
         eq(nc.about_label("Writer"), "<About <Writer>>",
            "About is composed from two keys, each looked up once")
         eq(nc.dynamic_item("edit.undo", "Typing", True, len)[0],
-           "<Undo Typing    Ctrl+Z>",
-           "the framed Undo label is looked up once, then filled")
+           "<Undo <Typing>    Ctrl+Z>",
+           "the Undo frame and raw action name are each translated once")
+        # Custom history adapters may return a name they already translated.
+        # A real catalog leaves an unknown translated value unchanged; model
+        # that behavior explicitly so accepting both caller shapes is pinned.
+        nc._t = lambda s: {"Undo %s    Ctrl+Z": "Annuler %s    Ctrl+Z",
+                           "Delete Frame": "Supprimer l’image"}.get(s, s)
+        eq(nc.dynamic_item("edit.undo", "Delete Frame", True, len)[0],
+           "Annuler Supprimer l’image    Ctrl+Z",
+           "a raw action name is localized inside the Undo frame")
+        eq(nc.dynamic_item("edit.undo", "Supprimer l’image", True, len)[0],
+           "Annuler Supprimer l’image    Ctrl+Z",
+           "an already-localized action name is not damaged")
+        nc._t = lambda s: "<%s>" % s
         eq(nc.dynamic_item("edit.undo", "", True, len)[0],
            "<Undo    Ctrl+Z>", "the plain fallback is looked up once")
         eq(nc.dynamic_item("edit.undo", None, False, None)[0],

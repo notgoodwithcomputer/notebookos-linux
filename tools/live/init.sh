@@ -33,8 +33,16 @@ rescue() {
 try_medium() {
     dev="$1"
     [ -b "$dev" ] || return 1
+    # Never use a generic `mount -o ro` while probing unknown disks. ext3/4
+    # may replay their journal before completing even a read-only mount, which
+    # means merely booting the live image can write to an unrelated internal
+    # drive. Probe the filesystems live media actually supports explicitly;
+    # journaled ext filesystems get `noload` so discovery is truly read-only.
     if /bin/mount -t iso9660 -o ro "$dev" /run/live/medium 2>/dev/null \
-       || /bin/mount -o ro "$dev" /run/live/medium 2>/dev/null; then
+       || /bin/mount -t vfat -o ro "$dev" /run/live/medium 2>/dev/null \
+       || /bin/mount -t ext4 -o ro,noload "$dev" /run/live/medium 2>/dev/null \
+       || /bin/mount -t ext3 -o ro,noload "$dev" /run/live/medium 2>/dev/null \
+       || /bin/mount -t ext2 -o ro "$dev" /run/live/medium 2>/dev/null; then
         if [ -f "/run/live/medium$SQUASH" ]; then
             return 0
         fi
@@ -106,5 +114,18 @@ echo "Notebook OS live: starting session..." > /dev/console
 /bin/mount --move /dev "$NEWROOT/dev" 2>/dev/null \
     || /bin/mount -t devtmpfs dev "$NEWROOT/dev" 2>/dev/null
 
+# switch_root MUST be exec'd. BusyBox refuses to run it unless it is PID 1 --
+# and a child forked by this shell never is, so it prints its USAGE text and
+# returns instead of switching. Running it as `if ! /sbin/switch_root ...` to
+# get a failure branch therefore breaks EVERY live boot: the ISO reaches
+# "starting session...", dies with the root still on the initramfs, and drops
+# to the emergency shell. Keep the exec; the recovery below still runs.
 exec /sbin/switch_root "$NEWROOT" /sbin/init
-exec /bin/sh
+
+# Only reached if the exec ITSELF failed (a missing or unrunnable binary), in
+# which case this process image was never replaced and the lines below are
+# still ours to run. Move devtmpfs back first, or the advertised emergency
+# shell has no console or tty device and is unusable.
+/bin/mount --move "$NEWROOT/dev" /dev 2>/dev/null \
+    || /bin/mount -t devtmpfs dev /dev 2>/dev/null
+rescue "cannot switch to live root"

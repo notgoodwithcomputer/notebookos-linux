@@ -207,6 +207,12 @@ def main():
           f.text() == "你好,", repr(f.text()))
     f.tgt.set_text("")
 
+    f.type("qzx")
+    f.key(Gdk.KEY_comma, ",")
+    check("punctuation preserves an unknown raw composition",
+          f.text() == "qzx,", repr(f.text()))
+    f.tgt.set_text("")
+
     # ---- a letter pinyin is not written in ends the composition ----------
     # `str.isalpha()` is true of every Unicode letter, so é, ü, Cyrillic д and
     # 好 itself used to be appended to the pinyin: the buffer then matched

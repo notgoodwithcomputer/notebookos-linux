@@ -71,4 +71,5 @@ check(app._main_pager.direction_to("editor") == nbtransitions.BACK,
       "leaving cooking resolves back")
 
 print("\n%d failed" % len(fails))
+print("RESULT: %s" % ("FAILED" if fails else "PASS"))
 sys.exit(1 if fails else 0)
